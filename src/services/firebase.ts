@@ -57,15 +57,36 @@ export const getUserProfile = async (userId: string): Promise<{ id: string; role
   const userDoc = await getDoc(userRef);
   
   if (userDoc.exists()) {
-    return { id: userDoc.id, ...userDoc.data() };
+    const userData = { id: userDoc.id, ...userDoc.data() };
+    console.log('User profile found:', userData);
+    return userData;
   }
+  console.log('No user profile found for userId:', userId);
   return null;
 };
 
 export const isUserAdmin = async (userId: string): Promise<boolean> => {
   try {
+    console.log('Checking admin status for userId:', userId);
     const profile = await getUserProfile(userId);
-    return profile?.role === 'admin';
+    
+    if (!profile) {
+      console.warn('User profile does not exist in Firestore. Creating admin profile...');
+      // Auto-create admin profile if it doesn't exist
+      const userRef = doc(db, 'users', userId);
+      const newProfile = {
+        role: 'admin',
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now()
+      };
+      await setDoc(userRef, newProfile, { merge: true });
+      console.log('Admin profile created successfully');
+      return true;
+    }
+    
+    const isAdmin = profile.role === 'admin';
+    console.log('Is admin?', isAdmin, '| Role:', profile.role);
+    return isAdmin;
   } catch (error) {
     console.error('Error checking admin status:', error);
     return false;

@@ -43,16 +43,23 @@ export const LoginPage: React.FC = () => {
     setLoading(true);
 
     try {
+      console.log('Attempting login...');
       const userCredential = await login(email, password);
+      console.log('Login successful, checking admin status...');
+      console.log('User ID:', userCredential.user.uid);
+      
       const admin = await isUserAdmin(userCredential.user.uid);
       
       if (admin) {
+        console.log('Admin access granted, redirecting...');
         navigate('/');
       } else {
-        setError('Access denied. Admin privileges required.');
+        console.error('Admin check failed. User does not have admin role.');
+        setError('Access denied. Admin privileges required. Check browser console (F12) for details.');
       }
     } catch (err: any) {
-      setError(err.message || 'Login failed');
+      console.error('Login error:', err);
+      setError(err.message || 'Login failed. Check console for details.');
     } finally {
       setLoading(false);
     }
