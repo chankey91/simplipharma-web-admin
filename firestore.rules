@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Users collection - Allow users to read/write their own profile
+    match /users/{userId} {
+      // Allow authenticated users to read and write their own profile
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow any admin user to read all user profiles
+      allow read: if request.auth != null && 
+                     exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                     get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Medical Stores collection
+    match /stores/{storeId} {
+      // Allow any authenticated user to read stores
+      allow read: if request.auth != null;
+      
+      // Only admins can write stores
+      allow write: if request.auth != null && 
+                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Orders collection
+    match /orders/{orderId} {
+      // Allow any authenticated user to read orders
+      allow read: if request.auth != null;
+      
+      // Only admins can create/update orders
+      allow write: if request.auth != null && 
+                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Inventory collection
+    match /inventory/{inventoryId} {
+      // Allow any authenticated user to read inventory
+      allow read: if request.auth != null;
+      
+      // Only admins can write inventory
+      allow write: if request.auth != null && 
+                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Default: Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
