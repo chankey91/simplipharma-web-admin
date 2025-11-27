@@ -23,14 +23,14 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 
-// Firebase configuration (same as mobile app)
+// Firebase configuration from environment variables
 const firebaseConfig = {
-  apiKey: "AIzaSyCFtUVHKtADWllccdnlbougsnsntEUHQDA",
-  authDomain: "simplipharma.firebaseapp.com",
-  projectId: "simplipharma",
-  storageBucket: "simplipharma.firebasestorage.app",
-  messagingSenderId: "343720215451",
-  appId: "1:343720215451:android:d2576ba41a99a5681e973e"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 // Initialize Firebase
