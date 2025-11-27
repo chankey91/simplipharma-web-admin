@@ -16,16 +16,30 @@ pipeline {
         VITE_FIREBASE_APP_ID = credentials('simplipharma-firebase-app-id')
     }
     
-    tools {
-        nodejs "nodejs" // Make sure NodeJS is configured in Jenkins Global Tool Configuration
-    }
-    
     stages {
         stage('Checkout') {
             steps {
                 echo 'Checking out code from repository...'
                 git branch: 'main',
                     url: 'https://github.com/chankey91/simplipharma-web-admin.git'
+            }
+        }
+        
+        stage('Setup Node.js') {
+            steps {
+                script {
+                    echo 'Setting up Node.js environment...'
+                    // Try to use NodeJS plugin if configured, otherwise use system Node.js
+                    try {
+                        def nodeHome = tool name: 'nodejs', type: 'nodejs'
+                        env.PATH = "${nodeHome}/bin:${env.PATH}"
+                        echo "Using NodeJS plugin: ${nodeHome}"
+                    } catch (Exception e) {
+                        echo "NodeJS plugin not configured, using system Node.js"
+                    }
+                    sh 'node -v'
+                    sh 'npm -v'
+                }
             }
         }
         
