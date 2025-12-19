@@ -14,10 +14,6 @@ import {
   IconButton,
   TextField,
   InputAdornment,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   MenuItem,
   FormControl,
   InputLabel,
@@ -25,36 +21,34 @@ import {
   Grid,
   Card,
   CardContent,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import {
   Search,
   Visibility,
-  LocalShipping,
-  CheckCircle,
+  Cancel,
 } from '@mui/icons-material';
-import { useOrders, useUpdateOrderDispatch, useMarkOrderDelivered } from '../hooks/useOrders';
+import { useOrders, useCancelOrder } from '../hooks/useOrders';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
+import { useNavigate } from 'react-router-dom';
 
 export const OrdersPage: React.FC = () => {
   const { data: orders, isLoading } = useOrders();
-  const updateDispatch = useUpdateOrderDispatch();
-  const markDelivered = useMarkOrderDelivered();
+  const cancelOrderMutation = useCancelOrder();
+  const navigate = useNavigate();
   
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [openDetails, setOpenDetails] = useState(false);
-  const [openDispatch, setOpenDispatch] = useState(false);
-  
-  // Dispatch form state
-  const [dispatchData, setDispatchData] = useState({
-    trackingNumber: '',
-    courierName: '',
-    dispatchNotes: '',
-    estimatedDeliveryDate: '',
+  const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
+    open: false,
+    orderId: '',
+    reason: ''
   });
 
   const filteredOrders = orders?.filter(order => {
@@ -69,72 +63,37 @@ export const OrdersPage: React.FC = () => {
   }) || [];
 
   const ordersByStatus = {
-    Pending: filteredOrders.filter(o => o.status === 'Pending').length,
-    Dispatched: filteredOrders.filter(o => o.status === 'Dispatched').length,
-    Delivered: filteredOrders.filter(o => o.status === 'Delivered').length,
-    Cancelled: filteredOrders.filter(o => o.status === 'Cancelled').length,
+    Pending: orders?.filter(o => o.status === 'Pending').length || 0,
+    Fulfillment: orders?.filter(o => o.status === 'Order Fulfillment').length || 0,
+    Transit: orders?.filter(o => o.status === 'In Transit').length || 0,
+    Delivered: orders?.filter(o => o.status === 'Delivered').length || 0,
+    Cancelled: orders?.filter(o => o.status === 'Cancelled').length || 0,
   };
 
-  const handleDispatch = async () => {
-    if (!selectedOrder) return;
-    
+  const handleCancelOrder = async () => {
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user || !cancelDialog.orderId) return;
 
     try {
-      await updateDispatch.mutateAsync({
-        orderId: selectedOrder.id,
-        dispatchData: {
-          status: 'Dispatched',
-          dispatchDate: new Date(),
-          trackingNumber: dispatchData.trackingNumber || undefined,
-          courierName: dispatchData.courierName || undefined,
-          dispatchNotes: dispatchData.dispatchNotes || undefined,
-          dispatchedBy: user.uid,
-          estimatedDeliveryDate: dispatchData.estimatedDeliveryDate 
-            ? new Date(dispatchData.estimatedDeliveryDate)
-            : undefined,
-        },
+      await cancelOrderMutation.mutateAsync({
+        orderId: cancelDialog.orderId,
+        cancelledBy: user.uid,
+        reason: cancelDialog.reason
       });
-
-      setOpenDispatch(false);
-      setDispatchData({
-        trackingNumber: '',
-        courierName: '',
-        dispatchNotes: '',
-        estimatedDeliveryDate: '',
-      });
+      setCancelDialog({ open: false, orderId: '', reason: '' });
     } catch (error) {
-      console.error('Error dispatching order:', error);
-    }
-  };
-
-  const handleMarkDelivered = async (orderId: string) => {
-    const user = auth.currentUser;
-    if (!user) return;
-
-    try {
-      await markDelivered.mutateAsync({
-        orderId,
-        deliveredBy: user.uid,
-      });
-    } catch (error) {
-      console.error('Error marking order as delivered:', error);
+      console.error('Error cancelling order:', error);
     }
   };
 
   const getStatusColor = (status: OrderStatus) => {
     switch (status) {
-      case 'Pending':
-        return 'warning';
-      case 'Dispatched':
-        return 'info';
-      case 'Delivered':
-        return 'success';
-      case 'Cancelled':
-        return 'error';
-      default:
-        return 'default';
+      case 'Pending': return 'warning';
+      case 'Order Fulfillment': return 'primary';
+      case 'In Transit': return 'info';
+      case 'Delivered': return 'success';
+      case 'Cancelled': return 'error';
+      default: return 'default';
     }
   };
 
@@ -150,38 +109,22 @@ export const OrdersPage: React.FC = () => {
 
       {/* Statistics Cards */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" gutterBottom>Pending</Typography>
-              <Typography variant="h4">{ordersByStatus.Pending}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" gutterBottom>Dispatched</Typography>
-              <Typography variant="h4">{ordersByStatus.Dispatched}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" gutterBottom>Delivered</Typography>
-              <Typography variant="h4">{ordersByStatus.Delivered}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" gutterBottom>Cancelled</Typography>
-              <Typography variant="h4">{ordersByStatus.Cancelled}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+        {[
+          { label: 'Pending', count: ordersByStatus.Pending, color: 'warning.main' },
+          { label: 'Fulfillment', count: ordersByStatus.Fulfillment, color: 'primary.main' },
+          { label: 'In Transit', count: ordersByStatus.Transit, color: 'info.main' },
+          { label: 'Delivered', count: ordersByStatus.Delivered, color: 'success.main' },
+          { label: 'Cancelled', count: ordersByStatus.Cancelled, color: 'error.main' },
+        ].map((stat) => (
+          <Grid item xs={12} sm={6} md={2.4} key={stat.label}>
+            <Card>
+              <CardContent sx={{ textAlign: 'center' }}>
+                <Typography color="textSecondary" variant="subtitle2" gutterBottom>{stat.label}</Typography>
+                <Typography variant="h4" sx={{ color: stat.color }}>{stat.count}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
       </Grid>
 
       {/* Filters */}
@@ -199,16 +142,17 @@ export const OrdersPage: React.FC = () => {
             ),
           }}
         />
-        <FormControl sx={{ minWidth: 150 }}>
+        <FormControl sx={{ minWidth: 200 }}>
           <InputLabel>Status</InputLabel>
           <Select
             value={statusFilter}
             label="Status"
-            onChange={(e) => setStatusFilter(e.target.value as OrderStatus | 'All')}
+            onChange={(e) => setStatusFilter(e.target.value as any)}
           >
-            <MenuItem value="All">All</MenuItem>
+            <MenuItem value="All">All Statuses</MenuItem>
             <MenuItem value="Pending">Pending</MenuItem>
-            <MenuItem value="Dispatched">Dispatched</MenuItem>
+            <MenuItem value="Order Fulfillment">Order Fulfillment</MenuItem>
+            <MenuItem value="In Transit">In Transit</MenuItem>
             <MenuItem value="Delivered">Delivered</MenuItem>
             <MenuItem value="Cancelled">Cancelled</MenuItem>
           </Select>
@@ -226,19 +170,19 @@ export const OrdersPage: React.FC = () => {
               <TableCell>Items</TableCell>
               <TableCell>Amount</TableCell>
               <TableCell>Status</TableCell>
-              <TableCell>Actions</TableCell>
+              <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {filteredOrders.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} align="center">
-                  <Typography color="textSecondary">No orders found</Typography>
+                  <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
                 </TableCell>
               </TableRow>
             ) : (
               filteredOrders.map((order) => (
-                <TableRow key={order.id}>
+                <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
                   <TableCell>#{order.id.substring(0, 8)}</TableCell>
                   <TableCell>
                     {order.orderDate instanceof Date
@@ -253,35 +197,30 @@ export const OrdersPage: React.FC = () => {
                       label={order.status}
                       color={getStatusColor(order.status) as any}
                       size="small"
+                      sx={{ fontWeight: 'bold' }}
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell align="right">
                     <IconButton
                       size="small"
-                      onClick={() => {
-                        setSelectedOrder(order);
-                        setOpenDetails(true);
+                      color="primary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/orders/${order.id}`);
                       }}
                     >
                       <Visibility />
                     </IconButton>
-                    {order.status === 'Pending' && (
+                    {order.status !== 'Cancelled' && order.status !== 'Delivered' && (
                       <IconButton
                         size="small"
-                        onClick={() => {
-                          setSelectedOrder(order);
-                          setOpenDispatch(true);
+                        color="error"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCancelDialog({ open: true, orderId: order.id, reason: '' });
                         }}
                       >
-                        <LocalShipping />
-                      </IconButton>
-                    )}
-                    {order.status === 'Dispatched' && (
-                      <IconButton
-                        size="small"
-                        onClick={() => handleMarkDelivered(order.id)}
-                      >
-                        <CheckCircle />
+                        <Cancel />
                       </IconButton>
                     )}
                   </TableCell>
@@ -292,113 +231,30 @@ export const OrdersPage: React.FC = () => {
         </Table>
       </TableContainer>
 
-      {/* Order Details Dialog */}
-      <Dialog open={openDetails} onClose={() => setOpenDetails(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Order Details</DialogTitle>
+      {/* Cancel Confirmation Dialog */}
+      <Dialog open={cancelDialog.open} onClose={() => setCancelDialog({ ...cancelDialog, open: false })}>
+        <DialogTitle>Cancel Order</DialogTitle>
         <DialogContent>
-          {selectedOrder && (
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Order #{selectedOrder.id.substring(0, 8)}
-              </Typography>
-              <Typography>Retailer: {selectedOrder.retailerEmail}</Typography>
-              <Typography>
-                Date:{' '}
-                {selectedOrder.orderDate instanceof Date
-                  ? format(selectedOrder.orderDate, 'PPpp')
-                  : format(new Date(selectedOrder.orderDate), 'PPpp')}
-              </Typography>
-              <Typography>Status: {selectedOrder.status}</Typography>
-              <Typography>Delivery Address: {selectedOrder.deliveryAddress || 'N/A'}</Typography>
-              
-              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
-                Items:
-              </Typography>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Medicine</TableCell>
-                    <TableCell>Quantity</TableCell>
-                    <TableCell>Price</TableCell>
-                    <TableCell>Total</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {selectedOrder.medicines.map((item, index) => (
-                    <TableRow key={index}>
-                      <TableCell>{item.name}</TableCell>
-                      <TableCell>{item.quantity}</TableCell>
-                      <TableCell>₹{item.price.toFixed(2)}</TableCell>
-                      <TableCell>₹{(item.price * item.quantity).toFixed(2)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <Typography variant="h6" sx={{ mt: 2, textAlign: 'right' }}>
-                Total: ₹{selectedOrder.totalAmount.toFixed(2)}
-              </Typography>
-            </Box>
-          )}
+          <Typography gutterBottom>Are you sure you want to cancel order #{cancelDialog.orderId.substring(0, 8)}?</Typography>
+          <TextField
+            fullWidth
+            label="Reason for cancellation"
+            multiline
+            rows={3}
+            value={cancelDialog.reason}
+            onChange={(e) => setCancelDialog({ ...cancelDialog, reason: e.target.value })}
+            sx={{ mt: 2 }}
+          />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpenDetails(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Dispatch Dialog */}
-      <Dialog open={openDispatch} onClose={() => setOpenDispatch(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Dispatch Order</DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 2 }}>
-            <TextField
-              fullWidth
-              label="Tracking Number"
-              value={dispatchData.trackingNumber}
-              onChange={(e) =>
-                setDispatchData({ ...dispatchData, trackingNumber: e.target.value })
-              }
-              sx={{ mb: 2 }}
-            />
-            <TextField
-              fullWidth
-              label="Courier Name"
-              value={dispatchData.courierName}
-              onChange={(e) =>
-                setDispatchData({ ...dispatchData, courierName: e.target.value })
-              }
-              sx={{ mb: 2 }}
-            />
-            <TextField
-              fullWidth
-              label="Estimated Delivery Date"
-              type="date"
-              value={dispatchData.estimatedDeliveryDate}
-              onChange={(e) =>
-                setDispatchData({ ...dispatchData, estimatedDeliveryDate: e.target.value })
-              }
-              InputLabelProps={{ shrink: true }}
-              sx={{ mb: 2 }}
-            />
-            <TextField
-              fullWidth
-              label="Dispatch Notes"
-              multiline
-              rows={3}
-              value={dispatchData.dispatchNotes}
-              onChange={(e) =>
-                setDispatchData({ ...dispatchData, dispatchNotes: e.target.value })
-              }
-            />
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpenDispatch(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleDispatch}
-            disabled={updateDispatch.isPending}
+          <Button onClick={() => setCancelDialog({ ...cancelDialog, open: false })}>Keep Order</Button>
+          <Button 
+            variant="contained" 
+            color="error" 
+            onClick={handleCancelOrder}
+            disabled={!cancelDialog.reason || cancelOrderMutation.isPending}
           >
-            Dispatch Order
+            Cancel Order
           </Button>
         </DialogActions>
       </Dialog>

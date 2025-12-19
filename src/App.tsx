@@ -11,8 +11,10 @@ import { LoginPage } from './pages/Login';
 import { DashboardPage } from './pages/Dashboard';
 import { StoresPage } from './pages/Stores';
 import { OrdersPage } from './pages/Orders';
+import { OrderDetailsPage } from './pages/OrderDetails';
 import { InventoryPage } from './pages/Inventory';
 import { StockUpdatePage } from './pages/StockUpdate';
+import { MedicineDetailsPage } from './pages/MedicineDetails';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -108,11 +110,31 @@ function App() {
                 }
               />
               <Route
+                path="/orders/:orderId"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <OrderDetailsPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="/inventory"
                 element={
                   <ProtectedRoute>
                     <Layout>
                       <InventoryPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/inventory/:medicineId"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <MedicineDetailsPage />
                     </Layout>
                   </ProtectedRoute>
                 }
