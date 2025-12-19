@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getAllStores, updateStore, toggleStoreStatus } from '../services/stores';
+import { getAllStores, updateStore, toggleStoreStatus, createStore } from '../services/stores';
 import { User } from '../types';
 
 export const useStores = () => {
@@ -21,6 +21,17 @@ export const useUpdateStore = () => {
   });
 };
 
+export const useCreateStore = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (storeData: Partial<User>) => createStore(storeData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
+    }
+  });
+};
+
 export const useToggleStoreStatus = () => {
   const queryClient = useQueryClient();
   
@@ -32,4 +43,3 @@ export const useToggleStoreStatus = () => {
     }
   });
 };
-

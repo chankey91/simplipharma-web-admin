@@ -4,10 +4,18 @@ import { Medicine, StockBatch } from '../types';
 export const getAllMedicines = async (): Promise<Medicine[]> => {
   const medicinesCol = collection(db, 'medicines');
   const snapshot = await getDocs(medicinesCol);
-  return snapshot.docs.map(doc => ({
-    id: doc.id,
-    ...doc.data()
-  } as Medicine));
+  return snapshot.docs.map(doc => {
+    const data = doc.data();
+    // Ensure string fields are properly converted
+    return {
+      id: doc.id,
+      ...data,
+      name: String(data.name || ''),
+      manufacturer: String(data.manufacturer || ''),
+      category: String(data.category || ''),
+      code: data.code ? String(data.code) : undefined,
+    } as Medicine;
+  });
 };
 
 export const updateMedicineStock = async (
@@ -18,6 +26,7 @@ export const updateMedicineStock = async (
     expiryDate?: Date;
     batchNumber?: string;
     barcode?: string;
+    mrp?: number;
   }
 ) => {
   const medicineRef = doc(db, 'medicines', medicineId);
@@ -85,9 +94,14 @@ export const findMedicineByBarcode = async (barcode: string): Promise<Medicine |
     
     if (!snapshot.empty) {
       const doc = snapshot.docs[0];
+      const data = doc.data();
       return {
         id: doc.id,
-        ...doc.data()
+        ...data,
+        name: String(data.name || ''),
+        manufacturer: String(data.manufacturer || ''),
+        category: String(data.category || ''),
+        code: data.code ? String(data.code) : undefined,
       } as Medicine;
     }
   } catch (error) {
@@ -101,9 +115,14 @@ export const findMedicineByBarcode = async (barcode: string): Promise<Medicine |
     
     if (!codeSnapshot.empty) {
       const doc = codeSnapshot.docs[0];
+      const data = doc.data();
       return {
         id: doc.id,
-        ...doc.data()
+        ...data,
+        name: String(data.name || ''),
+        manufacturer: String(data.manufacturer || ''),
+        category: String(data.category || ''),
+        code: data.code ? String(data.code) : undefined,
       } as Medicine;
     }
   } catch (error) {

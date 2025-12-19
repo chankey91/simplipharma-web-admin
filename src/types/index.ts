@@ -26,6 +26,7 @@ export interface Medicine {
   composition?: string;
   // NEW: Expiry and batch management
   expiryDate?: Date | any;
+  mfgDate?: Date | any;
   batchNumber?: string;
   barcode?: string;
   stockBatches?: StockBatch[];
@@ -36,24 +37,39 @@ export interface StockBatch {
   batchNumber: string;
   quantity: number;
   expiryDate: Date | any;
+  mfgDate?: Date | any;
   purchaseDate?: Date | any;
   purchasePrice?: number;
+  mrp?: number;
 }
 
-export type OrderStatus = 'Pending' | 'Dispatched' | 'Delivered' | 'Cancelled';
+export type OrderStatus = 'Pending' | 'Order Fulfillment' | 'In Transit' | 'Delivered' | 'Cancelled';
 
 export interface OrderMedicine {
   medicineId: string;
   name: string;
   price: number;
   quantity: number;
+  batchNumber?: string;
+  expiryDate?: Date | any;
+}
+
+export interface OrderTimelineEvent {
+  status: OrderStatus;
+  timestamp: Date | any;
+  note?: string;
+  updatedBy?: string;
 }
 
 export interface Order {
   id: string;
   retailerId: string;
   retailerEmail?: string;
+  retailerName?: string;
   medicines: OrderMedicine[];
+  subTotal: number;
+  taxAmount: number;
+  taxPercentage?: number;
   totalAmount: number;
   status: OrderStatus;
   orderDate: Date | any;
@@ -69,6 +85,7 @@ export interface Order {
   paidAmount?: number;
   dueAmount?: number;
   payments?: Payment[];
+  timeline: OrderTimelineEvent[];
   // NEW: Dispatch fields
   dispatchDate?: Date | any;
   dispatchNotes?: string;
@@ -107,5 +124,17 @@ export interface User {
   shopName?: string;
   isActive?: boolean;
   createdAt?: Date | any;
+  // Store details
+  licenceNumber?: string;
+  ownerName?: string;
+  licenceHolderName?: string;
+  pan?: string;
+  gst?: string;
+  shopImage?: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+    address?: string;
+  };
+  mustResetPassword?: boolean;
 }
-
