@@ -43,7 +43,7 @@ import {
   Edit,
 } from '@mui/icons-material';
 import { useOrder, useUpdateOrderStatus, useFulfillOrder, useUpdateOrderDispatch, useMarkOrderDelivered, useCancelOrder, useUpdatePaymentStatus } from '../hooks/useOrders';
-import { useMedicines } from '../hooks/useInventory';
+import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
@@ -78,6 +78,16 @@ export const OrderDetailsPage: React.FC = () => {
     message: ''
   });
   const [selectedBatch, setSelectedBatch] = useState<string>('');
+  const [addMedicineDialog, setAddMedicineDialog] = useState(false);
+  const [newMedicineData, setNewMedicineData] = useState({
+    name: '',
+    code: '',
+    category: '',
+    manufacturer: '',
+    mrp: '',
+  });
+  
+  const createMedicineMutation = useCreateMedicine();
   
   const [fulfillmentData, setFulfillmentData] = useState({
     taxPercentage: 18,
@@ -335,6 +345,32 @@ export const OrderDetailsPage: React.FC = () => {
     }
   };
 
+  const handleAddMedicineToMaster = async () => {
+    if (!newMedicineData.name || !newMedicineData.manufacturer || !newMedicineData.category) {
+      alert('Please fill all required fields');
+      return;
+    }
+
+    try {
+      await createMedicineMutation.mutateAsync({
+        name: newMedicineData.name,
+        code: newMedicineData.code || undefined,
+        category: newMedicineData.category,
+        manufacturer: newMedicineData.manufacturer,
+        stock: 0,
+        currentStock: 0,
+        price: 0,
+        mrp: newMedicineData.mrp ? parseFloat(newMedicineData.mrp) : undefined,
+      });
+      
+      setAddMedicineDialog(false);
+      setNewMedicineData({ name: '', code: '', category: '', manufacturer: '', mrp: '' });
+      alert('Medicine added to master data successfully!');
+    } catch (error: any) {
+      alert(error.message || 'Failed to add medicine');
+    }
+  };
+
   const subTotal = order.subTotal || order.medicines.reduce((sum, m) => sum + (m.price * m.quantity), 0);
   const taxAmount = order.taxAmount || 0;
   const totalAmount = order.totalAmount;
@@ -358,7 +394,19 @@ export const OrderDetailsPage: React.FC = () => {
             Cancel Order
           </Button>
         )}
-        <Button variant="outlined" startIcon={<Print />}>
+        <Button 
+          variant="outlined" 
+          startIcon={<Print />}
+          onClick={() => {
+            if (order.status === 'Order Fulfillment' || order.status === 'In Transit' || order.status === 'Delivered') {
+              import('../utils/invoice').then(module => {
+                module.generateOrderInvoice(order);
+              });
+            } else {
+              alert('Please fulfill the order first to generate invoice');
+            }
+          }}
+        >
           Print Invoice
         </Button>
       </Box>
@@ -429,7 +477,13 @@ export const OrderDetailsPage: React.FC = () => {
                         )}
                       </TableCell>
                       <TableCell align="right">{item.quantity || 0}</TableCell>
-                      <TableCell align="right">₹{(item.price || 0).toFixed(2)}</TableCell>
+                      <TableCell align="right">
+                        {item.batchNumber ? (
+                          <>₹{(item.price || 0).toFixed(2)}</>
+                        ) : (
+                          <Typography variant="caption" color="textSecondary">Enter batch</Typography>
+                        )}
+                      </TableCell>
                       <TableCell>
                         {item.batchNumber ? (
                           <Box>
@@ -455,7 +509,13 @@ export const OrderDetailsPage: React.FC = () => {
                           <Typography variant="caption" color="textSecondary">Not assigned</Typography>
                         )}
                       </TableCell>
-                      <TableCell align="right">₹{((item.price || 0) * (item.quantity || 0)).toFixed(2)}</TableCell>
+                      <TableCell align="right">
+                        {item.batchNumber ? (
+                          <>₹{((item.price || 0) * (item.quantity || 0)).toFixed(2)}</>
+                        ) : (
+                          <Typography variant="caption" color="textSecondary">-</Typography>
+                        )}
+                      </TableCell>
                       {order.status === 'Pending' && (
                         <TableCell align="center">
                           <Box display="flex" gap={0.5} justifyContent="center">
@@ -803,9 +863,71 @@ export const OrderDetailsPage: React.FC = () => {
           <Button
             variant="contained"
             onClick={handleManualEntry}
-            disabled={!manualBarcodeInput && !selectedBatch}
           >
-            Verify & Assign Batch
+            {selectedBatch || manualBarcodeInput ? 'Verify & Assign Batch' : 'Verify Without Batch'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add Medicine to Master Dialog */}
+      <Dialog open={addMedicineDialog} onClose={() => setAddMedicineDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Add New Medicine to Master Data</DialogTitle>
+        <DialogContent>
+          <Grid container spacing={2} sx={{ mt: 1 }}>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Medicine Name"
+                required
+                value={newMedicineData.name}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, name: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Code"
+                value={newMedicineData.code}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, code: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Category"
+                required
+                value={newMedicineData.category}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, category: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Manufacturer"
+                required
+                value={newMedicineData.manufacturer}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, manufacturer: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="MRP"
+                type="number"
+                value={newMedicineData.mrp}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, mrp: e.target.value })}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddMedicineDialog(false)}>Cancel</Button>
+          <Button 
+            variant="contained" 
+            onClick={handleAddMedicineToMaster}
+            disabled={createMedicineMutation.isPending}
+          >
+            Add to Master
           </Button>
         </DialogActions>
       </Dialog>

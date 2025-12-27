@@ -138,3 +138,54 @@ export interface User {
   };
   mustResetPassword?: boolean;
 }
+
+export interface Vendor {
+  id: string;
+  vendorName: string;
+  contactPerson?: string;
+  email: string;
+  phoneNumber?: string;
+  address?: string;
+  gstNumber: string; // Unique
+  drugLicenseNumber?: string; // Unique
+  pan?: string;
+  bankDetails?: {
+    accountNumber?: string;
+    ifscCode?: string;
+    bankName?: string;
+  };
+  isActive: boolean;
+  createdAt: Date | any;
+}
+
+export interface PurchaseInvoiceItem {
+  medicineId: string;
+  medicineName: string;
+  batchNumber: string;
+  mfgDate: Date | any;
+  expiryDate: Date | any;
+  quantity: number;
+  unitPrice: number;
+  purchasePrice: number;
+  mrp?: number;
+  totalAmount: number;
+}
+
+export interface PurchaseInvoice {
+  id: string;
+  invoiceNumber: string; // Unique
+  vendorId: string;
+  vendorName: string;
+  invoiceDate: Date | any;
+  items: PurchaseInvoiceItem[];
+  subTotal: number;
+  taxAmount: number;
+  taxPercentage?: number;
+  discount?: number;
+  totalAmount: number;
+  paymentStatus: PaymentStatus;
+  paymentMethod?: PaymentMethod;
+  notes?: string;
+  createdAt: Date | any;
+  createdBy: string;
+}
