@@ -7,7 +7,9 @@ import {
   ShoppingCart,
   Inventory,
   Logout,
-  Menu as MenuIcon
+  Menu as MenuIcon,
+  Business,
+  Receipt,
 } from '@mui/icons-material';
 import { logout } from '../services/firebase';
 
@@ -16,7 +18,9 @@ const drawerWidth = 240;
 const menuItems = [
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
   { text: 'Medical Stores', icon: <Store />, path: '/stores' },
+  { text: 'Vendors', icon: <Business />, path: '/vendors' },
   { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
+  { text: 'Purchase Invoices', icon: <Receipt />, path: '/purchases' },
   { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
 ];
 

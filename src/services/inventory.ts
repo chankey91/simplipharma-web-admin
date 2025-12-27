@@ -159,3 +159,16 @@ export const getExpiredMedicines = async (): Promise<Medicine[]> => {
     return expiry < today;
   });
 };
+
+export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promise<string> => {
+  const medicineRef = doc(collection(db, 'medicines'));
+  const newMedicine = {
+    ...medicineData,
+    stock: medicineData.stock || 0,
+    currentStock: medicineData.currentStock || medicineData.stock || 0,
+    stockBatches: [],
+  };
+  
+  await setDoc(medicineRef, newMedicine);
+  return medicineRef.id;
+};

@@ -10,8 +10,12 @@ import { Layout } from './components/Layout';
 import { LoginPage } from './pages/Login';
 import { DashboardPage } from './pages/Dashboard';
 import { StoresPage } from './pages/Stores';
+import { VendorsPage } from './pages/Vendors';
 import { OrdersPage } from './pages/Orders';
 import { OrderDetailsPage } from './pages/OrderDetails';
+import { PurchaseInvoicesPage } from './pages/PurchaseInvoices';
+import { CreatePurchaseInvoicePage } from './pages/CreatePurchaseInvoice';
+import { PurchaseInvoiceDetailsPage } from './pages/PurchaseInvoiceDetails';
 import { InventoryPage } from './pages/Inventory';
 import { StockUpdatePage } from './pages/StockUpdate';
 import { MedicineDetailsPage } from './pages/MedicineDetails';
@@ -100,6 +104,16 @@ function App() {
                 }
               />
               <Route
+                path="/vendors"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <VendorsPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="/orders"
                 element={
                   <ProtectedRoute>
@@ -115,6 +129,36 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <OrderDetailsPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/purchases"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <PurchaseInvoicesPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/purchases/new"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <CreatePurchaseInvoicePage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/purchases/:invoiceId"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <PurchaseInvoiceDetailsPage />
                     </Layout>
                   </ProtectedRoute>
                 }

@@ -19,6 +19,7 @@
     "firebase": "^10.7.1",
     "html5-qrcode": "^2.3.8",
     "jsbarcode": "^3.12.1",
+    "jspdf": "^3.0.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.48.0",
