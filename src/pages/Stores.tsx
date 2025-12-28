@@ -196,18 +196,51 @@ export const StoresPage: React.FC = () => {
           storeId: editingStore.id,
           data: storeData
         });
+        alert('Store updated successfully!');
       } else {
         // In creation, we'd also include the password to be sent to email
-        // For now we just add it to the data or log it
-        console.log('Sending password to store email:', formData.email, generatedPassword);
-        await createStoreMutation.mutateAsync({
-          ...storeData,
-          initialPassword: generatedPassword // This would be used by a Cloud Function
-        });
+        console.log('Creating store with email:', formData.email, 'Password:', generatedPassword);
+        try {
+          await createStoreMutation.mutateAsync({
+            ...storeData,
+            initialPassword: generatedPassword // This would be used by a Cloud Function
+          });
+          
+          // Success - email should have been sent
+          alert(`Store created successfully!\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nAn email with the password has been sent to ${formData.email}. If the email was not received, please share the password above with the store owner.`);
+        } catch (createError: any) {
+          // Check if store was created but email failed
+          if (createError.storeCreated) {
+            // Store was created but email failed
+            alert(`Store created successfully, but email could not be sent.\n\nPlease share these credentials with the store owner:\n\nEmail: ${createError.email || formData.email}\nPassword: ${createError.password || generatedPassword}\n\nNote: Cloud Function for email sending is not configured or failed. Please set up Firebase Cloud Functions with SMTP to enable email notifications.\n\nError: ${createError.message}`);
+          } else {
+            // Complete failure
+            throw createError; // Re-throw to be caught by outer catch
+          }
+        }
       }
       setOpenDialog(false);
-    } catch (error) {
+      // Reset form
+      setFormData({
+        displayName: '',
+        shopName: '',
+        phoneNumber: '',
+        address: '',
+        email: '',
+        licenceNumber: '',
+        ownerName: '',
+        licenceHolderName: '',
+        pan: '',
+        gst: '',
+        isActive: true,
+        latitude: '',
+        longitude: '',
+        shopImage: ''
+      });
+      setGeneratedPassword('');
+    } catch (error: any) {
       console.error('Error saving store:', error);
+      alert(`Failed to save store: ${error.message || 'Unknown error'}`);
     }
   };
 
