@@ -21,6 +21,7 @@ import {
   Grid,
   Divider,
   Alert,
+  Pagination,
 } from '@mui/material';
 import {
   Edit,
@@ -42,6 +43,8 @@ export const VendorsPage: React.FC = () => {
   const toggleStatusMutation = useToggleVendorStatus();
   
   const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [rowsPerPage] = useState(10);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
   const [openDialog, setOpenDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +70,14 @@ export const VendorsPage: React.FC = () => {
     vendor.gstNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     vendor.drugLicenseNumber?.toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
+
+  // Pagination
+  const totalPages = Math.ceil(filteredVendors.length / rowsPerPage);
+  const paginatedVendors = filteredVendors.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
+    setPage(value);
+  };
 
   const handleOpenCreate = () => {
     setEditingVendor(null);
@@ -168,8 +179,11 @@ export const VendorsPage: React.FC = () => {
       <TextField
         fullWidth
         placeholder="Search vendors by name, email, GST, or license number..."
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value);
+            setPage(1);
+          }}
         sx={{ mb: 2 }}
         InputProps={{
           startAdornment: (
@@ -200,7 +214,7 @@ export const VendorsPage: React.FC = () => {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredVendors.map((vendor) => (
+              paginatedVendors.map((vendor) => (
                 <TableRow key={vendor.id}>
                   <TableCell>
                     <Typography variant="body2" fontWeight="bold">{vendor.vendorName}</Typography>
@@ -237,6 +251,23 @@ export const VendorsPage: React.FC = () => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Pagination */}
+      {filteredVendors.length > 0 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+          <Pagination
+            count={totalPages}
+            page={page}
+            onChange={handlePageChange}
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredVendors.length)} of {filteredVendors.length} vendors
+          </Typography>
+        </Box>
+      )}
 
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="md" fullWidth>
         <DialogTitle>{editingVendor ? 'Edit Vendor' : 'Add New Vendor'}</DialogTitle>
