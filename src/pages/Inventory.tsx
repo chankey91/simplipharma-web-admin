@@ -22,6 +22,7 @@ import {
   FormControl,
   InputLabel,
   Select,
+  Pagination,
 } from '@mui/material';
 import {
   Search,
@@ -42,6 +43,8 @@ export const InventoryPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [stockFilter, setStockFilter] = useState<string>('All');
+  const [page, setPage] = useState(1);
+  const [rowsPerPage] = useState(10);
 
   const categories = Array.from(new Set(medicines?.map(m => m.category).filter(Boolean) || []));
 
@@ -64,6 +67,14 @@ export const InventoryPage: React.FC = () => {
     
     return matchesSearch && matchesCategory && matchesStock;
   }) || [];
+
+  // Pagination
+  const totalPages = Math.ceil(filteredMedicines.length / rowsPerPage);
+  const paginatedMedicines = filteredMedicines.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
+    setPage(value);
+  };
 
   const getStockColor = (stock: number) => {
     if (stock === 0) return 'error';
@@ -101,7 +112,10 @@ export const InventoryPage: React.FC = () => {
               fullWidth
               placeholder="Search by name, code, or manufacturer..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setPage(1);
+              }}
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
@@ -117,7 +131,10 @@ export const InventoryPage: React.FC = () => {
               <Select
                 value={categoryFilter}
                 label="Category"
-                onChange={(e) => setCategoryFilter(e.target.value)}
+                onChange={(e) => {
+                  setCategoryFilter(e.target.value);
+                  setPage(1);
+                }}
               >
                 <MenuItem value="All">All Categories</MenuItem>
                 {categories.map(cat => (
@@ -132,7 +149,10 @@ export const InventoryPage: React.FC = () => {
               <Select
                 value={stockFilter}
                 label="Stock Status"
-                onChange={(e) => setStockFilter(e.target.value)}
+                onChange={(e) => {
+                  setStockFilter(e.target.value);
+                  setPage(1);
+                }}
               >
                 <MenuItem value="All">All Stock</MenuItem>
                 <MenuItem value="In Stock">In Stock</MenuItem>
@@ -157,7 +177,14 @@ export const InventoryPage: React.FC = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredMedicines.map((medicine) => (
+            {paginatedMedicines.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} align="center">
+                  <Typography color="textSecondary" sx={{ py: 3 }}>No medicines found</Typography>
+                </TableCell>
+              </TableRow>
+            ) : (
+              paginatedMedicines.map((medicine) => (
               <TableRow key={medicine.id} hover onClick={() => navigate(`/inventory/${medicine.id}`)} sx={{ cursor: 'pointer' }}>
                 <TableCell>
                   <Typography variant="body2" fontWeight="bold">{medicine.name}</Typography>
@@ -178,10 +205,28 @@ export const InventoryPage: React.FC = () => {
                   </IconButton>
                 </TableCell>
               </TableRow>
-            ))}
+              ))
+            )}
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Pagination */}
+      {filteredMedicines.length > 0 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+          <Pagination
+            count={totalPages}
+            page={page}
+            onChange={handlePageChange}
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredMedicines.length)} of {filteredMedicines.length} medicines
+          </Typography>
+        </Box>
+      )}
     </Box>
   );
 };

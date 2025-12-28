@@ -25,6 +25,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Pagination,
 } from '@mui/material';
 import {
   Search,
@@ -45,6 +46,8 @@ export const OrdersPage: React.FC = () => {
   
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
+  const [page, setPage] = useState(1);
+  const [rowsPerPage] = useState(10);
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
@@ -61,6 +64,14 @@ export const OrdersPage: React.FC = () => {
     
     return matchesSearch && matchesStatus;
   }) || [];
+
+  // Pagination
+  const totalPages = Math.ceil(filteredOrders.length / rowsPerPage);
+  const paginatedOrders = filteredOrders.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
+    setPage(value);
+  };
 
   const ordersByStatus = {
     Pending: orders?.filter(o => o.status === 'Pending').length || 0,
@@ -132,7 +143,10 @@ export const OrdersPage: React.FC = () => {
         <TextField
           placeholder="Search orders..."
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => {
+            setSearchTerm(e.target.value);
+            setPage(1); // Reset to first page when search changes
+          }}
           sx={{ flexGrow: 1 }}
           InputProps={{
             startAdornment: (
@@ -147,7 +161,10 @@ export const OrdersPage: React.FC = () => {
           <Select
             value={statusFilter}
             label="Status"
-            onChange={(e) => setStatusFilter(e.target.value as any)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as any);
+              setPage(1); // Reset to first page when filter changes
+            }}
           >
             <MenuItem value="All">All Statuses</MenuItem>
             <MenuItem value="Pending">Pending</MenuItem>
@@ -181,7 +198,7 @@ export const OrdersPage: React.FC = () => {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredOrders.map((order) => (
+              paginatedOrders.map((order) => (
                 <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
                   <TableCell>#{order.id.substring(0, 8)}</TableCell>
                   <TableCell>
@@ -236,6 +253,23 @@ export const OrdersPage: React.FC = () => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Pagination */}
+      {filteredOrders.length > 0 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+          <Pagination
+            count={totalPages}
+            page={page}
+            onChange={handlePageChange}
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredOrders.length)} of {filteredOrders.length} orders
+          </Typography>
+        </Box>
+      )}
 
       {/* Cancel Confirmation Dialog */}
       <Dialog open={cancelDialog.open} onClose={() => setCancelDialog({ ...cancelDialog, open: false })}>

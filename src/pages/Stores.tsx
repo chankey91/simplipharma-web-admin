@@ -23,6 +23,7 @@ import {
   Alert,
   Grid,
   Divider,
+  Pagination,
 } from '@mui/material';
 import {
   Edit,
@@ -55,6 +56,8 @@ export const StoresPage: React.FC = () => {
   const toggleStatusMutation = useToggleStoreStatus();
   
   const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [rowsPerPage] = useState(10);
   const [editingStore, setEditingStore] = useState<User | null>(null);
   const [openDialog, setOpenDialog] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState('');
@@ -81,6 +84,14 @@ export const StoresPage: React.FC = () => {
     store.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
     store.displayName?.toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
+
+  // Pagination
+  const totalPages = Math.ceil(filteredStores.length / rowsPerPage);
+  const paginatedStores = filteredStores.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
+    setPage(value);
+  };
 
   const handleOpenCreate = () => {
     setEditingStore(null);
@@ -215,7 +226,10 @@ export const StoresPage: React.FC = () => {
         fullWidth
         placeholder="Search stores..."
         value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
+        onChange={(e) => {
+          setSearchTerm(e.target.value);
+          setPage(1);
+        }}
         sx={{ mb: 2 }}
         InputProps={{
           startAdornment: (
@@ -240,7 +254,14 @@ export const StoresPage: React.FC = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredStores.map((store) => (
+            {paginatedStores.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} align="center">
+                  <Typography color="textSecondary" sx={{ py: 3 }}>No stores found</Typography>
+                </TableCell>
+              </TableRow>
+            ) : (
+              paginatedStores.map((store) => (
               <TableRow key={store.id}>
                 <TableCell>
                   <Typography variant="body2" fontWeight="bold">{store.shopName}</Typography>
@@ -276,10 +297,28 @@ export const StoresPage: React.FC = () => {
                   </IconButton>
                 </TableCell>
               </TableRow>
-            ))}
+              ))
+            )}
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Pagination */}
+      {filteredStores.length > 0 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+          <Pagination
+            count={totalPages}
+            page={page}
+            onChange={handlePageChange}
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredStores.length)} of {filteredStores.length} stores
+          </Typography>
+        </Box>
+      )}
 
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="md" fullWidth>
         <DialogTitle>{editingStore ? 'Edit Store' : 'Add New Store'}</DialogTitle>

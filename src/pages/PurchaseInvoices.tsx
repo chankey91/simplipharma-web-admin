@@ -21,6 +21,7 @@ import {
   Grid,
   Card,
   CardContent,
+  Pagination,
 } from '@mui/material';
 import {
   Search,
@@ -40,6 +41,8 @@ export const PurchaseInvoicesPage: React.FC = () => {
   
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [page, setPage] = useState(1);
+  const [rowsPerPage] = useState(10);
 
   const filteredInvoices = invoices?.filter(invoice => {
     const matchesSearch = 
@@ -51,6 +54,14 @@ export const PurchaseInvoicesPage: React.FC = () => {
     
     return matchesSearch && matchesStatus;
   }) || [];
+
+  // Pagination
+  const totalPages = Math.ceil(filteredInvoices.length / rowsPerPage);
+  const paginatedInvoices = filteredInvoices.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
+    setPage(value);
+  };
 
   const totalPurchases = invoices?.reduce((sum, inv) => sum + inv.totalAmount, 0) || 0;
   const paidInvoices = invoices?.filter(inv => inv.paymentStatus === 'Paid').length || 0;
@@ -108,7 +119,10 @@ export const PurchaseInvoicesPage: React.FC = () => {
         <TextField
           placeholder="Search invoices..."
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => {
+            setSearchTerm(e.target.value);
+            setPage(1);
+          }}
           sx={{ flexGrow: 1 }}
           InputProps={{
             startAdornment: (
@@ -123,7 +137,10 @@ export const PurchaseInvoicesPage: React.FC = () => {
           <Select
             value={statusFilter}
             label="Payment Status"
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(1);
+            }}
           >
             <MenuItem value="All">All Statuses</MenuItem>
             <MenuItem value="Paid">Paid</MenuItem>
@@ -155,7 +172,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredInvoices.map((invoice) => (
+              paginatedInvoices.map((invoice) => (
                 <TableRow key={invoice.id} hover onClick={() => navigate(`/purchases/${invoice.id}`)} sx={{ cursor: 'pointer' }}>
                   <TableCell>
                     <Typography variant="body2" fontWeight="bold">{invoice.invoiceNumber}</Typography>
@@ -190,6 +207,23 @@ export const PurchaseInvoicesPage: React.FC = () => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Pagination */}
+      {filteredInvoices.length > 0 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+          <Pagination
+            count={totalPages}
+            page={page}
+            onChange={handlePageChange}
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredInvoices.length)} of {filteredInvoices.length} invoices
+          </Typography>
+        </Box>
+      )}
     </Box>
   );
 };
