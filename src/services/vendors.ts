@@ -38,7 +38,23 @@ export const checkLicenseUnique = async (licenseNumber: string, excludeId?: stri
   return snapshot.docs.every(d => !excludeId || d.id !== excludeId);
 };
 
+export const checkPhoneUnique = async (phoneNumber: string, excludeId?: string): Promise<boolean> => {
+  if (!phoneNumber) return true;
+  const vendorsCol = collection(db, 'vendors');
+  const q = query(vendorsCol, where('phoneNumber', '==', phoneNumber));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.every(d => !excludeId || d.id !== excludeId);
+};
+
 export const createVendor = async (vendorData: Omit<Vendor, 'id'>) => {
+  // Check phone number uniqueness
+  if (vendorData.phoneNumber) {
+    const isPhoneUnique = await checkPhoneUnique(vendorData.phoneNumber);
+    if (!isPhoneUnique) {
+      throw new Error('Phone Number already exists');
+    }
+  }
+  
   // Check GST uniqueness
   if (vendorData.gstNumber) {
     const isGSTUnique = await checkGSTUnique(vendorData.gstNumber);
@@ -66,6 +82,14 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'>) => {
 
 export const updateVendor = async (vendorId: string, vendorData: Partial<Vendor>) => {
   const vendorRef = doc(db, 'vendors', vendorId);
+  
+  // Check phone number uniqueness if being updated
+  if (vendorData.phoneNumber) {
+    const isPhoneUnique = await checkPhoneUnique(vendorData.phoneNumber, vendorId);
+    if (!isPhoneUnique) {
+      throw new Error('Phone Number already exists');
+    }
+  }
   
   // Check GST uniqueness if being updated
   if (vendorData.gstNumber) {

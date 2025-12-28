@@ -6,15 +6,90 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
   const snapshot = await getDocs(medicinesCol);
   return snapshot.docs.map(doc => {
     const data = doc.data();
-    // Ensure string fields are properly converted
-    return {
+    
+    // Calculate stock from stockBatches if available
+    let calculatedStock = data.stock || data.currentStock || 0;
+    if (data.stockBatches && Array.isArray(data.stockBatches) && data.stockBatches.length > 0) {
+      calculatedStock = data.stockBatches.reduce((sum: number, batch: any) => {
+        return sum + (batch.quantity || 0);
+      }, 0);
+    }
+    
+    // Process stockBatches first to ensure MRP is properly extracted
+    const processedBatches = data.stockBatches ? data.stockBatches.map((batch: any) => {
+      // Extract and convert MRP - handle all possible formats
+      let mrpValue: number | undefined = undefined;
+      
+      // Check if MRP exists in any form
+      const rawMrp = batch.mrp;
+      
+      if (rawMrp !== undefined && rawMrp !== null) {
+        if (typeof rawMrp === 'number') {
+          mrpValue = isNaN(rawMrp) ? undefined : rawMrp;
+        } else if (typeof rawMrp === 'string') {
+          const trimmed = rawMrp.trim();
+          if (trimmed !== '' && trimmed !== 'null' && trimmed !== 'undefined') {
+            const parsed = parseFloat(trimmed);
+            mrpValue = !isNaN(parsed) ? parsed : undefined;
+          }
+        } else if (typeof rawMrp === 'object' && rawMrp.value !== undefined) {
+          // Handle case where MRP might be an object with a value property
+          mrpValue = typeof rawMrp.value === 'number' ? rawMrp.value : parseFloat(rawMrp.value);
+          if (isNaN(mrpValue)) mrpValue = undefined;
+        }
+      }
+      
+      // Log for debugging specific medicine
+      if (doc.id === '0IXu5mRZu10DpmnpSXSg') {
+        console.log(`[DEBUG ${doc.id}] Batch ${batch.batchNumber}:`, {
+          rawMrp: rawMrp,
+          mrpType: typeof rawMrp,
+          processedMrp: mrpValue,
+          batchKeys: Object.keys(batch),
+          fullBatch: JSON.parse(JSON.stringify(batch))
+        });
+      }
+      
+      return {
+        id: batch.id || Date.now().toString() + Math.random(),
+        batchNumber: batch.batchNumber || '',
+        quantity: batch.quantity || 0,
+        expiryDate: batch.expiryDate?.toDate ? batch.expiryDate : (batch.expiryDate ? batch.expiryDate : undefined),
+        mfgDate: batch.mfgDate?.toDate ? batch.mfgDate : (batch.mfgDate ? batch.mfgDate : undefined),
+        purchaseDate: batch.purchaseDate?.toDate ? batch.purchaseDate : (batch.purchaseDate ? batch.purchaseDate : undefined),
+        purchasePrice: batch.purchasePrice !== undefined && batch.purchasePrice !== null 
+          ? (typeof batch.purchasePrice === 'number' ? batch.purchasePrice : parseFloat(String(batch.purchasePrice))) 
+          : undefined,
+        mrp: mrpValue,
+      };
+    }) : undefined;
+    
+    // Create medicine object - exclude stockBatches from spread to avoid conflicts
+    const { stockBatches: _, ...dataWithoutBatches } = data;
+    
+    const medicine: Medicine = {
       id: doc.id,
-      ...data,
+      ...dataWithoutBatches,
       name: String(data.name || ''),
       manufacturer: String(data.manufacturer || ''),
       category: String(data.category || ''),
       code: data.code ? String(data.code) : undefined,
-    } as Medicine;
+      stock: calculatedStock,
+      currentStock: calculatedStock,
+      stockBatches: processedBatches, // Use processed batches with proper MRP
+    };
+    
+    // Debug log for specific medicine
+    if (doc.id === '0IXu5mRZu10DpmnpSXSg') {
+      console.log(`[DEBUG] Medicine ${doc.id} (${data.name}):`, {
+        stockBatchesCount: processedBatches?.length || 0,
+        processedBatches: processedBatches,
+        rawDataBatches: data.stockBatches,
+        medicineStockBatches: medicine.stockBatches
+      });
+    }
+    
+    return medicine;
   });
 };
 
@@ -53,35 +128,127 @@ export const addStockBatch = async (
   const medicine = medicineDoc.data() as Medicine;
   const batches = medicine.stockBatches || [];
   
-  const newBatch: StockBatch = {
+  const newBatch: any = {
     id: Date.now().toString(),
-    ...batch,
-    expiryDate: batch.expiryDate instanceof Date 
-      ? Timestamp.fromDate(batch.expiryDate)
-      : batch.expiryDate,
-    purchaseDate: batch.purchaseDate instanceof Date
-      ? Timestamp.fromDate(batch.purchaseDate)
-      : batch.purchaseDate || Timestamp.now()
+    batchNumber: batch.batchNumber,
+    quantity: batch.quantity,
   };
   
-  batches.push(newBatch);
+  // Add optional fields only if they exist
+  if (batch.expiryDate) {
+    newBatch.expiryDate = batch.expiryDate instanceof Date 
+      ? Timestamp.fromDate(batch.expiryDate)
+      : (batch.expiryDate.toDate ? batch.expiryDate : Timestamp.fromDate(new Date(batch.expiryDate)));
+  }
+  
+  if (batch.mfgDate) {
+    newBatch.mfgDate = batch.mfgDate instanceof Date 
+      ? Timestamp.fromDate(batch.mfgDate)
+      : (batch.mfgDate.toDate ? batch.mfgDate : Timestamp.fromDate(new Date(batch.mfgDate)));
+  }
+  
+  if (batch.purchaseDate) {
+    newBatch.purchaseDate = batch.purchaseDate instanceof Date
+      ? Timestamp.fromDate(batch.purchaseDate)
+      : (batch.purchaseDate.toDate ? batch.purchaseDate : Timestamp.fromDate(new Date(batch.purchaseDate)));
+  } else {
+    newBatch.purchaseDate = Timestamp.now();
+  }
+  
+  if (batch.purchasePrice !== undefined && batch.purchasePrice !== null) {
+    newBatch.purchasePrice = batch.purchasePrice;
+  }
+  
+  if (batch.mrp !== undefined && batch.mrp !== null) {
+    newBatch.mrp = batch.mrp;
+  }
+  
+  // Check if batch with same batch number already exists
+  const existingBatchIndex = batches.findIndex(b => b.batchNumber === batch.batchNumber);
+  
+  if (existingBatchIndex >= 0) {
+    // Update existing batch quantity (merge batches with same batch number)
+    console.log(`Batch ${batch.batchNumber} already exists, updating quantity from ${batches[existingBatchIndex].quantity} to ${(batches[existingBatchIndex].quantity || 0) + (batch.quantity || 0)}`);
+    batches[existingBatchIndex].quantity = (batches[existingBatchIndex].quantity || 0) + (batch.quantity || 0);
+    // Update other fields if provided
+    if (newBatch.expiryDate) batches[existingBatchIndex].expiryDate = newBatch.expiryDate;
+    if (newBatch.mfgDate) batches[existingBatchIndex].mfgDate = newBatch.mfgDate;
+    if (newBatch.purchaseDate) batches[existingBatchIndex].purchaseDate = newBatch.purchaseDate;
+    if (newBatch.purchasePrice !== undefined && newBatch.purchasePrice !== null) {
+      batches[existingBatchIndex].purchasePrice = newBatch.purchasePrice;
+    }
+    // Always update MRP if provided (even if it's 0, but we check for undefined/null)
+    if (newBatch.mrp !== undefined && newBatch.mrp !== null) {
+      batches[existingBatchIndex].mrp = newBatch.mrp;
+      console.log(`Updated MRP for batch ${batch.batchNumber} to ${newBatch.mrp}`);
+    } else {
+      console.log(`MRP not provided for batch ${batch.batchNumber}, keeping existing value: ${batches[existingBatchIndex].mrp}`);
+    }
+  } else {
+    // Add new batch
+    console.log(`Adding new batch ${batch.batchNumber} with quantity ${batch.quantity}, MRP: ${newBatch.mrp}`);
+    batches.push(newBatch);
+  }
   
   // Calculate total stock from all batches
-  const totalStock = batches.reduce((sum, b) => sum + b.quantity, 0);
+  const totalStock = batches.reduce((sum, b) => sum + (b.quantity || 0), 0);
+  console.log(`Total stock calculated: ${totalStock} from ${batches.length} batches`);
   
-  await updateDoc(medicineRef, {
-    stockBatches: batches.map(b => ({
-      ...b,
-      expiryDate: b.expiryDate instanceof Date 
+  // Prepare batches for Firestore, ensuring all dates are Timestamps and removing undefined values
+  const firestoreBatches = batches.map(b => {
+    const firestoreBatch: any = {
+      id: b.id,
+      batchNumber: b.batchNumber,
+      quantity: b.quantity || 0,
+    };
+    
+    if (b.expiryDate) {
+      firestoreBatch.expiryDate = b.expiryDate instanceof Date 
         ? Timestamp.fromDate(b.expiryDate)
-        : b.expiryDate,
-      purchaseDate: b.purchaseDate instanceof Date
+        : (b.expiryDate && typeof b.expiryDate.toDate === 'function' ? b.expiryDate : Timestamp.fromDate(new Date(b.expiryDate)));
+    }
+    
+    if (b.mfgDate) {
+      firestoreBatch.mfgDate = b.mfgDate instanceof Date 
+        ? Timestamp.fromDate(b.mfgDate)
+        : (b.mfgDate && typeof b.mfgDate.toDate === 'function' ? b.mfgDate : Timestamp.fromDate(new Date(b.mfgDate)));
+    }
+    
+    if (b.purchaseDate) {
+      firestoreBatch.purchaseDate = b.purchaseDate instanceof Date
         ? Timestamp.fromDate(b.purchaseDate)
-        : b.purchaseDate
-    })),
+        : (b.purchaseDate && typeof b.purchaseDate.toDate === 'function' ? b.purchaseDate : Timestamp.fromDate(new Date(b.purchaseDate)));
+    }
+    
+    if (b.purchasePrice !== undefined && b.purchasePrice !== null) {
+      firestoreBatch.purchasePrice = typeof b.purchasePrice === 'number' ? b.purchasePrice : parseFloat(b.purchasePrice);
+    }
+    
+    // Ensure MRP is saved as a number if it exists
+    if (b.mrp !== undefined && b.mrp !== null) {
+      const mrpValue = typeof b.mrp === 'number' ? b.mrp : parseFloat(b.mrp);
+      if (!isNaN(mrpValue)) {
+        firestoreBatch.mrp = mrpValue;
+        console.log(`Saving MRP ${mrpValue} for batch ${b.batchNumber}`);
+      } else {
+        console.warn(`Invalid MRP value for batch ${b.batchNumber}: ${b.mrp}`);
+      }
+    } else {
+      console.log(`No MRP for batch ${b.batchNumber}`);
+    }
+    
+    return firestoreBatch;
+  });
+  
+  const updateData: any = {
+    stockBatches: firestoreBatches,
     stock: totalStock,
     currentStock: totalStock
-  });
+  };
+  
+  console.log(`Updating medicine ${medicineId} with stock: ${totalStock}, batches: ${firestoreBatches.length}`);
+  await updateDoc(medicineRef, updateData);
+  console.log(`✓ Medicine ${medicineId} stock updated successfully. New stock: ${totalStock}`);
 };
 
 export const findMedicineByBarcode = async (barcode: string): Promise<Medicine | null> => {

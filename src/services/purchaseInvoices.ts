@@ -18,6 +18,7 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
           ...item,
           mfgDate: item.mfgDate?.toDate() || undefined,
           expiryDate: item.expiryDate?.toDate() || undefined,
+          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp)) : undefined,
         })) || []
       } as PurchaseInvoice;
     });
@@ -35,6 +36,7 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
           ...item,
           mfgDate: item.mfgDate?.toDate() || undefined,
           expiryDate: item.expiryDate?.toDate() || undefined,
+          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp)) : undefined,
         })) || []
       } as PurchaseInvoice;
     });
@@ -74,6 +76,26 @@ export const checkInvoiceNumberUnique = async (invoiceNumber: string, excludeId?
   return snapshot.docs.every(d => !excludeId || d.id !== excludeId);
 };
 
+// Helper function to remove undefined values from an object
+const removeUndefined = (obj: any): any => {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(removeUndefined);
+  }
+  if (typeof obj === 'object') {
+    const cleaned: any = {};
+    for (const key in obj) {
+      if (obj[key] !== undefined) {
+        cleaned[key] = removeUndefined(obj[key]);
+      }
+    }
+    return cleaned;
+  }
+  return obj;
+};
+
 export const createPurchaseInvoice = async (
   invoiceData: Omit<PurchaseInvoice, 'id'>,
   updateStock: boolean = true
@@ -86,39 +108,135 @@ export const createPurchaseInvoice = async (
   
   const invoiceRef = doc(collection(db, 'purchaseInvoices'));
   
-  // Prepare items with proper date conversion
-  const items = invoiceData.items.map(item => ({
-    ...item,
-    mfgDate: item.mfgDate instanceof Date ? Timestamp.fromDate(item.mfgDate) : item.mfgDate,
-    expiryDate: item.expiryDate instanceof Date ? Timestamp.fromDate(item.expiryDate) : item.expiryDate,
-  }));
+  // Prepare items with proper date conversion and remove undefined values
+  const items = invoiceData.items.map(item => {
+    const cleanedItem: any = {
+      medicineId: item.medicineId,
+      medicineName: item.medicineName,
+      batchNumber: item.batchNumber,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      purchasePrice: item.purchasePrice,
+      totalAmount: item.totalAmount,
+    };
+    
+    // Add optional fields only if they exist
+    if (item.mfgDate) {
+      cleanedItem.mfgDate = item.mfgDate instanceof Date ? Timestamp.fromDate(item.mfgDate) : item.mfgDate;
+    }
+    if (item.expiryDate) {
+      cleanedItem.expiryDate = item.expiryDate instanceof Date ? Timestamp.fromDate(item.expiryDate) : item.expiryDate;
+    }
+    if (item.mrp !== undefined && item.mrp !== null) {
+      cleanedItem.mrp = item.mrp;
+    }
+    
+    return cleanedItem;
+  });
   
-  await setDoc(invoiceRef, {
-    ...invoiceData,
-    items,
+  // Prepare invoice data, removing undefined values
+  const invoiceDoc: any = {
+    invoiceNumber: invoiceData.invoiceNumber,
+    vendorId: invoiceData.vendorId,
+    vendorName: invoiceData.vendorName,
     invoiceDate: invoiceData.invoiceDate instanceof Date 
       ? Timestamp.fromDate(invoiceData.invoiceDate)
       : invoiceData.invoiceDate,
+    items,
+    subTotal: invoiceData.subTotal,
+    taxAmount: invoiceData.taxAmount,
+    totalAmount: invoiceData.totalAmount,
+    paymentStatus: invoiceData.paymentStatus,
+    createdBy: invoiceData.createdBy,
     createdAt: Timestamp.now()
-  });
+  };
+  
+  // Add optional fields only if they exist
+  if (invoiceData.taxPercentage !== undefined && invoiceData.taxPercentage !== null) {
+    invoiceDoc.taxPercentage = invoiceData.taxPercentage;
+  }
+  if (invoiceData.discount !== undefined && invoiceData.discount !== null) {
+    invoiceDoc.discount = invoiceData.discount;
+  }
+  if (invoiceData.paymentMethod) {
+    invoiceDoc.paymentMethod = invoiceData.paymentMethod;
+  }
+  if (invoiceData.notes) {
+    invoiceDoc.notes = invoiceData.notes;
+  }
+  
+  await setDoc(invoiceRef, invoiceDoc);
   
   // Update medicine stock with purchase batches
   if (updateStock) {
+    const stockUpdateErrors: string[] = [];
+    const stockUpdatePromises: Promise<void>[] = [];
+    
     for (const item of invoiceData.items) {
-      try {
-        await addStockBatch(item.medicineId, {
-          batchNumber: item.batchNumber,
-          quantity: item.quantity,
-          mfgDate: item.mfgDate,
-          expiryDate: item.expiryDate,
-          purchaseDate: invoiceData.invoiceDate,
-          purchasePrice: item.purchasePrice,
-          mrp: item.mrp,
-        });
-      } catch (error) {
-        console.error(`Failed to update stock for medicine ${item.medicineId}:`, error);
-        // Continue with other items even if one fails
-      }
+      const updatePromise = (async () => {
+        try {
+          if (!item.medicineId) {
+            throw new Error('Medicine ID is missing');
+          }
+          if (!item.batchNumber) {
+            throw new Error('Batch number is missing');
+          }
+          if (!item.quantity || item.quantity <= 0) {
+            throw new Error('Invalid quantity');
+          }
+          
+          const batchData: any = {
+            batchNumber: item.batchNumber,
+            quantity: item.quantity,
+            purchasePrice: item.purchasePrice || 0,
+          };
+          
+          // Add optional fields only if they exist
+          if (item.mfgDate) {
+            batchData.mfgDate = item.mfgDate instanceof Date ? item.mfgDate : new Date(item.mfgDate);
+          }
+          if (item.expiryDate) {
+            batchData.expiryDate = item.expiryDate instanceof Date ? item.expiryDate : new Date(item.expiryDate);
+          }
+          if (invoiceData.invoiceDate) {
+            batchData.purchaseDate = invoiceData.invoiceDate instanceof Date ? invoiceData.invoiceDate : new Date(invoiceData.invoiceDate);
+          }
+          if (item.mrp !== undefined && item.mrp !== null) {
+            // Ensure MRP is a number
+            batchData.mrp = typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp);
+            if (isNaN(batchData.mrp)) {
+              console.warn(`Invalid MRP value for item ${item.medicineName}: ${item.mrp}`);
+              delete batchData.mrp;
+            }
+          }
+          
+          console.log(`Updating stock for medicine ${item.medicineId} with batch data:`, batchData);
+          await addStockBatch(item.medicineId, batchData);
+          console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
+        } catch (error: any) {
+          const errorMsg = `Failed to update stock for ${item.medicineName || item.medicineId} (${item.medicineId}): ${error.message || error}`;
+          console.error(errorMsg, error);
+          stockUpdateErrors.push(errorMsg);
+          throw error; // Re-throw to be caught by Promise.allSettled
+        }
+      })();
+      
+      stockUpdatePromises.push(updatePromise);
+    }
+    
+    // Wait for all stock updates to complete
+    const results = await Promise.allSettled(stockUpdatePromises);
+    
+    // Log results
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+    
+    console.log(`Stock update summary: ${successful} successful, ${failed} failed`);
+    
+    if (stockUpdateErrors.length > 0) {
+      console.warn('Some stock updates failed:', stockUpdateErrors);
+      // You could optionally throw an error here if you want to prevent invoice creation on stock update failure
+      // throw new Error(`Failed to update stock for ${stockUpdateErrors.length} item(s). Please update stock manually.`);
     }
   }
   
@@ -148,5 +266,103 @@ export const updatePurchaseInvoice = async (
   }
   
   await updateDoc(invoiceRef, updateData);
+};
+
+export const updateStockForExistingInvoice = async (invoiceId: string) => {
+  const invoice = await getPurchaseInvoiceById(invoiceId);
+  if (!invoice) {
+    throw new Error('Invoice not found');
+  }
+  
+  const stockUpdateErrors: string[] = [];
+  const stockUpdatePromises: Promise<void>[] = [];
+  
+  for (const item of invoice.items) {
+    const updatePromise = (async () => {
+      try {
+        if (!item.medicineId) {
+          throw new Error('Medicine ID is missing');
+        }
+        if (!item.batchNumber) {
+          throw new Error('Batch number is missing');
+        }
+        if (!item.quantity || item.quantity <= 0) {
+          throw new Error('Invalid quantity');
+        }
+        
+        const batchData: any = {
+          batchNumber: item.batchNumber,
+          quantity: item.quantity,
+          purchasePrice: item.purchasePrice || 0,
+        };
+        
+        // Add optional fields only if they exist
+        if (item.mfgDate) {
+          batchData.mfgDate = item.mfgDate instanceof Date ? item.mfgDate : new Date(item.mfgDate);
+        }
+        if (item.expiryDate) {
+          batchData.expiryDate = item.expiryDate instanceof Date ? item.expiryDate : new Date(item.expiryDate);
+        }
+        if (invoice.invoiceDate) {
+          batchData.purchaseDate = invoice.invoiceDate instanceof Date ? invoice.invoiceDate : new Date(invoice.invoiceDate);
+        }
+        if (item.mrp !== undefined && item.mrp !== null) {
+          // Ensure MRP is a number
+          batchData.mrp = typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp);
+          if (isNaN(batchData.mrp)) {
+            console.warn(`Invalid MRP value for item ${item.medicineName}: ${item.mrp}`);
+            delete batchData.mrp;
+          }
+        }
+        
+        console.log(`Updating stock for existing invoice - medicine ${item.medicineId} with batch data:`, batchData);
+        await addStockBatch(item.medicineId, batchData);
+        console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
+      } catch (error: any) {
+        const errorMsg = `Failed to update stock for ${item.medicineName || item.medicineId} (${item.medicineId}): ${error.message || error}`;
+        console.error(errorMsg, error);
+        stockUpdateErrors.push(errorMsg);
+        throw error;
+      }
+    })();
+    
+    stockUpdatePromises.push(updatePromise);
+  }
+  
+  // Wait for all stock updates to complete
+  const results = await Promise.allSettled(stockUpdatePromises);
+  
+  const successful = results.filter(r => r.status === 'fulfilled').length;
+  const failed = results.filter(r => r.status === 'rejected').length;
+  
+  console.log(`Stock update summary for invoice ${invoiceId}: ${successful} successful, ${failed} failed`);
+  
+  if (stockUpdateErrors.length > 0) {
+    throw new Error(`Failed to update stock for ${stockUpdateErrors.length} item(s): ${stockUpdateErrors.join('; ')}`);
+  }
+  
+  return { successful, failed };
+};
+
+export const updateStockForAllExistingInvoices = async () => {
+  const invoices = await getAllPurchaseInvoices();
+  const results = [];
+  
+  for (const invoice of invoices) {
+    try {
+      const result = await updateStockForExistingInvoice(invoice.id);
+      results.push({ invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber, ...result });
+    } catch (error: any) {
+      results.push({ 
+        invoiceId: invoice.id, 
+        invoiceNumber: invoice.invoiceNumber, 
+        successful: 0, 
+        failed: invoice.items.length,
+        error: error.message 
+      });
+    }
+  }
+  
+  return results;
 };
 

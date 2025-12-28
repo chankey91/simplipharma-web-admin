@@ -25,9 +25,6 @@ import {
 } from '@mui/material';
 import {
   Search,
-  Edit,
-  Add,
-  UploadFile,
   Visibility,
 } from '@mui/icons-material';
 import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
@@ -35,7 +32,6 @@ import { Medicine } from '../types';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
-import * as XLSX from 'xlsx';
 
 export const InventoryPage: React.FC = () => {
   const { data: medicines, isLoading } = useMedicines();
@@ -69,23 +65,6 @@ export const InventoryPage: React.FC = () => {
     return matchesSearch && matchesCategory && matchesStock;
   }) || [];
 
-  const handleExcelUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json(worksheet);
-        console.log('Uploaded Excel Data:', json);
-        alert('Excel data read successfully! Check console for details. (Implementation of bulk save pending)');
-      };
-      reader.readAsArrayBuffer(file);
-    }
-  };
-
   const getStockColor = (stock: number) => {
     if (stock === 0) return 'error';
     if (stock < 10) return 'warning';
@@ -98,23 +77,6 @@ export const InventoryPage: React.FC = () => {
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Inventory Management</Typography>
-        <Box gap={2} display="flex">
-          <Button
-            variant="outlined"
-            component="label"
-            startIcon={<UploadFile />}
-          >
-            Upload Excel
-            <input type="file" hidden accept=".xlsx, .xls" onChange={handleExcelUpload} />
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<Add />}
-            onClick={() => navigate('/inventory/stock-update')}
-          >
-            Add/Update Stock
-          </Button>
-        </Box>
       </Box>
 
       {/* Alerts */}
@@ -191,8 +153,6 @@ export const InventoryPage: React.FC = () => {
               <TableCell>Category</TableCell>
               <TableCell>Manufacturer</TableCell>
               <TableCell align="right">Stock</TableCell>
-              <TableCell align="right">Price/MRP</TableCell>
-              <TableCell>Expiry Date</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -213,24 +173,8 @@ export const InventoryPage: React.FC = () => {
                   />
                 </TableCell>
                 <TableCell align="right">
-                  <Typography variant="body2">₹{(medicine.price || 0).toFixed(2)}</Typography>
-                  {medicine.mrp && (
-                    <Typography variant="caption" color="textSecondary">MRP: ₹{medicine.mrp.toFixed(2)}</Typography>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {medicine.expiryDate ? (
-                    <Typography variant="body2">
-                      {format(medicine.expiryDate instanceof Date ? medicine.expiryDate : medicine.expiryDate.toDate(), 'MMM dd, yyyy')}
-                    </Typography>
-                  ) : 'N/A'}
-                </TableCell>
-                <TableCell align="right">
                   <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); navigate(`/inventory/${medicine.id}`); }}>
                     <Visibility />
-                  </IconButton>
-                  <IconButton size="small" onClick={(e) => { e.stopPropagation(); navigate(`/inventory/stock-update?medicineId=${medicine.id}`); }}>
-                    <Edit />
                   </IconButton>
                 </TableCell>
               </TableRow>
