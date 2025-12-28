@@ -191,7 +191,13 @@ export const OrdersPage: React.FC = () => {
                   </TableCell>
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
                   <TableCell>{order.medicines.length} items</TableCell>
-                  <TableCell>₹{order.totalAmount.toFixed(2)}</TableCell>
+                  <TableCell>
+                    {order.status === 'Pending' ? (
+                      <Typography variant="caption" color="textSecondary">-</Typography>
+                    ) : (
+                      <>₹{order.totalAmount.toFixed(2)}</>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Chip
                       label={order.status}

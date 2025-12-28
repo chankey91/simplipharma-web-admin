@@ -43,6 +43,7 @@ import { PurchaseInvoiceItem, Medicine, Vendor } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
+import { Breadcrumbs } from '../components/Breadcrumbs';
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -112,9 +113,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       mfgDate: '',
       expiryDate: '',
       quantity: '',
-      unitPrice: selectedMedicine.purchasePrice?.toString() || '',
-      purchasePrice: selectedMedicine.purchasePrice?.toString() || '',
-      mrp: selectedMedicine.mrp?.toString() || '',
+      unitPrice: '',
+      purchasePrice: '',
+      mrp: '',
     });
     setItemDialog({ open: true, itemIndex: null });
   };
@@ -265,6 +266,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   return (
     <Box>
+      <Breadcrumbs items={[
+        { label: 'Purchase Invoices', path: '/purchases' },
+        { label: 'Create Invoice' }
+      ]} />
       <Box display="flex" alignItems="center" mb={3}>
         <IconButton onClick={() => navigate('/purchases')} sx={{ mr: 2 }}>
           <ArrowBack />
@@ -541,7 +546,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
                 label="MRP"
@@ -551,7 +556,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
                 label="Total Amount"

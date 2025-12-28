@@ -154,6 +154,11 @@ export const updateOrderDispatch = async (
 export const markOrderDelivered = async (orderId: string, deliveredBy: string) => {
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
+  
+  if (!orderDoc.exists()) {
+    throw new Error('Order not found');
+  }
+  
   const currentTimeline = orderDoc.data()?.timeline || [];
   
   await updateDoc(orderRef, {
@@ -162,7 +167,7 @@ export const markOrderDelivered = async (orderId: string, deliveredBy: string) =
       deliveredAt: Timestamp.now(),
       deliveredBy
     },
-    timeline: [...currentTimeline, createTimelineEvent('Delivered', deliveredBy)]
+    timeline: [...currentTimeline, createTimelineEvent('Delivered', deliveredBy, 'Order delivered successfully')]
   });
 };
 

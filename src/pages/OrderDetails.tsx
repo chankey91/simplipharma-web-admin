@@ -48,7 +48,9 @@ import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { BarcodeScanner } from '../components/BarcodeScanner';
+import { Breadcrumbs } from '../components/Breadcrumbs';
 import { OrderStatus } from '../types';
+import { generateOrderInvoice } from '../utils/invoice';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -170,7 +172,10 @@ export const OrderDetailsPage: React.FC = () => {
 
   const executeAction = async () => {
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user) {
+      alert('You must be logged in to perform this action');
+      return;
+    }
 
     try {
       if (confirmDialog.action === 'fulfill') {
@@ -189,6 +194,7 @@ export const OrderDetailsPage: React.FC = () => {
             totalAmount
           }
         });
+        alert('Order fulfilled successfully!');
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
           orderId: order.id,
@@ -201,21 +207,29 @@ export const OrderDetailsPage: React.FC = () => {
             dispatchNotes: dispatchInfo.notes
           }
         });
+        alert('Order dispatched successfully!');
       } else if (confirmDialog.action === 'deliver') {
         await deliverOrderMutation.mutateAsync({
           orderId: order.id,
           deliveredBy: user.uid
         });
+        alert('Order marked as delivered successfully!');
       } else if (confirmDialog.action === 'cancel') {
+        if (!cancelReason.trim()) {
+          alert('Please provide a cancellation reason');
+          return;
+        }
         await cancelOrderMutation.mutateAsync({
           orderId: order.id,
           cancelledBy: user.uid,
           reason: cancelReason
         });
+        alert('Order cancelled successfully!');
       }
       setConfirmDialog({ ...confirmDialog, open: false });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Action failed:', error);
+      alert(`Failed to ${confirmDialog.action} order: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -265,6 +279,10 @@ export const OrderDetailsPage: React.FC = () => {
         if (foundBatch) {
           newMedicines[scanningItemIndex].batchNumber = foundBatch.batchNumber;
           newMedicines[scanningItemIndex].batchExpiryDate = foundBatch.expiryDate;
+          // Update price from batch MRP if available, otherwise keep original price
+          if (foundBatch.mrp && foundBatch.mrp > 0) {
+            newMedicines[scanningItemIndex].price = foundBatch.mrp;
+          }
         }
         setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
       } else {
@@ -310,6 +328,10 @@ export const OrderDetailsPage: React.FC = () => {
           if (foundBatch) {
             newMedicines[itemIndex].batchNumber = foundBatch.batchNumber;
             newMedicines[itemIndex].batchExpiryDate = foundBatch.expiryDate;
+            // Update price from batch MRP if available, otherwise keep original price
+            if (foundBatch.mrp && foundBatch.mrp > 0) {
+              newMedicines[itemIndex].price = foundBatch.mrp;
+            }
           }
         } else if (selectedBatch && medicine.stockBatches) {
           // Use selected batch
@@ -318,6 +340,10 @@ export const OrderDetailsPage: React.FC = () => {
             newMedicines[itemIndex].verified = true;
             newMedicines[itemIndex].batchNumber = batch.batchNumber;
             newMedicines[itemIndex].batchExpiryDate = batch.expiryDate;
+            // Update price from batch MRP if available, otherwise keep original price
+            if (batch.mrp && batch.mrp > 0) {
+              newMedicines[itemIndex].price = batch.mrp;
+            }
           }
         } else {
           // Mark as verified without batch
@@ -371,12 +397,20 @@ export const OrderDetailsPage: React.FC = () => {
     }
   };
 
-  const subTotal = order.subTotal || order.medicines.reduce((sum, m) => sum + (m.price * m.quantity), 0);
-  const taxAmount = order.taxAmount || 0;
-  const totalAmount = order.totalAmount;
+  // Calculate subtotal and total from fulfillmentData.medicines to reflect updated prices after batch selection
+  const subTotal = fulfillmentData.medicines.length > 0 
+    ? fulfillmentData.medicines.reduce((sum, m) => sum + ((m.price || 0) * (m.quantity || 0)), 0)
+    : (order.subTotal || order.medicines.reduce((sum, m) => sum + (m.price * m.quantity), 0));
+  const taxPercentage = order.taxPercentage || fulfillmentData.taxPercentage || 18;
+  const taxAmount = (subTotal * taxPercentage) / 100;
+  const totalAmount = subTotal + taxAmount;
 
   return (
     <Box>
+      <Breadcrumbs items={[
+        { label: 'Orders', path: '/orders' },
+        { label: `Order #${order.id.substring(0, 8)}` }
+      ]} />
       <Box display="flex" alignItems="center" mb={3}>
         <IconButton onClick={() => navigate('/orders')} sx={{ mr: 2 }}>
           <ArrowBack />
@@ -398,12 +432,36 @@ export const OrderDetailsPage: React.FC = () => {
           variant="outlined" 
           startIcon={<Print />}
           onClick={() => {
-            if (order.status === 'Order Fulfillment' || order.status === 'In Transit' || order.status === 'Delivered') {
-              import('../utils/invoice').then(module => {
-                module.generateOrderInvoice(order);
-              });
-            } else {
-              alert('Please fulfill the order first to generate invoice');
+            // Check if all items have batches assigned
+            const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
+              fulfillmentData.medicines.every(m => m.batchNumber);
+            
+            if (!allBatchesAssigned && order.status === 'Pending') {
+              alert('Please assign batches to all items before generating invoice');
+              return;
+            }
+            
+            // Create order object with updated prices from fulfillmentData
+            const invoiceOrder = {
+              ...order,
+              medicines: fulfillmentData.medicines.length > 0 
+                ? fulfillmentData.medicines.map(m => ({
+                    ...m,
+                    batchNumber: m.batchNumber,
+                    expiryDate: m.batchExpiryDate || m.expiryDate
+                  }))
+                : order.medicines,
+              subTotal: subTotal,
+              taxAmount: taxAmount,
+              taxPercentage: taxPercentage,
+              totalAmount: totalAmount
+            };
+            
+            try {
+              generateOrderInvoice(invoiceOrder);
+            } catch (error) {
+              console.error('Error generating invoice:', error);
+              alert('Failed to generate invoice. Please try again.');
             }
           }}
         >
@@ -566,22 +624,26 @@ export const OrderDetailsPage: React.FC = () => {
               </Table>
             </TableContainer>
 
-            <Divider sx={{ my: 3 }} />
+            {fulfillmentData.medicines.length > 0 && fulfillmentData.medicines.every(m => m.batchNumber) && (
+              <>
+                <Divider sx={{ my: 3 }} />
 
-            <Box sx={{ width: '100%', maxWidth: 300, ml: 'auto' }}>
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="textSecondary">Subtotal:</Typography>
-                <Typography>₹{subTotal.toFixed(2)}</Typography>
-              </Box>
-              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                <Typography color="textSecondary">Tax ({order.taxPercentage || fulfillmentData.taxPercentage}%):</Typography>
-                <Typography>₹{taxAmount.toFixed(2)}</Typography>
-              </Box>
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography variant="h6">Total:</Typography>
-                <Typography variant="h6">₹{totalAmount.toFixed(2)}</Typography>
-              </Box>
-            </Box>
+                <Box sx={{ width: '100%', maxWidth: 300, ml: 'auto' }}>
+                  <Box display="flex" justifyContent="space-between" mb={1}>
+                    <Typography color="textSecondary">Subtotal:</Typography>
+                    <Typography>₹{subTotal.toFixed(2)}</Typography>
+                  </Box>
+                  <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                    <Typography color="textSecondary">Tax ({taxPercentage}%):</Typography>
+                    <Typography>₹{taxAmount.toFixed(2)}</Typography>
+                  </Box>
+                  <Box display="flex" justifyContent="space-between" mb={1}>
+                    <Typography variant="h6">Total:</Typography>
+                    <Typography variant="h6">₹{totalAmount.toFixed(2)}</Typography>
+                  </Box>
+                </Box>
+              </>
+            )}
 
             {order.status === 'Pending' && (
               <Box display="flex" justifyContent="flex-end" mt={3}>
@@ -799,59 +861,71 @@ export const OrderDetailsPage: React.FC = () => {
                 );
               }
               const medicine = medicines?.find(m => m.id === item.medicineId);
-              const availableBatches = medicine?.stockBatches?.filter(b => 
+              
+              if (!medicine) {
+                return (
+                  <Alert severity="warning" sx={{ mt: 2 }}>
+                    Medicine not found in inventory. Please add it to master data first.
+                  </Alert>
+                );
+              }
+              
+              const allBatches = medicine.stockBatches || [];
+              const availableBatches = allBatches.filter(b => 
                 b.quantity > 0 && 
                 (!b.expiryDate || (b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate()) > new Date())
-              ) || [];
+              );
               
-              return availableBatches.length > 0 ? (
+              if (allBatches.length === 0) {
+                return (
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    No batches available for this medicine. Please add stock first.
+                  </Alert>
+                );
+              }
+              
+              return (
                 <FormControl fullWidth margin="normal">
                   <InputLabel>Select Batch from Stock</InputLabel>
                   <Select
                     value={selectedBatch}
                     label="Select Batch from Stock"
                     onChange={(e) => setSelectedBatch(e.target.value)}
+                    displayEmpty
                   >
-                    {availableBatches.map((batch) => (
-                      <MenuItem key={batch.id} value={batch.batchNumber}>
-                        <Box>
-                          <Typography variant="body2" fontWeight="medium">
-                            Batch: {batch.batchNumber}
-                          </Typography>
-                          <Typography variant="caption" color="textSecondary">
-                            Qty: {batch.quantity} | 
-                            Expiry: {batch.expiryDate ? format(
-                              batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate(),
-                              'MMM yyyy'
-                            ) : 'N/A'}
-                          </Typography>
-                        </Box>
-                      </MenuItem>
-                    ))}
+                    <MenuItem value="">
+                      <em>Select a batch</em>
+                    </MenuItem>
+                    {allBatches.map((batch) => {
+                      const isAvailable = batch.quantity > 0 && 
+                        (!batch.expiryDate || (batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate()) > new Date());
+                      return (
+                        <MenuItem key={batch.id} value={batch.batchNumber} disabled={!isAvailable}>
+                          <Box>
+                            <Typography variant="body2" fontWeight="medium">
+                              Batch: {batch.batchNumber}
+                            </Typography>
+                            <Typography variant="caption" color={isAvailable ? "textSecondary" : "error"}>
+                              Qty: {batch.quantity} | 
+                              Expiry: {batch.expiryDate ? format(
+                                batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate(),
+                                'MMM yyyy'
+                              ) : 'N/A'}
+                              {!isAvailable && ' (Unavailable)'}
+                            </Typography>
+                          </Box>
+                        </MenuItem>
+                      );
+                    })}
                   </Select>
+                  {availableBatches.length === 0 && allBatches.length > 0 && (
+                    <Typography variant="caption" color="warning.main" sx={{ mt: 1, display: 'block' }}>
+                      All batches are either out of stock or expired. You can still select a batch manually.
+                    </Typography>
+                  )}
                 </FormControl>
-              ) : (
-                <Alert severity="info" sx={{ mt: 2 }}>
-                  No batches available for this medicine. You can still verify without batch assignment.
-                </Alert>
               );
             })()}
-            
-            <Button
-              fullWidth
-              variant="outlined"
-              sx={{ mt: 2 }}
-              onClick={() => {
-                const newMedicines = [...fulfillmentData.medicines];
-                newMedicines[manualEntryDialog.itemIndex].verified = true;
-                setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
-                setManualEntryDialog({ open: false, itemIndex: -1 });
-                setManualBarcodeInput('');
-                setSelectedBatch('');
-              }}
-            >
-              Mark as Verified (Skip Batch Assignment)
-            </Button>
           </Box>
         </DialogContent>
         <DialogActions>

@@ -3,7 +3,9 @@ import {
   getAllPurchaseInvoices, 
   getPurchaseInvoiceById, 
   createPurchaseInvoice, 
-  updatePurchaseInvoice 
+  updatePurchaseInvoice,
+  updateStockForExistingInvoice,
+  updateStockForAllExistingInvoices
 } from '../services/purchaseInvoices';
 import { PurchaseInvoice } from '../types';
 
@@ -30,9 +32,13 @@ export const useCreatePurchaseInvoice = () => {
       invoiceData: Omit<PurchaseInvoice, 'id'>; 
       updateStock?: boolean;
     }) => createPurchaseInvoice(invoiceData, updateStock ?? true),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
-      queryClient.invalidateQueries({ queryKey: ['medicines'] }); // Invalidate medicines to refresh stock
+    onSuccess: async () => {
+      // Invalidate queries to refresh data
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      // Force refetch medicines to get updated stock
+      await queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      // Also refetch any medicine detail pages
+      await queryClient.invalidateQueries({ queryKey: ['medicine'] });
     }
   });
 };
@@ -48,6 +54,31 @@ export const useUpdatePurchaseInvoice = () => {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
+    }
+  });
+};
+
+export const useUpdateStockForInvoice = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (invoiceId: string) => updateStockForExistingInvoice(invoiceId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      await queryClient.invalidateQueries({ queryKey: ['medicine'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+    }
+  });
+};
+
+export const useUpdateStockForAllInvoices = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: () => updateStockForAllExistingInvoices(),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      await queryClient.invalidateQueries({ queryKey: ['medicine'] });
     }
   });
 };

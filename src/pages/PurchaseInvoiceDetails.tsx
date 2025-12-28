@@ -26,6 +26,8 @@ import {
 import { usePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
+import { Breadcrumbs } from '../components/Breadcrumbs';
+import { generatePurchaseInvoice } from '../utils/invoice';
 
 export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { invoiceId } = useParams<{ invoiceId: string }>();
@@ -37,13 +39,25 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
 
   return (
     <Box>
+      <Breadcrumbs items={[
+        { label: 'Purchase Invoices', path: '/purchases' },
+        { label: `Invoice #${invoice.invoiceNumber}` }
+      ]} />
       <Box display="flex" alignItems="center" mb={3}>
         <IconButton onClick={() => navigate('/purchases')} sx={{ mr: 2 }}>
           <ArrowBack />
         </IconButton>
         <Typography variant="h4">Purchase Invoice #{invoice.invoiceNumber}</Typography>
         <Box sx={{ flexGrow: 1 }} />
-        <Button variant="outlined" startIcon={<Print />} onClick={() => {/* Print invoice */}}>
+        <Button 
+          variant="outlined" 
+          startIcon={<Print />} 
+          onClick={() => {
+            if (invoice) {
+              generatePurchaseInvoice(invoice);
+            }
+          }}
+        >
           Print Invoice
         </Button>
       </Box>

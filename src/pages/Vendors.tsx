@@ -111,8 +111,14 @@ export const VendorsPage: React.FC = () => {
   const handleSave = async () => {
     setError(null);
     
-    if (!formData.vendorName || !formData.email || !formData.gstNumber) {
-      setError('Please fill all required fields (Vendor Name, Email, GST Number)');
+    if (!formData.vendorName || !formData.phoneNumber || !formData.gstNumber) {
+      setError('Please fill all required fields (Vendor Name, Phone Number, GST Number)');
+      return;
+    }
+
+    // Email is optional, but if provided should be valid
+    if (formData.email && !formData.email.includes('@')) {
+      setError('Please enter a valid email address or leave it empty');
       return;
     }
 
@@ -253,10 +259,10 @@ export const VendorsPage: React.FC = () => {
                 <TextField
                   fullWidth
                   label="Email Address"
-                  required
                   type="email"
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  helperText="Optional"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -271,8 +277,10 @@ export const VendorsPage: React.FC = () => {
                 <TextField
                   fullWidth
                   label="Phone Number"
+                  required
                   value={formData.phoneNumber}
                   onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+                  helperText="Must be unique"
                 />
               </Grid>
               <Grid item xs={12}>

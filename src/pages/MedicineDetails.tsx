@@ -38,6 +38,7 @@ import {
 import { useMedicines, useAddStockBatch } from '../hooks/useInventory';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
+import { Breadcrumbs } from '../components/Breadcrumbs';
 import JsBarcode from 'jsbarcode';
 
 export const MedicineDetailsPage: React.FC = () => {
@@ -67,6 +68,48 @@ export const MedicineDetailsPage: React.FC = () => {
 
   if (isLoading) return <Loading message="Loading medicine details..." />;
   if (!medicine) return <Alert severity="error">Medicine not found</Alert>;
+
+  // Debug: Log batch data to console (especially for specific medicine)
+  React.useEffect(() => {
+    if (medicine?.id === '0IXu5mRZu10DpmnpSXSg') {
+      console.log('[DEBUG MedicineDetails] Medicine ID:', medicine.id);
+      console.log('[DEBUG MedicineDetails] Medicine batches:', medicine.stockBatches);
+      if (medicine.stockBatches) {
+        medicine.stockBatches.forEach((batch, index) => {
+          console.log(`[DEBUG MedicineDetails] Batch ${index} (${batch.batchNumber}):`, {
+            batchNumber: batch.batchNumber,
+            mrp: batch.mrp,
+            mrpType: typeof batch.mrp,
+            mrpIsUndefined: batch.mrp === undefined,
+            mrpIsNull: batch.mrp === null,
+            quantity: batch.quantity,
+            fullBatch: batch
+          });
+        });
+      }
+    }
+  }, [medicine?.id, medicine?.stockBatches]);
+
+  // Helper function to get latest MRP from batches
+  const getLatestMRP = (): string => {
+    if (medicine.stockBatches && medicine.stockBatches.length > 0) {
+      // Get the latest batch by purchase date that has an MRP
+      const sortedBatches = [...medicine.stockBatches].sort((a, b) => {
+        const dateA = a.purchaseDate 
+          ? (a.purchaseDate instanceof Date ? a.purchaseDate : a.purchaseDate.toDate())
+          : new Date(0);
+        const dateB = b.purchaseDate 
+          ? (b.purchaseDate instanceof Date ? b.purchaseDate : b.purchaseDate.toDate())
+          : new Date(0);
+        return dateB.getTime() - dateA.getTime();
+      });
+      const latestBatch = sortedBatches.find(b => b.mrp);
+      if (latestBatch?.mrp) {
+        return `₹${latestBatch.mrp.toFixed(2)}`;
+      }
+    }
+    return medicine.mrp ? `₹${medicine.mrp.toFixed(2)}` : 'N/A';
+  };
 
   const generateBarcode = (batchNumber: string): string | null => {
     if (!barcodeCanvasRef.current || !medicine) return null;
@@ -171,6 +214,10 @@ export const MedicineDetailsPage: React.FC = () => {
 
   return (
     <Box>
+      <Breadcrumbs items={[
+        { label: 'Inventory', path: '/inventory' },
+        { label: medicine?.name || 'Medicine Details' }
+      ]} />
       <Box display="flex" alignItems="center" mb={3}>
         <IconButton onClick={() => navigate('/inventory')} sx={{ mr: 2 }}>
           <ArrowBack />
@@ -217,6 +264,10 @@ export const MedicineDetailsPage: React.FC = () => {
                 <Typography variant="caption" color="textSecondary">Item Code / Barcode</Typography>
                 <Typography variant="body1">{medicine.code || medicine.barcode || 'N/A'}</Typography>
               </Box>
+              <Box mb={2}>
+                <Typography variant="caption" color="textSecondary">MRP</Typography>
+                <Typography variant="body1" fontWeight="medium">{getLatestMRP()}</Typography>
+              </Box>
             </CardContent>
           </Card>
 
@@ -229,7 +280,7 @@ export const MedicineDetailsPage: React.FC = () => {
               </Box>
               <Box display="flex" justifyContent="space-between" mb={1}>
                 <Typography color="textSecondary">Latest MRP:</Typography>
-                <Typography>₹{medicine.mrp?.toFixed(2) || 'N/A'}</Typography>
+                <Typography fontWeight="bold">{getLatestMRP()}</Typography>
               </Box>
               <Box display="flex" justifyContent="space-between">
                 <Typography color="textSecondary">Expiry Status:</Typography>
@@ -274,7 +325,33 @@ export const MedicineDetailsPage: React.FC = () => {
                 </TableHead>
                 <TableBody>
                   {medicine.stockBatches && medicine.stockBatches.length > 0 ? (
-                    medicine.stockBatches.map((batch) => (
+                    medicine.stockBatches.map((batch) => {
+                      // Ensure MRP is properly converted to number - handle all cases
+                      let mrpValue: number | null = null;
+                      
+                      if (batch.mrp !== undefined && batch.mrp !== null) {
+                        if (typeof batch.mrp === 'number') {
+                          mrpValue = isNaN(batch.mrp) ? null : batch.mrp;
+                        } else if (typeof batch.mrp === 'string') {
+                          const trimmed = batch.mrp.trim();
+                          if (trimmed !== '' && trimmed !== 'null' && trimmed !== 'undefined') {
+                            const parsed = parseFloat(trimmed);
+                            mrpValue = !isNaN(parsed) ? parsed : null;
+                          }
+                        }
+                      }
+                      
+                      // Debug for specific medicine
+                      if (medicine.id === '0IXu5mRZu10DpmnpSXSg') {
+                        console.log(`[DEBUG Display] Batch ${batch.batchNumber} MRP:`, {
+                          batchMrp: batch.mrp,
+                          mrpType: typeof batch.mrp,
+                          mrpValue: mrpValue,
+                          willDisplay: mrpValue !== null && !isNaN(mrpValue)
+                        });
+                      }
+                      
+                      return (
                       <TableRow key={batch.id}>
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{batch.batchNumber}</Typography>
@@ -286,7 +363,11 @@ export const MedicineDetailsPage: React.FC = () => {
                             {format(batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate(), 'MM/yy')}
                           </Typography>
                         </TableCell>
-                        <TableCell align="right">₹{batch.mrp?.toFixed(2) || '-'}</TableCell>
+                        <TableCell align="right">
+                          {mrpValue !== null && !isNaN(mrpValue) 
+                            ? `₹${mrpValue.toFixed(2)}` 
+                            : '-'}
+                        </TableCell>
                         <TableCell align="right">
                           <IconButton 
                             size="small" 
@@ -297,7 +378,8 @@ export const MedicineDetailsPage: React.FC = () => {
                           </IconButton>
                         </TableCell>
                       </TableRow>
-                    ))
+                      );
+                    })
                   ) : (
                     <TableRow>
                       <TableCell colSpan={6} align="center">
