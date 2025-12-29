@@ -75,7 +75,17 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     open: false,
     itemIndex: null,
   });
-  const [currentItem, setCurrentItem] = useState<Partial<PurchaseInvoiceItem>>({
+  const [currentItem, setCurrentItem] = useState<{
+    medicineId?: string;
+    medicineName?: string;
+    batchNumber?: string;
+    mfgDate?: string;
+    expiryDate?: string;
+    quantity?: string | number;
+    unitPrice?: string | number;
+    purchasePrice?: string | number;
+    mrp?: string | number;
+  }>({
     medicineId: '',
     medicineName: '',
     batchNumber: '',
@@ -127,8 +137,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return;
     }
 
-    const quantity = parseFloat(currentItem.quantity || '0');
-    const purchasePrice = parseFloat(currentItem.purchasePrice || '0');
+    const quantity = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
+    const purchasePrice = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
     const totalAmount = quantity * purchasePrice;
 
     const newItem: PurchaseInvoiceItem = {
@@ -140,7 +150,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       quantity,
       unitPrice: purchasePrice,
       purchasePrice,
-      mrp: currentItem.mrp ? parseFloat(currentItem.mrp) : undefined,
+      mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
       totalAmount,
     };
 
@@ -254,6 +264,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           paymentStatus: 'Unpaid',
           notes: invoiceData.notes || undefined,
           createdBy: user.uid,
+          createdAt: new Date(),
         },
         updateStock: true,
       });
@@ -496,11 +507,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 value={currentItem.quantity}
                 onChange={(e) => {
                   const qty = e.target.value;
-                  const price = parseFloat(currentItem.purchasePrice || '0');
+                  const price = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
                   setCurrentItem({ 
                     ...currentItem, 
                     quantity: qty,
-                    totalAmount: parseFloat(qty) * price
                   });
                 }}
               />
@@ -535,12 +545,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 value={currentItem.purchasePrice}
                 onChange={(e) => {
                   const price = e.target.value;
-                  const qty = parseFloat(currentItem.quantity || '0');
+                  const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
                   setCurrentItem({ 
                     ...currentItem, 
                     purchasePrice: price,
                     unitPrice: price,
-                    totalAmount: qty * parseFloat(price)
                   });
                 }}
                 InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
@@ -560,7 +569,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               <TextField
                 fullWidth
                 label="Total Amount"
-                value={((parseFloat(currentItem.quantity || '0')) * (parseFloat(currentItem.purchasePrice || '0'))).toFixed(2)}
+                value={((typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'))) * (typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0')))).toFixed(2)}
                 InputProps={{ 
                   readOnly: true,
                   startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography>
