@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, addDoc, query, where, Timestamp, getDoc, db } from './firebase';
+import { collection, getDocs, doc, updateDoc, addDoc, query, where, Timestamp, getDoc, setDoc, db } from './firebase';
 import { Medicine, StockBatch } from '../types';
 
 export const getAllMedicines = async (): Promise<Medicine[]> => {
@@ -34,8 +34,13 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
           }
         } else if (typeof rawMrp === 'object' && rawMrp.value !== undefined) {
           // Handle case where MRP might be an object with a value property
-          mrpValue = typeof rawMrp.value === 'number' ? rawMrp.value : parseFloat(rawMrp.value);
-          if (isNaN(mrpValue)) mrpValue = undefined;
+          const value = rawMrp.value;
+          if (typeof value === 'number') {
+            mrpValue = isNaN(value) ? undefined : value;
+          } else if (typeof value === 'string') {
+            const parsed = parseFloat(value);
+            mrpValue = !isNaN(parsed) ? parsed : undefined;
+          }
         }
       }
       
@@ -76,6 +81,7 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
       code: data.code ? String(data.code) : undefined,
       stock: calculatedStock,
       currentStock: calculatedStock,
+      price: data.price || data.mrp || 0, // Ensure price field exists
       stockBatches: processedBatches, // Use processed batches with proper MRP
     };
     

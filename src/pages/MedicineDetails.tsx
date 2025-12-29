@@ -333,7 +333,7 @@ export const MedicineDetailsPage: React.FC = () => {
                         if (typeof batch.mrp === 'number') {
                           mrpValue = isNaN(batch.mrp) ? null : batch.mrp;
                         } else if (typeof batch.mrp === 'string') {
-                          const trimmed = batch.mrp.trim();
+                          const trimmed = String(batch.mrp).trim();
                           if (trimmed !== '' && trimmed !== 'null' && trimmed !== 'undefined') {
                             const parsed = parseFloat(trimmed);
                             mrpValue = !isNaN(parsed) ? parsed : null;
