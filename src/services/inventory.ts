@@ -83,7 +83,19 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
       currentStock: calculatedStock,
       price: data.price || data.mrp || 0, // Ensure price field exists
       stockBatches: processedBatches, // Use processed batches with proper MRP
+      gstRate: data.gstRate !== undefined && data.gstRate !== null ? (typeof data.gstRate === 'number' ? data.gstRate : parseFloat(String(data.gstRate))) : 5, // Default to 5 if not set
     };
+    
+    // Update existing medicines in Firebase to have gstRate = 5 if not present (async, non-blocking)
+    if (data.gstRate === undefined || data.gstRate === null) {
+      // Use setTimeout to avoid blocking the read operation
+      setTimeout(() => {
+        const medicineRef = doc(db, 'medicines', doc.id);
+        updateDoc(medicineRef, { gstRate: 5 }).catch(err => {
+          console.warn(`Failed to update gstRate for medicine ${doc.id}:`, err);
+        });
+      }, 0);
+    }
     
     // Debug log for specific medicine
     if (doc.id === '0IXu5mRZu10DpmnpSXSg') {
@@ -429,6 +441,7 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
     stock: medicineData.stock || 0,
     currentStock: medicineData.currentStock || medicineData.stock || 0,
     stockBatches: [],
+    gstRate: medicineData.gstRate !== undefined && medicineData.gstRate !== null ? medicineData.gstRate : 5, // Default to 5 if not provided
   };
   
   await setDoc(medicineRef, newMedicine);
