@@ -6,14 +6,6 @@ pipeline {
         APP_NAME = 'simplipharma-admin'
         DEPLOY_PATH = "/var/www/${APP_NAME}"
         NGINX_PORT = '8085'
-        
-        // Firebase Credentials - Store these in Jenkins Credentials
-        VITE_FIREBASE_API_KEY = credentials('simplipharma-firebase-api-key')
-        VITE_FIREBASE_AUTH_DOMAIN = credentials('simplipharma-firebase-auth-domain')
-        VITE_FIREBASE_PROJECT_ID = credentials('simplipharma-firebase-project-id')
-        VITE_FIREBASE_STORAGE_BUCKET = credentials('simplipharma-firebase-storage-bucket')
-        VITE_FIREBASE_MESSAGING_SENDER_ID = credentials('simplipharma-firebase-messaging-sender-id')
-        VITE_FIREBASE_APP_ID = credentials('simplipharma-firebase-app-id')
     }
     
     stages {
@@ -53,18 +45,27 @@ pipeline {
         stage('Create Environment File') {
             steps {
                 echo 'Creating .env file with Firebase credentials...'
-                sh '''
-                    cat > .env << EOF
-VITE_FIREBASE_API_KEY=${VITE_FIREBASE_API_KEY}
-VITE_FIREBASE_AUTH_DOMAIN=${VITE_FIREBASE_AUTH_DOMAIN}
-VITE_FIREBASE_PROJECT_ID=${VITE_FIREBASE_PROJECT_ID}
-VITE_FIREBASE_STORAGE_BUCKET=${VITE_FIREBASE_STORAGE_BUCKET}
-VITE_FIREBASE_MESSAGING_SENDER_ID=${VITE_FIREBASE_MESSAGING_SENDER_ID}
-VITE_FIREBASE_APP_ID=${VITE_FIREBASE_APP_ID}
+                withCredentials([
+                    string(credentialsId: 'simplipharma-firebase-api-key', variable: 'FB_API_KEY'),
+                    string(credentialsId: 'simplipharma-firebase-auth-domain', variable: 'FB_AUTH_DOMAIN'),
+                    string(credentialsId: 'simplipharma-firebase-project-id', variable: 'FB_PROJECT_ID'),
+                    string(credentialsId: 'simplipharma-firebase-storage-bucket', variable: 'FB_STORAGE_BUCKET'),
+                    string(credentialsId: 'simplipharma-firebase-messaging-sender-id', variable: 'FB_MESSAGING_SENDER_ID'),
+                    string(credentialsId: 'simplipharma-firebase-app-id', variable: 'FB_APP_ID')
+                ]) {
+                    sh '''
+                        cat > .env << EOF
+VITE_FIREBASE_API_KEY=${FB_API_KEY}
+VITE_FIREBASE_AUTH_DOMAIN=${FB_AUTH_DOMAIN}
+VITE_FIREBASE_PROJECT_ID=${FB_PROJECT_ID}
+VITE_FIREBASE_STORAGE_BUCKET=${FB_STORAGE_BUCKET}
+VITE_FIREBASE_MESSAGING_SENDER_ID=${FB_MESSAGING_SENDER_ID}
+VITE_FIREBASE_APP_ID=${FB_APP_ID}
 VITE_APP_NAME="SimpliPharma Admin Panel"
 VITE_APP_VERSION=1.0.0
 EOF
-                '''
+                    '''
+                }
             }
         }
         
@@ -201,12 +202,16 @@ EOFNGINX
         failure {
             echo '❌ Deployment failed! Check the logs for details.'
             sh """
-                if [ -d "${DEPLOY_PATH}/backup-"* ]; then
+                # Check if any backup directories exist
+                if ls -d ${DEPLOY_PATH}/backup-* 1> /dev/null 2>&1; then
                     echo "Rolling back to previous version..."
                     sudo rm -rf ${DEPLOY_PATH}/current
                     LATEST_BACKUP=\$(ls -t ${DEPLOY_PATH} | grep backup | head -n 1)
-                    sudo mv ${DEPLOY_PATH}/\$LATEST_BACKUP ${DEPLOY_PATH}/current
-                    sudo systemctl reload nginx
+                    if [ -n "\$LATEST_BACKUP" ]; then
+                        sudo mv ${DEPLOY_PATH}/\$LATEST_BACKUP ${DEPLOY_PATH}/current
+                        sudo systemctl reload nginx
+                        echo "Rollback completed successfully"
+                    fi
                 fi
             """
         }
