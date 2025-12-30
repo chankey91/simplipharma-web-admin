@@ -22,6 +22,7 @@ import {
   ArrowBack,
   Print,
   Receipt,
+  QrCode,
 } from '@mui/icons-material';
 import { usePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
@@ -36,6 +37,46 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
 
   if (isLoading) return <Loading message="Loading invoice..." />;
   if (!invoice) return <Typography>Invoice not found</Typography>;
+
+  // Calculate subtotal: sum of (price * quantity) for all items
+  const recalculatedSubTotal = invoice.items.reduce((sum, item) => {
+    const quantity = item.quantity || 0;
+    const purchasePrice = item.purchasePrice || 0;
+    return sum + (purchasePrice * quantity);
+  }, 0);
+
+  // Calculate total discount amount: sum of discount amounts from discount percentage
+  const recalculatedDiscount = invoice.items.reduce((sum, item) => {
+    const quantity = item.quantity || 0;
+    const purchasePrice = item.purchasePrice || 0;
+    const discountPercentage = item.discountPercentage || 0;
+    
+    const baseAmount = purchasePrice * quantity;
+    const discountAmount = (baseAmount * discountPercentage) / 100;
+    
+    return sum + discountAmount;
+  }, 0);
+
+  // Calculate total tax amount: sum of GST amounts from GST rate
+  const recalculatedTaxAmount = invoice.items.reduce((sum, item) => {
+    const quantity = item.quantity || 0;
+    const purchasePrice = item.purchasePrice || 0;
+    const discountPercentage = item.discountPercentage || 0;
+    const gstRate = item.gstRate || 0;
+    
+    const baseAmount = purchasePrice * quantity;
+    const discountAmount = (baseAmount * discountPercentage) / 100;
+    const amountAfterDiscount = baseAmount - discountAmount;
+    const gstAmount = (amountAfterDiscount * gstRate) / 100;
+    
+    return sum + gstAmount;
+  }, 0);
+
+  // Use recalculated values or fall back to stored values
+  const displaySubTotal = recalculatedSubTotal > 0 ? recalculatedSubTotal : invoice.subTotal;
+  const displayDiscount = recalculatedDiscount > 0 ? recalculatedDiscount : (invoice.discount || 0);
+  const displayTaxAmount = recalculatedTaxAmount > 0 ? recalculatedTaxAmount : invoice.taxAmount;
+  const displayTotal = displaySubTotal - displayDiscount + displayTaxAmount;
 
   return (
     <Box>
@@ -101,7 +142,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                       <TableCell>{item.batchNumber}</TableCell>
                       <TableCell align="right">{item.quantity}</TableCell>
                       <TableCell align="right">
-                        {item.freeQuantity && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                        {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
                       </TableCell>
                       <TableCell align="right">
                         <Typography variant="body2" fontWeight="medium">
@@ -121,7 +162,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                       )}
                       <TableCell align="right">₹{item.totalAmount.toFixed(2)}</TableCell>
                       <TableCell align="center">
-                        {item.qrCode ? (
+                        {item.qrCode && item.qrCode.trim() !== '' ? (
                           <IconButton 
                             size="small" 
                             onClick={() => {
@@ -141,9 +182,10 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                                 `);
                               }
                             }}
-                            sx={{ p: 0.5 }}
+                            color="primary"
+                            title="View QR Code"
                           >
-                            <img src={item.qrCode} alt="QR Code" style={{ width: 40, height: 40, cursor: 'pointer' }} />
+                            <QrCode />
                           </IconButton>
                         ) : (
                           <Typography variant="caption" color="textSecondary">-</Typography>
@@ -177,22 +219,22 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
             <Divider sx={{ my: 2 }} />
             <Box display="flex" justifyContent="space-between" mb={1}>
               <Typography color="textSecondary">Subtotal:</Typography>
-              <Typography>₹{invoice.subTotal.toFixed(2)}</Typography>
+              <Typography>₹{displaySubTotal.toFixed(2)}</Typography>
             </Box>
-            {invoice.discount && invoice.discount > 0 && (
+            {displayDiscount > 0 && (
               <Box display="flex" justifyContent="space-between" mb={1}>
                 <Typography color="textSecondary">Discount:</Typography>
-                <Typography color="error">-₹{invoice.discount.toFixed(2)}</Typography>
+                <Typography color="error">-₹{displayDiscount.toFixed(2)}</Typography>
               </Box>
             )}
             <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Tax ({invoice.taxPercentage || 18}%):</Typography>
-              <Typography>₹{invoice.taxAmount.toFixed(2)}</Typography>
+              <Typography color="textSecondary">Tax:</Typography>
+              <Typography>₹{displayTaxAmount.toFixed(2)}</Typography>
             </Box>
             <Divider sx={{ my: 2 }} />
             <Box display="flex" justifyContent="space-between" mb={2}>
               <Typography variant="h6">Total:</Typography>
-              <Typography variant="h6">₹{invoice.totalAmount.toFixed(2)}</Typography>
+              <Typography variant="h6">₹{displayTotal.toFixed(2)}</Typography>
             </Box>
             <Chip
               label={invoice.paymentStatus}

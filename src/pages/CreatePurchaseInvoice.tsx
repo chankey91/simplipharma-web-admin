@@ -35,6 +35,7 @@ import {
   Delete,
   Save,
   Search,
+  QrCode,
 } from '@mui/icons-material';
 import { useVendors } from '../hooks/useVendors';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
@@ -68,7 +69,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     code: '',
     category: '',
     manufacturer: '',
-    mrp: '',
+    gstRate: '5',
   });
   const [itemDialog, setItemDialog] = useState<{ open: boolean; itemIndex: number | null }>({
     open: false,
@@ -135,7 +136,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
-      gstRate: '',
+      gstRate: selectedMedicine.gstRate || 5, // Get GST rate from medicine master data
       discountPercentage: '',
     });
     setItemDialog({ open: true, itemIndex: null });
@@ -161,7 +162,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const quantity = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
     const freeQuantity = currentItem.freeQuantity ? (typeof currentItem.freeQuantity === 'number' ? currentItem.freeQuantity : parseFloat(String(currentItem.freeQuantity || '0'))) : 0;
     const purchasePrice = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
-    const gstRate = currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 0;
+    // Get GST rate from medicine master data (from selectedMedicine)
+    const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+    const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
     const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
     
     // Calculate total: (purchasePrice * quantity) - discount + GST
@@ -225,7 +228,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
-      gstRate: '',
+      gstRate: selectedMedicine?.gstRate || 5, // Reset to medicine's GST rate
       discountPercentage: '',
     });
   };
@@ -245,7 +248,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       unitPrice: item.unitPrice.toString(),
       purchasePrice: item.purchasePrice.toString(),
       mrp: item.mrp?.toString() || '',
-      gstRate: item.gstRate?.toString() || '',
+      gstRate: item.gstRate || selectedMedicine?.gstRate || 5, // Use item's GST rate or medicine's default
       discountPercentage: item.discountPercentage?.toString() || '',
     });
     setItemDialog({ open: true, itemIndex: index });
@@ -288,7 +291,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         stock: 0,
         currentStock: 0,
         price: 0,
-        mrp: newMedicineData.mrp ? parseFloat(newMedicineData.mrp) : undefined,
+        gstRate: newMedicineData.gstRate ? parseFloat(newMedicineData.gstRate) : 5,
       });
 
       const newMedicine = medicines?.find(m => m.id === medicineId) || {
@@ -301,7 +304,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
       setSelectedMedicine(newMedicine as Medicine);
       setAddMedicineDialog(false);
-      setNewMedicineData({ name: '', code: '', category: '', manufacturer: '', mrp: '' });
+      setNewMedicineData({ name: '', code: '', category: '', manufacturer: '', gstRate: '5' });
     } catch (error: any) {
       alert(error.message || 'Failed to add medicine');
     }
@@ -523,9 +526,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                             <IconButton 
                               size="small" 
                               onClick={() => handleViewQRCode(item.qrCode || null, item.medicineName)}
-                              sx={{ p: 0.5 }}
+                              color="primary"
+                              title="View QR Code"
                             >
-                              <img src={item.qrCode} alt="QR Code" style={{ width: 40, height: 40, cursor: 'pointer' }} />
+                              <QrCode />
                             </IconButton>
                           ) : (
                             <Typography variant="caption" color="textSecondary">-</Typography>
@@ -649,8 +653,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 fullWidth
                 label="GST Rate (%)"
                 type="number"
-                value={currentItem.gstRate}
-                onChange={(e) => setCurrentItem({ ...currentItem, gstRate: e.target.value })}
+                value={(() => {
+                  // Get GST rate from medicine master data
+                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+                  return selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
+                })()}
+                InputProps={{ 
+                  readOnly: true
+                }}
+                helperText="From medicine master data"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -669,7 +680,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 value={(() => {
                   const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
                   const price = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
-                  const gstRate = currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 0;
+                  // Get GST rate from medicine master data
+                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+                  const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
                   const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
                   const baseAmount = price * qty;
                   const discountAmount = (baseAmount * discountPercentage) / 100;
@@ -765,10 +778,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="MRP"
+                label="GST Rate (%)"
                 type="number"
-                value={newMedicineData.mrp}
-                onChange={(e) => setNewMedicineData({ ...newMedicineData, mrp: e.target.value })}
+                required
+                value={newMedicineData.gstRate}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, gstRate: e.target.value })}
+                inputProps={{ min: 0, max: 100, step: 0.01 }}
               />
             </Grid>
           </Grid>

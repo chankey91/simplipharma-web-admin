@@ -30,6 +30,7 @@ export interface Medicine {
   batchNumber?: string;
   barcode?: string;
   stockBatches?: StockBatch[];
+  gstRate?: number; // GST rate percentage (default: 5)
 }
 
 export interface StockBatch {
