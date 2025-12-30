@@ -1,5 +1,6 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
 import { Order, OrderStatus, OrderTimelineEvent } from '../types';
+import { reduceStockFromBatch } from './inventory';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -111,8 +112,41 @@ export const fulfillOrder = async (
   const orderDoc = await getDoc(orderRef);
   const currentTimeline = orderDoc.data()?.timeline || [];
   
+  // Reduce stock from batches for items that have batch numbers assigned
+  const stockUpdateErrors: string[] = [];
+  
+  for (const item of fulfillmentData.medicines) {
+    if (item.batchNumber && item.medicineId && item.quantity) {
+      try {
+        await reduceStockFromBatch(
+          item.medicineId,
+          item.batchNumber,
+          item.quantity
+        );
+        console.log(`✓ Stock reduced for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
+      } catch (error: any) {
+        const errorMsg = `Failed to reduce stock for ${item.name || item.medicineId} (batch ${item.batchNumber}): ${error.message || error}`;
+        console.error(errorMsg, error);
+        stockUpdateErrors.push(errorMsg);
+        // Continue with other items even if one fails
+      }
+    }
+  }
+  
+  if (stockUpdateErrors.length > 0) {
+    console.warn('Some stock updates failed:', stockUpdateErrors);
+    // Still update the order, but log the errors
+  }
+  
+  // Update medicines array to include batchExpiryDate as expiryDate for invoice generation
+  const updatedMedicines = fulfillmentData.medicines.map(m => ({
+    ...m,
+    expiryDate: m.batchExpiryDate || m.expiryDate
+  }));
+  
   await updateDoc(orderRef, {
     ...fulfillmentData,
+    medicines: updatedMedicines,
     status: 'Order Fulfillment',
     timeline: [...currentTimeline, createTimelineEvent('Order Fulfillment', fulfilledBy, 'Order items verified and tax added')]
   });

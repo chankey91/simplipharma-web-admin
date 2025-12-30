@@ -39,7 +39,7 @@ import { useMedicines, useAddStockBatch } from '../hooks/useInventory';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import JsBarcode from 'jsbarcode';
+import QRCode from 'qrcode';
 
 export const MedicineDetailsPage: React.FC = () => {
   const { medicineId } = useParams<{ medicineId: string }>();
@@ -57,12 +57,11 @@ export const MedicineDetailsPage: React.FC = () => {
     purchasePrice: '',
     purchaseDate: new Date().toISOString().split('T')[0],
   });
-  const [barcodeViewDialog, setBarcodeViewDialog] = useState<{ open: boolean; batchNumber: string; barcodeData: string | null }>({
+  const [qrCodeViewDialog, setQrCodeViewDialog] = useState<{ open: boolean; batchNumber: string; qrCodeData: string | null }>({
     open: false,
     batchNumber: '',
-    barcodeData: null,
+    qrCodeData: null,
   });
-  const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
   
   const medicine = medicines?.find(m => m.id === medicineId);
 
@@ -111,31 +110,31 @@ export const MedicineDetailsPage: React.FC = () => {
     return medicine.mrp ? `₹${medicine.mrp.toFixed(2)}` : 'N/A';
   };
 
-  const generateBarcode = (batchNumber: string): string | null => {
-    if (!barcodeCanvasRef.current || !medicine) return null;
+  const generateQRCode = async (batchNumber: string): Promise<string | null> => {
+    if (!medicine) return null;
     
-    const barcodeValue = `${medicine.code || medicine.id}-${batchNumber}`;
+    const qrData = JSON.stringify({
+      medicineId: medicine.id,
+      medicineName: medicine.name,
+      medicineCode: medicine.code || medicine.id,
+      batchNumber: batchNumber,
+    });
+    
     try {
-      JsBarcode(barcodeCanvasRef.current, barcodeValue, {
-        format: "CODE128",
-        width: 2,
-        height: 50,
-        displayValue: true,
-        fontSize: 14,
-      });
-      return barcodeCanvasRef.current.toDataURL();
+      const qrDataUrl = await QRCode.toDataURL(qrData, { width: 200, margin: 1 });
+      return qrDataUrl;
     } catch (error) {
-      console.error('Barcode generation error:', error);
+      console.error('QR code generation error:', error);
       return null;
     }
   };
 
-  const handleViewBarcode = (batchNumber: string) => {
-    const barcodeData = generateBarcode(batchNumber);
-    setBarcodeViewDialog({
+  const handleViewQRCode = async (batchNumber: string) => {
+    const qrCodeData = await generateQRCode(batchNumber);
+    setQrCodeViewDialog({
       open: true,
       batchNumber,
-      barcodeData,
+      qrCodeData,
     });
   };
 
@@ -173,42 +172,47 @@ export const MedicineDetailsPage: React.FC = () => {
     }
   };
 
-  const handleGeneratePDF = () => {
+  const handleGeneratePDF = async () => {
     if (!medicine || !medicine.stockBatches || medicine.stockBatches.length === 0) {
-      alert('No batches available to generate barcodes');
+      alert('No batches available to generate QR codes');
       return;
     }
     
-    // For now, open all barcodes in a new window
-    // In production, use jsPDF to create a proper PDF
-    const barcodes = medicine.stockBatches.map(batch => {
-      const canvas = document.createElement('canvas');
-      const barcodeValue = `${medicine.code || medicine.id}-${batch.batchNumber}`;
-      JsBarcode(canvas, barcodeValue, {
-        format: "CODE128",
-        width: 2,
-        height: 50,
-        displayValue: true,
-      });
-      return canvas.toDataURL();
-    });
+    // Generate QR codes for all batches
+    const qrCodes = await Promise.all(
+      medicine.stockBatches.map(async (batch) => {
+        const qrData = JSON.stringify({
+          medicineId: medicine.id,
+          medicineName: medicine.name,
+          medicineCode: medicine.code || medicine.id,
+          batchNumber: batch.batchNumber,
+        });
+        try {
+          return await QRCode.toDataURL(qrData, { width: 200, margin: 1 });
+        } catch (error) {
+          console.error(`Error generating QR code for batch ${batch.batchNumber}:`, error);
+          return null;
+        }
+      })
+    );
 
     const newWindow = window.open();
     if (newWindow) {
       newWindow.document.write(`
         <html>
-          <head><title>Barcodes for ${medicine.name}</title></head>
+          <head><title>QR Codes for ${medicine.name}</title></head>
           <body style="padding: 20px; text-align: center;">
-            <h2>Barcodes for ${medicine.name}</h2>
-            ${barcodes.map((barcode, idx) => `
+            <h2>QR Codes for ${medicine.name}</h2>
+            ${qrCodes.map((qrCode, idx) => qrCode ? `
               <div style="margin: 20px; display: inline-block;">
                 <p>Batch: ${medicine.stockBatches![idx].batchNumber}</p>
-                <img src="${barcode}" style="border: 1px solid #ccc; padding: 10px;" />
+                <img src="${qrCode}" style="border: 1px solid #ccc; padding: 10px;" />
               </div>
-            `).join('')}
+            ` : '').join('')}
           </body>
         </html>
       `);
+      newWindow.document.close();
     }
   };
 
@@ -238,7 +242,7 @@ export const MedicineDetailsPage: React.FC = () => {
           onClick={handleGeneratePDF}
           disabled={!medicine.stockBatches || medicine.stockBatches.length === 0}
         >
-          Export Barcodes
+          Export QR Codes
         </Button>
       </Box>
 
@@ -261,8 +265,8 @@ export const MedicineDetailsPage: React.FC = () => {
                 <Typography variant="body1">{medicine.composition || 'N/A'}</Typography>
               </Box>
               <Box mb={2}>
-                <Typography variant="caption" color="textSecondary">Item Code / Barcode</Typography>
-                <Typography variant="body1">{medicine.code || medicine.barcode || 'N/A'}</Typography>
+                <Typography variant="caption" color="textSecondary">Item Code</Typography>
+                <Typography variant="body1">{medicine.code || 'N/A'}</Typography>
               </Box>
               <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">MRP</Typography>
@@ -317,10 +321,9 @@ export const MedicineDetailsPage: React.FC = () => {
                   <TableRow>
                     <TableCell>Batch No.</TableCell>
                     <TableCell align="right">Qty</TableCell>
-                    <TableCell>MFG</TableCell>
                     <TableCell>Expiry</TableCell>
                     <TableCell align="right">MRP</TableCell>
-                    <TableCell align="right">Barcode</TableCell>
+                    <TableCell align="right">QR Code</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -357,7 +360,6 @@ export const MedicineDetailsPage: React.FC = () => {
                           <Typography variant="body2" fontWeight="medium">{batch.batchNumber}</Typography>
                         </TableCell>
                         <TableCell align="right">{batch.quantity}</TableCell>
-                        <TableCell>{batch.mfgDate ? format(batch.mfgDate instanceof Date ? batch.mfgDate : batch.mfgDate.toDate(), 'MM/yy') : '-'}</TableCell>
                         <TableCell>
                           <Typography variant="body2" color={new Date() > (batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate()) ? 'error.main' : 'inherit'}>
                             {format(batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate(), 'MM/yy')}
@@ -371,8 +373,8 @@ export const MedicineDetailsPage: React.FC = () => {
                         <TableCell align="right">
                           <IconButton 
                             size="small" 
-                            title="View/Print Barcode"
-                            onClick={() => handleViewBarcode(batch.batchNumber)}
+                            title="View/Print QR Code"
+                            onClick={() => handleViewQRCode(batch.batchNumber)}
                           >
                             <QrCode />
                           </IconButton>
@@ -382,7 +384,7 @@ export const MedicineDetailsPage: React.FC = () => {
                     })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={6} align="center">
+                      <TableCell colSpan={5} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>No batches found. Add a batch to get started.</Typography>
                       </TableCell>
                     </TableRow>
@@ -434,16 +436,6 @@ export const MedicineDetailsPage: React.FC = () => {
                 required
                 value={batchData.quantity}
                 onChange={(e) => setBatchData({ ...batchData, quantity: e.target.value })}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Manufacturing Date (MFG)"
-                type="date"
-                value={batchData.mfgDate}
-                onChange={(e) => setBatchData({ ...batchData, mfgDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -501,38 +493,37 @@ export const MedicineDetailsPage: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Barcode View Dialog */}
-      <Dialog open={barcodeViewDialog.open} onClose={() => setBarcodeViewDialog({ open: false, batchNumber: '', barcodeData: null })} maxWidth="xs" fullWidth>
-        <DialogTitle>Barcode - Batch {barcodeViewDialog.batchNumber}</DialogTitle>
+      {/* QR Code View Dialog */}
+      <Dialog open={qrCodeViewDialog.open} onClose={() => setQrCodeViewDialog({ open: false, batchNumber: '', qrCodeData: null })} maxWidth="xs" fullWidth>
+        <DialogTitle>QR Code - Batch {qrCodeViewDialog.batchNumber}</DialogTitle>
         <DialogContent sx={{ textAlign: 'center' }}>
-          {barcodeViewDialog.barcodeData ? (
+          {qrCodeViewDialog.qrCodeData ? (
             <Box>
-              <img src={barcodeViewDialog.barcodeData} alt="Barcode" style={{ maxWidth: '100%' }} />
+              <img src={qrCodeViewDialog.qrCodeData} alt="QR Code" style={{ maxWidth: '100%' }} />
               <Button
-                variant="outlined"
+                variant="contained"
                 fullWidth
                 sx={{ mt: 2 }}
                 onClick={() => {
                   const link = document.createElement('a');
-                  link.href = barcodeViewDialog.barcodeData!;
-                  link.download = `barcode-${barcodeViewDialog.batchNumber}.png`;
+                  link.href = qrCodeViewDialog.qrCodeData!;
+                  link.download = `qr-code-${qrCodeViewDialog.batchNumber}.png`;
+                  document.body.appendChild(link);
                   link.click();
+                  document.body.removeChild(link);
                 }}
               >
-                Download Barcode
+                Download QR Code
               </Button>
             </Box>
           ) : (
-            <Typography>Error generating barcode</Typography>
+            <Typography>Error generating QR code</Typography>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setBarcodeViewDialog({ open: false, batchNumber: '', barcodeData: null })}>Close</Button>
+          <Button onClick={() => setQrCodeViewDialog({ open: false, batchNumber: '', qrCodeData: null })}>Close</Button>
         </DialogActions>
       </Dialog>
-
-      {/* Hidden canvas for barcode generation */}
-      <canvas ref={barcodeCanvasRef} style={{ display: 'none' }} />
     </Box>
   );
 };

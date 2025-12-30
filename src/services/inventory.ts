@@ -257,6 +257,95 @@ export const addStockBatch = async (
   console.log(`✓ Medicine ${medicineId} stock updated successfully. New stock: ${totalStock}`);
 };
 
+export const reduceStockFromBatch = async (
+  medicineId: string,
+  batchNumber: string,
+  quantityToReduce: number
+) => {
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  
+  if (!medicineDoc.exists()) {
+    throw new Error('Medicine not found');
+  }
+  
+  const medicine = medicineDoc.data() as Medicine;
+  const batches = medicine.stockBatches || [];
+  
+  // Find the batch
+  const batchIndex = batches.findIndex(b => b.batchNumber === batchNumber);
+  
+  if (batchIndex < 0) {
+    throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
+  }
+  
+  const batch = batches[batchIndex];
+  const currentQuantity = batch.quantity || 0;
+  
+  if (currentQuantity < quantityToReduce) {
+    throw new Error(`Insufficient stock in batch ${batchNumber}. Available: ${currentQuantity}, Required: ${quantityToReduce}`);
+  }
+  
+  // Reduce the quantity
+  batches[batchIndex].quantity = currentQuantity - quantityToReduce;
+  
+  // If quantity becomes 0 or negative, we can either remove the batch or keep it with 0
+  // For now, we'll keep it with 0 quantity
+  
+  // Calculate new total stock
+  const totalStock = batches.reduce((sum, b) => sum + (b.quantity || 0), 0);
+  
+  // Prepare batches for Firestore
+  const firestoreBatches = batches.map(b => {
+    const firestoreBatch: any = {
+      id: b.id,
+      batchNumber: b.batchNumber,
+      quantity: b.quantity || 0,
+    };
+    
+    if (b.expiryDate) {
+      firestoreBatch.expiryDate = b.expiryDate instanceof Date 
+        ? Timestamp.fromDate(b.expiryDate)
+        : (b.expiryDate && typeof b.expiryDate.toDate === 'function' ? b.expiryDate : Timestamp.fromDate(new Date(b.expiryDate)));
+    }
+    
+    if (b.mfgDate) {
+      firestoreBatch.mfgDate = b.mfgDate instanceof Date 
+        ? Timestamp.fromDate(b.mfgDate)
+        : (b.mfgDate && typeof b.mfgDate.toDate === 'function' ? b.mfgDate : Timestamp.fromDate(new Date(b.mfgDate)));
+    }
+    
+    if (b.purchaseDate) {
+      firestoreBatch.purchaseDate = b.purchaseDate instanceof Date
+        ? Timestamp.fromDate(b.purchaseDate)
+        : (b.purchaseDate && typeof b.purchaseDate.toDate === 'function' ? b.purchaseDate : Timestamp.fromDate(new Date(b.purchaseDate)));
+    }
+    
+    if (b.purchasePrice !== undefined && b.purchasePrice !== null) {
+      firestoreBatch.purchasePrice = typeof b.purchasePrice === 'number' ? b.purchasePrice : parseFloat(b.purchasePrice);
+    }
+    
+    if (b.mrp !== undefined && b.mrp !== null) {
+      const mrpValue = typeof b.mrp === 'number' ? b.mrp : parseFloat(b.mrp);
+      if (!isNaN(mrpValue)) {
+        firestoreBatch.mrp = mrpValue;
+      }
+    }
+    
+    return firestoreBatch;
+  });
+  
+  const updateData: any = {
+    stockBatches: firestoreBatches,
+    stock: totalStock,
+    currentStock: totalStock
+  };
+  
+  console.log(`Reducing stock for medicine ${medicineId}, batch ${batchNumber}: ${currentQuantity} - ${quantityToReduce} = ${batches[batchIndex].quantity}`);
+  await updateDoc(medicineRef, updateData);
+  console.log(`✓ Stock reduced successfully. New stock: ${totalStock}`);
+};
+
 export const findMedicineByBarcode = async (barcode: string): Promise<Medicine | null> => {
   const medicinesCol = collection(db, 'medicines');
   

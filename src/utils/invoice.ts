@@ -109,16 +109,18 @@ export const generateOrderInvoice = (order: Order) => {
   doc.setFillColor(220, 220, 220);
   doc.rect(10, yPos - 4, 190, 5, 'F');
   
-  // Table columns: SN, Product Name, Package, HSN, Batch No, EXP, QTY, FREE QTY, OMRP, M.R.P., RATE, DISC, GST, AMOUNT
+  // Table columns: SN, Product Name, HSN, Batch No, MFG, EXP, QTY, RATE, DISC, GST, AMOUNT
   let xPos = 11;
   doc.text('SN', xPos, yPos);
   xPos += 7;
   doc.text('Product Name', xPos, yPos);
-  xPos += 32;
+  xPos += 28;
   doc.text('HSN', xPos, yPos);
-  xPos += 11;
+  xPos += 10;
   doc.text('Batch', xPos, yPos);
-  xPos += 14;
+  xPos += 12;
+  doc.text('MFG', xPos, yPos);
+  xPos += 10;
   doc.text('EXP', xPos, yPos);
   xPos += 9;
   doc.text('QTY', xPos, yPos);
@@ -144,11 +146,13 @@ export const generateOrderInvoice = (order: Order) => {
     doc.text('SN', x, y);
     x += 7;
     doc.text('Product Name', x, y);
-    x += 32;
+    x += 28;
     doc.text('HSN', x, y);
-    x += 11;
+    x += 10;
     doc.text('Batch', x, y);
-    x += 14;
+    x += 12;
+    doc.text('MFG', x, y);
+    x += 10;
     doc.text('EXP', x, y);
     x += 9;
     doc.text('QTY', x, y);
@@ -173,22 +177,51 @@ export const generateOrderInvoice = (order: Order) => {
     
     const price = item.price || 0;
     const quantity = item.quantity || 0;
-    const amount = price * quantity;
     const discount = 0; // Can be calculated if discount is stored
     const gstRate = order.taxPercentage || 18;
+    // Amount per item (base amount without GST - GST is applied to subtotal)
+    const amount = (price * quantity) - discount;
     
     xPos = 11;
     doc.text((index + 1).toString(), xPos, yPos);
     xPos += 7;
-    const itemName = (item.name || 'Unknown').substring(0, 18);
+    const itemName = (item.name || 'Unknown').substring(0, 16);
     doc.text(itemName, xPos, yPos);
-    xPos += 32;
+    xPos += 28;
     doc.text('300490', xPos, yPos); // Default HSN, can be from medicine data
-    xPos += 11;
+    xPos += 10;
     doc.text((item.batchNumber || '-').substring(0, 8), xPos, yPos);
-    xPos += 14;
+    xPos += 12;
+    // MFG Date
+    if ((item as any).mfgDate) {
+      let mfgDate: Date;
+      const mfg = (item as any).mfgDate;
+      if (mfg instanceof Date) {
+        mfgDate = mfg;
+      } else if (mfg && typeof mfg.toDate === 'function') {
+        mfgDate = mfg.toDate();
+      } else if (typeof mfg === 'string' || typeof mfg === 'number') {
+        mfgDate = new Date(mfg);
+      } else {
+        mfgDate = new Date();
+      }
+      doc.text(format(mfgDate, 'MM/yy'), xPos, yPos);
+    } else {
+      doc.text('-', xPos, yPos);
+    }
+    xPos += 10;
+    // Expiry Date
     if (item.expiryDate) {
-      const expDate = item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate();
+      let expDate: Date;
+      if (item.expiryDate instanceof Date) {
+        expDate = item.expiryDate;
+      } else if (item.expiryDate && typeof item.expiryDate.toDate === 'function') {
+        expDate = item.expiryDate.toDate();
+      } else if (typeof item.expiryDate === 'string' || typeof item.expiryDate === 'number') {
+        expDate = new Date(item.expiryDate);
+      } else {
+        expDate = new Date();
+      }
       doc.text(format(expDate, 'MM/yy'), xPos, yPos);
     } else {
       doc.text('-', xPos, yPos);
@@ -348,24 +381,30 @@ export const generatePurchaseInvoice = (invoice: PurchaseInvoice) => {
   doc.setFillColor(220, 220, 220);
   doc.rect(10, yPos - 4, 190, 5, 'F');
   
-  // Table columns: SN, Product Name, HSN, Batch No, EXP, QTY, RATE, MRP, AMOUNT
+  // Table columns: SN, Product Name, HSN, Batch No, EXP, QTY, FREE QTY, RATE, GST%, DISC%, MRP, AMOUNT, QR
   let xPos = 11;
   doc.text('SN', xPos, yPos);
   xPos += 7;
   doc.text('Product Name', xPos, yPos);
-  xPos += 35;
+  xPos += 30;
   doc.text('HSN', xPos, yPos);
-  xPos += 11;
+  xPos += 9;
   doc.text('Batch', xPos, yPos);
-  xPos += 14;
+  xPos += 12;
   doc.text('EXP', xPos, yPos);
-  xPos += 9;
+  xPos += 8;
   doc.text('QTY', xPos, yPos);
-  xPos += 9;
+  xPos += 7;
+  doc.text('FREE', xPos, yPos);
+  xPos += 7;
   doc.text('RATE', xPos, yPos);
-  xPos += 11;
+  xPos += 9;
+  doc.text('GST%', xPos, yPos);
+  xPos += 7;
+  doc.text('DISC%', xPos, yPos);
+  xPos += 7;
   doc.text('MRP', xPos, yPos);
-  xPos += 11;
+  xPos += 9;
   doc.text('AMOUNT', xPos, yPos);
   
   // Items
@@ -381,25 +420,31 @@ export const generatePurchaseInvoice = (invoice: PurchaseInvoice) => {
     doc.text('SN', x, y);
     x += 7;
     doc.text('Product Name', x, y);
-    x += 35;
+    x += 30;
     doc.text('HSN', x, y);
-    x += 11;
+    x += 9;
     doc.text('Batch', x, y);
-    x += 14;
+    x += 12;
     doc.text('EXP', x, y);
-    x += 9;
+    x += 8;
     doc.text('QTY', x, y);
-    x += 9;
+    x += 7;
+    doc.text('FREE', x, y);
+    x += 7;
     doc.text('RATE', x, y);
-    x += 11;
+    x += 9;
+    doc.text('GST%', x, y);
+    x += 7;
+    doc.text('DISC%', x, y);
+    x += 7;
     doc.text('MRP', x, y);
-    x += 11;
+    x += 9;
     doc.text('AMOUNT', x, y);
     doc.setFont('helvetica', 'normal');
   };
   
   invoice.items.forEach((item, index) => {
-    if (yPos > 250) {
+    if (yPos > 240) {
       doc.addPage();
       yPos = 20;
       redrawHeader(yPos);
@@ -408,35 +453,56 @@ export const generatePurchaseInvoice = (invoice: PurchaseInvoice) => {
     
     const price = item.purchasePrice || 0;
     const quantity = item.quantity || 0;
+    const freeQuantity = item.freeQuantity || 0;
     const amount = item.totalAmount || (price * quantity);
     const mrp = item.mrp || 0;
+    const gstRate = item.gstRate || 0;
+    const discountPercentage = item.discountPercentage || 0;
     
     xPos = 11;
     doc.text((index + 1).toString(), xPos, yPos);
     xPos += 7;
-    const itemName = (item.medicineName || 'Unknown').substring(0, 20);
+    const itemName = (item.medicineName || 'Unknown').substring(0, 18);
     doc.text(itemName, xPos, yPos);
-    xPos += 35;
+    xPos += 30;
     doc.text('300490', xPos, yPos); // Default HSN, can be from medicine data
-    xPos += 11;
-    doc.text((item.batchNumber || '-').substring(0, 8), xPos, yPos);
-    xPos += 14;
+    xPos += 9;
+    doc.text((item.batchNumber || '-').substring(0, 7), xPos, yPos);
+    xPos += 12;
     if (item.expiryDate) {
       const expDate = item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate();
-      doc.text(format(expDate, 'MM/yy'), xPos, yPos);
+      doc.text(format(expDate, 'MM/yyyy'), xPos, yPos);
     } else {
       doc.text('-', xPos, yPos);
     }
-    xPos += 9;
-    doc.text(quantity.toFixed(2), xPos, yPos);
-    xPos += 9;
+    xPos += 8;
+    doc.text(quantity.toFixed(0), xPos, yPos);
+    xPos += 7;
+    doc.text(freeQuantity > 0 ? freeQuantity.toFixed(0) : '-', xPos, yPos);
+    xPos += 7;
     doc.text(price.toFixed(2), xPos, yPos);
-    xPos += 11;
+    xPos += 9;
+    doc.text(gstRate > 0 ? `${gstRate.toFixed(0)}%` : '-', xPos, yPos);
+    xPos += 7;
+    doc.text(discountPercentage > 0 ? `${discountPercentage.toFixed(0)}%` : '-', xPos, yPos);
+    xPos += 7;
     doc.text(mrp > 0 ? mrp.toFixed(2) : '-', xPos, yPos);
-    xPos += 11;
+    xPos += 9;
     doc.text(amount.toFixed(2), xPos, yPos);
     
-    yPos += 4;
+    // Add QR code if available
+    if (item.qrCode) {
+      try {
+        const qrImg = new Image();
+        qrImg.src = item.qrCode;
+        // Note: jsPDF's addImage works with base64 data URLs
+        doc.addImage(item.qrCode, 'PNG', 185, yPos - 3, 5, 5);
+      } catch (error) {
+        console.error('Error adding QR code to PDF:', error);
+      }
+    }
+    
+    yPos += 5;
   });
   
   // Financial Summary

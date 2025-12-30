@@ -74,7 +74,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Purchase Invoice Management</Typography>
         <Button variant="contained" startIcon={<Add />} onClick={() => navigate('/purchases/new')}>
-          Create Invoice
+          Add Invoice
         </Button>
       </Box>
 

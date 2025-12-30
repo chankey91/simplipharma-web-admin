@@ -13,18 +13,18 @@ import {
 } from '@mui/material';
 import { QrCodeScanner, Close } from '@mui/icons-material';
 
-interface BarcodeScannerProps {
+interface QRCodeScannerProps {
   open: boolean;
   onClose: () => void;
-  onScan: (barcode: string) => void;
+  onScan: (qrCode: string) => void;
 }
 
-export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ open, onClose, onScan }) => {
+export const QRCodeScanner: React.FC<QRCodeScannerProps> = ({ open, onClose, onScan }) => {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
-  const scannerId = 'barcode-scanner';
+  const scannerId = 'qr-code-scanner';
 
   useEffect(() => {
     if (open) {
@@ -107,7 +107,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ open, onClose, o
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>
         <Box display="flex" justifyContent="space-between" alignItems="center">
-          <Typography variant="h6">Scan Barcode</Typography>
+          <Typography variant="h6">Scan QR Code</Typography>
           <Button onClick={handleClose} size="small">
             <Close />
           </Button>
@@ -123,7 +123,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ open, onClose, o
           
           {hasPermission === false && !error && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              Camera permission is required to scan barcodes. Please enable camera access.
+              Camera permission is required to scan QR codes. Please enable camera access.
             </Alert>
           )}
 
