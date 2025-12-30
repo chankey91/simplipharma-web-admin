@@ -73,8 +73,17 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                     <TableCell>Medicine</TableCell>
                     <TableCell>Batch</TableCell>
                     <TableCell align="right">Qty</TableCell>
+                    <TableCell align="right">Free Qty</TableCell>
+                    <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">Price</TableCell>
+                    {invoice.items.some(item => item.gstRate !== undefined) && (
+                      <TableCell align="right">GST %</TableCell>
+                    )}
+                    {invoice.items.some(item => item.discountPercentage !== undefined) && (
+                      <TableCell align="right">Disc %</TableCell>
+                    )}
                     <TableCell align="right">Total</TableCell>
+                    <TableCell align="center">QR Code</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -83,14 +92,63 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                       <TableCell>
                         <Typography variant="body2" fontWeight="medium">{item.medicineName}</Typography>
                         <Typography variant="caption" color="textSecondary">
-                          MFG: {item.mfgDate ? format(item.mfgDate instanceof Date ? item.mfgDate : item.mfgDate.toDate(), 'MM/yy') : 'N/A'} | 
-                          Exp: {item.expiryDate ? format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yy') : 'N/A'}
+                          {item.mfgDate && (
+                            <>MFG: {format(item.mfgDate instanceof Date ? item.mfgDate : item.mfgDate.toDate(), 'MM/yyyy')} | </>
+                          )}
+                          Exp: {item.expiryDate ? format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yyyy') : 'N/A'}
                         </Typography>
                       </TableCell>
                       <TableCell>{item.batchNumber}</TableCell>
                       <TableCell align="right">{item.quantity}</TableCell>
+                      <TableCell align="right">
+                        {item.freeQuantity && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography variant="body2" fontWeight="medium">
+                          {item.quantity + (item.freeQuantity || 0)}
+                        </Typography>
+                      </TableCell>
                       <TableCell align="right">₹{item.purchasePrice.toFixed(2)}</TableCell>
+                      {invoice.items.some(i => i.gstRate !== undefined) && (
+                        <TableCell align="right">
+                          {item.gstRate !== undefined ? `${item.gstRate}%` : '-'}
+                        </TableCell>
+                      )}
+                      {invoice.items.some(i => i.discountPercentage !== undefined) && (
+                        <TableCell align="right">
+                          {item.discountPercentage !== undefined ? `${item.discountPercentage}%` : '-'}
+                        </TableCell>
+                      )}
                       <TableCell align="right">₹{item.totalAmount.toFixed(2)}</TableCell>
+                      <TableCell align="center">
+                        {item.qrCode ? (
+                          <IconButton 
+                            size="small" 
+                            onClick={() => {
+                              // Open QR code in popup
+                              const newWindow = window.open();
+                              if (newWindow) {
+                                newWindow.document.write(`
+                                  <html>
+                                    <head><title>QR Code - ${item.medicineName}</title></head>
+                                    <body style="text-align: center; padding: 20px;">
+                                      <h2>${item.medicineName}</h2>
+                                      <img src="${item.qrCode}" alt="QR Code" style="max-width: 400px; margin: 20px 0;" />
+                                      <br/>
+                                      <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px;">Print / Download</button>
+                                    </body>
+                                  </html>
+                                `);
+                              }
+                            }}
+                            sx={{ p: 0.5 }}
+                          >
+                            <img src={item.qrCode} alt="QR Code" style={{ width: 40, height: 40, cursor: 'pointer' }} />
+                          </IconButton>
+                        ) : (
+                          <Typography variant="caption" color="textSecondary">-</Typography>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

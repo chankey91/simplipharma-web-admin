@@ -47,7 +47,7 @@ import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
-import { BarcodeScanner } from '../components/BarcodeScanner';
+import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { OrderStatus } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
@@ -97,12 +97,13 @@ export const OrderDetailsPage: React.FC = () => {
   });
 
   const [cancelReason, setCancelReason] = useState('');
+  const [partialPaymentAmount, setPartialPaymentAmount] = useState<string>('');
   const [dispatchInfo, setDispatchInfo] = useState({
     trackingNumber: '',
     courierName: '',
     notes: ''
   });
-  const [manualBarcodeInput, setManualBarcodeInput] = useState('');
+  const [manualQRCodeInput, setManualQRCodeInput] = useState('');
 
   useEffect(() => {
     if (order) {
@@ -116,7 +117,7 @@ export const OrderDetailsPage: React.FC = () => {
             ...m, 
             medicineId: m.medicineId, // Ensure medicineId exists
             verified: !!m.batchNumber, // Auto-verify if batch already assigned
-            scannedBarcode: '',
+            scannedQRCode: '',
             batchExpiryDate: m.expiryDate // Use expiryDate from OrderMedicine
           }))
         }));
@@ -126,6 +127,13 @@ export const OrderDetailsPage: React.FC = () => {
           ...prev,
           medicines: []
         }));
+      }
+      
+      // Initialize partial payment amount if order has partial payment
+      if (order.paymentStatus === 'Partial' && order.paidAmount !== undefined) {
+        setPartialPaymentAmount(order.paidAmount.toFixed(2));
+      } else if (order.paymentStatus !== 'Partial') {
+        setPartialPaymentAmount('');
       }
     }
   }, [order]);
@@ -233,7 +241,7 @@ export const OrderDetailsPage: React.FC = () => {
     }
   };
 
-  const handleScan = (barcode: string) => {
+  const handleScan = (qrCode: string) => {
     if (scanningItemIndex !== null) {
       const item = fulfillmentData.medicines[scanningItemIndex];
       if (!item || !item.medicineId) {
@@ -243,18 +251,18 @@ export const OrderDetailsPage: React.FC = () => {
         return;
       }
       const medicine = medicines?.find(m => 
-        m.barcode === barcode || 
-        m.code === barcode ||
+        m.barcode === qrCode || 
+        m.code === qrCode ||
         m.id === item.medicineId
       );
       
       if (medicine && medicine.id === item.medicineId) {
-        // Try to find batch from barcode
-        // Barcode format: {medicineCode}-{batchNumber}
+        // Try to find batch from QR code
+        // QR code format: {medicineCode}-{batchNumber}
         let foundBatch = null;
         if (medicine.stockBatches && medicine.stockBatches.length > 0) {
-          // Extract batch number from barcode if format matches
-          const batchMatch = barcode.match(/-(.+)$/);
+          // Extract batch number from QR code if format matches
+          const batchMatch = qrCode.match(/-(.+)$/);
           if (batchMatch) {
             const batchNumber = batchMatch[1];
             foundBatch = medicine.stockBatches.find(b => b.batchNumber === batchNumber);
@@ -263,7 +271,7 @@ export const OrderDetailsPage: React.FC = () => {
           // If not found by format, try to match by checking if barcode contains batch number
           if (!foundBatch) {
             foundBatch = medicine.stockBatches.find(b => 
-              barcode.includes(b.batchNumber) || b.batchNumber.includes(barcode)
+              qrCode.includes(b.batchNumber) || b.batchNumber.includes(qrCode)
             );
           }
           
@@ -275,7 +283,7 @@ export const OrderDetailsPage: React.FC = () => {
         
         const newMedicines = [...fulfillmentData.medicines];
         newMedicines[scanningItemIndex].verified = true;
-        newMedicines[scanningItemIndex].scannedBarcode = barcode;
+        newMedicines[scanningItemIndex].scannedQRCode = qrCode;
         if (foundBatch) {
           newMedicines[scanningItemIndex].batchNumber = foundBatch.batchNumber;
           newMedicines[scanningItemIndex].batchExpiryDate = foundBatch.expiryDate;
@@ -286,7 +294,7 @@ export const OrderDetailsPage: React.FC = () => {
         }
         setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
       } else {
-        alert('Barcode does not match this medicine!');
+        alert('QR code does not match this medicine!');
       }
       setScannerOpen(false);
       setScanningItemIndex(null);
@@ -306,25 +314,25 @@ export const OrderDetailsPage: React.FC = () => {
         const newMedicines = [...fulfillmentData.medicines];
         const itemIndex = manualEntryDialog.itemIndex;
         
-        // If barcode entered, try to find batch from barcode
-        if (manualBarcodeInput) {
-          // Try to find batch from barcode
+        // If QR code entered, try to find batch from QR code
+        if (manualQRCodeInput) {
+          // Try to find batch from QR code
           let foundBatch = null;
           if (medicine.stockBatches && medicine.stockBatches.length > 0) {
-            const batchMatch = manualBarcodeInput.match(/-(.+)$/);
+            const batchMatch = manualQRCodeInput.match(/-(.+)$/);
             if (batchMatch) {
               const batchNumber = batchMatch[1];
               foundBatch = medicine.stockBatches.find(b => b.batchNumber === batchNumber);
             }
             if (!foundBatch) {
               foundBatch = medicine.stockBatches.find(b => 
-                manualBarcodeInput.includes(b.batchNumber) || b.batchNumber.includes(manualBarcodeInput)
+                manualQRCodeInput.includes(b.batchNumber) || b.batchNumber.includes(manualQRCodeInput)
               );
             }
           }
           
           newMedicines[itemIndex].verified = true;
-          newMedicines[itemIndex].scannedBarcode = manualBarcodeInput;
+          newMedicines[itemIndex].scannedQRCode = manualQRCodeInput;
           if (foundBatch) {
             newMedicines[itemIndex].batchNumber = foundBatch.batchNumber;
             newMedicines[itemIndex].batchExpiryDate = foundBatch.expiryDate;
@@ -354,7 +362,7 @@ export const OrderDetailsPage: React.FC = () => {
       }
       
       setManualEntryDialog({ open: false, itemIndex: -1 });
-      setManualBarcodeInput('');
+      setManualQRCodeInput('');
       setSelectedBatch('');
     }
   };
@@ -417,7 +425,7 @@ export const OrderDetailsPage: React.FC = () => {
         </IconButton>
         <Typography variant="h4">Order #{order.id.substring(0, 8)}</Typography>
         <Box sx={{ flexGrow: 1 }} />
-        {order.status !== 'Cancelled' && (
+        {order.status !== 'Cancelled' && order.status !== 'In Transit' && order.status !== 'Delivered' && (
           <Button
             variant="outlined"
             color="error"
@@ -442,14 +450,29 @@ export const OrderDetailsPage: React.FC = () => {
             }
             
             // Create order object with updated prices from fulfillmentData
+            // Also include batch MFG date if available
             const invoiceOrder = {
               ...order,
               medicines: fulfillmentData.medicines.length > 0 
-                ? fulfillmentData.medicines.map(m => ({
-                    ...m,
-                    batchNumber: m.batchNumber,
-                    expiryDate: m.batchExpiryDate || m.expiryDate
-                  }))
+                ? fulfillmentData.medicines.map(m => {
+                    // Find batch MFG date from medicine data
+                    let mfgDate = undefined;
+                    if (m.batchNumber && medicines) {
+                      const medicine = medicines.find(med => med.id === m.medicineId);
+                      if (medicine?.stockBatches) {
+                        const batch = medicine.stockBatches.find(b => b.batchNumber === m.batchNumber);
+                        if (batch?.mfgDate) {
+                          mfgDate = batch.mfgDate;
+                        }
+                      }
+                    }
+                    return {
+                      ...m,
+                      batchNumber: m.batchNumber,
+                      expiryDate: m.batchExpiryDate || m.expiryDate,
+                      mfgDate: mfgDate
+                    };
+                  })
                 : order.medicines,
               subTotal: subTotal,
               taxAmount: taxAmount,
@@ -487,19 +510,6 @@ export const OrderDetailsPage: React.FC = () => {
         </Stepper>
       </Paper>
 
-      {/* Workflow Info Card */}
-      <Card sx={{ mb: 3, bgcolor: 'info.light', color: 'info.contrastText' }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom>Order Workflow</Typography>
-          <Typography variant="body2">
-            <strong>Pending:</strong> Order received, awaiting verification<br/>
-            <strong>Order Fulfillment:</strong> Items verified, invoice generated with tax<br/>
-            <strong>In Transit:</strong> Order dispatched with tracking details<br/>
-            <strong>Delivered:</strong> Order received at store
-          </Typography>
-        </CardContent>
-      </Card>
-
       <Grid container spacing={3}>
         {/* Order Items & Fulfillment */}
         <Grid item xs={12} md={8}>
@@ -528,9 +538,9 @@ export const OrderDetailsPage: React.FC = () => {
                     <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                       <TableCell>
                         <Typography variant="body2" fontWeight="medium">{item.name || 'Unknown'}</Typography>
-                        {item.scannedBarcode && (
+                        {item.scannedQRCode && (
                           <Typography variant="caption" color="textSecondary" display="block">
-                            Scanned: {item.scannedBarcode}
+                            Scanned: {item.scannedQRCode}
                           </Typography>
                         )}
                       </TableCell>
@@ -584,7 +594,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 setScanningItemIndex(index);
                                 setScannerOpen(true);
                               }}
-                              title="Scan Barcode"
+                              title="Scan QR Code"
                             >
                               <QrCodeScanner fontSize="small" />
                             </IconButton>
@@ -695,12 +705,31 @@ export const OrderDetailsPage: React.FC = () => {
                 <Select
                   value={order.paymentStatus || 'Unpaid'}
                   onChange={(e) => {
-                    updatePaymentStatusMutation.mutate({
-                      orderId: order.id,
-                      paymentStatus: e.target.value as 'Paid' | 'Unpaid' | 'Partial',
-                      paidAmount: e.target.value === 'Paid' ? order.totalAmount : (e.target.value === 'Partial' ? order.totalAmount * 0.5 : 0),
-                      totalAmount: order.totalAmount,
-                    });
+                    const newStatus = e.target.value as 'Paid' | 'Unpaid' | 'Partial';
+                    if (newStatus === 'Partial') {
+                      // Initialize partial amount - use existing paidAmount if available, otherwise default to 50%
+                      const defaultAmount = order.paidAmount !== undefined 
+                        ? order.paidAmount 
+                        : (order.totalAmount * 0.5);
+                      setPartialPaymentAmount(defaultAmount.toFixed(2));
+                      
+                      // Immediately update payment status to Partial with default amount
+                      updatePaymentStatusMutation.mutate({
+                        orderId: order.id,
+                        paymentStatus: 'Partial',
+                        paidAmount: defaultAmount,
+                        totalAmount: order.totalAmount,
+                      });
+                    } else {
+                      // Update payment status immediately for Paid/Unpaid
+                      updatePaymentStatusMutation.mutate({
+                        orderId: order.id,
+                        paymentStatus: newStatus,
+                        paidAmount: newStatus === 'Paid' ? order.totalAmount : 0,
+                        totalAmount: order.totalAmount,
+                      });
+                      setPartialPaymentAmount('');
+                    }
                   }}
                   size="small"
                 >
@@ -709,10 +738,45 @@ export const OrderDetailsPage: React.FC = () => {
                   <MenuItem value="Paid">Paid</MenuItem>
                 </Select>
               </FormControl>
-              {order.paidAmount !== undefined && (
-                <Typography variant="caption" color="textSecondary" sx={{ mt: 1, display: 'block' }}>
-                  Paid: ₹{order.paidAmount.toFixed(2)} | Due: ₹{(order.dueAmount || 0).toFixed(2)}
-                </Typography>
+              {order.paymentStatus === 'Partial' && (
+                <Box sx={{ mt: 2 }}>
+                  <TextField
+                    fullWidth
+                    label="Partial Payment Amount"
+                    type="number"
+                    value={partialPaymentAmount}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setPartialPaymentAmount(value);
+                      const paidAmount = parseFloat(value) || 0;
+                      const totalAmount = order.totalAmount || 0;
+                      if (paidAmount > 0 && paidAmount <= totalAmount) {
+                        updatePaymentStatusMutation.mutate({
+                          orderId: order.id,
+                          paymentStatus: 'Partial',
+                          paidAmount: paidAmount,
+                          totalAmount: totalAmount,
+                        });
+                      }
+                    }}
+                    InputProps={{ 
+                      startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography>,
+                      inputProps: { min: 0, max: order.totalAmount || 0, step: 0.01 }
+                    }}
+                    helperText={`Total Amount: ₹${(order.totalAmount || 0).toFixed(2)} | Due: ₹${((order.totalAmount || 0) - (parseFloat(partialPaymentAmount) || 0)).toFixed(2)}`}
+                    size="small"
+                  />
+                </Box>
+              )}
+              {(order.paymentStatus === 'Partial' || order.paymentStatus === 'Paid') && order.paidAmount !== undefined && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="caption" color="textSecondary">
+                    Paid: ₹{order.paidAmount.toFixed(2)} | 
+                    {order.dueAmount !== undefined && (
+                      <> Due: ₹{order.dueAmount.toFixed(2)}</>
+                    )}
+                  </Typography>
+                </Box>
               )}
             </CardContent>
           </Card>
@@ -828,7 +892,7 @@ export const OrderDetailsPage: React.FC = () => {
       {/* Manual Entry Dialog */}
       <Dialog open={manualEntryDialog.open} onClose={() => {
         setManualEntryDialog({ open: false, itemIndex: -1 });
-        setManualBarcodeInput('');
+        setManualQRCodeInput('');
         setSelectedBatch('');
       }} maxWidth="sm" fullWidth>
         <DialogTitle>
@@ -838,17 +902,17 @@ export const OrderDetailsPage: React.FC = () => {
           <Box sx={{ mt: 2 }}>
             <TextField
               fullWidth
-              label="Enter Barcode/Code (Optional)"
+              label="Enter QR Code/Code (Optional)"
               margin="normal"
-              value={manualBarcodeInput}
-              onChange={(e) => setManualBarcodeInput(e.target.value)}
+              value={manualQRCodeInput}
+              onChange={(e) => setManualQRCodeInput(e.target.value)}
               onKeyPress={(e) => {
-                if (e.key === 'Enter' && (manualBarcodeInput || selectedBatch)) {
+                if (e.key === 'Enter' && (manualQRCodeInput || selectedBatch)) {
                   handleManualEntry();
                 }
               }}
               autoFocus
-              helperText="Enter barcode to auto-detect batch, or select batch manually below"
+              helperText="Enter QR code to auto-detect batch, or select batch manually below"
             />
             
             {(() => {
@@ -931,14 +995,14 @@ export const OrderDetailsPage: React.FC = () => {
         <DialogActions>
           <Button onClick={() => {
             setManualEntryDialog({ open: false, itemIndex: -1 });
-            setManualBarcodeInput('');
+            setManualQRCodeInput('');
             setSelectedBatch('');
           }}>Cancel</Button>
           <Button
             variant="contained"
             onClick={handleManualEntry}
           >
-            {selectedBatch || manualBarcodeInput ? 'Verify & Assign Batch' : 'Verify Without Batch'}
+            {selectedBatch || manualQRCodeInput ? 'Verify & Assign Batch' : 'Verify Without Batch'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1006,7 +1070,7 @@ export const OrderDetailsPage: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      <BarcodeScanner
+      <QRCodeScanner
         open={scannerOpen}
         onClose={() => {
           setScannerOpen(false);

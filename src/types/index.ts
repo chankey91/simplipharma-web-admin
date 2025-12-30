@@ -162,13 +162,17 @@ export interface PurchaseInvoiceItem {
   medicineId: string;
   medicineName: string;
   batchNumber: string;
-  mfgDate: Date | any;
+  mfgDate?: Date | any;
   expiryDate: Date | any;
   quantity: number;
+  freeQuantity?: number;
   unitPrice: number;
   purchasePrice: number;
   mrp?: number;
+  gstRate?: number;
+  discountPercentage?: number;
   totalAmount: number;
+  qrCode?: string; // Base64 encoded QR code image
 }
 
 export interface PurchaseInvoice {

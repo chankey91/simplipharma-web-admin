@@ -36,7 +36,11 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
           ...item,
           mfgDate: item.mfgDate?.toDate() || undefined,
           expiryDate: item.expiryDate?.toDate() || undefined,
-          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp)) : undefined,
+          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(String(item.mrp))) : undefined,
+          freeQuantity: item.freeQuantity !== undefined && item.freeQuantity !== null ? (typeof item.freeQuantity === 'number' ? item.freeQuantity : parseFloat(String(item.freeQuantity))) : undefined,
+          gstRate: item.gstRate !== undefined && item.gstRate !== null ? (typeof item.gstRate === 'number' ? item.gstRate : parseFloat(String(item.gstRate))) : undefined,
+          discountPercentage: item.discountPercentage !== undefined && item.discountPercentage !== null ? (typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage))) : undefined,
+          qrCode: item.qrCode || undefined,
         })) || []
       } as PurchaseInvoice;
     });
@@ -61,11 +65,16 @@ export const getPurchaseInvoiceById = async (invoiceId: string): Promise<Purchas
     ...data,
     invoiceDate: data.invoiceDate?.toDate() || new Date(),
     createdAt: data.createdAt?.toDate() || new Date(),
-    items: data.items?.map((item: any) => ({
-      ...item,
-      mfgDate: item.mfgDate?.toDate() || undefined,
-      expiryDate: item.expiryDate?.toDate() || undefined,
-    })) || []
+        items: data.items?.map((item: any) => ({
+          ...item,
+          mfgDate: item.mfgDate?.toDate() || undefined,
+          expiryDate: item.expiryDate?.toDate() || undefined,
+          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(String(item.mrp))) : undefined,
+          freeQuantity: item.freeQuantity !== undefined && item.freeQuantity !== null ? (typeof item.freeQuantity === 'number' ? item.freeQuantity : parseFloat(String(item.freeQuantity))) : undefined,
+          gstRate: item.gstRate !== undefined && item.gstRate !== null ? (typeof item.gstRate === 'number' ? item.gstRate : parseFloat(String(item.gstRate))) : undefined,
+          discountPercentage: item.discountPercentage !== undefined && item.discountPercentage !== null ? (typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage))) : undefined,
+          qrCode: item.qrCode || undefined,
+        })) || []
   } as PurchaseInvoice;
 };
 
@@ -130,6 +139,18 @@ export const createPurchaseInvoice = async (
     if (item.mrp !== undefined && item.mrp !== null) {
       cleanedItem.mrp = item.mrp;
     }
+    if (item.freeQuantity !== undefined && item.freeQuantity !== null) {
+      cleanedItem.freeQuantity = item.freeQuantity;
+    }
+    if (item.gstRate !== undefined && item.gstRate !== null) {
+      cleanedItem.gstRate = item.gstRate;
+    }
+    if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
+      cleanedItem.discountPercentage = item.discountPercentage;
+    }
+    if (item.qrCode) {
+      cleanedItem.qrCode = item.qrCode;
+    }
     
     return cleanedItem;
   });
@@ -181,13 +202,14 @@ export const createPurchaseInvoice = async (
           if (!item.batchNumber) {
             throw new Error('Batch number is missing');
           }
-          if (!item.quantity || item.quantity <= 0) {
+          const totalQuantity = item.quantity + (item.freeQuantity || 0);
+          if (!totalQuantity || totalQuantity <= 0) {
             throw new Error('Invalid quantity');
           }
           
           const batchData: any = {
             batchNumber: item.batchNumber,
-            quantity: item.quantity,
+            quantity: totalQuantity, // Use quantity + free quantity
             purchasePrice: item.purchasePrice || 0,
           };
           
@@ -212,7 +234,7 @@ export const createPurchaseInvoice = async (
           
           console.log(`Updating stock for medicine ${item.medicineId} with batch data:`, batchData);
           await addStockBatch(item.medicineId, batchData);
-          console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
+          console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
         } catch (error: any) {
           const errorMsg = `Failed to update stock for ${item.medicineName || item.medicineId} (${item.medicineId}): ${error.message || error}`;
           console.error(errorMsg, error);
@@ -286,13 +308,14 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
         if (!item.batchNumber) {
           throw new Error('Batch number is missing');
         }
-        if (!item.quantity || item.quantity <= 0) {
+        const totalQuantity = item.quantity + (item.freeQuantity || 0);
+        if (!totalQuantity || totalQuantity <= 0) {
           throw new Error('Invalid quantity');
         }
         
         const batchData: any = {
           batchNumber: item.batchNumber,
-          quantity: item.quantity,
+          quantity: totalQuantity, // Use quantity + free quantity
           purchasePrice: item.purchasePrice || 0,
         };
         
@@ -317,7 +340,7 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
         
         console.log(`Updating stock for existing invoice - medicine ${item.medicineId} with batch data:`, batchData);
         await addStockBatch(item.medicineId, batchData);
-        console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
+        console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
       } catch (error: any) {
         const errorMsg = `Failed to update stock for ${item.medicineName || item.medicineId} (${item.medicineId}): ${error.message || error}`;
         console.error(errorMsg, error);

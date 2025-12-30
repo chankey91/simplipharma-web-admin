@@ -44,6 +44,7 @@ import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
+import QRCode from 'qrcode';
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -56,8 +57,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     invoiceNumber: '',
     vendorId: '',
     invoiceDate: new Date().toISOString().split('T')[0],
-    taxPercentage: 18,
-    discount: 0,
     notes: '',
   });
   
@@ -75,41 +74,49 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     open: false,
     itemIndex: null,
   });
+  const [qrCodeDialog, setQrCodeDialog] = useState<{ open: boolean; qrCode: string | null; itemName: string }>({
+    open: false,
+    qrCode: null,
+    itemName: '',
+  });
   const [currentItem, setCurrentItem] = useState<{
     medicineId?: string;
     medicineName?: string;
     batchNumber?: string;
-    mfgDate?: string;
     expiryDate?: string;
+    expiryMonth?: string;
+    expiryYear?: string;
     quantity?: string | number;
+    freeQuantity?: string | number;
     unitPrice?: string | number;
     purchasePrice?: string | number;
     mrp?: string | number;
+    gstRate?: string | number;
+    discountPercentage?: string | number;
   }>({
     medicineId: '',
     medicineName: '',
     batchNumber: '',
-    mfgDate: '',
     expiryDate: '',
+    expiryMonth: '',
+    expiryYear: '',
     quantity: '',
+    freeQuantity: '',
     unitPrice: '',
     purchasePrice: '',
     mrp: '',
+    gstRate: '',
+    discountPercentage: '',
   });
 
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
 
   const calculateTotals = () => {
     const subTotal = items.reduce((sum, item) => sum + item.totalAmount, 0);
-    const discountAmount = (subTotal * (invoiceData.discount || 0)) / 100;
-    const taxableAmount = subTotal - discountAmount;
-    const taxAmount = (taxableAmount * invoiceData.taxPercentage) / 100;
-    const totalAmount = taxableAmount + taxAmount;
-    
-    return { subTotal, discountAmount, taxAmount, totalAmount };
+    return { subTotal, totalAmount: subTotal };
   };
 
-  const { subTotal, discountAmount, taxAmount, totalAmount } = calculateTotals();
+  const { subTotal, totalAmount } = calculateTotals();
 
   const handleAddItem = () => {
     if (!selectedMedicine) {
@@ -120,38 +127,80 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: selectedMedicine.id,
       medicineName: selectedMedicine.name,
       batchNumber: '',
-      mfgDate: '',
       expiryDate: '',
+      expiryMonth: '',
+      expiryYear: '',
       quantity: '',
+      freeQuantity: '',
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
+      gstRate: '',
+      discountPercentage: '',
     });
     setItemDialog({ open: true, itemIndex: null });
   };
 
-  const handleSaveItem = () => {
+  const generateQRCode = async (data: string): Promise<string> => {
+    try {
+      const qrDataUrl = await QRCode.toDataURL(data, { width: 200, margin: 1 });
+      return qrDataUrl;
+    } catch (error) {
+      console.error('Error generating QR code:', error);
+      return '';
+    }
+  };
+
+  const handleSaveItem = async () => {
     if (!currentItem.medicineId || !currentItem.batchNumber || !currentItem.quantity || 
-        !currentItem.expiryDate || !currentItem.purchasePrice) {
+        !currentItem.expiryMonth || !currentItem.expiryYear || !currentItem.purchasePrice) {
       alert('Please fill all required fields');
       return;
     }
 
     const quantity = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
+    const freeQuantity = currentItem.freeQuantity ? (typeof currentItem.freeQuantity === 'number' ? currentItem.freeQuantity : parseFloat(String(currentItem.freeQuantity || '0'))) : 0;
     const purchasePrice = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
-    const totalAmount = quantity * purchasePrice;
+    const gstRate = currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 0;
+    const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
+    
+    // Calculate total: (purchasePrice * quantity) - discount + GST
+    const baseAmount = purchasePrice * quantity;
+    const discountAmount = (baseAmount * discountPercentage) / 100;
+    const amountAfterDiscount = baseAmount - discountAmount;
+    const gstAmount = (amountAfterDiscount * gstRate) / 100;
+    const totalAmount = amountAfterDiscount + gstAmount;
+
+    // Create expiry date from month/year
+    const expiryDate = new Date(parseInt(currentItem.expiryYear || '2024'), parseInt(currentItem.expiryMonth || '1') - 1, 1);
+
+    // Generate QR code data
+    const qrData = JSON.stringify({
+      medicineId: currentItem.medicineId,
+      medicineName: currentItem.medicineName,
+      batchNumber: currentItem.batchNumber,
+      expiryDate: format(expiryDate, 'MM/yyyy'),
+      quantity,
+      freeQuantity,
+      purchasePrice,
+      mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
+    });
+    const qrCode = await generateQRCode(qrData);
 
     const newItem: PurchaseInvoiceItem = {
       medicineId: currentItem.medicineId,
       medicineName: currentItem.medicineName || '',
       batchNumber: currentItem.batchNumber,
-      mfgDate: currentItem.mfgDate ? new Date(currentItem.mfgDate) : new Date(),
-      expiryDate: new Date(currentItem.expiryDate),
+      expiryDate,
       quantity,
+      freeQuantity: freeQuantity > 0 ? freeQuantity : undefined,
       unitPrice: purchasePrice,
       purchasePrice,
       mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
+      gstRate: gstRate > 0 ? gstRate : undefined,
+      discountPercentage: discountPercentage > 0 ? discountPercentage : undefined,
       totalAmount,
+      qrCode: qrCode || undefined,
     };
 
     if (itemDialog.itemIndex !== null) {
@@ -168,31 +217,36 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: '',
       medicineName: '',
       batchNumber: '',
-      mfgDate: '',
       expiryDate: '',
+      expiryMonth: '',
+      expiryYear: '',
       quantity: '',
+      freeQuantity: '',
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
+      gstRate: '',
+      discountPercentage: '',
     });
   };
 
   const handleEditItem = (index: number) => {
     const item = items[index];
+    const expiryDate = item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate();
     setCurrentItem({
       medicineId: item.medicineId,
       medicineName: item.medicineName,
       batchNumber: item.batchNumber,
-      mfgDate: item.mfgDate instanceof Date 
-        ? item.mfgDate.toISOString().split('T')[0]
-        : item.mfgDate.toDate().toISOString().split('T')[0],
-      expiryDate: item.expiryDate instanceof Date
-        ? item.expiryDate.toISOString().split('T')[0]
-        : item.expiryDate.toDate().toISOString().split('T')[0],
+      expiryDate: format(expiryDate, 'MM/yyyy'),
+      expiryMonth: String(expiryDate.getMonth() + 1).padStart(2, '0'),
+      expiryYear: String(expiryDate.getFullYear()),
       quantity: item.quantity.toString(),
+      freeQuantity: item.freeQuantity?.toString() || '',
       unitPrice: item.unitPrice.toString(),
       purchasePrice: item.purchasePrice.toString(),
       mrp: item.mrp?.toString() || '',
+      gstRate: item.gstRate?.toString() || '',
+      discountPercentage: item.discountPercentage?.toString() || '',
     });
     setItemDialog({ open: true, itemIndex: index });
   };
@@ -200,6 +254,23 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const handleDeleteItem = (index: number) => {
     const newItems = items.filter((_, i) => i !== index);
     setItems(newItems);
+  };
+
+  const handleViewQRCode = (qrCode: string | null, itemName: string) => {
+    if (qrCode) {
+      setQrCodeDialog({ open: true, qrCode, itemName });
+    }
+  };
+
+  const handleDownloadQRCode = () => {
+    if (qrCodeDialog.qrCode) {
+      const link = document.createElement('a');
+      link.href = qrCodeDialog.qrCode;
+      link.download = `qr-code-${qrCodeDialog.itemName.replace(/\s+/g, '-')}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   const handleAddMedicine = async () => {
@@ -257,9 +328,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           invoiceDate: new Date(invoiceData.invoiceDate),
           items,
           subTotal,
-          taxAmount,
-          taxPercentage: invoiceData.taxPercentage,
-          discount: discountAmount,
+          taxAmount: 0,
           totalAmount,
           paymentStatus: 'Unpaid',
           notes: invoiceData.notes || undefined,
@@ -342,22 +411,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             )}
             <TextField
               fullWidth
-              label="Tax Percentage (%)"
-              type="number"
-              value={invoiceData.taxPercentage}
-              onChange={(e) => setInvoiceData({ ...invoiceData, taxPercentage: parseFloat(e.target.value) || 0 })}
-              sx={{ mb: 2 }}
-            />
-            <TextField
-              fullWidth
-              label="Discount (%)"
-              type="number"
-              value={invoiceData.discount}
-              onChange={(e) => setInvoiceData({ ...invoiceData, discount: parseFloat(e.target.value) || 0 })}
-              sx={{ mb: 2 }}
-            />
-            <TextField
-              fullWidth
               label="Notes"
               multiline
               rows={3}
@@ -372,16 +425,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Box display="flex" justifyContent="space-between" mb={1}>
               <Typography color="textSecondary">Subtotal:</Typography>
               <Typography>₹{subTotal.toFixed(2)}</Typography>
-            </Box>
-            {invoiceData.discount > 0 && (
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="textSecondary">Discount ({invoiceData.discount}%):</Typography>
-                <Typography color="error">-₹{discountAmount.toFixed(2)}</Typography>
-              </Box>
-            )}
-            <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Tax ({invoiceData.taxPercentage}%):</Typography>
-              <Typography>₹{taxAmount.toFixed(2)}</Typography>
             </Box>
             <Divider sx={{ my: 2 }} />
             <Box display="flex" justifyContent="space-between">
@@ -437,15 +480,18 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     <TableCell>Medicine</TableCell>
                     <TableCell>Batch</TableCell>
                     <TableCell align="right">Qty</TableCell>
+                    <TableCell align="right">Free Qty</TableCell>
+                    <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">Price</TableCell>
                     <TableCell align="right">Total</TableCell>
+                    <TableCell align="center">QR Code</TableCell>
                     <TableCell align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {items.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} align="center">
+                      <TableCell colSpan={9} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>
                           No items added. Search and add medicines to create invoice.
                         </Typography>
@@ -457,13 +503,34 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{item.medicineName}</Typography>
                           <Typography variant="caption" color="textSecondary">
-                            Exp: {format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yy')}
+                            Exp: {format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yyyy')}
                           </Typography>
                         </TableCell>
                         <TableCell>{item.batchNumber}</TableCell>
                         <TableCell align="right">{item.quantity}</TableCell>
+                        <TableCell align="right">
+                          {item.freeQuantity && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                        </TableCell>
+                        <TableCell align="right">
+                          <Typography variant="body2" fontWeight="medium">
+                            {item.quantity + (item.freeQuantity || 0)}
+                          </Typography>
+                        </TableCell>
                         <TableCell align="right">₹{item.purchasePrice.toFixed(2)}</TableCell>
                         <TableCell align="right">₹{item.totalAmount.toFixed(2)}</TableCell>
+                        <TableCell align="center">
+                          {item.qrCode ? (
+                            <IconButton 
+                              size="small" 
+                              onClick={() => handleViewQRCode(item.qrCode || null, item.medicineName)}
+                              sx={{ p: 0.5 }}
+                            >
+                              <img src={item.qrCode} alt="QR Code" style={{ width: 40, height: 40, cursor: 'pointer' }} />
+                            </IconButton>
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">-</Typography>
+                          )}
+                        </TableCell>
                         <TableCell align="center">
                           <IconButton size="small" onClick={() => handleEditItem(index)}>
                             <Search />
@@ -506,11 +573,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 required
                 value={currentItem.quantity}
                 onChange={(e) => {
-                  const qty = e.target.value;
-                  const price = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
                   setCurrentItem({ 
                     ...currentItem, 
-                    quantity: qty,
+                    quantity: e.target.value,
                   });
                 }}
               />
@@ -518,25 +583,41 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Manufacturing Date (MFG)"
-                type="date"
-                value={currentItem.mfgDate}
-                onChange={(e) => setCurrentItem({ ...currentItem, mfgDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
+                label="Free Quantity"
+                type="number"
+                value={currentItem.freeQuantity}
+                onChange={(e) => setCurrentItem({ ...currentItem, freeQuantity: e.target.value })}
               />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth>
+                <InputLabel>Expiry Month</InputLabel>
+                <Select
+                  value={currentItem.expiryMonth}
+                  label="Expiry Month"
+                  required
+                  onChange={(e) => setCurrentItem({ ...currentItem, expiryMonth: e.target.value })}
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
+                    <MenuItem key={month} value={String(month).padStart(2, '0')}>
+                      {String(month).padStart(2, '0')}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Expiry Date"
-                type="date"
+                label="Expiry Year"
+                type="number"
                 required
-                value={currentItem.expiryDate}
-                onChange={(e) => setCurrentItem({ ...currentItem, expiryDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
+                value={currentItem.expiryYear}
+                onChange={(e) => setCurrentItem({ ...currentItem, expiryYear: e.target.value })}
+                inputProps={{ min: 2020, max: 2100 }}
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
                 label="Purchase Price"
@@ -544,12 +625,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 required
                 value={currentItem.purchasePrice}
                 onChange={(e) => {
-                  const price = e.target.value;
-                  const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
                   setCurrentItem({ 
                     ...currentItem, 
-                    purchasePrice: price,
-                    unitPrice: price,
+                    purchasePrice: e.target.value,
+                    unitPrice: e.target.value,
                   });
                 }}
                 InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
@@ -568,8 +647,36 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
+                label="GST Rate (%)"
+                type="number"
+                value={currentItem.gstRate}
+                onChange={(e) => setCurrentItem({ ...currentItem, gstRate: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Discount Percentage (%)"
+                type="number"
+                value={currentItem.discountPercentage}
+                onChange={(e) => setCurrentItem({ ...currentItem, discountPercentage: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
                 label="Total Amount"
-                value={((typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'))) * (typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0')))).toFixed(2)}
+                value={(() => {
+                  const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
+                  const price = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
+                  const gstRate = currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 0;
+                  const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
+                  const baseAmount = price * qty;
+                  const discountAmount = (baseAmount * discountPercentage) / 100;
+                  const amountAfterDiscount = baseAmount - discountAmount;
+                  const gstAmount = (amountAfterDiscount * gstRate) / 100;
+                  return (amountAfterDiscount + gstAmount).toFixed(2);
+                })()}
                 InputProps={{ 
                   readOnly: true,
                   startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography>
@@ -583,6 +690,35 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           <Button variant="contained" onClick={handleSaveItem}>
             {itemDialog.itemIndex !== null ? 'Update' : 'Add'} Item
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* QR Code View Dialog */}
+      <Dialog 
+        open={qrCodeDialog.open} 
+        onClose={() => setQrCodeDialog({ open: false, qrCode: null, itemName: '' })} 
+        maxWidth="xs" 
+        fullWidth
+      >
+        <DialogTitle>QR Code - {qrCodeDialog.itemName}</DialogTitle>
+        <DialogContent>
+          {qrCodeDialog.qrCode ? (
+            <Box sx={{ textAlign: 'center', py: 2 }}>
+              <img src={qrCodeDialog.qrCode} alt="QR Code" style={{ maxWidth: '100%', marginBottom: 16 }} />
+              <Button
+                variant="contained"
+                fullWidth
+                onClick={handleDownloadQRCode}
+              >
+                Download QR Code
+              </Button>
+            </Box>
+          ) : (
+            <Typography>No QR code available</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setQrCodeDialog({ open: false, qrCode: null, itemName: '' })}>Close</Button>
         </DialogActions>
       </Dialog>
 

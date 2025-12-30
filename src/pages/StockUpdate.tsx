@@ -27,7 +27,7 @@ import {
   Save,
   Search,
 } from '@mui/icons-material';
-import { BarcodeScanner } from '../components/BarcodeScanner';
+import { QRCodeScanner } from '../components/BarcodeScanner';
 import { useMedicines, useUpdateStock, useAddStockBatch, useFindMedicineByBarcode } from '../hooks/useInventory';
 import { Medicine } from '../types';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -327,7 +327,7 @@ export const StockUpdatePage: React.FC = () => {
         </Grid>
       </Grid>
 
-      <BarcodeScanner
+      <QRCodeScanner
         open={scannerOpen}
         onClose={() => setScannerOpen(false)}
         onScan={handleBarcodeScan}
