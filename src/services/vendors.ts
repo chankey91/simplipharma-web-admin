@@ -1,5 +1,7 @@
 import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, db, getDoc } from './firebase';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Vendor } from '../types';
+import { functions } from './firebase';
 
 export const getAllVendors = async (): Promise<Vendor[]> => {
   const vendorsCol = collection(db, 'vendors');
@@ -46,7 +48,7 @@ export const checkPhoneUnique = async (phoneNumber: string, excludeId?: string):
   return snapshot.docs.every(d => !excludeId || d.id !== excludeId);
 };
 
-export const createVendor = async (vendorData: Omit<Vendor, 'id'>) => {
+export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?: string }) => {
   // Check phone number uniqueness
   if (vendorData.phoneNumber) {
     const isPhoneUnique = await checkPhoneUnique(vendorData.phoneNumber);
@@ -86,16 +88,93 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'>) => {
   if (vendorData.address) cleanedData.address = vendorData.address;
   if (vendorData.drugLicenseNumber) cleanedData.drugLicenseNumber = vendorData.drugLicenseNumber;
   if (vendorData.pan) cleanedData.pan = vendorData.pan;
+  
+  // Handle bankDetails - only add if at least one field has a value
   if (vendorData.bankDetails) {
     const bankDetails: any = {};
-    if (vendorData.bankDetails.accountNumber) bankDetails.accountNumber = vendorData.bankDetails.accountNumber;
-    if (vendorData.bankDetails.ifscCode) bankDetails.ifscCode = vendorData.bankDetails.ifscCode;
-    if (vendorData.bankDetails.bankName) bankDetails.bankName = vendorData.bankDetails.bankName;
-    if (Object.keys(bankDetails).length > 0) cleanedData.bankDetails = bankDetails;
+    if (vendorData.bankDetails.accountNumber && vendorData.bankDetails.accountNumber.trim() !== '') {
+      bankDetails.accountNumber = vendorData.bankDetails.accountNumber;
+    }
+    if (vendorData.bankDetails.ifscCode && vendorData.bankDetails.ifscCode.trim() !== '') {
+      bankDetails.ifscCode = vendorData.bankDetails.ifscCode;
+    }
+    if (vendorData.bankDetails.bankName && vendorData.bankDetails.bankName.trim() !== '') {
+      bankDetails.bankName = vendorData.bankDetails.bankName;
+    }
+    // Only add bankDetails if at least one field has a value
+    if (Object.keys(bankDetails).length > 0) {
+      cleanedData.bankDetails = bankDetails;
+    }
+    // Don't add bankDetails at all if it's empty - Firestore doesn't allow undefined values
   }
+  
+  // Remove any undefined values that might have been added
+  Object.keys(cleanedData).forEach(key => {
+    if (cleanedData[key] === undefined) {
+      delete cleanedData[key];
+    }
+  });
   
   const vendorRef = doc(collection(db, 'vendors'));
   await setDoc(vendorRef, cleanedData);
+  
+  // Send password email if email and password are provided
+  console.log('Vendor creation - Email check:', {
+    email: vendorData.email,
+    hasPassword: !!vendorData.password,
+    emailTrimmed: vendorData.email?.trim(),
+    emailNotEmpty: vendorData.email?.trim() !== ''
+  });
+  
+  if (vendorData.email && vendorData.password && vendorData.email.trim() !== '') {
+    console.log('Attempting to send vendor password email...', {
+      email: vendorData.email,
+      vendorName: vendorData.vendorName
+    });
+    try {
+      const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail');
+      const result = await sendVendorPasswordEmail({
+        email: vendorData.email,
+        password: vendorData.password,
+        vendorName: vendorData.vendorName,
+      });
+      console.log('Vendor password email sent successfully:', result);
+    } catch (error: any) {
+      console.error('Failed to send vendor password email:', error);
+      console.error('Error details:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        stack: error.stack
+      });
+      
+      // Check if function doesn't exist (not deployed)
+      const isFunctionNotFound = error.code === 'functions/not-found' || 
+                                  error.message?.includes('not found') ||
+                                  error.message?.includes('not-found');
+      
+      // Don't fail vendor creation if email fails
+      // Throw error with password info so UI can display it
+      const errorMessage = isFunctionNotFound 
+        ? 'Cloud Functions are not deployed. Please deploy Firebase Cloud Functions to enable email sending.'
+        : `Email sending failed: ${error.message || 'Unknown error'}`;
+      
+      const emailError = new Error(`Vendor created successfully, but ${errorMessage}`) as any;
+      emailError.vendorCreated = true;
+      emailError.vendorId = vendorRef.id;
+      emailError.password = vendorData.password;
+      emailError.email = vendorData.email;
+      emailError.isFunctionNotFound = isFunctionNotFound;
+      throw emailError;
+    }
+  } else {
+    console.log('Skipping email send - missing email or password:', {
+      hasEmail: !!vendorData.email,
+      hasPassword: !!vendorData.password,
+      emailValue: vendorData.email
+    });
+  }
+  
   return vendorRef.id;
 };
 

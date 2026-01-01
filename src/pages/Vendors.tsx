@@ -36,6 +36,15 @@ import { useVendors, useCreateVendor, useUpdateVendor, useToggleVendorStatus } f
 import { Vendor } from '../types';
 import { Loading } from '../components/Loading';
 
+const generatePassword = () => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+  let password = "";
+  for (let i = 0; i < 10; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return password;
+};
+
 export const VendorsPage: React.FC = () => {
   const { data: vendors, isLoading } = useVendors();
   const createVendorMutation = useCreateVendor();
@@ -48,6 +57,7 @@ export const VendorsPage: React.FC = () => {
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
   const [openDialog, setOpenDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generatedPassword, setGeneratedPassword] = useState('');
   
   const [formData, setFormData] = useState({
     vendorName: '',
@@ -82,6 +92,8 @@ export const VendorsPage: React.FC = () => {
   const handleOpenCreate = () => {
     setEditingVendor(null);
     setError(null);
+    const newPassword = generatePassword();
+    setGeneratedPassword(newPassword);
     setFormData({
       vendorName: '',
       contactPerson: '',
@@ -133,22 +145,51 @@ export const VendorsPage: React.FC = () => {
       return;
     }
 
+    // Build bankDetails object only if at least one field has a value
+    let bankDetails: any = undefined;
+    if (formData.accountNumber || formData.ifscCode || formData.bankName) {
+      bankDetails = {};
+      if (formData.accountNumber && formData.accountNumber.trim() !== '') {
+        bankDetails.accountNumber = formData.accountNumber;
+      }
+      if (formData.ifscCode && formData.ifscCode.trim() !== '') {
+        bankDetails.ifscCode = formData.ifscCode;
+      }
+      if (formData.bankName && formData.bankName.trim() !== '') {
+        bankDetails.bankName = formData.bankName;
+      }
+      // If bankDetails is empty after filtering, set to undefined
+      if (Object.keys(bankDetails).length === 0) {
+        bankDetails = undefined;
+      }
+    }
+
     const vendorData: any = {
       vendorName: formData.vendorName,
-      contactPerson: formData.contactPerson,
-      email: formData.email,
       phoneNumber: formData.phoneNumber,
-      address: formData.address,
       gstNumber: formData.gstNumber,
-      drugLicenseNumber: formData.drugLicenseNumber || undefined,
-      pan: formData.pan || undefined,
       isActive: formData.isActive,
-      bankDetails: (formData.accountNumber || formData.ifscCode || formData.bankName) ? {
-        accountNumber: formData.accountNumber || undefined,
-        ifscCode: formData.ifscCode || undefined,
-        bankName: formData.bankName || undefined,
-      } : undefined,
     };
+    
+    // Add optional fields only if they have values
+    if (formData.contactPerson && formData.contactPerson.trim() !== '') {
+      vendorData.contactPerson = formData.contactPerson;
+    }
+    if (formData.email && formData.email.trim() !== '') {
+      vendorData.email = formData.email;
+    }
+    if (formData.address && formData.address.trim() !== '') {
+      vendorData.address = formData.address;
+    }
+    if (formData.drugLicenseNumber && formData.drugLicenseNumber.trim() !== '') {
+      vendorData.drugLicenseNumber = formData.drugLicenseNumber;
+    }
+    if (formData.pan && formData.pan.trim() !== '') {
+      vendorData.pan = formData.pan;
+    }
+    if (bankDetails) {
+      vendorData.bankDetails = bankDetails;
+    }
 
     try {
       if (editingVendor) {
@@ -156,12 +197,40 @@ export const VendorsPage: React.FC = () => {
           vendorId: editingVendor.id,
           vendorData
         });
+        setOpenDialog(false);
       } else {
-        await createVendorMutation.mutateAsync(vendorData as Omit<Vendor, 'id'>);
+        // Add password for new vendor creation
+        const vendorDataWithPassword = {
+          ...vendorData,
+          password: generatedPassword,
+        };
+        console.log('Creating vendor with data:', {
+          ...vendorDataWithPassword,
+          password: '***' // Don't log actual password
+        });
+        await createVendorMutation.mutateAsync(vendorDataWithPassword as Omit<Vendor, 'id'> & { password?: string });
+        setOpenDialog(false);
+        setGeneratedPassword(''); // Clear password after successful creation
+        // Success message is shown in the catch block if email fails, or silently succeeds if email is sent
       }
-      setOpenDialog(false);
     } catch (error: any) {
-      setError(error.message || 'Failed to save vendor');
+      console.error('Vendor creation error:', error);
+      // If vendor was created but email failed, show password in alert
+      if (error.vendorCreated && error.password && error.email) {
+        const isFunctionNotFound = error.isFunctionNotFound || 
+                                   error.message?.includes('not deployed') ||
+                                   error.message?.includes('not-found');
+        
+        const message = isFunctionNotFound
+          ? `Vendor created successfully! ✅\n\n⚠️ Cloud Functions are not deployed yet.\n\nPlease share these credentials manually:\n\n📧 Email: ${error.email}\n🔑 Password: ${error.password}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nTo enable automatic email sending, deploy Cloud Functions:\n\n1. Open terminal/command prompt\n2. cd functions\n3. npm install\n4. firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"\n5. npm run build\n6. firebase deploy --only functions\n\nAfter deployment, emails will be sent automatically!`
+          : `Vendor created successfully! ✅\n\nHowever, the password email could not be sent.\n\nPlease share these credentials manually:\n\n📧 Email: ${error.email}\n🔑 Password: ${error.password}\n\nError: ${error.message || 'Unknown error'}`;
+        
+        alert(message);
+        setOpenDialog(false);
+        setGeneratedPassword('');
+      } else {
+        setError(error.message || 'Failed to save vendor');
+      }
     }
   };
 
