@@ -95,7 +95,10 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
           startIcon={<Print />} 
           onClick={() => {
             if (invoice) {
-              generatePurchaseInvoice(invoice);
+              generatePurchaseInvoice(invoice).catch(err => {
+                console.error('Error generating invoice:', err);
+                alert('Failed to generate invoice. Please try again.');
+              });
             }
           }}
         >

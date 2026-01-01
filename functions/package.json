@@ -6,6 +6,8 @@
     "test-smtp": "node test-smtp.js"
   },
   "dependencies": {
+    "html2canvas": "^1.4.1",
+    "html2pdf.js": "^0.12.1",
     "nodemailer": "^6.10.1"
   },
   "engines": {

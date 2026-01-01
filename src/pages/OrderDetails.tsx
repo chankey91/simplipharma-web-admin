@@ -92,7 +92,7 @@ export const OrderDetailsPage: React.FC = () => {
   const createMedicineMutation = useCreateMedicine();
   
   const [fulfillmentData, setFulfillmentData] = useState({
-    taxPercentage: 18,
+    taxPercentage: 5,
     medicines: [] as any[]
   });
 
@@ -409,7 +409,7 @@ export const OrderDetailsPage: React.FC = () => {
   const subTotal = fulfillmentData.medicines.length > 0 
     ? fulfillmentData.medicines.reduce((sum, m) => sum + ((m.price || 0) * (m.quantity || 0)), 0)
     : (order.subTotal || order.medicines.reduce((sum, m) => sum + (m.price * m.quantity), 0));
-  const taxPercentage = order.taxPercentage || fulfillmentData.taxPercentage || 18;
+    const taxPercentage = order.taxPercentage || fulfillmentData.taxPercentage || 5;
   const taxAmount = (subTotal * taxPercentage) / 100;
   const totalAmount = subTotal + taxAmount;
 
@@ -481,7 +481,10 @@ export const OrderDetailsPage: React.FC = () => {
             };
             
             try {
-              generateOrderInvoice(invoiceOrder);
+              generateOrderInvoice(invoiceOrder).catch(err => {
+                console.error('Error generating invoice:', err);
+                alert('Failed to generate invoice. Please try again.');
+              });
             } catch (error) {
               console.error('Error generating invoice:', error);
               alert('Failed to generate invoice. Please try again.');
