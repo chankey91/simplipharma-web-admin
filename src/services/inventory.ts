@@ -4,8 +4,8 @@ import { Medicine, StockBatch } from '../types';
 export const getAllMedicines = async (): Promise<Medicine[]> => {
   const medicinesCol = collection(db, 'medicines');
   const snapshot = await getDocs(medicinesCol);
-  return snapshot.docs.map(doc => {
-    const data = doc.data();
+  return snapshot.docs.map(docSnapshot => {
+    const data = docSnapshot.data();
     
     // Calculate stock from stockBatches if available
     let calculatedStock = data.stock || data.currentStock || 0;
@@ -45,8 +45,8 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
       }
       
       // Log for debugging specific medicine
-      if (doc.id === '0IXu5mRZu10DpmnpSXSg') {
-        console.log(`[DEBUG ${doc.id}] Batch ${batch.batchNumber}:`, {
+      if (docSnapshot.id === '0IXu5mRZu10DpmnpSXSg') {
+        console.log(`[DEBUG ${docSnapshot.id}] Batch ${batch.batchNumber}:`, {
           rawMrp: rawMrp,
           mrpType: typeof rawMrp,
           processedMrp: mrpValue,
@@ -73,7 +73,7 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
     const { stockBatches: _, ...dataWithoutBatches } = data;
     
     const medicine: Medicine = {
-      id: doc.id,
+      id: docSnapshot.id,
       ...dataWithoutBatches,
       name: String(data.name || ''),
       manufacturer: String(data.manufacturer || ''),
@@ -90,16 +90,16 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
     if (data.gstRate === undefined || data.gstRate === null) {
       // Use setTimeout to avoid blocking the read operation
       setTimeout(() => {
-        const medicineRef = doc(db, 'medicines', doc.id);
+        const medicineRef = doc(db, 'medicines', docSnapshot.id);
         updateDoc(medicineRef, { gstRate: 5 }).catch(err => {
-          console.warn(`Failed to update gstRate for medicine ${doc.id}:`, err);
+          console.warn(`Failed to update gstRate for medicine ${docSnapshot.id}:`, err);
         });
       }, 0);
     }
     
     // Debug log for specific medicine
-    if (doc.id === '0IXu5mRZu10DpmnpSXSg') {
-      console.log(`[DEBUG] Medicine ${doc.id} (${data.name}):`, {
+    if (docSnapshot.id === '0IXu5mRZu10DpmnpSXSg') {
+      console.log(`[DEBUG] Medicine ${docSnapshot.id} (${data.name}):`, {
         stockBatchesCount: processedBatches?.length || 0,
         processedBatches: processedBatches,
         rawDataBatches: data.stockBatches,
