@@ -19,7 +19,7 @@ const nodemailer = require('nodemailer');
 // SMTP Credentials
 const SMTP_CONFIG = {
   user: 'simplipharma.2025@gmail.com',
-  password: 'yyebnebjqbtuasys'.replace(/\s/g, ''), // Remove any spaces from App Password
+  password: 'rvpljxxeeygrlfov'.replace(/\s/g, ''), // Remove any spaces from App Password
   host: 'smtp.gmail.com',
   port: 587,
   secure: false, // true for 465, false for other ports

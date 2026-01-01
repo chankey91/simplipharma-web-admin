@@ -38,7 +38,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const functions = getFunctions(app);
+// Initialize Functions with region (us-central1 is default, but explicit is better)
+export const functions = getFunctions(app, 'us-central1');
 
 // Auth helpers
 export const login = async (email: string, password: string) => {
