@@ -111,6 +111,70 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
   });
 };
 
+export const getMedicineById = async (medicineId: string): Promise<Medicine | null> => {
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  
+  if (!medicineDoc.exists()) return null;
+  
+  const data = medicineDoc.data();
+  
+  // Calculate stock from stockBatches if available
+  let calculatedStock = data.stock || data.currentStock || 0;
+  if (data.stockBatches && Array.isArray(data.stockBatches) && data.stockBatches.length > 0) {
+    calculatedStock = data.stockBatches.reduce((sum: number, batch: any) => {
+      return sum + (batch.quantity || 0);
+    }, 0);
+  }
+  
+  // Process stockBatches
+  const processedBatches = data.stockBatches ? data.stockBatches.map((batch: any) => {
+    let mrpValue: number | undefined = undefined;
+    const rawMrp = batch.mrp;
+    
+    if (rawMrp !== undefined && rawMrp !== null) {
+      if (typeof rawMrp === 'number') {
+        mrpValue = isNaN(rawMrp) ? undefined : rawMrp;
+      } else if (typeof rawMrp === 'string') {
+        const trimmed = rawMrp.trim();
+        if (trimmed !== '' && trimmed !== 'null' && trimmed !== 'undefined') {
+          const parsed = parseFloat(trimmed);
+          mrpValue = !isNaN(parsed) ? parsed : undefined;
+        }
+      }
+    }
+    
+    return {
+      id: batch.id || '',
+      batchNumber: String(batch.batchNumber || ''),
+      quantity: typeof batch.quantity === 'number' ? batch.quantity : parseInt(String(batch.quantity || 0)),
+      expiryDate: batch.expiryDate?.toDate ? batch.expiryDate.toDate() : (batch.expiryDate ? new Date(batch.expiryDate) : new Date()),
+      mfgDate: batch.mfgDate?.toDate ? batch.mfgDate.toDate() : (batch.mfgDate ? new Date(batch.mfgDate) : undefined),
+      purchaseDate: batch.purchaseDate?.toDate ? batch.purchaseDate.toDate() : (batch.purchaseDate ? new Date(batch.purchaseDate) : undefined),
+      purchasePrice: batch.purchasePrice !== undefined && batch.purchasePrice !== null ? (typeof batch.purchasePrice === 'number' ? batch.purchasePrice : parseFloat(String(batch.purchasePrice))) : undefined,
+      mrp: mrpValue
+    };
+  }) : [];
+  
+  const { stockBatches, ...dataWithoutBatches } = data;
+  
+  const medicine: Medicine = {
+    id: medicineDoc.id,
+    ...dataWithoutBatches,
+    name: String(data.name || ''),
+    manufacturer: String(data.manufacturer || ''),
+    category: String(data.category || ''),
+    code: data.code ? String(data.code) : undefined,
+    stock: calculatedStock,
+    currentStock: calculatedStock,
+    price: data.price || data.mrp || 0,
+    stockBatches: processedBatches,
+    gstRate: data.gstRate !== undefined && data.gstRate !== null ? (typeof data.gstRate === 'number' ? data.gstRate : parseFloat(String(data.gstRate))) : 5,
+  };
+  
+  return medicine;
+};
+
 export const updateMedicineStock = async (
   medicineId: string, 
   updates: {

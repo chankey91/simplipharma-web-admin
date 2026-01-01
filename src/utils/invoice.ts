@@ -4,6 +4,7 @@ import { Order, PurchaseInvoice } from '../types';
 import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
+import { getMedicineById } from '../services/inventory';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -138,7 +139,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
     name: 'SimpliPharma Solution Pvt. Ltd.',
     address: 'AG 50, Scheme No. 74, Indore, Madhya Pradesh. 452010',
     phone: '',
-    email: 'pgsbillforward@gmail.com',
+    email: 'simplipharma.2025@gmail.com',
     dl: '20B/2876/12/2021,20B/2876/12/2021',
     gstin: '23AALCP3728L1Z4'
   };
@@ -442,6 +443,54 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
   let totalProductDiscount = 0;
   let totalGST = 0;
   
+  // Fetch all medicines to get packaging info
+  const medicineMap = new Map<string, string>();
+  await Promise.all(
+    invoice.items.map(async (item) => {
+      if (item.medicineId) {
+        try {
+          const medicine = await getMedicineById(item.medicineId);
+          if (medicine) {
+            // Check unit field first
+            let packaging = medicine.unit;
+            
+            // If unit is not available, check description for "Packaging: " pattern
+            if (!packaging && medicine.description) {
+              const packagingMatch = medicine.description.match(/Packaging:\s*(.+)/i);
+              if (packagingMatch && packagingMatch[1]) {
+                packaging = packagingMatch[1].trim();
+              }
+            }
+            
+            // Debug logging
+            if (!packaging) {
+              console.log(`No packaging found for medicine ${item.medicineId} (${item.medicineName}):`, {
+                unit: medicine.unit,
+                description: medicine.description,
+                medicineData: medicine
+              });
+            }
+            
+            if (packaging) {
+              medicineMap.set(item.medicineId, packaging);
+            } else {
+              // Set empty string so we know we tried
+              medicineMap.set(item.medicineId, '-');
+            }
+          } else {
+            console.warn(`Medicine not found for ID: ${item.medicineId}`);
+            medicineMap.set(item.medicineId, '-');
+          }
+        } catch (error) {
+          console.warn(`Failed to fetch medicine ${item.medicineId}:`, error);
+          medicineMap.set(item.medicineId, '-');
+        }
+      } else {
+        medicineMap.set('', '-');
+      }
+    })
+  );
+  
   const items = invoice.items.map((item, index) => {
     const price = item.purchasePrice || 0;
     const quantity = item.quantity || 0;
@@ -482,10 +531,13 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
       expDate = format(exp, 'MM/yy');
     }
     
+    // Get packaging from medicine master data
+    const packaging = item.medicineId ? (medicineMap.get(item.medicineId) || '-') : '-';
+    
     return {
       sn: index + 1,
       name: item.medicineName || 'Unknown',
-      pack: (item as any).packaging || '-',
+      pack: packaging,
       hsn: (item as any).hsn || '300490',
       batch: item.batchNumber || '-',
       exp: expDate,
@@ -518,7 +570,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     name: 'SimpliPharma Solution Pvt. Ltd.',
     address: 'AG 50, Scheme No. 74, Indore, Madhya Pradesh. 452010',
     phone: '',
-    email: 'pgsbillforward@gmail.com',
+    email: 'simplipharma.2025@gmail.com',
     dl: '20B/2876/12/2021,20B/2876/12/2021',
     gstin: '23AALCP3728L1Z4'
   };
