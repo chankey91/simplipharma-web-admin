@@ -67,7 +67,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [newMedicineData, setNewMedicineData] = useState({
     name: '',
     code: '',
-    category: '',
+    type: '', // Displayed as "Type" but stored as category
+    packaging: '',
     manufacturer: '',
     gstRate: '5',
   });
@@ -277,7 +278,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const handleAddMedicine = async () => {
-    if (!newMedicineData.name || !newMedicineData.manufacturer || !newMedicineData.category) {
+    if (!newMedicineData.name || !newMedicineData.code || !newMedicineData.type || !newMedicineData.packaging || !newMedicineData.manufacturer || !newMedicineData.gstRate) {
       alert('Please fill all required fields');
       return;
     }
@@ -285,26 +286,28 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     try {
       const medicineId = await createMedicineMutation.mutateAsync({
         name: newMedicineData.name,
-        code: newMedicineData.code || undefined,
-        category: newMedicineData.category,
+        code: newMedicineData.code,
+        category: newMedicineData.type, // Store type as category
         manufacturer: newMedicineData.manufacturer,
         stock: 0,
         currentStock: 0,
         price: 0,
         gstRate: newMedicineData.gstRate ? parseFloat(newMedicineData.gstRate) : 5,
+        // Store packaging in description or a custom field if available
+        description: `Packaging: ${newMedicineData.packaging}`,
       });
 
       const newMedicine = medicines?.find(m => m.id === medicineId) || {
         id: medicineId,
         name: newMedicineData.name,
         code: newMedicineData.code,
-        category: newMedicineData.category,
+        category: newMedicineData.type,
         manufacturer: newMedicineData.manufacturer,
       } as Medicine;
 
       setSelectedMedicine(newMedicine as Medicine);
       setAddMedicineDialog(false);
-      setNewMedicineData({ name: '', code: '', category: '', manufacturer: '', gstRate: '5' });
+      setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
     } catch (error: any) {
       alert(error.message || 'Failed to add medicine');
     }
@@ -753,6 +756,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               <TextField
                 fullWidth
                 label="Code"
+                required
                 value={newMedicineData.code}
                 onChange={(e) => setNewMedicineData({ ...newMedicineData, code: e.target.value })}
               />
@@ -760,10 +764,20 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Category"
+                label="Type"
                 required
-                value={newMedicineData.category}
-                onChange={(e) => setNewMedicineData({ ...newMedicineData, category: e.target.value })}
+                value={newMedicineData.type}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, type: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Packaging"
+                required
+                value={newMedicineData.packaging}
+                onChange={(e) => setNewMedicineData({ ...newMedicineData, packaging: e.target.value })}
+                placeholder="e.g., 10 ml, 15 Tablet, 10 Capsule"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
