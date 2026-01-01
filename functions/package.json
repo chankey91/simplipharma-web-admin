@@ -1,0 +1,14 @@
+{
+  "name": "simplipharma-functions",
+  "version": "1.0.0",
+  "description": "Firebase Cloud Functions for SimpliPharma Admin",
+  "scripts": {
+    "test-smtp": "node test-smtp.js"
+  },
+  "dependencies": {
+    "nodemailer": "^6.10.1"
+  },
+  "engines": {
+    "node": "18"
+  }
+}

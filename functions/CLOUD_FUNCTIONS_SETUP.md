@@ -9,7 +9,20 @@
  * 5. Deploy: firebase deploy --only functions
  * 
  * SMTP CONFIGURATION:
- * firebase functions:config:set smtp.user="your-email@gmail.com" smtp.password="your-app-password"
+ * 
+ * Current SMTP Credentials:
+ * Email: simplipharma.2025@gmail.com
+ * Password: yyebnebjqbtuasys (App Password)
+ * 
+ * To set/update SMTP credentials:
+ * firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="yyebnebjqbtuasys"
+ * 
+ * Note: For Gmail, you may need to use an App Password instead of the regular password.
+ * To generate an App Password:
+ * 1. Go to Google Account settings
+ * 2. Security > 2-Step Verification > App passwords
+ * 3. Generate a new app password for "Mail"
+ * 4. Use that app password instead of the regular password
  */
 
 // Example Cloud Function (functions/src/index.ts)
