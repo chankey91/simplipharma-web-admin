@@ -35,7 +35,7 @@ import {
   PictureAsPdf,
   Edit,
 } from '@mui/icons-material';
-import { useMedicines, useAddStockBatch } from '../hooks/useInventory';
+import { useMedicines, useAddStockBatch, useUpdateMedicine } from '../hooks/useInventory';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -46,8 +46,22 @@ export const MedicineDetailsPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: medicines, isLoading } = useMedicines();
   const addBatchMutation = useAddStockBatch();
+  const updateMedicineMutation = useUpdateMedicine();
   
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editData, setEditData] = useState({
+    name: '',
+    code: '',
+    category: '',
+    unit: '',
+    manufacturer: '',
+    gstRate: 5,
+    description: '',
+    composition: '',
+    dosage: '',
+    sideEffects: '',
+  });
   const [batchData, setBatchData] = useState({
     batchNumber: '',
     quantity: '',
@@ -64,6 +78,24 @@ export const MedicineDetailsPage: React.FC = () => {
   });
   
   const medicine = medicines?.find(m => m.id === medicineId);
+
+  // Initialize edit data when medicine loads or edit dialog opens
+  React.useEffect(() => {
+    if (medicine && editDialogOpen) {
+      setEditData({
+        name: medicine.name || '',
+        code: medicine.code || '',
+        category: medicine.category || '',
+        unit: medicine.unit || '',
+        manufacturer: medicine.manufacturer || '',
+        gstRate: medicine.gstRate !== undefined && medicine.gstRate !== null ? medicine.gstRate : 5,
+        description: medicine.description || '',
+        composition: medicine.composition || '',
+        dosage: medicine.dosage || '',
+        sideEffects: medicine.sideEffects || '',
+      });
+    }
+  }, [medicine, editDialogOpen]);
 
   if (isLoading) return <Loading message="Loading medicine details..." />;
   if (!medicine) return <Alert severity="error">Medicine not found</Alert>;
@@ -172,6 +204,31 @@ export const MedicineDetailsPage: React.FC = () => {
     }
   };
 
+  const handleEditGeneralInfo = async () => {
+    if (!medicine) return;
+    
+    try {
+      await updateMedicineMutation.mutateAsync({
+        medicineId: medicine.id,
+        updates: {
+          name: editData.name,
+          code: editData.code || undefined,
+          category: editData.category,
+          unit: editData.unit || undefined,
+          manufacturer: editData.manufacturer,
+          gstRate: editData.gstRate,
+          description: editData.description || undefined,
+          composition: editData.composition || undefined,
+          dosage: editData.dosage || undefined,
+          sideEffects: editData.sideEffects || undefined,
+        }
+      });
+      setEditDialogOpen(false);
+    } catch (error: any) {
+      alert(error.message || 'Failed to update medicine');
+    }
+  };
+
   const handleGeneratePDF = async () => {
     if (!medicine || !medicine.stockBatches || medicine.stockBatches.length === 0) {
       alert('No batches available to generate QR codes');
@@ -251,26 +308,39 @@ export const MedicineDetailsPage: React.FC = () => {
         <Grid item xs={12} md={4}>
           <Card sx={{ mb: 3 }}>
             <CardContent>
-              <Typography variant="h6" gutterBottom>General Information</Typography>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="h6">General Information</Typography>
+                <IconButton size="small" color="primary" onClick={() => setEditDialogOpen(true)}>
+                  <Edit />
+                </IconButton>
+              </Box>
               <Box mb={2}>
-                <Typography variant="caption" color="textSecondary">Category</Typography>
+                <Typography variant="caption" color="textSecondary">Medicine Name</Typography>
+                <Typography variant="body1" fontWeight="medium">{medicine.name}</Typography>
+              </Box>
+              <Box mb={2}>
+                <Typography variant="caption" color="textSecondary">Type</Typography>
                 <Typography variant="body1">{medicine.category}</Typography>
+              </Box>
+              <Box mb={2}>
+                <Typography variant="caption" color="textSecondary">Packaging</Typography>
+                <Typography variant="body1">{medicine.unit || 'N/A'}</Typography>
               </Box>
               <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">Manufacturer</Typography>
                 <Typography variant="body1">{medicine.manufacturer}</Typography>
               </Box>
               <Box mb={2}>
-                <Typography variant="caption" color="textSecondary">Composition</Typography>
-                <Typography variant="body1">{medicine.composition || 'N/A'}</Typography>
-              </Box>
-              <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">Item Code</Typography>
                 <Typography variant="body1">{medicine.code || 'N/A'}</Typography>
               </Box>
               <Box mb={2}>
-                <Typography variant="caption" color="textSecondary">MRP</Typography>
-                <Typography variant="body1" fontWeight="medium">{getLatestMRP()}</Typography>
+                <Typography variant="caption" color="textSecondary">GST Rate</Typography>
+                <Typography variant="body1" fontWeight="medium">{medicine.gstRate || 5}%</Typography>
+              </Box>
+              <Box mb={2}>
+                <Typography variant="caption" color="textSecondary">Composition</Typography>
+                <Typography variant="body1">{medicine.composition || 'N/A'}</Typography>
               </Box>
             </CardContent>
           </Card>
@@ -283,8 +353,8 @@ export const MedicineDetailsPage: React.FC = () => {
                 <Typography fontWeight="bold">{medicine.currentStock ?? medicine.stock ?? 0}</Typography>
               </Box>
               <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="textSecondary">Latest MRP:</Typography>
-                <Typography fontWeight="bold">{getLatestMRP()}</Typography>
+                <Typography color="textSecondary">GST Rate:</Typography>
+                <Typography fontWeight="bold">{medicine.gstRate || 5}%</Typography>
               </Box>
               <Box display="flex" justifyContent="space-between">
                 <Typography color="textSecondary">Expiry Status:</Typography>
@@ -489,6 +559,113 @@ export const MedicineDetailsPage: React.FC = () => {
             disabled={addBatchMutation.isPending}
           >
             {addBatchMutation.isPending ? 'Adding...' : 'Add Batch'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edit General Information Dialog */}
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Edit General Information</DialogTitle>
+        <DialogContent>
+          <Grid container spacing={2} sx={{ mt: 1 }}>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Medicine Name"
+                required
+                value={editData.name}
+                onChange={(e) => setEditData({ ...editData, name: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Item Code"
+                value={editData.code}
+                onChange={(e) => setEditData({ ...editData, code: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Type"
+                required
+                value={editData.category}
+                onChange={(e) => setEditData({ ...editData, category: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Packaging"
+                value={editData.unit}
+                onChange={(e) => setEditData({ ...editData, unit: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Manufacturer"
+                required
+                value={editData.manufacturer}
+                onChange={(e) => setEditData({ ...editData, manufacturer: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="GST Rate (%)"
+                type="number"
+                required
+                value={editData.gstRate}
+                onChange={(e) => setEditData({ ...editData, gstRate: parseFloat(e.target.value) || 5 })}
+                inputProps={{ min: 0, max: 100, step: 0.01 }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Composition"
+                value={editData.composition}
+                onChange={(e) => setEditData({ ...editData, composition: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Description"
+                multiline
+                rows={3}
+                value={editData.description}
+                onChange={(e) => setEditData({ ...editData, description: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Dosage"
+                value={editData.dosage}
+                onChange={(e) => setEditData({ ...editData, dosage: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Side Effects"
+                value={editData.sideEffects}
+                onChange={(e) => setEditData({ ...editData, sideEffects: e.target.value })}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleEditGeneralInfo}
+            disabled={updateMedicineMutation.isPending || !editData.name || !editData.category || !editData.manufacturer}
+          >
+            {updateMedicineMutation.isPending ? 'Updating...' : 'Update'}
           </Button>
         </DialogActions>
       </Dialog>

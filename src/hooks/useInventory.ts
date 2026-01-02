@@ -6,7 +6,8 @@ import {
   findMedicineByBarcode,
   getExpiringMedicines,
   getExpiredMedicines,
-  createMedicine
+  createMedicine,
+  updateMedicine
 } from '../services/inventory';
 import { Medicine, StockBatch } from '../types';
 
@@ -76,6 +77,18 @@ export const useCreateMedicine = () => {
   
   return useMutation({
     mutationFn: (medicineData: Omit<Medicine, 'id'>) => createMedicine(medicineData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['medicines'] });
+    }
+  });
+};
+
+export const useUpdateMedicine = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: ({ medicineId, updates }: { medicineId: string; updates: Partial<Medicine> }) =>
+      updateMedicine(medicineId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
     }
