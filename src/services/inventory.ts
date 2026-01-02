@@ -500,13 +500,21 @@ export const getExpiredMedicines = async (): Promise<Medicine[]> => {
 
 export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promise<string> => {
   const medicineRef = doc(collection(db, 'medicines'));
-  const newMedicine = {
-    ...medicineData,
+  const newMedicine: any = {
+    name: medicineData.name,
+    category: medicineData.category,
+    manufacturer: medicineData.manufacturer,
     stock: medicineData.stock || 0,
     currentStock: medicineData.currentStock || medicineData.stock || 0,
     stockBatches: [],
     gstRate: medicineData.gstRate !== undefined && medicineData.gstRate !== null ? medicineData.gstRate : 5, // Default to 5 if not provided
+    price: 0, // Default price, not from Excel
   };
+  
+  // Add optional fields only if they have values
+  if (medicineData.code) newMedicine.code = medicineData.code;
+  if (medicineData.unit) newMedicine.unit = medicineData.unit;
+  if (medicineData.description) newMedicine.description = medicineData.description;
   
   await setDoc(medicineRef, newMedicine);
   return medicineRef.id;
