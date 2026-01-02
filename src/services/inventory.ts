@@ -79,6 +79,7 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
       manufacturer: String(data.manufacturer || ''),
       category: String(data.category || ''),
       code: data.code ? String(data.code) : undefined,
+      unit: data.unit ? String(data.unit) : undefined, // Packaging/Unit field
       stock: calculatedStock,
       currentStock: calculatedStock,
       price: data.price || data.mrp || 0, // Ensure price field exists
@@ -165,11 +166,13 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
     manufacturer: String(data.manufacturer || ''),
     category: String(data.category || ''),
     code: data.code ? String(data.code) : undefined,
+    unit: data.unit ? String(data.unit) : undefined, // Packaging/Unit field
     stock: calculatedStock,
     currentStock: calculatedStock,
     price: data.price || data.mrp || 0,
     stockBatches: processedBatches,
     gstRate: data.gstRate !== undefined && data.gstRate !== null ? (typeof data.gstRate === 'number' ? data.gstRate : parseFloat(String(data.gstRate))) : 5,
+    description: String(data.description || ''), // Ensure description is included
   };
   
   return medicine;
@@ -496,6 +499,25 @@ export const getExpiredMedicines = async (): Promise<Medicine[]> => {
       : medicine.expiryDate.toDate();
     return expiry < today;
   });
+};
+
+export const updateMedicine = async (medicineId: string, updates: Partial<Medicine>): Promise<void> => {
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const cleanUpdates: any = {};
+  
+  // Only include defined fields
+  if (updates.name !== undefined) cleanUpdates.name = updates.name;
+  if (updates.code !== undefined) cleanUpdates.code = updates.code;
+  if (updates.category !== undefined) cleanUpdates.category = updates.category;
+  if (updates.unit !== undefined) cleanUpdates.unit = updates.unit;
+  if (updates.manufacturer !== undefined) cleanUpdates.manufacturer = updates.manufacturer;
+  if (updates.gstRate !== undefined) cleanUpdates.gstRate = updates.gstRate;
+  if (updates.description !== undefined) cleanUpdates.description = updates.description;
+  if (updates.composition !== undefined) cleanUpdates.composition = updates.composition;
+  if (updates.dosage !== undefined) cleanUpdates.dosage = updates.dosage;
+  if (updates.sideEffects !== undefined) cleanUpdates.sideEffects = updates.sideEffects;
+  
+  await updateDoc(medicineRef, cleanUpdates);
 };
 
 export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promise<string> => {

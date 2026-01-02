@@ -302,16 +302,16 @@ export const InventoryPage: React.FC = () => {
           </Grid>
           <Grid item xs={12} md={3}>
             <FormControl fullWidth>
-              <InputLabel>Category</InputLabel>
+              <InputLabel>Type</InputLabel>
               <Select
                 value={categoryFilter}
-                label="Category"
+                label="Type"
                 onChange={(e) => {
                   setCategoryFilter(e.target.value);
                   setPage(1);
                 }}
               >
-                <MenuItem value="All">All Categories</MenuItem>
+                <MenuItem value="All">All Types</MenuItem>
                 {categories.map(cat => (
                   <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                 ))}
@@ -345,8 +345,10 @@ export const InventoryPage: React.FC = () => {
           <TableHead>
             <TableRow>
               <TableCell>Medicine Details</TableCell>
-              <TableCell>Category</TableCell>
+              <TableCell>Type</TableCell>
+              <TableCell>Packaging</TableCell>
               <TableCell>Manufacturer</TableCell>
+              <TableCell align="right">GST Rate</TableCell>
               <TableCell align="right">Stock</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -354,7 +356,7 @@ export const InventoryPage: React.FC = () => {
           <TableBody>
             {paginatedMedicines.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} align="center">
+                <TableCell colSpan={7} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No medicines found</Typography>
                 </TableCell>
               </TableRow>
@@ -366,7 +368,16 @@ export const InventoryPage: React.FC = () => {
                   <Typography variant="caption" color="textSecondary">{medicine.code || 'No code'}</Typography>
                 </TableCell>
                 <TableCell>{medicine.category}</TableCell>
+                <TableCell>{medicine.unit || 'N/A'}</TableCell>
                 <TableCell>{medicine.manufacturer}</TableCell>
+                <TableCell align="right">
+                  <Chip
+                    label={`${medicine.gstRate || 5}%`}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                  />
+                </TableCell>
                 <TableCell align="right">
                   <Chip
                     label={medicine.currentStock ?? medicine.stock ?? 0}
