@@ -76,7 +76,11 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const displaySubTotal = recalculatedSubTotal > 0 ? recalculatedSubTotal : invoice.subTotal;
   const displayDiscount = recalculatedDiscount > 0 ? recalculatedDiscount : (invoice.discount || 0);
   const displayTaxAmount = recalculatedTaxAmount > 0 ? recalculatedTaxAmount : invoice.taxAmount;
-  const displayTotal = displaySubTotal - displayDiscount + displayTaxAmount;
+  const calculatedTotal = displaySubTotal - displayDiscount + displayTaxAmount;
+  
+  // Calculate round off
+  const roundoff = Math.round(calculatedTotal) - calculatedTotal;
+  const grandTotal = Math.round(calculatedTotal);
 
   return (
     <Box>
@@ -234,10 +238,16 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
               <Typography color="textSecondary">Tax:</Typography>
               <Typography>₹{displayTaxAmount.toFixed(2)}</Typography>
             </Box>
+            {Math.abs(roundoff) > 0.01 && (
+              <Box display="flex" justifyContent="space-between" mb={1}>
+                <Typography color="textSecondary">Round Off:</Typography>
+                <Typography>{roundoff > 0 ? '+' : ''}₹{roundoff.toFixed(2)}</Typography>
+              </Box>
+            )}
             <Divider sx={{ my: 2 }} />
             <Box display="flex" justifyContent="space-between" mb={2}>
               <Typography variant="h6">Total:</Typography>
-              <Typography variant="h6">₹{displayTotal.toFixed(2)}</Typography>
+              <Typography variant="h6">₹{grandTotal.toFixed(2)}</Typography>
             </Box>
             <Chip
               label={invoice.paymentStatus}
