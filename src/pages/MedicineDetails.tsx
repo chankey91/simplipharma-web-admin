@@ -393,6 +393,10 @@ export const MedicineDetailsPage: React.FC = () => {
                     <TableCell align="right">Qty</TableCell>
                     <TableCell>Expiry</TableCell>
                     <TableCell align="right">MRP</TableCell>
+                    <TableCell align="right">Purchase Price</TableCell>
+                    <TableCell align="right">GST %</TableCell>
+                    <TableCell align="right">Standard Discount %</TableCell>
+                    <TableCell align="right">Discount %</TableCell>
                     <TableCell align="right">QR Code</TableCell>
                   </TableRow>
                 </TableHead>
@@ -414,13 +418,47 @@ export const MedicineDetailsPage: React.FC = () => {
                         }
                       }
                       
-                      // Debug for specific medicine
-                      if (medicine.id === '0IXu5mRZu10DpmnpSXSg') {
-                        console.log(`[DEBUG Display] Batch ${batch.batchNumber} MRP:`, {
+                      // Get purchase price
+                      const purchasePrice = batch.purchasePrice || 0;
+                      
+                      // Get GST rate from medicine
+                      const gstRate = medicine.gstRate || 5;
+                      
+                      // Get discount percentage - handle all cases similar to MRP
+                      let discountPercentageValue: number | null = null;
+                      if (batch.discountPercentage !== undefined && batch.discountPercentage !== null) {
+                        if (typeof batch.discountPercentage === 'number') {
+                          discountPercentageValue = isNaN(batch.discountPercentage) ? null : batch.discountPercentage;
+                        } else if (typeof batch.discountPercentage === 'string') {
+                          const trimmed = String(batch.discountPercentage).trim();
+                          if (trimmed !== '' && trimmed !== 'null' && trimmed !== 'undefined') {
+                            const parsed = parseFloat(trimmed);
+                            discountPercentageValue = !isNaN(parsed) ? parsed : null;
+                          }
+                        }
+                      }
+                      
+                      // Calculate standard discount from MRP and Purchase Price
+                      // Formula: Standard Discount = (1 - (Purchase Price * (1 + GST/100) / MRP)) * 100
+                      let standardDiscount: number | null = null;
+                      if (mrpValue !== null && mrpValue > 0 && purchasePrice > 0) {
+                        const priceWithGST = purchasePrice * (1 + gstRate / 100);
+                        standardDiscount = (1 - (priceWithGST / mrpValue)) * 100;
+                      } else if (mrpValue === null || mrpValue === 0) {
+                        // Default to 20% if MRP not available
+                        standardDiscount = 20;
+                      }
+                      
+                      // Debug for specific medicine or batch
+                      if (medicine.id === '0IXu5mRZu10DpmnpSXSg' || batch.batchNumber === '3412432') {
+                        console.log(`[DEBUG Display] Batch ${batch.batchNumber}:`, {
                           batchMrp: batch.mrp,
                           mrpType: typeof batch.mrp,
                           mrpValue: mrpValue,
-                          willDisplay: mrpValue !== null && !isNaN(mrpValue)
+                          batchDiscount: batch.discountPercentage,
+                          discountType: typeof batch.discountPercentage,
+                          discountValue: discountPercentageValue,
+                          fullBatch: batch
                         });
                       }
                       
@@ -438,6 +476,24 @@ export const MedicineDetailsPage: React.FC = () => {
                         <TableCell align="right">
                           {mrpValue !== null && !isNaN(mrpValue) 
                             ? `₹${mrpValue.toFixed(2)}` 
+                            : '-'}
+                        </TableCell>
+                        <TableCell align="right">
+                          {purchasePrice > 0 
+                            ? `₹${purchasePrice.toFixed(2)}` 
+                            : '-'}
+                        </TableCell>
+                        <TableCell align="right">
+                          {gstRate}%
+                        </TableCell>
+                        <TableCell align="right">
+                          {standardDiscount !== null 
+                            ? `${standardDiscount.toFixed(2)}%` 
+                            : '-'}
+                        </TableCell>
+                        <TableCell align="right">
+                          {discountPercentageValue !== null && !isNaN(discountPercentageValue)
+                            ? `${discountPercentageValue.toFixed(2)}%`
                             : '-'}
                         </TableCell>
                         <TableCell align="right">

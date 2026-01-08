@@ -42,6 +42,7 @@ export interface StockBatch {
   purchaseDate?: Date | any;
   purchasePrice?: number;
   mrp?: number;
+  discountPercentage?: number;
 }
 
 export type OrderStatus = 'Pending' | 'Order Fulfillment' | 'In Transit' | 'Delivered' | 'Cancelled';
