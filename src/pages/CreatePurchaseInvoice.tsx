@@ -114,11 +114,51 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
 
   const calculateTotals = () => {
-    const subTotal = items.reduce((sum, item) => sum + item.totalAmount, 0);
-    return { subTotal, totalAmount: subTotal };
+    // Calculate subtotal: sum of (purchasePrice * quantity) for all items
+    const subTotal = items.reduce((sum, item) => {
+      const quantity = item.quantity || 0;
+      const purchasePrice = item.purchasePrice || 0;
+      return sum + (purchasePrice * quantity);
+    }, 0);
+
+    // Calculate total discount amount: sum of discount amounts from discount percentage
+    const totalDiscount = items.reduce((sum, item) => {
+      const quantity = item.quantity || 0;
+      const purchasePrice = item.purchasePrice || 0;
+      const discountPercentage = item.discountPercentage || 0;
+      
+      const baseAmount = purchasePrice * quantity;
+      const discountAmount = (baseAmount * discountPercentage) / 100;
+      
+      return sum + discountAmount;
+    }, 0);
+
+    // Calculate total tax amount: sum of GST amounts from GST rate
+    const totalTax = items.reduce((sum, item) => {
+      const quantity = item.quantity || 0;
+      const purchasePrice = item.purchasePrice || 0;
+      const discountPercentage = item.discountPercentage || 0;
+      const gstRate = item.gstRate || 0;
+      
+      const baseAmount = purchasePrice * quantity;
+      const discountAmount = (baseAmount * discountPercentage) / 100;
+      const amountAfterDiscount = baseAmount - discountAmount;
+      const gstAmount = (amountAfterDiscount * gstRate) / 100;
+      
+      return sum + gstAmount;
+    }, 0);
+
+    // Calculate total: subtotal - discount + tax
+    const calculatedTotal = subTotal - totalDiscount + totalTax;
+    
+    // Calculate round off
+    const roundoff = Math.round(calculatedTotal) - calculatedTotal;
+    const grandTotal = Math.round(calculatedTotal);
+
+    return { subTotal, totalDiscount, totalTax, roundoff, grandTotal };
   };
 
-  const { subTotal, totalAmount } = calculateTotals();
+  const { subTotal, totalDiscount, totalTax, roundoff, grandTotal } = calculateTotals();
 
   const handleAddItem = () => {
     if (!selectedMedicine) {
@@ -163,12 +203,25 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const quantity = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
     const freeQuantity = currentItem.freeQuantity ? (typeof currentItem.freeQuantity === 'number' ? currentItem.freeQuantity : parseFloat(String(currentItem.freeQuantity || '0'))) : 0;
     const purchasePrice = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
+    const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
     // Get GST rate from medicine master data (from selectedMedicine)
     const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
     const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
     const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
     
+    // Calculate standard discount from MRP and Purchase Price
+    // Formula: Standard Discount = (1 - (Purchase Price * (1 + GST/100) / MRP)) * 100
+    let standardDiscount: number | undefined = undefined;
+    if (mrp > 0 && purchasePrice > 0) {
+      const priceWithGST = purchasePrice * (1 + gstRate / 100);
+      standardDiscount = (1 - (priceWithGST / mrp)) * 100;
+    } else {
+      // Default to 20% if MRP or Purchase Price not available
+      standardDiscount = 20;
+    }
+    
     // Calculate total: (purchasePrice * quantity) - discount + GST
+    // Formula: Purchase Price - Discount + GST
     const baseAmount = purchasePrice * quantity;
     const discountAmount = (baseAmount * discountPercentage) / 100;
     const amountAfterDiscount = baseAmount - discountAmount;
@@ -202,6 +255,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       purchasePrice,
       mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
       gstRate: gstRate > 0 ? gstRate : undefined,
+      standardDiscount: standardDiscount !== undefined ? standardDiscount : undefined,
       discountPercentage: discountPercentage > 0 ? discountPercentage : undefined,
       totalAmount,
       qrCode: qrCode || undefined,
@@ -334,8 +388,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           invoiceDate: new Date(invoiceData.invoiceDate),
           items,
           subTotal,
-          taxAmount: 0,
-          totalAmount,
+          taxAmount: totalTax,
+          discount: totalDiscount > 0 ? totalDiscount : undefined,
+          totalAmount: grandTotal,
           paymentStatus: 'Unpaid',
           notes: invoiceData.notes || undefined,
           createdBy: user.uid,
@@ -432,10 +487,26 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               <Typography color="textSecondary">Subtotal:</Typography>
               <Typography>₹{subTotal.toFixed(2)}</Typography>
             </Box>
+            {totalDiscount > 0 && (
+              <Box display="flex" justifyContent="space-between" mb={1}>
+                <Typography color="textSecondary">Discount:</Typography>
+                <Typography color="error">-₹{totalDiscount.toFixed(2)}</Typography>
+              </Box>
+            )}
+            <Box display="flex" justifyContent="space-between" mb={1}>
+              <Typography color="textSecondary">Tax:</Typography>
+              <Typography>₹{totalTax.toFixed(2)}</Typography>
+            </Box>
+            {Math.abs(roundoff) > 0.01 && (
+              <Box display="flex" justifyContent="space-between" mb={1}>
+                <Typography color="textSecondary">Round Off:</Typography>
+                <Typography>{roundoff > 0 ? '+' : ''}₹{roundoff.toFixed(2)}</Typography>
+              </Box>
+            )}
             <Divider sx={{ my: 2 }} />
             <Box display="flex" justifyContent="space-between">
               <Typography variant="h6">Total:</Typography>
-              <Typography variant="h6">₹{totalAmount.toFixed(2)}</Typography>
+              <Typography variant="h6">₹{grandTotal.toFixed(2)}</Typography>
             </Box>
           </Paper>
         </Grid>
@@ -489,6 +560,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     <TableCell align="right">Free Qty</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">Price</TableCell>
+                    <TableCell align="right">GST %</TableCell>
+                    <TableCell align="right">Discount %</TableCell>
                     <TableCell align="right">Total</TableCell>
                     <TableCell align="center">QR Code</TableCell>
                     <TableCell align="center">Actions</TableCell>
@@ -497,7 +570,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 <TableBody>
                   {items.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={9} align="center">
+                      <TableCell colSpan={11} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>
                           No items added. Search and add medicines to create invoice.
                         </Typography>
@@ -523,6 +596,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                           </Typography>
                         </TableCell>
                         <TableCell align="right">₹{item.purchasePrice.toFixed(2)}</TableCell>
+                        <TableCell align="right">
+                          {item.gstRate !== undefined ? `${item.gstRate}%` : '-'}
+                        </TableCell>
+                        <TableCell align="right">
+                          {item.discountPercentage !== undefined ? `${item.discountPercentage}%` : '-'}
+                        </TableCell>
                         <TableCell align="right">₹{item.totalAmount.toFixed(2)}</TableCell>
                         <TableCell align="center">
                           {item.qrCode ? (
@@ -627,28 +706,38 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Purchase Price"
-                type="number"
-                required
-                value={currentItem.purchasePrice}
-                onChange={(e) => {
-                  setCurrentItem({ 
-                    ...currentItem, 
-                    purchasePrice: e.target.value,
-                    unitPrice: e.target.value,
-                  });
-                }}
-                InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
                 label="MRP"
                 type="number"
                 value={currentItem.mrp}
-                onChange={(e) => setCurrentItem({ ...currentItem, mrp: e.target.value })}
+                onChange={(e) => {
+                  const mrpValue = e.target.value;
+                  const mrp = mrpValue ? (typeof mrpValue === 'number' ? mrpValue : parseFloat(String(mrpValue || '0'))) : 0;
+                  
+                  // Get GST rate from medicine master data
+                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+                  const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
+                  
+                  // Calculate Purchase Price: (MRP * 0.80) / (1 + GST rate/100)
+                  // Step 1: Apply 20% standard discount
+                  // Step 2: Remove inclusive GST
+                  let calculatedPurchasePrice = '';
+                  if (mrp > 0) {
+                    const afterDiscount = mrp * 0.80;
+                    const purchasePrice = afterDiscount / (1 + gstRate / 100);
+                    calculatedPurchasePrice = purchasePrice.toFixed(2);
+                  }
+                  
+                  setCurrentItem({ 
+                    ...currentItem, 
+                    mrp: mrpValue,
+                    ...(calculatedPurchasePrice && {
+                      purchasePrice: calculatedPurchasePrice,
+                      unitPrice: calculatedPurchasePrice,
+                    })
+                  });
+                }}
                 InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
+                helperText="Enter MRP to auto-calculate Purchase Price (20% discount + GST removal)"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -665,6 +754,52 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   readOnly: true
                 }}
                 helperText="From medicine master data"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Standard Discount (%)"
+                type="number"
+                value={(() => {
+                  const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
+                  const purchasePrice = currentItem.purchasePrice ? (typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'))) : 0;
+                  
+                  // Get GST rate from medicine master data
+                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+                  const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
+                  
+                  // Calculate standard discount from MRP and Purchase Price
+                  // Formula: Standard Discount = (1 - (Purchase Price * (1 + GST/100) / MRP)) * 100
+                  if (mrp > 0 && purchasePrice > 0) {
+                    const priceWithGST = purchasePrice * (1 + gstRate / 100);
+                    const standardDiscount = (1 - (priceWithGST / mrp)) * 100;
+                    return standardDiscount.toFixed(2);
+                  }
+                  // Default to 20% if MRP or Purchase Price not available
+                  return '20.00';
+                })()}
+                InputProps={{ 
+                  readOnly: true
+                }}
+                helperText="Calculated from MRP and Purchase Price"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Purchase Price"
+                type="number"
+                required
+                value={currentItem.purchasePrice}
+                onChange={(e) => {
+                  setCurrentItem({ 
+                    ...currentItem, 
+                    purchasePrice: e.target.value,
+                    unitPrice: e.target.value,
+                  });
+                }}
+                InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -687,10 +822,17 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
                   const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
                   const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
+                  
+                  // Formula: Purchase Price - Discount + GST
+                  // Step 1: Calculate base amount (Purchase Price * Quantity)
                   const baseAmount = price * qty;
+                  // Step 2: Calculate discount amount
                   const discountAmount = (baseAmount * discountPercentage) / 100;
+                  // Step 3: Subtract discount from base amount
                   const amountAfterDiscount = baseAmount - discountAmount;
+                  // Step 4: Calculate GST on discounted amount
                   const gstAmount = (amountAfterDiscount * gstRate) / 100;
+                  // Step 5: Add GST to get total amount
                   return (amountAfterDiscount + gstAmount).toFixed(2);
                 })()}
                 InputProps={{ 

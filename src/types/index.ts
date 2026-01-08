@@ -171,6 +171,7 @@ export interface PurchaseInvoiceItem {
   purchasePrice: number;
   mrp?: number;
   gstRate?: number;
+  standardDiscount?: number;
   discountPercentage?: number;
   totalAmount: number;
   qrCode?: string; // Base64 encoded QR code image
