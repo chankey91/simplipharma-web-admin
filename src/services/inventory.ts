@@ -66,6 +66,9 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
           ? (typeof batch.purchasePrice === 'number' ? batch.purchasePrice : parseFloat(String(batch.purchasePrice))) 
           : undefined,
         mrp: mrpValue,
+        discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
+          ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
+          : undefined,
       };
     }) : undefined;
     
@@ -248,6 +251,10 @@ export const addStockBatch = async (
     newBatch.mrp = batch.mrp;
   }
   
+  if (batch.discountPercentage !== undefined && batch.discountPercentage !== null) {
+    newBatch.discountPercentage = batch.discountPercentage;
+  }
+  
   // Check if batch with same batch number already exists
   const existingBatchIndex = batches.findIndex(b => b.batchNumber === batch.batchNumber);
   
@@ -269,9 +276,14 @@ export const addStockBatch = async (
     } else {
       console.log(`MRP not provided for batch ${batch.batchNumber}, keeping existing value: ${batches[existingBatchIndex].mrp}`);
     }
+    // Update discountPercentage if provided
+    if (newBatch.discountPercentage !== undefined && newBatch.discountPercentage !== null) {
+      batches[existingBatchIndex].discountPercentage = newBatch.discountPercentage;
+      console.log(`Updated discountPercentage for batch ${batch.batchNumber} to ${newBatch.discountPercentage}`);
+    }
   } else {
     // Add new batch
-    console.log(`Adding new batch ${batch.batchNumber} with quantity ${batch.quantity}, MRP: ${newBatch.mrp}`);
+    console.log(`Adding new batch ${batch.batchNumber} with quantity ${batch.quantity}, MRP: ${newBatch.mrp}, discountPercentage: ${newBatch.discountPercentage}`);
     batches.push(newBatch);
   }
   
@@ -320,6 +332,17 @@ export const addStockBatch = async (
       }
     } else {
       console.log(`No MRP for batch ${b.batchNumber}`);
+    }
+    
+    // Ensure discountPercentage is saved as a number if it exists
+    if (b.discountPercentage !== undefined && b.discountPercentage !== null) {
+      const discountValue = typeof b.discountPercentage === 'number' ? b.discountPercentage : parseFloat(String(b.discountPercentage));
+      if (!isNaN(discountValue)) {
+        firestoreBatch.discountPercentage = discountValue;
+        console.log(`Saving discountPercentage ${discountValue} for batch ${b.batchNumber}`);
+      } else {
+        console.warn(`Invalid discountPercentage value for batch ${b.batchNumber}: ${b.discountPercentage}`);
+      }
     }
     
     return firestoreBatch;

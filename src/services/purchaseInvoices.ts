@@ -231,6 +231,14 @@ export const createPurchaseInvoice = async (
               delete batchData.mrp;
             }
           }
+          if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
+            // Ensure discountPercentage is a number
+            batchData.discountPercentage = typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage));
+            if (isNaN(batchData.discountPercentage)) {
+              console.warn(`Invalid discountPercentage value for item ${item.medicineName}: ${item.discountPercentage}`);
+              delete batchData.discountPercentage;
+            }
+          }
           
           console.log(`Updating stock for medicine ${item.medicineId} with batch data:`, batchData);
           await addStockBatch(item.medicineId, batchData);
@@ -335,6 +343,14 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
           if (isNaN(batchData.mrp)) {
             console.warn(`Invalid MRP value for item ${item.medicineName}: ${item.mrp}`);
             delete batchData.mrp;
+          }
+        }
+        if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
+          // Ensure discountPercentage is a number
+          batchData.discountPercentage = typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage));
+          if (isNaN(batchData.discountPercentage)) {
+            console.warn(`Invalid discountPercentage value for item ${item.medicineName}: ${item.discountPercentage}`);
+            delete batchData.discountPercentage;
           }
         }
         

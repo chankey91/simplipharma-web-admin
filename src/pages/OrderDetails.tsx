@@ -287,9 +287,18 @@ export const OrderDetailsPage: React.FC = () => {
         if (foundBatch) {
           newMedicines[scanningItemIndex].batchNumber = foundBatch.batchNumber;
           newMedicines[scanningItemIndex].batchExpiryDate = foundBatch.expiryDate;
-          // Update price from batch MRP if available, otherwise keep original price
+          // Store MRP from batch
           if (foundBatch.mrp && foundBatch.mrp > 0) {
-            newMedicines[scanningItemIndex].price = foundBatch.mrp;
+            newMedicines[scanningItemIndex].mrp = foundBatch.mrp;
+          } else {
+            newMedicines[scanningItemIndex].mrp = undefined;
+          }
+          // Set price from batch purchasePrice if available, otherwise keep original order price
+          if (foundBatch.purchasePrice && foundBatch.purchasePrice > 0) {
+            newMedicines[scanningItemIndex].price = foundBatch.purchasePrice;
+          } else if (!newMedicines[scanningItemIndex].price || newMedicines[scanningItemIndex].price === 0) {
+            // If no batch purchasePrice, use original order price
+            newMedicines[scanningItemIndex].price = item.price || 0;
           }
         }
         setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
@@ -336,9 +345,18 @@ export const OrderDetailsPage: React.FC = () => {
           if (foundBatch) {
             newMedicines[itemIndex].batchNumber = foundBatch.batchNumber;
             newMedicines[itemIndex].batchExpiryDate = foundBatch.expiryDate;
-            // Update price from batch MRP if available, otherwise keep original price
+            // Store MRP from batch
             if (foundBatch.mrp && foundBatch.mrp > 0) {
-              newMedicines[itemIndex].price = foundBatch.mrp;
+              newMedicines[itemIndex].mrp = foundBatch.mrp;
+            } else {
+              newMedicines[itemIndex].mrp = undefined;
+            }
+            // Set price from batch purchasePrice if available, otherwise keep original order price
+            if (foundBatch.purchasePrice && foundBatch.purchasePrice > 0) {
+              newMedicines[itemIndex].price = foundBatch.purchasePrice;
+            } else if (!newMedicines[itemIndex].price || newMedicines[itemIndex].price === 0) {
+              // If no batch purchasePrice, use original order price
+              newMedicines[itemIndex].price = item.price || 0;
             }
           }
         } else if (selectedBatch && medicine.stockBatches) {
@@ -348,9 +366,18 @@ export const OrderDetailsPage: React.FC = () => {
             newMedicines[itemIndex].verified = true;
             newMedicines[itemIndex].batchNumber = batch.batchNumber;
             newMedicines[itemIndex].batchExpiryDate = batch.expiryDate;
-            // Update price from batch MRP if available, otherwise keep original price
+            // Store MRP from batch
             if (batch.mrp && batch.mrp > 0) {
-              newMedicines[itemIndex].price = batch.mrp;
+              newMedicines[itemIndex].mrp = batch.mrp;
+            } else {
+              newMedicines[itemIndex].mrp = undefined;
+            }
+            // Set price from batch purchasePrice if available, otherwise keep original order price
+            if (batch.purchasePrice && batch.purchasePrice > 0) {
+              newMedicines[itemIndex].price = batch.purchasePrice;
+            } else if (!newMedicines[itemIndex].price || newMedicines[itemIndex].price === 0) {
+              // If no batch purchasePrice, use original order price
+              newMedicines[itemIndex].price = item.price || 0;
             }
           }
         } else {
@@ -405,13 +432,24 @@ export const OrderDetailsPage: React.FC = () => {
     }
   };
 
+  // Check if all items have batches assigned
+  const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
+    fulfillmentData.medicines.every(m => m.batchNumber);
+  
   // Calculate subtotal and total from fulfillmentData.medicines to reflect updated prices after batch selection
-  const subTotal = fulfillmentData.medicines.length > 0 
-    ? fulfillmentData.medicines.reduce((sum, m) => sum + ((m.price || 0) * (m.quantity || 0)), 0)
-    : (order.subTotal || order.medicines.reduce((sum, m) => sum + (m.price * m.quantity), 0));
+  // Calculate from items that have batches assigned (incremental update)
+  const subTotal = fulfillmentData.medicines.length > 0
+    ? fulfillmentData.medicines
+        .filter(m => m.batchNumber) // Only include items with batches assigned
+        .reduce((sum, m) => sum + ((m.price || 0) * (m.quantity || 0)), 0)
+    : 0;
     const taxPercentage = order.taxPercentage || fulfillmentData.taxPercentage || 5;
-  const taxAmount = (subTotal * taxPercentage) / 100;
-  const totalAmount = subTotal + taxAmount;
+  const taxAmount = subTotal > 0 ? (subTotal * taxPercentage) / 100 : 0;
+  const calculatedTotal = subTotal + taxAmount;
+  
+  // Calculate round off
+  const roundoff = calculatedTotal > 0 ? (Math.round(calculatedTotal) - calculatedTotal) : 0;
+  const grandTotal = calculatedTotal > 0 ? Math.round(calculatedTotal) : 0;
 
   return (
     <Box>
@@ -477,7 +515,7 @@ export const OrderDetailsPage: React.FC = () => {
               subTotal: subTotal,
               taxAmount: taxAmount,
               taxPercentage: taxPercentage,
-              totalAmount: totalAmount
+              totalAmount: grandTotal
             };
             
             try {
@@ -515,7 +553,7 @@ export const OrderDetailsPage: React.FC = () => {
 
       <Grid container spacing={3}>
         {/* Order Items & Fulfillment */}
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12} md={9} sx={{ maxWidth: '72%', flexBasis: '72%', flexGrow: 0 }}>
           <Paper sx={{ p: 3, mb: 3 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
               <Typography variant="h6">Order Items</Typography>
@@ -525,9 +563,14 @@ export const OrderDetailsPage: React.FC = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>Medicine</TableCell>
-                    <TableCell align="right">Quantity</TableCell>
+                    <TableCell>Batch</TableCell>
+                    <TableCell align="right">Qty</TableCell>
+                    <TableCell align="right">Free Qty</TableCell>
+                    <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">Price</TableCell>
-                    <TableCell>Batch Number</TableCell>
+                    <TableCell align="right">MRP</TableCell>
+                    <TableCell align="right">GST %</TableCell>
+                    <TableCell align="right">Disc %</TableCell>
                     <TableCell align="right">Total</TableCell>
                     {order.status === 'Pending' && <TableCell align="center">Actions</TableCell>}
                   </TableRow>
@@ -541,13 +584,39 @@ export const OrderDetailsPage: React.FC = () => {
                     <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                       <TableCell>
                         <Typography variant="body2" fontWeight="medium">{item.name || 'Unknown'}</Typography>
-                        {item.scannedQRCode && (
-                          <Typography variant="caption" color="textSecondary" display="block">
-                            Scanned: {item.scannedQRCode}
-                          </Typography>
+                        <Typography variant="caption" color="textSecondary">
+                          {item.batchExpiryDate && (
+                            <>
+                              Exp: {format(
+                                item.batchExpiryDate instanceof Date 
+                                  ? item.batchExpiryDate 
+                                  : item.batchExpiryDate.toDate(),
+                                'MM/yyyy'
+                              )}
+                            </>
+                          )}
+                          {item.scannedQRCode && (
+                            <>
+                              {item.batchExpiryDate && ' | '}
+                              Scanned: {item.scannedQRCode}
+                            </>
+                          )}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        {item.batchNumber || (
+                          <Typography variant="caption" color="textSecondary">Not assigned</Typography>
                         )}
                       </TableCell>
                       <TableCell align="right">{item.quantity || 0}</TableCell>
+                      <TableCell align="right">
+                        {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography variant="body2" fontWeight="medium">
+                          {(item.quantity || 0) + (item.freeQuantity || 0)}
+                        </Typography>
+                      </TableCell>
                       <TableCell align="right">
                         {item.batchNumber ? (
                           <>₹{(item.price || 0).toFixed(2)}</>
@@ -555,30 +624,18 @@ export const OrderDetailsPage: React.FC = () => {
                           <Typography variant="caption" color="textSecondary">Enter batch</Typography>
                         )}
                       </TableCell>
-                      <TableCell>
-                        {item.batchNumber ? (
-                          <Box>
-                            <Chip 
-                              label={item.batchNumber} 
-                              size="small" 
-                              color="primary" 
-                              variant="outlined"
-                              sx={{ mb: 0.5 }}
-                            />
-                            {item.batchExpiryDate && (
-                              <Typography variant="caption" color="textSecondary" display="block">
-                                Exp: {format(
-                                  item.batchExpiryDate instanceof Date 
-                                    ? item.batchExpiryDate 
-                                    : item.batchExpiryDate.toDate(),
-                                  'MMM yyyy'
-                                )}
-                              </Typography>
-                            )}
-                          </Box>
+                      <TableCell align="right">
+                        {item.mrp ? (
+                          <>₹{(item.mrp || 0).toFixed(2)}</>
                         ) : (
-                          <Typography variant="caption" color="textSecondary">Not assigned</Typography>
+                          <Typography variant="caption" color="textSecondary">-</Typography>
                         )}
+                      </TableCell>
+                      <TableCell align="right">
+                        {item.gstRate !== undefined ? `${item.gstRate}%` : '-'}
+                      </TableCell>
+                      <TableCell align="right">
+                        {item.discountPercentage !== undefined ? `${item.discountPercentage}%` : '-'}
                       </TableCell>
                       <TableCell align="right">
                         {item.batchNumber ? (
@@ -672,9 +729,60 @@ export const OrderDetailsPage: React.FC = () => {
               </Box>
             )}
           </Paper>
+        </Grid>
 
-          {/* Timeline History */}
-          <Paper sx={{ p: 3 }}>
+        {/* Invoice Details */}
+        <Grid item xs={12} md={3} sx={{ maxWidth: '28%', flexBasis: '28%', flexGrow: 0 }}>
+          <Paper sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Invoice Details</Typography>
+            <Box display="flex" justifyContent="space-between" mb={1}>
+              <Typography color="textSecondary">Order ID:</Typography>
+              <Typography fontWeight="medium">#{order.id.substring(0, 8)}</Typography>
+            </Box>
+            <Box display="flex" justifyContent="space-between" mb={1}>
+              <Typography color="textSecondary">Date:</Typography>
+              <Typography>
+                {format(order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate), 'MMM dd, yyyy')}
+              </Typography>
+            </Box>
+            <Box display="flex" justifyContent="space-between" mb={2}>
+              <Typography color="textSecondary">Retailer:</Typography>
+              <Typography fontWeight="medium">{order.retailerEmail || order.retailerName || 'N/A'}</Typography>
+            </Box>
+            <Divider sx={{ my: 2 }} />
+            <Box display="flex" justifyContent="space-between" mb={1}>
+              <Typography color="textSecondary">Subtotal:</Typography>
+              <Typography>₹{subTotal.toFixed(2)}</Typography>
+            </Box>
+            <Box display="flex" justifyContent="space-between" mb={1}>
+              <Typography color="textSecondary">Tax ({taxPercentage}%):</Typography>
+              <Typography>₹{taxAmount.toFixed(2)}</Typography>
+            </Box>
+            {Math.abs(roundoff) > 0.01 && (
+              <Box display="flex" justifyContent="space-between" mb={1}>
+                <Typography color="textSecondary">Round Off:</Typography>
+                <Typography>{roundoff > 0 ? '+' : ''}₹{roundoff.toFixed(2)}</Typography>
+              </Box>
+            )}
+            <Divider sx={{ my: 2 }} />
+            <Box display="flex" justifyContent="space-between" mb={2}>
+              <Typography variant="h6">Total:</Typography>
+              <Typography variant="h6">₹{grandTotal.toFixed(2)}</Typography>
+            </Box>
+            <Chip
+              label={order.paymentStatus || 'Unpaid'}
+              color={
+                order.paymentStatus === 'Paid' ? 'success' :
+                order.paymentStatus === 'Partial' ? 'warning' : 'error'
+              }
+              sx={{ width: '100%', mb: 2 }}
+            />
+          </Paper>
+        </Grid>
+
+        {/* Timeline History */}
+        <Grid item xs={12} md={9} sx={{ maxWidth: '72%', flexBasis: '72%', flexGrow: 0 }}>
+          <Paper sx={{ p: 3, mb: 3 }}>
             <Typography variant="h6" gutterBottom>Order History</Typography>
             {order.timeline?.map((event, index) => (
               <Box key={index} sx={{ mb: 2, display: 'flex' }}>
@@ -690,10 +798,8 @@ export const OrderDetailsPage: React.FC = () => {
               </Box>
             ))}
           </Paper>
-        </Grid>
 
-        {/* Store & Shipping Info */}
-        <Grid item xs={12} md={4}>
+          {/* Store Information */}
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>Store Information</Typography>
@@ -783,6 +889,10 @@ export const OrderDetailsPage: React.FC = () => {
               )}
             </CardContent>
           </Card>
+        </Grid>
+
+        {/* Shipping Info */}
+        <Grid item xs={12} md={4}>
 
           {order.status === 'Order Fulfillment' && (
             <Paper sx={{ p: 3 }}>
