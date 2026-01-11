@@ -113,7 +113,7 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
                 await restoreStockToBatch(
                   item.medicineId,
                   allocation.batchNumber,
-                  allocation.quantity
+                  allocation.quantity || 0
                 );
                 console.log(`✓ Stock restored for medicine ${item.medicineId}, batch ${allocation.batchNumber}, quantity: ${allocation.quantity}`);
               } catch (error: any) {
@@ -129,7 +129,7 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
             await restoreStockToBatch(
               item.medicineId,
               item.batchNumber,
-              item.quantity
+              item.quantity || 0
             );
             console.log(`✓ Stock restored for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
           } catch (error: any) {
@@ -241,20 +241,22 @@ export const fulfillOrder = async (
         
         // Priority 1: From allocation itself (should already have it from frontend)
         if (allocation.discountPercentage !== undefined && allocation.discountPercentage !== null) {
-          discountPct = typeof allocation.discountPercentage === 'number' 
+          const parsed = typeof allocation.discountPercentage === 'number' 
             ? allocation.discountPercentage 
             : parseFloat(String(allocation.discountPercentage));
-          if (!isNaN(discountPct)) {
+          if (!isNaN(parsed)) {
+            discountPct = parsed;
             console.log(`[fulfillOrder] Using discountPercentage from allocation: ${discountPct}% for batch ${allocation.batchNumber}`);
           }
         }
         
         // Priority 2: From item itself
         if ((discountPct === undefined || isNaN(discountPct)) && item.discountPercentage !== undefined && item.discountPercentage !== null) {
-          discountPct = typeof item.discountPercentage === 'number'
+          const parsed = typeof item.discountPercentage === 'number'
             ? item.discountPercentage
             : parseFloat(String(item.discountPercentage));
-          if (!isNaN(discountPct)) {
+          if (!isNaN(parsed)) {
+            discountPct = parsed;
             console.log(`[fulfillOrder] Using discountPercentage from item: ${discountPct}% for batch ${allocation.batchNumber}`);
           }
         }

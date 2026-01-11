@@ -54,6 +54,9 @@ export interface OrderMedicine {
   quantity: number;
   batchNumber?: string; // Keep for backward compatibility
   expiryDate?: Date | any;
+  discountPercentage?: number; // Discount percentage for the item
+  gstRate?: number; // GST rate for the item
+  mrp?: number; // MRP for the item
   // NEW: Support multiple batch allocations
   batchAllocations?: Array<{
     batchNumber: string;
