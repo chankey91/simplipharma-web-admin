@@ -38,39 +38,55 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   if (isLoading) return <Loading message="Loading invoice..." />;
   if (!invoice) return <Typography>Invoice not found</Typography>;
 
-  // Calculate subtotal: sum of (price * quantity) for all items
+  // Calculate subtotal: sum of all "Total" column values (Price * Quantity)
+  // Price is calculated from MRP: (MRP * 0.80) / (1 + GST/100)
   const recalculatedSubTotal = invoice.items.reduce((sum, item) => {
     const quantity = item.quantity || 0;
-    const purchasePrice = item.purchasePrice || 0;
+    const mrp = item.mrp || 0;
+    const gstRate = item.gstRate || 5;
+    
+    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
+    let purchasePrice = 0;
+    if (mrp > 0) {
+      const afterDiscount = mrp * 0.80; // Apply 20% discount
+      purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+    } else {
+      purchasePrice = item.purchasePrice || 0;
+    }
+    
+    // Total = Price * Quantity (simple calculation for display)
     return sum + (purchasePrice * quantity);
   }, 0);
 
-  // Calculate total discount amount: sum of discount amounts from discount percentage
+  // Calculate total discount amount: sum of (Price * Quantity * discountPercentage / 100)
   const recalculatedDiscount = invoice.items.reduce((sum, item) => {
     const quantity = item.quantity || 0;
-    const purchasePrice = item.purchasePrice || 0;
+    const mrp = item.mrp || 0;
+    const gstRate = item.gstRate || 5;
     const discountPercentage = item.discountPercentage || 0;
     
-    const baseAmount = purchasePrice * quantity;
-    const discountAmount = (baseAmount * discountPercentage) / 100;
+    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
+    let purchasePrice = 0;
+    if (mrp > 0) {
+      const afterDiscount = mrp * 0.80; // Apply 20% discount
+      purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+    } else {
+      purchasePrice = item.purchasePrice || 0;
+    }
+    
+    const totalAmount = purchasePrice * quantity;
+    const discountAmount = (totalAmount * discountPercentage) / 100;
     
     return sum + discountAmount;
   }, 0);
 
-  // Calculate total tax amount: sum of GST amounts from GST rate
-  const recalculatedTaxAmount = invoice.items.reduce((sum, item) => {
-    const quantity = item.quantity || 0;
-    const purchasePrice = item.purchasePrice || 0;
-    const discountPercentage = item.discountPercentage || 0;
-    const gstRate = item.gstRate || 0;
-    
-    const baseAmount = purchasePrice * quantity;
-    const discountAmount = (baseAmount * discountPercentage) / 100;
-    const amountAfterDiscount = baseAmount - discountAmount;
-    const gstAmount = (amountAfterDiscount * gstRate) / 100;
-    
-    return sum + gstAmount;
-  }, 0);
+  // Calculate total tax amount on (Subtotal - Discount)
+  const amountAfterDiscount = recalculatedSubTotal - recalculatedDiscount;
+  // Use average GST rate or default to 5%
+  const avgGstRate = invoice.items.length > 0
+    ? invoice.items.reduce((sum, item) => sum + (item.gstRate || 5), 0) / invoice.items.length
+    : 5;
+  const recalculatedTaxAmount = (amountAfterDiscount * avgGstRate) / 100;
 
   // Use recalculated values or fall back to stored values
   const displaySubTotal = recalculatedSubTotal > 0 ? recalculatedSubTotal : invoice.subTotal;
@@ -123,83 +139,95 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Free Qty</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
+                    <TableCell align="right">MRP</TableCell>
                     <TableCell align="right">Price</TableCell>
-                    {invoice.items.some(item => item.gstRate !== undefined) && (
-                      <TableCell align="right">GST %</TableCell>
-                    )}
-                    {invoice.items.some(item => item.discountPercentage !== undefined) && (
-                      <TableCell align="right">Disc %</TableCell>
-                    )}
+                    <TableCell align="right">GST %</TableCell>
+                    <TableCell align="right">Disc %</TableCell>
                     <TableCell align="right">Total</TableCell>
                     <TableCell align="center">QR Code</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {invoice.items.map((item, index) => (
-                    <TableRow key={index}>
-                      <TableCell>
-                        <Typography variant="body2" fontWeight="medium">{item.medicineName}</Typography>
-                        <Typography variant="caption" color="textSecondary">
-                          {item.mfgDate && (
-                            <>MFG: {format(item.mfgDate instanceof Date ? item.mfgDate : item.mfgDate.toDate(), 'MM/yyyy')} | </>
+                  {invoice.items.map((item, index) => {
+                    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
+                    const mrp = item.mrp || 0;
+                    const gstRate = item.gstRate || 5;
+                    let purchasePrice = 0;
+                    if (mrp > 0) {
+                      const afterDiscount = mrp * 0.80; // Apply 20% discount
+                      purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+                    } else {
+                      purchasePrice = item.purchasePrice || 0;
+                    }
+                    
+                    // Total = Price * Quantity (simple calculation for display)
+                    const total = purchasePrice * (item.quantity || 0);
+                    
+                    return (
+                      <TableRow key={index}>
+                        <TableCell>
+                          <Typography variant="body2" fontWeight="medium">{item.medicineName}</Typography>
+                          <Typography variant="caption" color="textSecondary">
+                            {item.mfgDate && (
+                              <>MFG: {format(item.mfgDate instanceof Date ? item.mfgDate : item.mfgDate.toDate(), 'MM/yyyy')} | </>
+                            )}
+                            Exp: {item.expiryDate ? format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yyyy') : 'N/A'}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>{item.batchNumber}</TableCell>
+                        <TableCell align="right">{item.quantity}</TableCell>
+                        <TableCell align="right">
+                          {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                        </TableCell>
+                        <TableCell align="right">
+                          <Typography variant="body2" fontWeight="medium">
+                            {item.quantity + (item.freeQuantity || 0)}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="right">
+                          {mrp > 0 ? `₹${mrp.toFixed(2)}` : '-'}
+                        </TableCell>
+                        <TableCell align="right">₹{purchasePrice.toFixed(2)}</TableCell>
+                        <TableCell align="right">
+                          {item.gstRate !== undefined ? `${item.gstRate}%` : '5%'}
+                        </TableCell>
+                        <TableCell align="right">
+                          {item.discountPercentage !== undefined ? `${item.discountPercentage}%` : '0%'}
+                        </TableCell>
+                        <TableCell align="right">₹{total.toFixed(2)}</TableCell>
+                        <TableCell align="center">
+                          {item.qrCode && item.qrCode.trim() !== '' ? (
+                            <IconButton 
+                              size="small" 
+                              onClick={() => {
+                                // Open QR code in popup
+                                const newWindow = window.open();
+                                if (newWindow) {
+                                  newWindow.document.write(`
+                                    <html>
+                                      <head><title>QR Code - ${item.medicineName}</title></head>
+                                      <body style="text-align: center; padding: 20px;">
+                                        <h2>${item.medicineName}</h2>
+                                        <img src="${item.qrCode}" alt="QR Code" style="max-width: 400px; margin: 20px 0;" />
+                                        <br/>
+                                        <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px;">Print / Download</button>
+                                      </body>
+                                    </html>
+                                  `);
+                                }
+                              }}
+                              color="primary"
+                              title="View QR Code"
+                            >
+                              <QrCode />
+                            </IconButton>
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">-</Typography>
                           )}
-                          Exp: {item.expiryDate ? format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yyyy') : 'N/A'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>{item.batchNumber}</TableCell>
-                      <TableCell align="right">{item.quantity}</TableCell>
-                      <TableCell align="right">
-                        {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
-                      </TableCell>
-                      <TableCell align="right">
-                        <Typography variant="body2" fontWeight="medium">
-                          {item.quantity + (item.freeQuantity || 0)}
-                        </Typography>
-                      </TableCell>
-                      <TableCell align="right">₹{item.purchasePrice.toFixed(2)}</TableCell>
-                      {invoice.items.some(i => i.gstRate !== undefined) && (
-                        <TableCell align="right">
-                          {item.gstRate !== undefined ? `${item.gstRate}%` : '-'}
                         </TableCell>
-                      )}
-                      {invoice.items.some(i => i.discountPercentage !== undefined) && (
-                        <TableCell align="right">
-                          {item.discountPercentage !== undefined ? `${item.discountPercentage}%` : '-'}
-                        </TableCell>
-                      )}
-                      <TableCell align="right">₹{item.totalAmount.toFixed(2)}</TableCell>
-                      <TableCell align="center">
-                        {item.qrCode && item.qrCode.trim() !== '' ? (
-                          <IconButton 
-                            size="small" 
-                            onClick={() => {
-                              // Open QR code in popup
-                              const newWindow = window.open();
-                              if (newWindow) {
-                                newWindow.document.write(`
-                                  <html>
-                                    <head><title>QR Code - ${item.medicineName}</title></head>
-                                    <body style="text-align: center; padding: 20px;">
-                                      <h2>${item.medicineName}</h2>
-                                      <img src="${item.qrCode}" alt="QR Code" style="max-width: 400px; margin: 20px 0;" />
-                                      <br/>
-                                      <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px;">Print / Download</button>
-                                    </body>
-                                  </html>
-                                `);
-                              }
-                            }}
-                            color="primary"
-                            title="View QR Code"
-                          >
-                            <QrCode />
-                          </IconButton>
-                        ) : (
-                          <Typography variant="caption" color="textSecondary">-</Typography>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableContainer>

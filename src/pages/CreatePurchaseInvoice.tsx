@@ -86,8 +86,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     medicineName?: string;
     batchNumber?: string;
     expiryDate?: string;
-    expiryMonth?: string;
-    expiryYear?: string;
     quantity?: string | number;
     freeQuantity?: string | number;
     unitPrice?: string | number;
@@ -99,9 +97,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     medicineId: '',
     medicineName: '',
     batchNumber: '',
-    expiryDate: '',
-    expiryMonth: '',
-    expiryYear: '',
+    expiryDate: '', // MM/YYYY format
     quantity: '',
     freeQuantity: '',
     unitPrice: '',
@@ -110,6 +106,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     gstRate: '',
     discountPercentage: '',
   });
+  const [expiryDateError, setExpiryDateError] = useState<string>('');
 
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
 
@@ -165,13 +162,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       alert('Please select a medicine');
       return;
     }
+    setExpiryDateError(''); // Clear error when opening dialog
     setCurrentItem({
       medicineId: selectedMedicine.id,
       medicineName: selectedMedicine.name,
       batchNumber: '',
-      expiryDate: '',
-      expiryMonth: '',
-      expiryYear: '',
+      expiryDate: '', // MM/YYYY format
       quantity: '',
       freeQuantity: '',
       unitPrice: '',
@@ -195,8 +191,57 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const handleSaveItem = async () => {
     if (!currentItem.medicineId || !currentItem.batchNumber || !currentItem.quantity || 
-        !currentItem.expiryMonth || !currentItem.expiryYear || !currentItem.purchasePrice) {
+        !currentItem.expiryDate || !currentItem.purchasePrice) {
       alert('Please fill all required fields');
+      return;
+    }
+
+    // Validate expiry date format
+    if (expiryDateError) {
+      alert(`Expiry date error: ${expiryDateError}`);
+      return;
+    }
+
+    // Parse expiry date from MM/YYYY format
+    const expiryParts = currentItem.expiryDate.trim().split('/');
+    if (expiryParts.length !== 2) {
+      setExpiryDateError('Format must be MM/YYYY (e.g., 12/2025)');
+      alert('Expiry date must be in MM/YYYY format (e.g., 12/2025)');
+      return;
+    }
+
+    const expiryMonth = parseInt(expiryParts[0]);
+    const expiryYear = parseInt(expiryParts[1]);
+    const currentYear = new Date().getFullYear();
+    
+    // Detailed validation
+    if (expiryParts[0].length !== 2) {
+      setExpiryDateError('Month must be 2 digits (e.g., 01, 02, ..., 12)');
+      alert('Month must be 2 digits (e.g., 01, 02, ..., 12)');
+      return;
+    }
+    
+    if (expiryParts[1].length !== 4) {
+      setExpiryDateError('Year must be 4 digits (e.g., 2025)');
+      alert('Year must be 4 digits (e.g., 2025)');
+      return;
+    }
+    
+    if (isNaN(expiryMonth) || expiryMonth < 1 || expiryMonth > 12) {
+      setExpiryDateError('Month must be between 01 and 12');
+      alert('Invalid month. Month must be between 01 and 12');
+      return;
+    }
+    
+    if (isNaN(expiryYear)) {
+      setExpiryDateError('Year must be a valid number');
+      alert('Invalid year. Year must be a valid number');
+      return;
+    }
+    
+    if (expiryYear < currentYear || expiryYear > currentYear + 20) {
+      setExpiryDateError(`Year must be between ${currentYear} and ${currentYear + 20}`);
+      alert(`Invalid year. Year must be between ${currentYear} and ${currentYear + 20}`);
       return;
     }
 
@@ -228,8 +273,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const gstAmount = (amountAfterDiscount * gstRate) / 100;
     const totalAmount = amountAfterDiscount + gstAmount;
 
-    // Create expiry date from month/year
-    const expiryDate = new Date(parseInt(currentItem.expiryYear || '2024'), parseInt(currentItem.expiryMonth || '1') - 1, 1);
+    // Create expiry date from MM/YYYY format
+    const expiryDate = new Date(expiryYear, expiryMonth - 1, 1);
 
     // Generate QR code data
     const qrData = JSON.stringify({
@@ -271,13 +316,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
     setItemDialog({ open: false, itemIndex: null });
     setSelectedMedicine(null);
+    setExpiryDateError(''); // Clear error when dialog closes
     setCurrentItem({
       medicineId: '',
       medicineName: '',
       batchNumber: '',
       expiryDate: '',
-      expiryMonth: '',
-      expiryYear: '',
       quantity: '',
       freeQuantity: '',
       unitPrice: '',
@@ -291,13 +335,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const handleEditItem = (index: number) => {
     const item = items[index];
     const expiryDate = item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate();
+    setExpiryDateError(''); // Clear error when editing
     setCurrentItem({
       medicineId: item.medicineId,
       medicineName: item.medicineName,
       batchNumber: item.batchNumber,
-      expiryDate: format(expiryDate, 'MM/yyyy'),
-      expiryMonth: String(expiryDate.getMonth() + 1).padStart(2, '0'),
-      expiryYear: String(expiryDate.getFullYear()),
+      expiryDate: format(expiryDate, 'MM/yyyy'), // Single field in MM/YYYY format
       quantity: item.quantity.toString(),
       freeQuantity: item.freeQuantity?.toString() || '',
       unitPrice: item.unitPrice.toString(),
@@ -338,16 +381,31 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     try {
+      // Check if medicine with same name already exists
+      const existingMedicine = medicines?.find(
+        m => m.name.toLowerCase().trim() === newMedicineData.name.toLowerCase().trim()
+      );
+      
+      if (existingMedicine) {
+        // Medicine already exists - use the existing one
+        setSelectedMedicine(existingMedicine);
+        setAddMedicineDialog(false);
+        setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
+        alert(`Medicine "${existingMedicine.name}" already exists. Selected from existing medicines.`);
+        return;
+      }
+
+      // Medicine doesn't exist - create new one
       const medicineId = await createMedicineMutation.mutateAsync({
         name: newMedicineData.name,
         code: newMedicineData.code,
         category: newMedicineData.type, // Store type as category
+        unit: newMedicineData.packaging, // Store packaging as unit
         manufacturer: newMedicineData.manufacturer,
         stock: 0,
         currentStock: 0,
         price: 0,
         gstRate: newMedicineData.gstRate ? parseFloat(newMedicineData.gstRate) : 5,
-        // Store packaging in description or a custom field if available
         description: `Packaging: ${newMedicineData.packaging}`,
       });
 
@@ -357,6 +415,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         code: newMedicineData.code,
         category: newMedicineData.type,
         manufacturer: newMedicineData.manufacturer,
+        unit: newMedicineData.packaging,
       } as Medicine;
 
       setSelectedMedicine(newMedicine as Medicine);
@@ -519,26 +578,35 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               <Box display="flex" gap={2}>
                 <Autocomplete
                   options={medicines || []}
-                  getOptionLabel={(option) => `${option.name} - ${option.code || 'N/A'}`}
+                  getOptionLabel={(option) => {
+                    const code = option.code ? ` (${option.code})` : '';
+                    const manufacturer = option.manufacturer ? ` - ${option.manufacturer}` : '';
+                    return `${option.name}${code}${manufacturer}`;
+                  }}
                   value={selectedMedicine}
                   onChange={(_, newValue) => setSelectedMedicine(newValue)}
+                  filterOptions={(options, { inputValue }) => {
+                    const searchTerm = inputValue.toLowerCase();
+                    return options.filter(option => 
+                      option.name.toLowerCase().includes(searchTerm) ||
+                      (option.code && option.code.toLowerCase().includes(searchTerm)) ||
+                      (option.manufacturer && option.manufacturer.toLowerCase().includes(searchTerm))
+                    );
+                  }}
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       label="Search Medicine"
-                      placeholder="Type to search..."
+                      placeholder="Search by name, code, or manufacturer..."
                       size="small"
-                      sx={{ minWidth: 250 }}
+                      sx={{ minWidth: 300 }}
+                      InputProps={{
+                        ...params.InputProps,
+                        startAdornment: <Search sx={{ mr: 1, color: 'text.secondary' }} />,
+                      }}
                     />
                   )}
                 />
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={() => setAddMedicineDialog(true)}
-                >
-                  Add New Medicine
-                </Button>
                 <Button
                   variant="contained"
                   startIcon={<Add />}
@@ -546,6 +614,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   disabled={!selectedMedicine}
                 >
                   Add Item
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => setAddMedicineDialog(true)}
+                >
+                  Add New Medicine
                 </Button>
               </Box>
             </Box>
@@ -636,7 +711,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       </Grid>
 
       {/* Add Item Dialog */}
-      <Dialog open={itemDialog.open} onClose={() => setItemDialog({ open: false, itemIndex: null })} maxWidth="sm" fullWidth>
+      <Dialog open={itemDialog.open} onClose={() => {
+        setItemDialog({ open: false, itemIndex: null });
+        setExpiryDateError(''); // Clear error when dialog closes
+      }} maxWidth="sm" fullWidth>
         <DialogTitle>
           {itemDialog.itemIndex !== null ? 'Edit Item' : 'Add Item'} - {currentItem.medicineName}
         </DialogTitle>
@@ -676,31 +754,90 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Expiry Month</InputLabel>
-                <Select
-                  value={currentItem.expiryMonth}
-                  label="Expiry Month"
-                  required
-                  onChange={(e) => setCurrentItem({ ...currentItem, expiryMonth: e.target.value })}
-                >
-                  {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
-                    <MenuItem key={month} value={String(month).padStart(2, '0')}>
-                      {String(month).padStart(2, '0')}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Expiry Year"
-                type="number"
+                label="Expiry Date"
                 required
-                value={currentItem.expiryYear}
-                onChange={(e) => setCurrentItem({ ...currentItem, expiryYear: e.target.value })}
-                inputProps={{ min: 2020, max: 2100 }}
+                value={currentItem.expiryDate}
+                onChange={(e) => {
+                  let value = e.target.value;
+                  // Allow only numbers and forward slash
+                  value = value.replace(/[^0-9/]/g, '');
+                  
+                  // Auto-format: insert slash after 2 digits if user types 3 digits without slash
+                  if (value.length === 3 && !value.includes('/')) {
+                    value = value.substring(0, 2) + '/' + value.substring(2);
+                  }
+                  
+                  // Limit to 7 characters (MM/YYYY)
+                  if (value.length <= 7) {
+                    setCurrentItem({ ...currentItem, expiryDate: value });
+                    
+                    // Clear error while typing if format looks correct
+                    if (value.length > 0 && !value.includes('/') && value.length <= 2) {
+                      setExpiryDateError('');
+                    } else if (value.length === 0) {
+                      setExpiryDateError('');
+                    }
+                  }
+                }}
+                onBlur={() => {
+                  // Final validation on blur
+                  const value = currentItem.expiryDate?.trim() || '';
+                  const currentYear = new Date().getFullYear();
+                  
+                  if (value.length === 0) {
+                    setExpiryDateError(''); // Empty - let required validation handle it
+                    return;
+                  }
+                  
+                  const parts = value.split('/');
+                  
+                  // Check format structure
+                  if (parts.length !== 2) {
+                    setExpiryDateError('Format must be MM/YYYY (e.g., 12/2025)');
+                    return;
+                  }
+                  
+                  const monthStr = parts[0].trim();
+                  const yearStr = parts[1].trim();
+                  
+                  // Check month format and value
+                  if (monthStr.length !== 2) {
+                    setExpiryDateError('Month must be 2 digits (e.g., 01, 02, ..., 12)');
+                    return;
+                  }
+                  
+                  const month = parseInt(monthStr);
+                  if (isNaN(month) || month < 1 || month > 12) {
+                    setExpiryDateError('Month must be between 01 and 12');
+                    return;
+                  }
+                  
+                  // Check year format and value
+                  if (yearStr.length !== 4) {
+                    setExpiryDateError('Year must be 4 digits (e.g., 2025)');
+                    return;
+                  }
+                  
+                  const year = parseInt(yearStr);
+                  if (isNaN(year)) {
+                    setExpiryDateError('Year must be a valid number');
+                    return;
+                  }
+                  
+                  if (year < currentYear || year > currentYear + 20) {
+                    setExpiryDateError(`Year must be between ${currentYear} and ${currentYear + 20}`);
+                    return;
+                  }
+                  
+                  // All validations passed
+                  setExpiryDateError('');
+                }}
+                placeholder="MM/YYYY"
+                error={!!expiryDateError}
+                helperText={expiryDateError || "Format: MM/YYYY (e.g., 12/2025)"}
+                inputProps={{ maxLength: 7 }}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -886,12 +1023,43 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Medicine Name"
-                required
-                value={newMedicineData.name}
-                onChange={(e) => setNewMedicineData({ ...newMedicineData, name: e.target.value })}
+              <Autocomplete
+                freeSolo
+                options={medicines || []}
+                getOptionLabel={(option) => {
+                  if (typeof option === 'string') return option;
+                  return option.name || '';
+                }}
+                inputValue={newMedicineData.name}
+                onInputChange={(_, newInputValue) => {
+                  setNewMedicineData({ ...newMedicineData, name: newInputValue });
+                }}
+                onChange={(_, newValue) => {
+                  if (newValue && typeof newValue === 'object') {
+                    // User selected existing medicine - auto-fill all fields
+                    const selectedMed = newValue as Medicine;
+                    setNewMedicineData({
+                      name: selectedMed.name || '',
+                      code: selectedMed.code || '',
+                      type: selectedMed.category || '',
+                      packaging: selectedMed.unit || '',
+                      manufacturer: selectedMed.manufacturer || '',
+                      gstRate: String(selectedMed.gstRate || 5),
+                    });
+                  } else if (typeof newValue === 'string') {
+                    // User typed new name - keep the typed value
+                    setNewMedicineData({ ...newMedicineData, name: newValue });
+                  }
+                }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    fullWidth
+                    label="Medicine Name"
+                    required
+                    helperText="Start typing to see suggestions or type a new name"
+                  />
+                )}
               />
             </Grid>
             <Grid item xs={12} sm={6}>

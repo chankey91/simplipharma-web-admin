@@ -191,14 +191,24 @@ export const createPurchaseInvoice = async (
   // Update medicine stock with purchase batches
   if (updateStock) {
     const stockUpdateErrors: string[] = [];
-    const stockUpdatePromises: Promise<void>[] = [];
+    
+    // Group items by medicineId to process sequentially per medicine
+    const itemsByMedicine = new Map<string, typeof invoiceData.items>();
     
     for (const item of invoiceData.items) {
-      const updatePromise = (async () => {
+      if (!item.medicineId) continue;
+      
+      if (!itemsByMedicine.has(item.medicineId)) {
+        itemsByMedicine.set(item.medicineId, []);
+      }
+      itemsByMedicine.get(item.medicineId)!.push(item);
+    }
+    
+    // Process each medicine sequentially to avoid race conditions
+    for (const [medicineId, items] of itemsByMedicine.entries()) {
+      // Process batches for this medicine sequentially
+      for (const item of items) {
         try {
-          if (!item.medicineId) {
-            throw new Error('Medicine ID is missing');
-          }
           if (!item.batchNumber) {
             throw new Error('Batch number is missing');
           }
@@ -240,28 +250,18 @@ export const createPurchaseInvoice = async (
             }
           }
           
-          console.log(`Updating stock for medicine ${item.medicineId} with batch data:`, batchData);
-          await addStockBatch(item.medicineId, batchData);
-          console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
+          console.log(`Updating stock for medicine ${medicineId} with batch data:`, batchData);
+          await addStockBatch(medicineId, batchData);
+          console.log(`✓ Stock updated successfully for medicine ${medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
         } catch (error: any) {
-          const errorMsg = `Failed to update stock for ${item.medicineName || item.medicineId} (${item.medicineId}): ${error.message || error}`;
+          const errorMsg = `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${error.message || error}`;
           console.error(errorMsg, error);
           stockUpdateErrors.push(errorMsg);
-          throw error; // Re-throw to be caught by Promise.allSettled
         }
-      })();
-      
-      stockUpdatePromises.push(updatePromise);
+      }
     }
     
-    // Wait for all stock updates to complete
-    const results = await Promise.allSettled(stockUpdatePromises);
-    
-    // Log results
-    const successful = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
-    
-    console.log(`Stock update summary: ${successful} successful, ${failed} failed`);
+    console.log(`Stock update summary: ${invoiceData.items.length - stockUpdateErrors.length} successful, ${stockUpdateErrors.length} failed`);
     
     if (stockUpdateErrors.length > 0) {
       console.warn('Some stock updates failed:', stockUpdateErrors);
@@ -305,14 +305,24 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
   }
   
   const stockUpdateErrors: string[] = [];
-  const stockUpdatePromises: Promise<void>[] = [];
+  
+  // Group items by medicineId to process sequentially per medicine
+  const itemsByMedicine = new Map<string, typeof invoice.items>();
   
   for (const item of invoice.items) {
-    const updatePromise = (async () => {
+    if (!item.medicineId) continue;
+    
+    if (!itemsByMedicine.has(item.medicineId)) {
+      itemsByMedicine.set(item.medicineId, []);
+    }
+    itemsByMedicine.get(item.medicineId)!.push(item);
+  }
+  
+  // Process each medicine sequentially to avoid race conditions
+  for (const [medicineId, items] of itemsByMedicine.entries()) {
+    // Process batches for this medicine sequentially
+    for (const item of items) {
       try {
-        if (!item.medicineId) {
-          throw new Error('Medicine ID is missing');
-        }
         if (!item.batchNumber) {
           throw new Error('Batch number is missing');
         }
@@ -354,25 +364,20 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
           }
         }
         
-        console.log(`Updating stock for existing invoice - medicine ${item.medicineId} with batch data:`, batchData);
-        await addStockBatch(item.medicineId, batchData);
-        console.log(`✓ Stock updated successfully for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
+        console.log(`Updating stock for existing invoice - medicine ${medicineId} with batch data:`, batchData);
+        await addStockBatch(medicineId, batchData);
+        console.log(`✓ Stock updated successfully for medicine ${medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
       } catch (error: any) {
-        const errorMsg = `Failed to update stock for ${item.medicineName || item.medicineId} (${item.medicineId}): ${error.message || error}`;
+        const errorMsg = `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${error.message || error}`;
         console.error(errorMsg, error);
         stockUpdateErrors.push(errorMsg);
-        throw error;
       }
-    })();
-    
-    stockUpdatePromises.push(updatePromise);
+    }
   }
   
-  // Wait for all stock updates to complete
-  const results = await Promise.allSettled(stockUpdatePromises);
-  
-  const successful = results.filter(r => r.status === 'fulfilled').length;
-  const failed = results.filter(r => r.status === 'rejected').length;
+  const totalItems = invoice.items.length;
+  const successful = totalItems - stockUpdateErrors.length;
+  const failed = stockUpdateErrors.length;
   
   console.log(`Stock update summary for invoice ${invoiceId}: ${successful} successful, ${failed} failed`);
   

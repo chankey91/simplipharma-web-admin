@@ -35,7 +35,7 @@ import {
   Upload,
   Download,
 } from '@mui/icons-material';
-import { useMedicines, useExpiringMedicines, useExpiredMedicines, useCreateMedicine } from '../hooks/useInventory';
+import { useMedicines, useExpiringMedicines, useExpiredMedicines, useCreateMedicine, useUpdateMedicine } from '../hooks/useInventory';
 import { Medicine } from '../types';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
@@ -47,6 +47,7 @@ export const InventoryPage: React.FC = () => {
   const { data: expiringMedicines } = useExpiringMedicines(30);
   const { data: expiredMedicines } = useExpiredMedicines();
   const createMedicineMutation = useCreateMedicine();
+  const updateMedicineMutation = useUpdateMedicine();
   const navigate = useNavigate();
   
   const [searchTerm, setSearchTerm] = useState('');
@@ -105,7 +106,6 @@ export const InventoryPage: React.FC = () => {
         'Packaging': 'Strip of 10',
         'Manufacturer': 'ABC Pharma',
         'GST Rate (%)': 5,
-        'Stock': 100,
         'Description': 'Pain reliever'
       },
       {
@@ -115,7 +115,6 @@ export const InventoryPage: React.FC = () => {
         'Packaging': 'Bottle of 15',
         'Manufacturer': 'XYZ Pharma',
         'GST Rate (%)': 5,
-        'Stock': 50,
         'Description': 'Antibiotic'
       }
     ];
@@ -148,7 +147,7 @@ export const InventoryPage: React.FC = () => {
       setUploadStatus(`Processing ${jsonData.length} medicines...`);
       setUploadProgress(30);
 
-      const medicines: Omit<Medicine, 'id'>[] = [];
+      const medicinesToUpload: Omit<Medicine, 'id'>[] = [];
       const errors: string[] = [];
 
       for (let i = 0; i < jsonData.length; i++) {
@@ -180,14 +179,14 @@ export const InventoryPage: React.FC = () => {
             category: String(row['Type'] || '').trim(), // Type maps to category
             unit: String(row['Packaging'] || '').trim(), // Packaging maps to unit
             manufacturer: String(row['Manufacturer'] || '').trim(),
-            stock: row['Stock'] ? parseInt(String(row['Stock'])) : 0,
-            currentStock: row['Stock'] ? parseInt(String(row['Stock'])) : 0,
+            stock: 0, // Default to 0, stock should not come from Excel
+            currentStock: 0, // Default to 0
             price: 0, // Default price, not from Excel
             gstRate: row['GST Rate (%)'] ? parseFloat(String(row['GST Rate (%)'])) : 5,
             description: row['Description'] ? String(row['Description']).trim() : undefined,
           };
 
-          medicines.push(medicine);
+          medicinesToUpload.push(medicine);
         } catch (error: any) {
           errors.push(`Row ${rowNum}: ${error.message || 'Invalid data'}`);
         }
@@ -199,30 +198,68 @@ export const InventoryPage: React.FC = () => {
         setUploadError(`Found ${errors.length} error(s):\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
       }
 
-      if (medicines.length === 0) {
+      if (medicinesToUpload.length === 0) {
         throw new Error('No valid medicines found in the file.');
       }
 
-      setUploadStatus(`Creating ${medicines.length} medicines...`);
+      setUploadStatus(`Processing ${medicinesToUpload.length} medicines (checking for duplicates)...`);
       setUploadProgress(80);
 
-      // Create medicines
+      // Process medicines - check for duplicates by name and update or create
       let successCount = 0;
+      let updateCount = 0;
+      let createCount = 0;
       let failCount = 0;
 
-      for (let i = 0; i < medicines.length; i++) {
+      for (let i = 0; i < medicinesToUpload.length; i++) {
         try {
-          await createMedicineMutation.mutateAsync(medicines[i]);
-          successCount++;
+          const medicineToUpload = medicinesToUpload[i];
+          
+          // Check if medicine with same name exists in database (case-insensitive)
+          const existingMedicine = medicines?.find(
+            m => m.name.toLowerCase().trim() === medicineToUpload.name.toLowerCase().trim()
+          );
+          
+          if (existingMedicine) {
+            // Update existing medicine - overwrite all fields except stock
+            await updateMedicineMutation.mutateAsync({
+              medicineId: existingMedicine.id,
+              updates: {
+                name: medicineToUpload.name,
+                code: medicineToUpload.code,
+                category: medicineToUpload.category,
+                unit: medicineToUpload.unit,
+                manufacturer: medicineToUpload.manufacturer,
+                gstRate: medicineToUpload.gstRate,
+                description: medicineToUpload.description,
+                // Stock is not updated from Excel upload
+              }
+            });
+            
+            updateCount++;
+            successCount++;
+            console.log(`Updated existing medicine: ${medicineToUpload.name}`);
+          } else {
+            // Create new medicine
+            await createMedicineMutation.mutateAsync(medicineToUpload);
+            createCount++;
+            successCount++;
+            console.log(`Created new medicine: ${medicineToUpload.name}`);
+          }
         } catch (error: any) {
           failCount++;
-          console.error(`Failed to create medicine ${medicines[i].name}:`, error);
+          console.error(`Failed to process medicine ${medicinesToUpload[i].name}:`, error);
+          errors.push(`Failed to process ${medicinesToUpload[i].name}: ${error.message || 'Unknown error'}`);
         }
-        setUploadProgress(80 + ((i + 1) / medicines.length) * 20);
+        setUploadProgress(80 + ((i + 1) / medicinesToUpload.length) * 20);
       }
 
-      setUploadStatus(`Upload complete! ${successCount} created, ${failCount} failed.`);
+      setUploadStatus(`Upload complete! ${successCount} processed (${createCount} created, ${updateCount} updated), ${failCount} failed.`);
       setUploadProgress(100);
+
+      if (errors.length > 0 && failCount > 0) {
+        setUploadError(`Found ${errors.length} error(s):\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
+      }
 
       setTimeout(() => {
         setBulkUploadOpen(false);
@@ -457,7 +494,9 @@ export const InventoryPage: React.FC = () => {
             <Typography variant="caption" color="textSecondary" sx={{ mt: 2, display: 'block' }}>
               Required columns: Medicine Name, Type, Packaging, Manufacturer, GST Rate (%)
               <br />
-              Optional columns: Code, Stock, Description
+              Optional columns: Code, Description
+              <br />
+              Note: Medicines with the same name will be updated (not duplicated)
             </Typography>
           </Box>
         </DialogContent>

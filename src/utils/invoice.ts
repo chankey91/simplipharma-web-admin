@@ -60,34 +60,80 @@ const numberToWords = (num: number): string => {
 const getOrderInvoiceHTML = async (order: Order) => {
   const invoiceDate = order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate);
   
+  // Fetch all medicines to get packaging info
+  const medicineMap = new Map<string, string>();
+  await Promise.all(
+    order.medicines.map(async (item) => {
+      if (item.medicineId) {
+        try {
+          const medicine = await getMedicineById(item.medicineId);
+          if (medicine) {
+            // Check unit field first
+            let packaging = medicine.unit;
+            
+            // If unit is not available, check description for "Packaging: " pattern
+            if (!packaging && medicine.description) {
+              const packagingMatch = medicine.description.match(/Packaging:\s*(.+)/i);
+              if (packagingMatch && packagingMatch[1]) {
+                packaging = packagingMatch[1].trim();
+              }
+            }
+            
+            if (packaging) {
+              medicineMap.set(item.medicineId, packaging);
+            } else {
+              medicineMap.set(item.medicineId, '-');
+            }
+          } else {
+            medicineMap.set(item.medicineId, '-');
+          }
+        } catch (error) {
+          console.warn(`Failed to fetch medicine ${item.medicineId}:`, error);
+          medicineMap.set(item.medicineId, '-');
+        }
+      } else {
+        medicineMap.set('', '-');
+      }
+    })
+  );
+  
   // Calculate totals
   let totalSubTotal = 0;
   let totalProductDiscount = 0;
-  let totalGST = 0;
   
   const items = order.medicines.map((item, index) => {
-    const price = item.price || 0;
     const quantity = item.quantity || 0;
     const freeQuantity = 0; // Order items don't have free quantity typically
     const totalQty = quantity + freeQuantity;
-    const mrp = (item as any).mrp || price || 0;
-    const discountPercentage = 0; // Can be from item if available
-    const gstRate = order.taxPercentage || 5;
+    const mrp = (item as any).mrp || 0;
+    const discountPercentage = (item as any).discountPercentage !== undefined ? (item as any).discountPercentage : 0;
+    const gstRate = (item as any).gstRate !== undefined ? (item as any).gstRate : (order.taxPercentage || 5);
     
-    // Calculate amounts
-    const baseAmount = price * quantity;
-    const discountAmount = (baseAmount * discountPercentage) / 100;
-    const amountAfterDiscount = baseAmount - discountAmount;
-    const sgstRate = gstRate / 2;
-    const cgstRate = gstRate / 2;
-    const sgstAmount = (amountAfterDiscount * sgstRate) / 100;
-    const cgstAmount = (amountAfterDiscount * cgstRate) / 100;
-    const itemGST = sgstAmount + cgstAmount;
-    const itemAmount = amountAfterDiscount + itemGST;
+    // Calculate price from MRP: MRP - 20% - GST% (inclusive)
+    // Formula: Price = (MRP * 0.80) / (1 + GST/100)
+    let price = 0;
+    if (mrp > 0) {
+      const afterDiscount = mrp * 0.80; // Apply 20% discount
+      price = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+    } else {
+      // Fallback to stored price if MRP not available
+      price = item.price || 0;
+    }
     
-    totalSubTotal += baseAmount;
+    // Total Amount = Price * Quantity (this is what's shown in the "Total" column)
+    const totalAmount = price * quantity;
+    
+    // Discount = Total Amount * discountPercentage / 100
+    const discountAmount = discountPercentage > 0 && totalAmount > 0
+      ? (totalAmount * discountPercentage) / 100
+      : 0;
+    
+    // Item amount in table = Price * Quantity (simple calculation - matches "Total" column)
+    const itemAmount = totalAmount;
+    
+    // Subtotal = Sum of all "Total" column values (Price * Quantity)
+    totalSubTotal += totalAmount;
     totalProductDiscount += discountAmount;
-    totalGST += itemGST;
     
     // Format expiry date
     let expDate = '-';
@@ -105,10 +151,13 @@ const getOrderInvoiceHTML = async (order: Order) => {
       expDate = format(exp, 'MM/yy');
     }
     
+    // Get packaging from medicine master data
+    const packaging = item.medicineId ? (medicineMap.get(item.medicineId) || '-') : '-';
+    
     return {
       sn: index + 1,
       name: item.name || 'Unknown',
-      pack: (item as any).packaging || '-',
+      pack: packaging,
       hsn: (item as any).hsn || '300490',
       batch: item.batchNumber || '-',
       exp: expDate,
@@ -116,7 +165,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
       free: freeQuantity > 0 ? freeQuantity.toFixed(1) : '0.0',
       totalQty: totalQty.toFixed(0),
       mrp: mrp > 0 ? mrp.toFixed(2) : '-',
-      rate: price.toFixed(2),
+      rate: price.toFixed(2), // Price is already after discount
       disc: discountPercentage > 0 ? discountPercentage.toFixed(2) : '0.00',
       sgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
       cgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
@@ -124,15 +173,20 @@ const getOrderInvoiceHTML = async (order: Order) => {
     };
   });
   
-  const billDiscount = 0;
+  // Subtotal is sum of all "Total" column values (Price * Quantity)
+  // Calculate tax on (Subtotal - Product Discount) using order's tax percentage
+  // Note: Bill discount has been removed from calculations
+  const amountAfterDiscount = totalSubTotal - totalProductDiscount;
+  const taxPercentage = order.taxPercentage || 5;
+  const totalGST = (amountAfterDiscount * taxPercentage) / 100;
   const totalSGST = totalGST / 2;
   const totalCGST = totalGST / 2;
-  const calculatedTotal = totalSubTotal - totalProductDiscount - billDiscount + totalGST;
+  const calculatedTotal = amountAfterDiscount + totalGST;
   const roundoff = Math.round(calculatedTotal) - calculatedTotal;
   const grandTotal = Math.round(calculatedTotal);
   
   const gstRate = order.taxPercentage || 5;
-  const taxableAmount = totalSubTotal - totalProductDiscount - billDiscount;
+  const taxableAmount = totalSubTotal - totalProductDiscount;
   
   // Company details
   const company = {
@@ -340,11 +394,10 @@ const getOrderInvoiceHTML = async (order: Order) => {
     <td width="30%">
       <table class="no-border">
         <tr><td>SUB TOTAL</td><td class="right">${summary.subTotal}</td></tr>
-        <tr><td>PRODUCT DISCOUNT</td><td class="right">${summary.discount}</td></tr>
-        <tr><td>BILL DISCOUNT</td><td class="right">${billDiscount.toFixed(2)}</td></tr>
+        <tr><td>PRODUCT DISCOUNT</td><td class="right">-${summary.discount}</td></tr>
         <tr><td>SGST</td><td class="right">${summary.sgst}</td></tr>
         <tr><td>CGST</td><td class="right">${summary.cgst}</td></tr>
-        <tr><td>Round Off</td><td class="right">${summary.roundOff}</td></tr>
+        <tr><td>Round Off</td><td class="right">${parseFloat(summary.roundOff) >= 0 ? '+' : ''}${summary.roundOff}</td></tr>
         <tr class="bold">
           <td>GRAND TOTAL</td>
           <td class="right">${summary.grandTotal}</td>
@@ -441,7 +494,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
   // Calculate totals
   let totalSubTotal = 0;
   let totalProductDiscount = 0;
-  let totalGST = 0;
+  // Note: totalGST will be calculated once at the end based on (Subtotal - Discount)
   
   // Fetch all medicines to get packaging info
   const medicineMap = new Map<string, string>();
@@ -492,28 +545,36 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
   );
   
   const items = invoice.items.map((item, index) => {
-    const price = item.purchasePrice || 0;
     const quantity = item.quantity || 0;
     const freeQuantity = item.freeQuantity || 0;
     const totalQty = quantity + freeQuantity;
     const mrp = item.mrp || 0;
     const discountPercentage = item.discountPercentage || 0;
-    const gstRate = item.gstRate || 0;
+    const gstRate = item.gstRate || 5;
     
-    // Calculate amounts
-    const baseAmount = price * quantity;
-    const discountAmount = (baseAmount * discountPercentage) / 100;
-    const amountAfterDiscount = baseAmount - discountAmount;
-    const sgstRate = gstRate / 2;
-    const cgstRate = gstRate / 2;
-    const sgstAmount = (amountAfterDiscount * sgstRate) / 100;
-    const cgstAmount = (amountAfterDiscount * cgstRate) / 100;
-    const itemGST = sgstAmount + cgstAmount;
-    const itemAmount = amountAfterDiscount + itemGST;
+    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
+    let price = 0;
+    if (mrp > 0) {
+      const afterDiscount = mrp * 0.80; // Apply 20% discount
+      price = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+    } else {
+      price = item.purchasePrice || 0;
+    }
     
-    totalSubTotal += baseAmount;
+    // Total Amount = Price * Quantity (this is what's shown in the "Total" column)
+    const totalAmount = price * quantity;
+    
+    // Discount = Total Amount * discountPercentage / 100
+    const discountAmount = discountPercentage > 0 && totalAmount > 0
+      ? (totalAmount * discountPercentage) / 100
+      : 0;
+    
+    // Item amount in table = Price * Quantity (simple calculation - matches "Total" column)
+    const itemAmount = totalAmount;
+    
+    // Subtotal = Sum of all "Total" column values (Price * Quantity)
+    totalSubTotal += totalAmount;
     totalProductDiscount += discountAmount;
-    totalGST += itemGST;
     
     // Format expiry date
     let expDate = '-';
@@ -553,34 +614,56 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     };
   });
   
-  const billDiscount = invoice.discount || 0;
+  // Subtotal is sum of all "Total" column values (Price * Quantity)
+  // Calculate tax on (Subtotal - Product Discount) using average GST rate
+  // Note: Bill discount has been removed from calculations
+  const amountAfterDiscount = totalSubTotal - totalProductDiscount;
+  const avgGstRate = invoice.items.length > 0
+    ? invoice.items.reduce((sum, item) => sum + (item.gstRate || 5), 0) / invoice.items.length
+    : 5;
+  const totalGST = (amountAfterDiscount * avgGstRate) / 100;
   const totalSGST = totalGST / 2;
   const totalCGST = totalGST / 2;
-  const calculatedTotal = totalSubTotal - totalProductDiscount - billDiscount + totalGST;
+  const calculatedTotal = amountAfterDiscount + totalGST;
   const roundoff = Math.round(calculatedTotal) - calculatedTotal;
   const grandTotal = Math.round(calculatedTotal);
   
-  const avgGstRate = invoice.items.length > 0 
-    ? invoice.items.reduce((sum, item) => sum + (item.gstRate || 0), 0) / invoice.items.length 
-    : 18;
-  const taxableAmount = totalSubTotal - totalProductDiscount - billDiscount;
+  // Tax summary
+  const taxableAmount = amountAfterDiscount;
+  const tax = {
+    taxable: taxableAmount.toFixed(2),
+    cgst: totalCGST.toFixed(2),
+    sgst: totalSGST.toFixed(2),
+    rate: avgGstRate.toFixed(0)
+  };
   
-  // Company details
-  const company = {
+  // Summary (calculated after tax calculations)
+  const summary = {
+    subTotal: totalSubTotal.toFixed(2),
+    discount: totalProductDiscount.toFixed(2),
+    sgst: totalSGST.toFixed(2),
+    cgst: totalCGST.toFixed(2),
+    roundOff: roundoff.toFixed(2),
+    grandTotal: grandTotal.toFixed(2)
+  };
+  
+  // Party details - Always SimpliPharma (on top right)
+  const party = {
     name: 'SimpliPharma Solution Pvt. Ltd.',
     address: 'AG 50, Scheme No. 74, Indore, Madhya Pradesh. 452010',
     phone: '',
+    state: 'Madhya Pradesh',
     email: 'simplipharma.2025@gmail.com',
     dl: '20B/2876/12/2021,20B/2876/12/2021',
     gstin: '23AALCP3728L1Z4'
   };
   
-  // Party/Vendor details - fetch from vendor if vendorId is available
-  let party = {
+  // Company/Vendor details - fetch from vendor if vendorId is available (on top left)
+  let company = {
     name: invoice.vendorName || 'N/A',
     address: (invoice as any).vendorAddress || '',
-    state: (invoice as any).vendorState || '',
     phone: (invoice as any).vendorPhone || (invoice as any).phoneNumber || '',
+    email: (invoice as any).vendorEmail || '',
     dl: (invoice as any).vendorDL || (invoice as any).drugLicenseNumber || '',
     gstin: (invoice as any).vendorGST || (invoice as any).gstNumber || ''
   };
@@ -590,13 +673,13 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     try {
       const vendor = await getVendorById(invoice.vendorId);
       if (vendor) {
-        party = {
-          name: vendor.vendorName || party.name,
-          address: vendor.address || party.address,
-          state: '', // Vendor doesn't have state field, keep empty or extract from address
-          phone: vendor.phoneNumber || party.phone,
-          dl: vendor.drugLicenseNumber || party.dl,
-          gstin: vendor.gstNumber || party.gstin
+        company = {
+          name: vendor.vendorName || company.name,
+          address: vendor.address || company.address,
+          phone: vendor.phoneNumber || company.phone,
+          email: vendor.email || company.email,
+          dl: vendor.drugLicenseNumber || company.dl,
+          gstin: vendor.gstNumber || company.gstin
         };
       }
     } catch (error) {
@@ -612,24 +695,6 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     dueDate: format(invoiceDate, 'yyyy-MM-dd'),
     user: invoice.createdBy || 'Admin',
     tray: (invoice as any).trayNo || '-'
-  };
-  
-  // Tax summary
-  const tax = {
-    taxable: taxableAmount.toFixed(2),
-    cgst: totalCGST.toFixed(2),
-    sgst: totalSGST.toFixed(2),
-    rate: avgGstRate.toFixed(0)
-  };
-  
-  // Summary
-  const summary = {
-    subTotal: totalSubTotal.toFixed(2),
-    discount: totalProductDiscount.toFixed(2),
-    sgst: totalSGST.toFixed(2),
-    cgst: totalCGST.toFixed(2),
-    roundOff: roundoff.toFixed(2),
-    grandTotal: grandTotal.toFixed(2)
   };
   
   // Generate items HTML
@@ -771,8 +836,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     <td width="30%">
       <table class="no-border">
         <tr><td>SUB TOTAL</td><td class="right">${summary.subTotal}</td></tr>
-        <tr><td>PRODUCT DISCOUNT</td><td class="right">${summary.discount}</td></tr>
-        <tr><td>BILL DISCOUNT</td><td class="right">${billDiscount.toFixed(2)}</td></tr>
+        <tr><td>PRODUCT DISCOUNT</td><td class="right">-${summary.discount}</td></tr>
         <tr><td>SGST</td><td class="right">${summary.sgst}</td></tr>
         <tr><td>CGST</td><td class="right">${summary.cgst}</td></tr>
         <tr><td>Round Off</td><td class="right">${summary.roundOff}</td></tr>
