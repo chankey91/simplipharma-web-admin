@@ -156,7 +156,10 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
       mfgDate: batch.mfgDate?.toDate ? batch.mfgDate.toDate() : (batch.mfgDate ? new Date(batch.mfgDate) : undefined),
       purchaseDate: batch.purchaseDate?.toDate ? batch.purchaseDate.toDate() : (batch.purchaseDate ? new Date(batch.purchaseDate) : undefined),
       purchasePrice: batch.purchasePrice !== undefined && batch.purchasePrice !== null ? (typeof batch.purchasePrice === 'number' ? batch.purchasePrice : parseFloat(String(batch.purchasePrice))) : undefined,
-      mrp: mrpValue
+      mrp: mrpValue,
+      discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
+        ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
+        : undefined,
     };
   }) : [];
   
@@ -434,6 +437,17 @@ export const reduceStockFromBatch = async (
       }
     }
     
+    // PRESERVE discountPercentage when reducing stock - this is critical!
+    if (b.discountPercentage !== undefined && b.discountPercentage !== null) {
+      const discountValue = typeof b.discountPercentage === 'number' 
+        ? b.discountPercentage 
+        : parseFloat(String(b.discountPercentage));
+      if (!isNaN(discountValue)) {
+        firestoreBatch.discountPercentage = discountValue;
+        console.log(`[reduceStockFromBatch] Preserving discountPercentage: ${discountValue}% for batch ${b.batchNumber}`);
+      }
+    }
+    
     return firestoreBatch;
   });
   
@@ -446,6 +460,95 @@ export const reduceStockFromBatch = async (
   console.log(`Reducing stock for medicine ${medicineId}, batch ${batchNumber}: ${currentQuantity} - ${quantityToReduce} = ${batches[batchIndex].quantity}`);
   await updateDoc(medicineRef, updateData);
   console.log(`✓ Stock reduced successfully. New stock: ${totalStock}`);
+};
+
+// Function to restore stock to a batch (used when order is cancelled)
+export const restoreStockToBatch = async (
+  medicineId: string,
+  batchNumber: string,
+  quantityToRestore: number
+) => {
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  
+  if (!medicineDoc.exists()) {
+    throw new Error(`Medicine ${medicineId} not found`);
+  }
+  
+  const medicine = medicineDoc.data() as Medicine;
+  const batches = medicine.stockBatches || [];
+  
+  // Find the batch
+  const batchIndex = batches.findIndex(b => b.batchNumber === batchNumber);
+  
+  if (batchIndex === -1) {
+    throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
+  }
+  
+  // Restore quantity
+  const currentQuantity = batches[batchIndex].quantity || 0;
+  batches[batchIndex].quantity = currentQuantity + quantityToRestore;
+  
+  console.log(`Restoring stock for medicine ${medicineId}, batch ${batchNumber}: ${currentQuantity} + ${quantityToRestore} = ${batches[batchIndex].quantity}`);
+  
+  // Calculate total stock
+  const totalStock = batches.reduce((sum, b) => sum + (b.quantity || 0), 0);
+  
+  // Prepare batches for Firestore, preserving all fields including discountPercentage
+  const firestoreBatches = batches.map(b => {
+    const firestoreBatch: any = {
+      id: b.id,
+      batchNumber: b.batchNumber,
+      quantity: b.quantity || 0,
+    };
+    
+    if (b.expiryDate) {
+      firestoreBatch.expiryDate = b.expiryDate instanceof Date 
+        ? Timestamp.fromDate(b.expiryDate)
+        : (b.expiryDate && typeof b.expiryDate.toDate === 'function' ? b.expiryDate : Timestamp.fromDate(new Date(b.expiryDate)));
+    }
+    
+    if (b.mfgDate) {
+      firestoreBatch.mfgDate = b.mfgDate instanceof Date 
+        ? Timestamp.fromDate(b.mfgDate)
+        : (b.mfgDate && typeof b.mfgDate.toDate === 'function' ? b.mfgDate : Timestamp.fromDate(new Date(b.mfgDate)));
+    }
+    
+    if (b.purchaseDate) {
+      firestoreBatch.purchaseDate = b.purchaseDate instanceof Date
+        ? Timestamp.fromDate(b.purchaseDate)
+        : (b.purchaseDate && typeof b.purchaseDate.toDate === 'function' ? b.purchaseDate : Timestamp.fromDate(new Date(b.purchaseDate)));
+    }
+    
+    if (b.purchasePrice !== undefined && b.purchasePrice !== null) {
+      firestoreBatch.purchasePrice = typeof b.purchasePrice === 'number' ? b.purchasePrice : parseFloat(b.purchasePrice);
+    }
+    
+    if (b.mrp !== undefined && b.mrp !== null) {
+      const mrpValue = typeof b.mrp === 'number' ? b.mrp : parseFloat(String(b.mrp));
+      if (!isNaN(mrpValue)) {
+        firestoreBatch.mrp = mrpValue;
+      }
+    }
+    
+    // Preserve discountPercentage
+    if (b.discountPercentage !== undefined && b.discountPercentage !== null) {
+      const discountValue = typeof b.discountPercentage === 'number' ? b.discountPercentage : parseFloat(String(b.discountPercentage));
+      if (!isNaN(discountValue)) {
+        firestoreBatch.discountPercentage = discountValue;
+      }
+    }
+    
+    return firestoreBatch;
+  });
+  
+  await updateDoc(medicineRef, {
+    stockBatches: firestoreBatches,
+    stock: totalStock,
+    currentStock: totalStock
+  });
+  
+  console.log(`✓ Stock restored successfully. New stock: ${totalStock}`);
 };
 
 export const findMedicineByBarcode = async (barcode: string): Promise<Medicine | null> => {

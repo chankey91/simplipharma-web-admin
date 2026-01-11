@@ -52,8 +52,18 @@ export interface OrderMedicine {
   name: string;
   price: number;
   quantity: number;
-  batchNumber?: string;
+  batchNumber?: string; // Keep for backward compatibility
   expiryDate?: Date | any;
+  // NEW: Support multiple batch allocations
+  batchAllocations?: Array<{
+    batchNumber: string;
+    quantity: number; // Quantity from this specific batch
+    expiryDate?: Date | any;
+    mrp?: number;
+    purchasePrice?: number;
+    gstRate?: number;
+    discountPercentage?: number;
+  }>;
 }
 
 export interface OrderTimelineEvent {

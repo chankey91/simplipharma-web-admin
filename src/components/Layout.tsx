@@ -10,6 +10,7 @@ import {
   Menu as MenuIcon,
   Business,
   Receipt,
+  Description,
 } from '@mui/icons-material';
 import { logout } from '../services/firebase';
 
@@ -17,11 +18,12 @@ const drawerWidth = 240;
 
 const menuItems = [
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
-  { text: 'Medical Stores', icon: <Store />, path: '/stores' },
   { text: 'Vendors', icon: <Business />, path: '/vendors' },
-  { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
-  { text: 'Purchase Invoices', icon: <Receipt />, path: '/purchases' },
+  { text: 'Medical Stores', icon: <Store />, path: '/stores' },
   { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
+  { text: 'Purchases', icon: <Receipt />, path: '/purchases' },
+  { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
+  { text: 'Invoices', icon: <Description />, path: '/invoices' },
 ];
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {

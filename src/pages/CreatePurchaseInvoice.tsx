@@ -578,26 +578,35 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               <Box display="flex" gap={2}>
                 <Autocomplete
                   options={medicines || []}
-                  getOptionLabel={(option) => `${option.name} - ${option.code || 'N/A'}`}
+                  getOptionLabel={(option) => {
+                    const code = option.code ? ` (${option.code})` : '';
+                    const manufacturer = option.manufacturer ? ` - ${option.manufacturer}` : '';
+                    return `${option.name}${code}${manufacturer}`;
+                  }}
                   value={selectedMedicine}
                   onChange={(_, newValue) => setSelectedMedicine(newValue)}
+                  filterOptions={(options, { inputValue }) => {
+                    const searchTerm = inputValue.toLowerCase();
+                    return options.filter(option => 
+                      option.name.toLowerCase().includes(searchTerm) ||
+                      (option.code && option.code.toLowerCase().includes(searchTerm)) ||
+                      (option.manufacturer && option.manufacturer.toLowerCase().includes(searchTerm))
+                    );
+                  }}
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       label="Search Medicine"
-                      placeholder="Type to search..."
+                      placeholder="Search by name, code, or manufacturer..."
                       size="small"
-                      sx={{ minWidth: 250 }}
+                      sx={{ minWidth: 300 }}
+                      InputProps={{
+                        ...params.InputProps,
+                        startAdornment: <Search sx={{ mr: 1, color: 'text.secondary' }} />,
+                      }}
                     />
                   )}
                 />
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={() => setAddMedicineDialog(true)}
-                >
-                  Add New Medicine
-                </Button>
                 <Button
                   variant="contained"
                   startIcon={<Add />}
@@ -605,6 +614,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   disabled={!selectedMedicine}
                 >
                   Add Item
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => setAddMedicineDialog(true)}
+                >
+                  Add New Medicine
                 </Button>
               </Box>
             </Box>

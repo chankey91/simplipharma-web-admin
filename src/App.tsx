@@ -19,6 +19,7 @@ import { PurchaseInvoiceDetailsPage } from './pages/PurchaseInvoiceDetails';
 import { InventoryPage } from './pages/Inventory';
 import { StockUpdatePage } from './pages/StockUpdate';
 import { MedicineDetailsPage } from './pages/MedicineDetails';
+import { InvoicesPage } from './pages/Invoices';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -189,6 +190,16 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <StockUpdatePage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/invoices"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <InvoicesPage />
                     </Layout>
                   </ProtectedRoute>
                 }

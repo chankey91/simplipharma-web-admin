@@ -30,7 +30,6 @@ import {
 } from '@mui/material';
 import {
   ArrowBack,
-  Add,
   QrCode,
   PictureAsPdf,
   Edit,
@@ -286,14 +285,6 @@ export const MedicineDetailsPage: React.FC = () => {
         <Typography variant="h4">{medicine.name}</Typography>
         <Box sx={{ flexGrow: 1 }} />
         <Button
-          variant="outlined"
-          startIcon={<Edit />}
-          onClick={() => navigate(`/inventory/stock-update?medicineId=${medicine.id}`)}
-          sx={{ mr: 2 }}
-        >
-          Update Stock
-        </Button>
-        <Button
           variant="contained"
           startIcon={<PictureAsPdf />}
           onClick={handleGeneratePDF}
@@ -348,23 +339,9 @@ export const MedicineDetailsPage: React.FC = () => {
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>Stock Summary</Typography>
-              <Box display="flex" justifyContent="space-between" mb={1}>
+              <Box display="flex" justifyContent="space-between">
                 <Typography color="textSecondary">Total Stock:</Typography>
                 <Typography fontWeight="bold">{medicine.currentStock ?? medicine.stock ?? 0}</Typography>
-              </Box>
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="textSecondary">GST Rate:</Typography>
-                <Typography fontWeight="bold">{medicine.gstRate || 5}%</Typography>
-              </Box>
-              <Box display="flex" justifyContent="space-between">
-                <Typography color="textSecondary">Expiry Status:</Typography>
-                {medicine.expiryDate ? (
-                  <Chip
-                    label={format(medicine.expiryDate instanceof Date ? medicine.expiryDate : medicine.expiryDate.toDate(), 'MMM yyyy')}
-                    size="small"
-                    color="primary"
-                  />
-                ) : <Typography>N/A</Typography>}
               </Box>
             </CardContent>
           </Card>
@@ -375,14 +352,6 @@ export const MedicineDetailsPage: React.FC = () => {
           <Paper sx={{ p: 3 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
               <Typography variant="h6">Batch-wise Inventory</Typography>
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<Add />}
-                onClick={() => setBatchDialogOpen(true)}
-              >
-                Add New Batch
-              </Button>
             </Box>
             
             <TableContainer>
@@ -402,7 +371,15 @@ export const MedicineDetailsPage: React.FC = () => {
                 </TableHead>
                 <TableBody>
                   {medicine.stockBatches && medicine.stockBatches.length > 0 ? (
-                    medicine.stockBatches.map((batch) => {
+                    // Sort batches by expiry date (ascending - earliest first), then by quantity (descending - higher first)
+                    [...medicine.stockBatches].sort((a, b) => {
+                      const expiryA = a.expiryDate instanceof Date ? a.expiryDate : a.expiryDate.toDate();
+                      const expiryB = b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate();
+                      const expiryDiff = expiryA.getTime() - expiryB.getTime();
+                      if (expiryDiff !== 0) return expiryDiff;
+                      // If expiry dates are same, sort by quantity (descending)
+                      return (b.quantity || 0) - (a.quantity || 0);
+                    }).map((batch) => {
                       // Ensure MRP is properly converted to number - handle all cases
                       let mrpValue: number | null = null;
                       
@@ -462,15 +439,45 @@ export const MedicineDetailsPage: React.FC = () => {
                         });
                       }
                       
+                      // Calculate expiry status for highlighting
+                      const expiryDate = batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate();
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      const expiryDateOnly = new Date(expiryDate);
+                      expiryDateOnly.setHours(0, 0, 0, 0);
+                      const daysUntilExpiry = Math.ceil((expiryDateOnly.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                      
+                      // Determine row background color based on expiry
+                      let rowBgColor = 'inherit';
+                      if (daysUntilExpiry < 0) {
+                        // Expired - red background
+                        rowBgColor = '#ffebee';
+                      } else if (daysUntilExpiry <= 30) {
+                        // Near expiry (within 30 days) - orange/yellow background
+                        rowBgColor = '#fff3e0';
+                      }
+                      
                       return (
-                      <TableRow key={batch.id}>
+                      <TableRow 
+                        key={batch.id}
+                        sx={{
+                          backgroundColor: rowBgColor,
+                          '&:hover': {
+                            backgroundColor: daysUntilExpiry < 0 
+                              ? '#ffcdd2' 
+                              : daysUntilExpiry <= 30 
+                                ? '#ffe0b2' 
+                                : 'inherit',
+                          },
+                        }}
+                      >
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{batch.batchNumber}</Typography>
                         </TableCell>
                         <TableCell align="right">{batch.quantity}</TableCell>
                         <TableCell>
-                          <Typography variant="body2" color={new Date() > (batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate()) ? 'error.main' : 'inherit'}>
-                            {format(batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate(), 'MM/yy')}
+                          <Typography variant="body2" color={daysUntilExpiry < 0 ? 'error.main' : daysUntilExpiry <= 30 ? 'warning.main' : 'inherit'}>
+                            {format(expiryDate, 'MM/yy')}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
@@ -510,8 +517,8 @@ export const MedicineDetailsPage: React.FC = () => {
                     })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={5} align="center">
-                        <Typography color="textSecondary" sx={{ py: 2 }}>No batches found. Add a batch to get started.</Typography>
+                      <TableCell colSpan={9} align="center">
+                        <Typography color="textSecondary" sx={{ py: 2 }}>No batches found.</Typography>
                       </TableCell>
                     </TableRow>
                   )}
@@ -539,85 +546,6 @@ export const MedicineDetailsPage: React.FC = () => {
           </Box>
         </Grid>
       </Grid>
-
-      {/* Add Batch Dialog */}
-      <Dialog open={batchDialogOpen} onClose={() => setBatchDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Add New Batch - {medicine.name}</DialogTitle>
-        <DialogContent>
-          <Grid container spacing={2} sx={{ mt: 1 }}>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Batch Number"
-                required
-                value={batchData.batchNumber}
-                onChange={(e) => setBatchData({ ...batchData, batchNumber: e.target.value })}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Quantity"
-                type="number"
-                required
-                value={batchData.quantity}
-                onChange={(e) => setBatchData({ ...batchData, quantity: e.target.value })}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Expiry Date"
-                type="date"
-                required
-                value={batchData.expiryDate}
-                onChange={(e) => setBatchData({ ...batchData, expiryDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="MRP"
-                type="number"
-                value={batchData.mrp}
-                onChange={(e) => setBatchData({ ...batchData, mrp: e.target.value })}
-                InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Purchase Price"
-                type="number"
-                value={batchData.purchasePrice}
-                onChange={(e) => setBatchData({ ...batchData, purchasePrice: e.target.value })}
-                InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Purchase Date"
-                type="date"
-                value={batchData.purchaseDate}
-                onChange={(e) => setBatchData({ ...batchData, purchaseDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setBatchDialogOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleAddBatch}
-            disabled={addBatchMutation.isPending}
-          >
-            {addBatchMutation.isPending ? 'Adding...' : 'Add Batch'}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Edit General Information Dialog */}
       <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="md" fullWidth>
