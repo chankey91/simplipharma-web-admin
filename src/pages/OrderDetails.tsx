@@ -276,10 +276,10 @@ export const OrderDetailsPage: React.FC = () => {
         );
         
         // Calculate subtotal: sum of all "Total" column values (Price * Quantity)
-        const subTotal = itemsWithBatches.reduce((sum, item) => {
+        const subTotal = itemsWithBatches.reduce((sum: number, item: any) => {
           // If item has batchAllocations, calculate from individual batch prices
           if (item.batchAllocations && item.batchAllocations.length > 0) {
-            const itemTotal = item.batchAllocations.reduce((batchSum, allocation) => {
+            const itemTotal = item.batchAllocations.reduce((batchSum: number, allocation: any) => {
               // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
               const mrp = allocation.mrp || 0;
               const gstRate = allocation.gstRate || item.gstRate || 5;
@@ -311,9 +311,9 @@ export const OrderDetailsPage: React.FC = () => {
         }, 0);
         
         // Calculate discount: sum of (Price * Quantity * discountPercentage / 100) for all items
-        const totalDiscount = itemsWithBatches.reduce((sum, item) => {
+        const totalDiscount = itemsWithBatches.reduce((sum: number, item: any) => {
           if (item.batchAllocations && item.batchAllocations.length > 0) {
-            const itemDiscount = item.batchAllocations.reduce((batchSum, allocation) => {
+            const itemDiscount = item.batchAllocations.reduce((batchSum: number, allocation: any) => {
               // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
               const mrp = allocation.mrp || 0;
               const gstRate = allocation.gstRate || item.gstRate || 5;
@@ -366,7 +366,7 @@ export const OrderDetailsPage: React.FC = () => {
           name: m.name,
           batchNumber: m.batchNumber,
           discountPercentage: m.discountPercentage,
-          batchAllocations: m.batchAllocations?.map(a => ({
+          batchAllocations: m.batchAllocations?.map((a: any) => ({
             batchNumber: a.batchNumber,
             discountPercentage: a.discountPercentage
           }))
@@ -696,7 +696,7 @@ export const OrderDetailsPage: React.FC = () => {
       }
     }
 
-    const allocatedQty = existingAllocations.reduce((sum, a) => sum + a.quantity, 0);
+    const allocatedQty = existingAllocations.reduce((sum: number, a: any) => sum + (a.quantity || 0), 0);
 
     // Filter batches: Only show batches with available quantity > 0
     // OR batches that are already allocated (so user can see existing allocations)
@@ -707,7 +707,7 @@ export const OrderDetailsPage: React.FC = () => {
     
     const filteredBatches = medicine.stockBatches.filter(batch => {
       const availableQty = batch.quantity || 0;
-      const isAlreadyAllocated = existingAllocations.some(a => a.batchNumber === batch.batchNumber && (a.quantity || 0) > 0);
+      const isAlreadyAllocated = existingAllocations.some((a: any) => a.batchNumber === batch.batchNumber && (a.quantity || 0) > 0);
       
       // Check if batch is expired
       const expiryDate = batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate();
@@ -744,7 +744,7 @@ export const OrderDetailsPage: React.FC = () => {
 
     setBatchAllocations(
       filteredBatches.map(batch => {
-        const existing = existingAllocations.find(a => a.batchNumber === batch.batchNumber);
+        const existing = existingAllocations.find((a: any) => a.batchNumber === batch.batchNumber);
         return {
           batchNumber: batch.batchNumber,
           quantity: existing?.quantity || 0,
@@ -778,7 +778,7 @@ export const OrderDetailsPage: React.FC = () => {
     }
 
     // Validate total allocated quantity matches required
-    const totalAllocated = batchAllocations.reduce((sum, a) => sum + a.quantity, 0);
+    const totalAllocated = batchAllocations.reduce((sum: number, a: any) => sum + (a.quantity || 0), 0);
     
     if (totalAllocated !== requiredQuantity) {
       alert(`Total allocated quantity (${totalAllocated}) must equal required quantity (${requiredQuantity})`);
@@ -914,10 +914,10 @@ export const OrderDetailsPage: React.FC = () => {
   const itemsWithBatches = fulfillmentData.medicines.filter(m => m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0));
   
   // Calculate subtotal: sum of all "Total" column values (Price * Quantity)
-  const subTotal = itemsWithBatches.reduce((sum, item) => {
+  const subTotal = itemsWithBatches.reduce((sum: number, item: any) => {
     // If item has batchAllocations, calculate from individual batch prices
     if (item.batchAllocations && item.batchAllocations.length > 0) {
-      const itemTotal = item.batchAllocations.reduce((batchSum, allocation) => {
+      const itemTotal = item.batchAllocations.reduce((batchSum: number, allocation: any) => {
         // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
         const mrp = allocation.mrp || 0;
         const gstRate = allocation.gstRate || item.gstRate || 5;
@@ -949,9 +949,9 @@ export const OrderDetailsPage: React.FC = () => {
   }, 0);
   
   // Calculate discount: sum of (Price * Quantity * discountPercentage / 100) for all items
-  const totalDiscount = itemsWithBatches.reduce((sum, item) => {
+  const totalDiscount = itemsWithBatches.reduce((sum: number, item: any) => {
     if (item.batchAllocations && item.batchAllocations.length > 0) {
-      const itemDiscount = item.batchAllocations.reduce((batchSum, allocation) => {
+      const itemDiscount = item.batchAllocations.reduce((batchSum: number, allocation: any) => {
         // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
         const mrp = allocation.mrp || 0;
         const gstRate = allocation.gstRate || item.gstRate || 5;
@@ -991,10 +991,10 @@ export const OrderDetailsPage: React.FC = () => {
   }, 0);
   
   // Calculate tax amount per item (using each item's GST rate) on (Total Amount - Discount) and sum them up
-  const taxAmount = itemsWithBatches.reduce((sum, item) => {
+  const taxAmount = itemsWithBatches.reduce((sum: number, item: any) => {
     let itemTax = 0;
     if (item.batchAllocations && item.batchAllocations.length > 0) {
-      itemTax = item.batchAllocations.reduce((batchSum, allocation) => {
+      itemTax = item.batchAllocations.reduce((batchSum: number, allocation: any) => {
         const purchasePrice = allocation.purchasePrice || 0; // Price already calculated from MRP
         const qty = allocation.quantity || 0;
         const totalAmount = purchasePrice * qty;
@@ -1258,7 +1258,7 @@ export const OrderDetailsPage: React.FC = () => {
                     // If item has multiple batch allocations, show each batch separately
                     if (item.batchAllocations && item.batchAllocations.length > 1) {
                       // Calculate total for all batches: Price * Quantity (simple calculation for display)
-                      const totalForAllBatches = item.batchAllocations.reduce((sum, allocation) => {
+                      const totalForAllBatches = item.batchAllocations.reduce((sum: number, allocation: any) => {
                         // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
                         const mrp = allocation.mrp || 0;
                         const gstRate = allocation.gstRate || item.gstRate || 5;
@@ -1273,7 +1273,7 @@ export const OrderDetailsPage: React.FC = () => {
                         return sum + (purchasePrice * qty); // Price * Quantity
                       }, 0);
                       const totalQtyForAllBatches = item.batchAllocations.reduce(
-                        (sum, allocation) => sum + (allocation.quantity || 0),
+                        (sum: number, allocation: any) => sum + (allocation.quantity || 0),
                         0
                       );
                       
@@ -1344,7 +1344,7 @@ export const OrderDetailsPage: React.FC = () => {
                           </TableRow>
                           
                           {/* Individual Batch Rows */}
-                          {item.batchAllocations.map((allocation, batchIdx) => {
+                          {item.batchAllocations.map((allocation: any, batchIdx: number) => {
                             const batchQty = allocation.quantity || 0;
                             const batchMRP = allocation.mrp || 0;
                             const gstRate = allocation.gstRate || item.gstRate || 5;
