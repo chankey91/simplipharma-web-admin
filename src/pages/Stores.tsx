@@ -82,7 +82,8 @@ export const StoresPage: React.FC = () => {
   const filteredStores = stores?.filter(store =>
     store.shopName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     store.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    store.displayName?.toLowerCase().includes(searchTerm.toLowerCase())
+    store.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    store.storeCode?.toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
 
   // Pagination
@@ -277,6 +278,7 @@ export const StoresPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
+              <TableCell>Store Code</TableCell>
               <TableCell>Shop Name</TableCell>
               <TableCell>Owner</TableCell>
               <TableCell>Licence No.</TableCell>
@@ -289,13 +291,22 @@ export const StoresPage: React.FC = () => {
           <TableBody>
             {paginatedStores.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No stores found</Typography>
                 </TableCell>
               </TableRow>
             ) : (
               paginatedStores.map((store) => (
               <TableRow key={store.id}>
+                <TableCell>
+                  <Chip
+                    label={store.storeCode || 'N/A'}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ fontWeight: 'bold' }}
+                  />
+                </TableCell>
                 <TableCell>
                   <Typography variant="body2" fontWeight="bold">{store.shopName}</Typography>
                   <Typography variant="caption" color="textSecondary">{store.email}</Typography>

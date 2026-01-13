@@ -46,6 +46,7 @@ import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
+import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -109,6 +110,23 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [expiryDateError, setExpiryDateError] = useState<string>('');
 
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
+
+  // Auto-generate invoice number on mount
+  useEffect(() => {
+    const loadInvoiceNumber = async () => {
+      try {
+        const invoiceNumber = await generatePurchaseInvoiceNumber();
+        setInvoiceData(prev => ({ ...prev, invoiceNumber }));
+      } catch (error) {
+        console.error('Failed to generate invoice number:', error);
+      }
+    };
+    
+    // Only generate if invoice number is empty
+    if (!invoiceData.invoiceNumber) {
+      loadInvoiceNumber();
+    }
+  }, []); // Run once on mount
 
   const calculateTotals = () => {
     // Calculate subtotal: sum of (purchasePrice * quantity) for all items
@@ -504,20 +522,25 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               InputLabelProps={{ shrink: true }}
               sx={{ mb: 2 }}
             />
-            <FormControl fullWidth sx={{ mb: 2 }}>
-              <InputLabel>Vendor</InputLabel>
-              <Select
-                value={invoiceData.vendorId}
-                label="Vendor"
-                onChange={(e) => setInvoiceData({ ...invoiceData, vendorId: e.target.value })}
-              >
-                {vendors?.filter(v => v.isActive !== false).map((vendor) => (
-                  <MenuItem key={vendor.id} value={vendor.id}>
-                    {vendor.vendorName}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <Autocomplete
+              fullWidth
+              options={vendors?.filter(v => v.isActive !== false) || []}
+              getOptionLabel={(option) => option.vendorName || ''}
+              value={selectedVendor || null}
+              onChange={(event, newValue) => {
+                setInvoiceData({ ...invoiceData, vendorId: newValue?.id || '' });
+              }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Vendor"
+                  required
+                  placeholder="Search vendor..."
+                />
+              )}
+              sx={{ mb: 2 }}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+            />
             {selectedVendor && (
               <Card variant="outlined" sx={{ mb: 2, bgcolor: 'rgba(33, 150, 243, 0.05)' }}>
                 <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>

@@ -45,7 +45,7 @@ import {
 import { useOrder, useUpdateOrderStatus, useFulfillOrder, useUpdateOrderDispatch, useMarkOrderDelivered, useCancelOrder, useUpdatePaymentStatus } from '../hooks/useOrders';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
 import { format } from 'date-fns';
-import { auth } from '../services/firebase';
+import { auth, doc, updateDoc, db } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -79,6 +79,12 @@ export const OrderDetailsPage: React.FC = () => {
     title: '',
     message: ''
   });
+  const [trayNumberDialog, setTrayNumberDialog] = useState<{ open: boolean; orderId: string | null }>({
+    open: false,
+    orderId: null
+  });
+  const [trayNumber, setTrayNumber] = useState('');
+  const [processedBy, setProcessedBy] = useState('');
   const [selectedBatch, setSelectedBatch] = useState<string>('');
   const [addMedicineDialog, setAddMedicineDialog] = useState(false);
   const [newMedicineData, setNewMedicineData] = useState({
@@ -383,7 +389,10 @@ export const OrderDetailsPage: React.FC = () => {
             totalAmount
           }
         });
-        alert('Order fulfilled successfully!');
+        // Show tray number dialog after successful fulfillment
+        setTrayNumberDialog({ open: true, orderId: order.id });
+        setTrayNumber('');
+        setProcessedBy('');
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
           orderId: order.id,
@@ -419,6 +428,25 @@ export const OrderDetailsPage: React.FC = () => {
     } catch (error: any) {
       console.error('Action failed:', error);
       alert(`Failed to ${confirmDialog.action} order: ${error.message || 'Unknown error'}`);
+    }
+  };
+
+  const handleSaveTrayNumber = async () => {
+    if (!trayNumberDialog.orderId) return;
+    
+    try {
+      const orderRef = doc(db, 'orders', trayNumberDialog.orderId);
+      await updateDoc(orderRef, {
+        trayNumber: trayNumber.trim() || undefined,
+        processedBy: processedBy.trim() || undefined
+      });
+      setTrayNumberDialog({ open: false, orderId: null });
+      setTrayNumber('');
+      setProcessedBy('');
+      alert('Tray number and processor information saved successfully!');
+    } catch (error: any) {
+      console.error('Failed to save tray number and processor:', error);
+      alert(`Failed to save information: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -1809,6 +1837,69 @@ export const OrderDetailsPage: React.FC = () => {
             }
           >
             {confirmDialog.action === 'cancel' ? 'Confirm Cancellation' : 'Proceed'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Tray Number Dialog */}
+      <Dialog open={trayNumberDialog.open} onClose={() => setTrayNumberDialog({ open: false, orderId: null })} maxWidth="sm" fullWidth>
+        <DialogTitle>Order Fulfilled Successfully</DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 2 }}>
+            <Alert severity="success" sx={{ mb: 2 }}>
+              Order has been fulfilled successfully. Please enter the tray number and processor name.
+            </Alert>
+            <TextField
+              fullWidth
+              label="Tray Number"
+              margin="normal"
+              value={trayNumber}
+              onChange={(e) => setTrayNumber(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  // Move focus to next field or save
+                  const nextInput = e.currentTarget.parentElement?.querySelector('input[type="text"]:not([value=""])') as HTMLInputElement;
+                  if (nextInput) {
+                    nextInput.focus();
+                  } else {
+                    handleSaveTrayNumber();
+                  }
+                }
+              }}
+              autoFocus
+              placeholder="Enter tray number (optional)"
+              helperText="Enter the tray number for this order"
+            />
+            <TextField
+              fullWidth
+              label="Processed By"
+              margin="normal"
+              value={processedBy}
+              onChange={(e) => setProcessedBy(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  handleSaveTrayNumber();
+                }
+              }}
+              placeholder="Enter name of person processing the order (optional)"
+              helperText="Enter the name of the person who processed this order"
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => {
+            setTrayNumberDialog({ open: false, orderId: null });
+            setTrayNumber('');
+            setProcessedBy('');
+          }}>
+            Skip
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleSaveTrayNumber}
+          >
+            Save
           </Button>
         </DialogActions>
       </Dialog>

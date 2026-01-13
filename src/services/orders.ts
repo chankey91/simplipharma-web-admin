@@ -1,6 +1,7 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
 import { Order, OrderStatus, OrderTimelineEvent } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
+import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -167,6 +168,19 @@ export const fulfillOrder = async (
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
   const currentTimeline = orderDoc.data()?.timeline || [];
+  
+  // Generate invoice number if not already set
+  const order = orderDoc.data() as Order;
+  let invoiceNumber = order.invoiceNumber;
+  if (!invoiceNumber) {
+    try {
+      invoiceNumber = await generateOrderInvoiceNumber();
+      console.log(`Generated invoice number for order ${orderId}: ${invoiceNumber}`);
+    } catch (error) {
+      console.error('Failed to generate invoice number:', error);
+      // Continue without invoice number if generation fails
+    }
+  }
   
   // Reduce stock from batches for items that have batch numbers assigned
   const stockUpdateErrors: string[] = [];
@@ -458,12 +472,19 @@ export const fulfillOrder = async (
     return processed;
   });
   
-  await updateDoc(orderRef, {
+  const updateData: any = {
     ...cleanFulfillmentData,
     medicines: processedMedicines, // Use processed medicines array with proper Timestamps
     status: 'Order Fulfillment',
     timeline: [...currentTimeline, createTimelineEvent('Order Fulfillment', fulfilledBy, 'Order items verified and tax added')]
-  });
+  };
+  
+  // Add invoice number if generated
+  if (invoiceNumber) {
+    updateData.invoiceNumber = invoiceNumber;
+  }
+  
+  await updateDoc(orderRef, updateData);
 };
 
 export const updateOrderDispatch = async (

@@ -230,11 +230,12 @@ const getOrderInvoiceHTML = async (order: Order) => {
   
   // Invoice details
   const invoiceData = {
-    no: order.id.substring(0, 12),
+    no: order.invoiceNumber || order.id.substring(0, 12),
     date: format(invoiceDate, 'yyyy-MM-dd'),
     dueDate: format(invoiceDate, 'yyyy-MM-dd'),
     user: 'Admin',
-    tray: '-'
+    tray: order.trayNumber || '-',
+    processedBy: order.processedBy || '-'
   };
   
   // Tax summary
@@ -307,6 +308,17 @@ const getOrderInvoiceHTML = async (order: Order) => {
     vertical-align: top;
     word-wrap: break-word;
   }
+  /* Remove borders between items in item table */
+  table tbody tr td {
+    border-top: none;
+    border-bottom: none;
+  }
+  table tbody tr:first-child td {
+    border-top: 1px solid #000;
+  }
+  table tbody tr:last-child td {
+    border-bottom: 1px solid #000;
+  }
   .no-border td {
     border: none;
   }
@@ -353,7 +365,8 @@ const getOrderInvoiceHTML = async (order: Order) => {
     </td>
     <td>
       Date: ${invoiceData.date}<br>
-      Tray No: ${invoiceData.tray}
+      Tray No: ${invoiceData.tray}<br>
+      Processed By: ${invoiceData.processedBy}
     </td>
   </tr>
 </table>
@@ -694,7 +707,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     date: format(invoiceDate, 'yyyy-MM-dd'),
     dueDate: format(invoiceDate, 'yyyy-MM-dd'),
     user: invoice.createdBy || 'Admin',
-    tray: (invoice as any).trayNo || '-'
+    tray: '-'
   };
   
   // Generate items HTML
@@ -749,6 +762,17 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     vertical-align: top;
     word-wrap: break-word;
   }
+  /* Remove borders between items in item table */
+  table tbody tr td {
+    border-top: none;
+    border-bottom: none;
+  }
+  table tbody tr:first-child td {
+    border-top: 1px solid #000;
+  }
+  table tbody tr:last-child td {
+    border-bottom: 1px solid #000;
+  }
   .no-border td {
     border: none;
   }
@@ -794,8 +818,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
       User: ${invoiceData.user}
     </td>
     <td>
-      Date: ${invoiceData.date}<br>
-      Tray No: ${invoiceData.tray}
+      Date: ${invoiceData.date}
     </td>
   </tr>
 </table>
