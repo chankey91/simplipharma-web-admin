@@ -88,6 +88,9 @@ export interface Order {
   totalAmount: number;
   status: OrderStatus;
   orderDate: Date | any;
+  invoiceNumber?: string; // Auto-generated invoice number (SPS + YYYY + MM + 001)
+  trayNumber?: string; // Tray number for order fulfillment
+  processedBy?: string; // Name of person processing the order
   deliveryAddress?: string;
   trackingLocation?: {
     latitude: number;
@@ -146,6 +149,7 @@ export interface User {
   pan?: string;
   gst?: string;
   shopImage?: string;
+  storeCode?: string; // Unique code for medical store (e.g., MS001, MS002)
   location?: {
     latitude: number;
     longitude: number;

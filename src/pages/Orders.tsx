@@ -31,16 +31,20 @@ import {
   Search,
   Visibility,
   Cancel,
+  Download,
 } from '@mui/icons-material';
 import { useOrders, useCancelOrder } from '../hooks/useOrders';
+import { useStores } from '../hooks/useStores';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
+import { exportPendingOrdersByStore } from '../utils/export';
 
 export const OrdersPage: React.FC = () => {
   const { data: orders, isLoading } = useOrders();
+  const { data: stores } = useStores();
   const cancelOrderMutation = useCancelOrder();
   const navigate = useNavigate();
   
@@ -48,6 +52,7 @@ export const OrdersPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
+  const [isExporting, setIsExporting] = useState(false);
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
@@ -105,6 +110,26 @@ export const OrdersPage: React.FC = () => {
       case 'Delivered': return 'success';
       case 'Cancelled': return 'error';
       default: return 'default';
+    }
+  };
+
+  const handleExportPendingOrders = async () => {
+    const pendingOrders = orders?.filter(o => o.status === 'Pending') || [];
+    
+    if (pendingOrders.length === 0) {
+      alert('No pending orders to export');
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      await exportPendingOrdersByStore(pendingOrders, stores || []);
+      alert('Excel file generated successfully!');
+    } catch (error: any) {
+      console.error('Error exporting orders:', error);
+      alert(`Failed to export: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -174,6 +199,15 @@ export const OrdersPage: React.FC = () => {
             <MenuItem value="Cancelled">Cancelled</MenuItem>
           </Select>
         </FormControl>
+        <Button
+          variant="outlined"
+          startIcon={<Download />}
+          onClick={handleExportPendingOrders}
+          disabled={!orders || orders.filter(o => o.status === 'Pending').length === 0 || isExporting}
+          sx={{ minWidth: 200 }}
+        >
+          {isExporting ? 'Exporting...' : 'Export Pending Orders (Excel)'}
+        </Button>
       </Box>
 
       {/* Orders Table */}

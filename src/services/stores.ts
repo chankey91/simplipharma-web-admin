@@ -1,6 +1,7 @@
 import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, db, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
+import { generateStoreCode } from '../utils/storeCode';
 
 export const getAllStores = async (): Promise<User[]> => {
   const usersCol = collection(db, 'users');
@@ -39,6 +40,23 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
       const { initialPassword, ...cleanStoreData } = storeData;
       const cleanData: any = { ...cleanStoreData };
       
+      // Generate unique store code if not provided
+      let storeCode = storeData.storeCode;
+      if (!storeCode) {
+        try {
+          storeCode = await generateStoreCode();
+          console.log(`Generated store code: ${storeCode}`);
+        } catch (error) {
+          console.error('Failed to generate store code:', error);
+          // Continue without store code if generation fails
+        }
+      }
+      
+      // Add store code to cleanData if generated
+      if (storeCode) {
+        cleanData.storeCode = storeCode;
+      }
+      
       // Remove any undefined values
       Object.keys(cleanData).forEach(key => {
         if (cleanData[key] === undefined) {
@@ -76,6 +94,18 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
   // Fallback: Create Firestore document only (user will need to be created separately)
   const storeRef = doc(collection(db, 'users'));
   
+  // Generate unique store code if not provided
+  let storeCode = storeData.storeCode;
+  if (!storeCode) {
+    try {
+      storeCode = await generateStoreCode();
+      console.log(`Generated store code: ${storeCode}`);
+    } catch (error) {
+      console.error('Failed to generate store code:', error);
+      // Continue without store code if generation fails
+    }
+  }
+  
   // Remove undefined values and initialPassword from storeData
   const { initialPassword, ...cleanStoreData } = storeData;
   const newStore: any = {
@@ -85,6 +115,11 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
     isActive: cleanStoreData.isActive !== undefined ? cleanStoreData.isActive : true,
     mustResetPassword: true, // Force password reset on first login
   };
+  
+  // Add store code if generated
+  if (storeCode) {
+    newStore.storeCode = storeCode;
+  }
   
   // Remove any undefined values from the object
   Object.keys(newStore).forEach(key => {
