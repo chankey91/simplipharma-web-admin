@@ -203,6 +203,8 @@ export const OrderDetailsPage: React.FC = () => {
                 : m.expiryDate, // Use expiryDate from first batch allocation or OrderMedicine
               discountPercentage: discountPct, // Explicitly preserve discountPercentage
               batchAllocations: batchAllocations, // Preserve updated batchAllocations with discountPercentage
+              // Preserve originalQuantity if it exists, otherwise set it to current quantity (for backward compatibility)
+              originalQuantity: m.originalQuantity || m.quantity,
             };
           })
         }));
@@ -219,6 +221,17 @@ export const OrderDetailsPage: React.FC = () => {
         setPartialPaymentAmount(order.paidAmount.toFixed(2));
       } else if (order.paymentStatus !== 'Partial') {
         setPartialPaymentAmount('');
+      }
+      
+      // Show tray number dialog for pending orders if tray number and processedBy are not set
+      if (order.status === 'Pending' && !order.trayNumber && !order.processedBy) {
+        setTrayNumberDialog({ open: true, orderId: order.id });
+        setTrayNumber('');
+        setProcessedBy('');
+      } else if (order.trayNumber || order.processedBy) {
+        // If already set, populate the fields
+        setTrayNumber(order.trayNumber || '');
+        setProcessedBy(order.processedBy || '');
       }
     }
   }, [order, medicines]);
@@ -386,13 +399,12 @@ export const OrderDetailsPage: React.FC = () => {
             subTotal,
             taxPercentage: taxPercentage,
             taxAmount,
-            totalAmount
+            totalAmount,
+            trayNumber: trayNumber.trim() || undefined,
+            processedBy: processedBy.trim() || undefined
           }
         });
-        // Show tray number dialog after successful fulfillment
-        setTrayNumberDialog({ open: true, orderId: order.id });
-        setTrayNumber('');
-        setProcessedBy('');
+        alert('Order fulfilled successfully!');
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
           orderId: order.id,
@@ -436,14 +448,30 @@ export const OrderDetailsPage: React.FC = () => {
     
     try {
       const orderRef = doc(db, 'orders', trayNumberDialog.orderId);
-      await updateDoc(orderRef, {
-        trayNumber: trayNumber.trim() || undefined,
-        processedBy: processedBy.trim() || undefined
-      });
+      const updateData: any = {};
+      
+      // Only update if values are provided (allow empty strings to clear)
+      if (trayNumber.trim()) {
+        updateData.trayNumber = trayNumber.trim();
+      }
+      if (processedBy.trim()) {
+        updateData.processedBy = processedBy.trim();
+      }
+      
+      // If both are empty, still save to mark as "acknowledged"
+      if (Object.keys(updateData).length > 0) {
+        await updateDoc(orderRef, updateData);
+      }
+      
       setTrayNumberDialog({ open: false, orderId: null });
       setTrayNumber('');
       setProcessedBy('');
-      alert('Tray number and processor information saved successfully!');
+      
+      if (order?.status === 'Pending') {
+        alert('Tray number and processor information saved successfully!');
+      } else {
+        alert('Tray number and processor information saved successfully!');
+      }
     } catch (error: any) {
       console.error('Failed to save tray number and processor:', error);
       alert(`Failed to save information: ${error.message || 'Unknown error'}`);
@@ -725,6 +753,9 @@ export const OrderDetailsPage: React.FC = () => {
     }
 
     const allocatedQty = existingAllocations.reduce((sum: number, a: any) => sum + (a.quantity || 0), 0);
+    
+    // Use originalQuantity if it exists (for partial fulfillment), otherwise use current quantity
+    const requiredQty = item.originalQuantity || item.quantity || 0;
 
     // Filter batches: Only show batches with available quantity > 0
     // OR batches that are already allocated (so user can see existing allocations)
@@ -773,10 +804,15 @@ export const OrderDetailsPage: React.FC = () => {
     setBatchAllocations(
       filteredBatches.map(batch => {
         const existing = existingAllocations.find((a: any) => a.batchNumber === batch.batchNumber);
+        const alreadyAllocated = existing?.quantity || 0;
+        // Available quantity = current batch quantity
+        // Note: If order hasn't been fulfilled yet, batch.quantity is the original stock
+        // If order has been fulfilled, batch.quantity is already reduced
+        const availableQty = batch.quantity || 0;
         return {
           batchNumber: batch.batchNumber,
-          quantity: existing?.quantity || 0,
-          availableQuantity: batch.quantity || 0,
+          quantity: alreadyAllocated,
+          availableQuantity: availableQty, // Current available stock in batch
           expiryDate: batch.expiryDate,
           mrp: batch.mrp,
           purchasePrice: batch.purchasePrice,
@@ -790,7 +826,7 @@ export const OrderDetailsPage: React.FC = () => {
       open: true,
       itemIndex,
       medicineId: item.medicineId,
-      requiredQuantity: item.quantity || 0,
+      requiredQuantity: requiredQty,
       allocatedQuantity: allocatedQty,
     });
   };
@@ -805,15 +841,33 @@ export const OrderDetailsPage: React.FC = () => {
       return;
     }
 
-    // Validate total allocated quantity matches required
+    // Validate total allocated quantity - allow partial fulfillment (must be > 0 and <= required)
     const totalAllocated = batchAllocations.reduce((sum: number, a: any) => sum + (a.quantity || 0), 0);
     
-    if (totalAllocated !== requiredQuantity) {
-      alert(`Total allocated quantity (${totalAllocated}) must equal required quantity (${requiredQuantity})`);
+    if (totalAllocated === 0) {
+      alert('Please allocate at least some quantity');
       return;
+    }
+    
+    if (totalAllocated > requiredQuantity) {
+      alert(`Total allocated quantity (${totalAllocated}) cannot exceed required quantity (${requiredQuantity})`);
+      return;
+    }
+    
+    // Warn if partial fulfillment
+    if (totalAllocated < requiredQuantity) {
+      const confirmPartial = window.confirm(
+        `Warning: Only ${totalAllocated} out of ${requiredQuantity} units will be fulfilled. ` +
+        `The remaining ${requiredQuantity - totalAllocated} units will not be fulfilled. Continue?`
+      );
+      if (!confirmPartial) {
+        return;
+      }
     }
 
     // Validate each batch has enough stock
+    // Note: If order status is 'Pending', stock hasn't been reduced yet, so availableQuantity is the actual stock
+    // If order has been fulfilled, stock is already reduced, so availableQuantity reflects current stock
     for (const allocation of batchAllocations) {
       if (allocation.quantity > 0 && allocation.quantity > allocation.availableQuantity) {
         alert(`Batch ${allocation.batchNumber} only has ${allocation.availableQuantity} units available, but ${allocation.quantity} were allocated`);
@@ -875,6 +929,10 @@ export const OrderDetailsPage: React.FC = () => {
     newMedicines[itemIndex] = {
       ...item,
       batchAllocations: processedAllocations,
+      // Store original ordered quantity if this is partial fulfillment
+      originalQuantity: totalAllocated < requiredQuantity ? requiredQuantity : item.originalQuantity || item.quantity,
+      // Update quantity to fulfilled quantity
+      quantity: totalAllocated, // This is the fulfilled quantity
       // Keep batchNumber for backward compatibility (use first allocation)
       batchNumber: validAllocations[0].batchNumber,
       batchExpiryDate: validAllocations[0].expiryDate,
@@ -1500,7 +1558,23 @@ export const OrderDetailsPage: React.FC = () => {
                             <Typography variant="caption" color="textSecondary">Not assigned</Typography>
                           )}
                         </TableCell>
-                        <TableCell align="right">{item.quantity || 0}</TableCell>
+                        <TableCell align="right">
+                          {item.originalQuantity && item.originalQuantity !== item.quantity ? (
+                            <Box>
+                              <Typography variant="body2">
+                                {item.quantity} / {item.originalQuantity}
+                              </Typography>
+                              <Chip 
+                                label="Partial" 
+                                size="small" 
+                                color="warning" 
+                                sx={{ mt: 0.5 }}
+                              />
+                            </Box>
+                          ) : (
+                            item.quantity || 0
+                          )}
+                        </TableCell>
                         <TableCell align="right">
                           {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
                         </TableCell>
@@ -1842,13 +1916,28 @@ export const OrderDetailsPage: React.FC = () => {
       </Dialog>
 
       {/* Tray Number Dialog */}
-      <Dialog open={trayNumberDialog.open} onClose={() => setTrayNumberDialog({ open: false, orderId: null })} maxWidth="sm" fullWidth>
-        <DialogTitle>Order Fulfilled Successfully</DialogTitle>
+      <Dialog 
+        open={trayNumberDialog.open} 
+        onClose={() => {
+          setTrayNumberDialog({ open: false, orderId: null });
+        }} 
+        maxWidth="sm" 
+        fullWidth
+      >
+        <DialogTitle>
+          {order?.status === 'Pending' ? 'Order Information' : 'Order Fulfilled Successfully'}
+        </DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
-            <Alert severity="success" sx={{ mb: 2 }}>
-              Order has been fulfilled successfully. Please enter the tray number and processor name.
-            </Alert>
+            {order?.status === 'Pending' ? (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Please enter the tray number and processor name for this pending order.
+              </Alert>
+            ) : (
+              <Alert severity="success" sx={{ mb: 2 }}>
+                Order has been fulfilled successfully. Please enter the tray number and processor name.
+              </Alert>
+            )}
             <TextField
               fullWidth
               label="Tray Number"
@@ -2167,14 +2256,20 @@ export const OrderDetailsPage: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
-            {batchAllocationDialog.allocatedQuantity !== batchAllocationDialog.requiredQuantity && (
+            {batchAllocationDialog.allocatedQuantity < batchAllocationDialog.requiredQuantity && batchAllocationDialog.allocatedQuantity > 0 && (
               <Alert severity="warning" sx={{ mt: 2 }}>
-                Total allocated ({batchAllocationDialog.allocatedQuantity}) does not match required ({batchAllocationDialog.requiredQuantity})
+                Partial fulfillment: {batchAllocationDialog.allocatedQuantity} / {batchAllocationDialog.requiredQuantity} units will be fulfilled. 
+                The remaining {batchAllocationDialog.requiredQuantity - batchAllocationDialog.allocatedQuantity} units will not be fulfilled.
               </Alert>
             )}
             {batchAllocationDialog.allocatedQuantity === batchAllocationDialog.requiredQuantity && batchAllocationDialog.allocatedQuantity > 0 && (
               <Alert severity="success" sx={{ mt: 2 }}>
                 All quantities allocated successfully!
+              </Alert>
+            )}
+            {batchAllocationDialog.allocatedQuantity === 0 && (
+              <Alert severity="info" sx={{ mt: 2 }}>
+                Please allocate at least some quantity to proceed.
               </Alert>
             )}
           </Box>
@@ -2187,7 +2282,7 @@ export const OrderDetailsPage: React.FC = () => {
           <Button 
             onClick={handleSaveBatchAllocations}
             variant="contained"
-            disabled={batchAllocationDialog.allocatedQuantity !== batchAllocationDialog.requiredQuantity}
+            disabled={batchAllocationDialog.allocatedQuantity === 0 || batchAllocationDialog.allocatedQuantity > batchAllocationDialog.requiredQuantity}
           >
             Save Allocations
           </Button>

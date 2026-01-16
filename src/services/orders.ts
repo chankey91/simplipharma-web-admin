@@ -163,6 +163,8 @@ export const fulfillOrder = async (
     taxPercentage: number;
     subTotal: number;
     totalAmount: number;
+    trayNumber?: string;
+    processedBy?: string;
   }
 ) => {
   const orderRef = doc(db, 'orders', orderId);
@@ -482,6 +484,14 @@ export const fulfillOrder = async (
   // Add invoice number if generated
   if (invoiceNumber) {
     updateData.invoiceNumber = invoiceNumber;
+  }
+  
+  // Add tray number and processed by if provided
+  if (fulfillmentData.trayNumber) {
+    updateData.trayNumber = fulfillmentData.trayNumber;
+  }
+  if (fulfillmentData.processedBy) {
+    updateData.processedBy = fulfillmentData.processedBy;
   }
   
   await updateDoc(orderRef, updateData);
