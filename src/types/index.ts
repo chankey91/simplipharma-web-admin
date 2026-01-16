@@ -52,6 +52,7 @@ export interface OrderMedicine {
   name: string;
   price: number;
   quantity: number;
+  originalQuantity?: number; // Original ordered quantity (for partial fulfillment tracking)
   batchNumber?: string; // Keep for backward compatibility
   expiryDate?: Date | any;
   discountPercentage?: number; // Discount percentage for the item
