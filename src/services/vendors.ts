@@ -163,23 +163,57 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
       
       try {
         console.log('Calling Cloud Function sendVendorPasswordEmail...');
-        const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail', {
-          timeout: 30000 // 30 second timeout
-        });
         
-        // Add timeout handling
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Function call timed out after 30 seconds')), 30000);
-        });
+        // Get auth token for HTTP function
+        const currentUser = auth.currentUser;
+        if (!currentUser) {
+          throw new Error('User not authenticated');
+        }
         
-        const functionCall = sendVendorPasswordEmail({
-          email: emailToSend,
-          password: vendorData.password,
-          vendorName: vendorData.vendorName,
-        });
+        const authToken = await currentUser.getIdToken();
         
-        const result = await Promise.race([functionCall, timeoutPromise]);
-        console.log('Vendor password email sent successfully:', result);
+        // Try HTTP function first (has explicit CORS)
+        const httpFunctionUrl = `https://us-central1-simplipharma.cloudfunctions.net/sendVendorPasswordEmailHttp`;
+        
+        console.log('Calling HTTP function with CORS:', httpFunctionUrl);
+        
+        try {
+          const response = await fetch(httpFunctionUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              email: emailToSend,
+              password: vendorData.password,
+              vendorName: vendorData.vendorName,
+              authToken: authToken,
+            }),
+          });
+          
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: response.statusText }));
+            throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+          }
+          
+          const result = await response.json();
+          console.log('Vendor password email sent successfully via HTTP function:', result);
+        } catch (httpError: any) {
+          // If HTTP function fails (might not be deployed), try callable function as fallback
+          console.warn('HTTP function failed, trying callable function:', httpError.message);
+          
+          const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail', {
+            timeout: 30000
+          });
+          
+          const result = await sendVendorPasswordEmail({
+            email: emailToSend,
+            password: vendorData.password,
+            vendorName: vendorData.vendorName,
+          });
+          
+          console.log('Vendor password email sent successfully via callable function:', result);
+        }
       } catch (error: any) {
         console.error('Failed to send vendor password email:', error);
         console.error('Full error object:', JSON.stringify(error, null, 2));
