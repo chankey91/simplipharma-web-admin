@@ -232,7 +232,31 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
             console.log('Vendor password email sent successfully via callable function:', result);
           } catch (callableError: any) {
             // Both functions failed - this is likely a deployment issue
-            console.error('Both HTTP and callable functions failed:', callableError);
+            console.error('Both HTTP and callable functions failed:', {
+              httpError: httpError.message,
+              callableError: callableError.message,
+              httpErrorCode: httpError.code,
+              callableErrorCode: callableError.code
+            });
+            
+            // Check if it's a CORS/network error
+            const isCorsError = httpError.message?.includes('CORS') || 
+                               httpError.message?.includes('Failed to fetch') ||
+                               callableError.message?.includes('CORS') ||
+                               callableError.message?.includes('Failed to fetch');
+            
+            if (isCorsError) {
+              // Create a clear error message about deployment
+              const emailError = new Error(`Vendor created successfully, but email could not be sent due to CORS error. The Cloud Functions may not be deployed. Please deploy the functions and try again.`) as any;
+              emailError.vendorCreated = true;
+              emailError.vendorId = vendorRef.id;
+              emailError.password = vendorData.password;
+              emailError.email = emailToSend;
+              emailError.isCorsError = true;
+              emailError.needsDeployment = true;
+              throw emailError;
+            }
+            
             throw httpError; // Throw the original HTTP error
           }
         }
