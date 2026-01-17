@@ -258,13 +258,24 @@ export const VendorsPage: React.FC = () => {
                                    error.message?.includes('not deployed') ||
                                    error.message?.includes('not-found');
         
+        const isCorsError = error.isCorsError || 
+                          error.needsDeployment ||
+                          error.message?.includes('CORS');
+        
         // Extract the actual error message (remove "Vendor created successfully, but" prefix)
         const actualError = error.message?.replace('Vendor created successfully, but ', '') || 'Unknown error';
         
         let message = `Vendor created successfully! ✅\n\n`;
         
-        if (isFunctionNotFound) {
-          message += `⚠️ Cloud Functions are not deployed yet.\n\n`;
+        if (isCorsError || isFunctionNotFound) {
+          message += `⚠️ Cloud Functions are not deployed or CORS is not configured.\n\n`;
+          message += `📋 DEPLOYMENT REQUIRED:\n\n`;
+          message += `1. Open terminal/command prompt\n`;
+          message += `2. cd functions\n`;
+          message += `3. npm install\n`;
+          message += `4. npm run build\n`;
+          message += `5. firebase deploy --only functions\n\n`;
+          message += `After deployment, emails will be sent automatically!\n\n`;
         } else {
           message += `⚠️ Email could not be sent.\n\n`;
         }
@@ -273,18 +284,9 @@ export const VendorsPage: React.FC = () => {
         message += `📧 Email: ${error.email}\n`;
         message += `🔑 Password: ${error.password}\n\n`;
         message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-        message += `Error: ${actualError}\n\n`;
         
-        if (isFunctionNotFound) {
-          message += `To enable automatic email sending, deploy Cloud Functions:\n\n`;
-          message += `1. Open terminal/command prompt\n`;
-          message += `2. cd functions\n`;
-          message += `3. npm install\n`;
-          message += `4. firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"\n`;
-          message += `5. npm run build\n`;
-          message += `6. firebase deploy --only functions\n\n`;
-          message += `After deployment, emails will be sent automatically!`;
-        } else {
+        if (!isCorsError && !isFunctionNotFound) {
+          message += `Error: ${actualError}\n\n`;
           message += `Please check:\n`;
           message += `- Firebase Functions are deployed\n`;
           message += `- SMTP configuration is set correctly\n`;
