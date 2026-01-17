@@ -74,9 +74,12 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
   }
   
   // Clean up undefined values for optional fields
+  // Trim email if provided
+  const email = vendorData.email?.trim() || '';
+  
   const cleanedData: any = {
     vendorName: vendorData.vendorName,
-    email: vendorData.email || '',
+    email: email, // Use trimmed email
     phoneNumber: vendorData.phoneNumber,
     gstNumber: vendorData.gstNumber,
     isActive: vendorData.isActive !== false,
@@ -119,60 +122,77 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
   await setDoc(vendorRef, cleanedData);
   
   // Send password email if email and password are provided
+  // Use trimmed email for consistency
+  const emailToSend = email; // Already trimmed above
+  
   console.log('Vendor creation - Email check:', {
-    email: vendorData.email,
+    email: emailToSend,
     hasPassword: !!vendorData.password,
-    emailTrimmed: vendorData.email?.trim(),
-    emailNotEmpty: vendorData.email?.trim() !== ''
+    emailNotEmpty: emailToSend !== ''
   });
   
-  if (vendorData.email && vendorData.password && vendorData.email.trim() !== '') {
-    console.log('Attempting to send vendor password email...', {
-      email: vendorData.email,
-      vendorName: vendorData.vendorName
-    });
-    try {
-      const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail');
-      const result = await sendVendorPasswordEmail({
-        email: vendorData.email,
-        password: vendorData.password,
-        vendorName: vendorData.vendorName,
+  if (emailToSend && vendorData.password && emailToSend !== '') {
+    // Validate email format before sending
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailToSend)) {
+      console.warn('Invalid email format, skipping email send:', emailToSend);
+      // Don't throw error, just skip email sending
+    } else {
+      console.log('Attempting to send vendor password email...', {
+        email: emailToSend,
+        vendorName: vendorData.vendorName
       });
-      console.log('Vendor password email sent successfully:', result);
-    } catch (error: any) {
-      console.error('Failed to send vendor password email:', error);
-      console.error('Error details:', {
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        stack: error.stack
-      });
-      
-      // Check if function doesn't exist (not deployed)
-      const isFunctionNotFound = error.code === 'functions/not-found' || 
-                                  error.message?.includes('not found') ||
-                                  error.message?.includes('not-found');
-      
-      // Don't fail vendor creation if email fails
-      // Throw error with password info so UI can display it
-      const errorMessage = isFunctionNotFound 
-        ? 'Cloud Functions are not deployed. Please deploy Firebase Cloud Functions to enable email sending.'
-        : `Email sending failed: ${error.message || 'Unknown error'}`;
-      
-      const emailError = new Error(`Vendor created successfully, but ${errorMessage}`) as any;
-      emailError.vendorCreated = true;
-      emailError.vendorId = vendorRef.id;
-      emailError.password = vendorData.password;
-      emailError.email = vendorData.email;
-      emailError.isFunctionNotFound = isFunctionNotFound;
-      throw emailError;
+      try {
+        const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail');
+        const result = await sendVendorPasswordEmail({
+          email: emailToSend,
+          password: vendorData.password,
+          vendorName: vendorData.vendorName,
+        });
+        console.log('Vendor password email sent successfully:', result);
+      } catch (error: any) {
+        console.error('Failed to send vendor password email:', error);
+        console.error('Error details:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          stack: error.stack
+        });
+        
+        // Check if function doesn't exist (not deployed)
+        const isFunctionNotFound = error.code === 'functions/not-found' || 
+                                    error.code === 'functions/unavailable' ||
+                                    error.message?.includes('not found') ||
+                                    error.message?.includes('not-found') ||
+                                    error.message?.includes('not deployed') ||
+                                    error.message?.includes('UNAVAILABLE');
+        
+        // Don't fail vendor creation if email fails
+        // Throw error with password info so UI can display it
+        const errorMessage = isFunctionNotFound 
+          ? 'Cloud Functions are not deployed. Please deploy Firebase Cloud Functions to enable email sending.'
+          : `Email sending failed: ${error.message || 'Unknown error'}`;
+        
+        const emailError = new Error(`Vendor created successfully, but ${errorMessage}`) as any;
+        emailError.vendorCreated = true;
+        emailError.vendorId = vendorRef.id;
+        emailError.password = vendorData.password;
+        emailError.email = emailToSend;
+        emailError.isFunctionNotFound = isFunctionNotFound;
+        throw emailError;
+      }
     }
   } else {
     console.log('Skipping email send - missing email or password:', {
-      hasEmail: !!vendorData.email,
-      hasPassword: !!vendorData.password,
-      emailValue: vendorData.email
+      hasEmail: !!emailToSend,
+      emailValue: emailToSend,
+      hasPassword: !!vendorData.password
     });
+    
+    // If email was provided but is invalid, warn user
+    if (vendorData.email && vendorData.email.trim() !== '' && emailToSend === '') {
+      console.warn('Email was provided but became empty after trimming:', vendorData.email);
+    }
   }
   
   return vendorRef.id;
