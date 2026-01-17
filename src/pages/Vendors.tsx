@@ -244,15 +244,53 @@ export const VendorsPage: React.FC = () => {
       }
     } catch (error: any) {
       console.error('Vendor creation error:', error);
+      console.error('Error details:', {
+        vendorCreated: error.vendorCreated,
+        hasPassword: !!error.password,
+        hasEmail: !!error.email,
+        isFunctionNotFound: error.isFunctionNotFound,
+        originalError: error.originalError
+      });
+      
       // If vendor was created but email failed, show password in alert
       if (error.vendorCreated && error.password && error.email) {
         const isFunctionNotFound = error.isFunctionNotFound || 
                                    error.message?.includes('not deployed') ||
                                    error.message?.includes('not-found');
         
-        const message = isFunctionNotFound
-          ? `Vendor created successfully! ✅\n\n⚠️ Cloud Functions are not deployed yet.\n\nPlease share these credentials manually:\n\n📧 Email: ${error.email}\n🔑 Password: ${error.password}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nTo enable automatic email sending, deploy Cloud Functions:\n\n1. Open terminal/command prompt\n2. cd functions\n3. npm install\n4. firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"\n5. npm run build\n6. firebase deploy --only functions\n\nAfter deployment, emails will be sent automatically!`
-          : `Vendor created successfully! ✅\n\nHowever, the password email could not be sent.\n\nPlease share these credentials manually:\n\n📧 Email: ${error.email}\n🔑 Password: ${error.password}\n\nError: ${error.message || 'Unknown error'}`;
+        // Extract the actual error message (remove "Vendor created successfully, but" prefix)
+        const actualError = error.message?.replace('Vendor created successfully, but ', '') || 'Unknown error';
+        
+        let message = `Vendor created successfully! ✅\n\n`;
+        
+        if (isFunctionNotFound) {
+          message += `⚠️ Cloud Functions are not deployed yet.\n\n`;
+        } else {
+          message += `⚠️ Email could not be sent.\n\n`;
+        }
+        
+        message += `Please share these credentials manually:\n\n`;
+        message += `📧 Email: ${error.email}\n`;
+        message += `🔑 Password: ${error.password}\n\n`;
+        message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        message += `Error: ${actualError}\n\n`;
+        
+        if (isFunctionNotFound) {
+          message += `To enable automatic email sending, deploy Cloud Functions:\n\n`;
+          message += `1. Open terminal/command prompt\n`;
+          message += `2. cd functions\n`;
+          message += `3. npm install\n`;
+          message += `4. firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"\n`;
+          message += `5. npm run build\n`;
+          message += `6. firebase deploy --only functions\n\n`;
+          message += `After deployment, emails will be sent automatically!`;
+        } else {
+          message += `Please check:\n`;
+          message += `- Firebase Functions are deployed\n`;
+          message += `- SMTP configuration is set correctly\n`;
+          message += `- You are logged in as admin\n`;
+          message += `- Network connection is stable`;
+        }
         
         alert(message);
         setOpenDialog(false);
