@@ -2,6 +2,7 @@ import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, d
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Vendor } from '../types';
 import { functions } from './firebase';
+import { auth } from './firebase';
 
 export const getAllVendors = async (): Promise<Vendor[]> => {
   const vendorsCol = collection(db, 'vendors');
@@ -142,43 +143,105 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
         email: emailToSend,
         vendorName: vendorData.vendorName
       });
+      
+      // Check authentication before calling function
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        console.error('No authenticated user found');
+        const emailError = new Error('Vendor created successfully, but email sending failed: You must be logged in to send emails') as any;
+        emailError.vendorCreated = true;
+        emailError.vendorId = vendorRef.id;
+        emailError.password = vendorData.password;
+        emailError.email = emailToSend;
+        throw emailError;
+      }
+      
+      console.log('User authenticated:', {
+        uid: currentUser.uid,
+        email: currentUser.email
+      });
+      
       try {
-        const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail');
-        const result = await sendVendorPasswordEmail({
+        console.log('Calling Cloud Function sendVendorPasswordEmail...');
+        const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail', {
+          timeout: 30000 // 30 second timeout
+        });
+        
+        // Add timeout handling
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Function call timed out after 30 seconds')), 30000);
+        });
+        
+        const functionCall = sendVendorPasswordEmail({
           email: emailToSend,
           password: vendorData.password,
           vendorName: vendorData.vendorName,
         });
+        
+        const result = await Promise.race([functionCall, timeoutPromise]);
         console.log('Vendor password email sent successfully:', result);
       } catch (error: any) {
         console.error('Failed to send vendor password email:', error);
+        console.error('Full error object:', JSON.stringify(error, null, 2));
         console.error('Error details:', {
           code: error.code,
           message: error.message,
           details: error.details,
-          stack: error.stack
+          stack: error.stack,
+          toString: error.toString()
         });
         
-        // Check if function doesn't exist (not deployed)
-        const isFunctionNotFound = error.code === 'functions/not-found' || 
-                                    error.code === 'functions/unavailable' ||
-                                    error.message?.includes('not found') ||
-                                    error.message?.includes('not-found') ||
-                                    error.message?.includes('not deployed') ||
-                                    error.message?.includes('UNAVAILABLE');
+        // Check for various error conditions
+        const errorCode = error.code || '';
+        const errorMessage = error.message || '';
+        
+        const isFunctionNotFound = 
+          errorCode === 'functions/not-found' || 
+          errorCode === 'functions/unavailable' ||
+          errorCode === 'not-found' ||
+          errorMessage.includes('not found') ||
+          errorMessage.includes('not-found') ||
+          errorMessage.includes('not deployed') ||
+          errorMessage.includes('UNAVAILABLE') ||
+          errorMessage.includes('Function not found');
+        
+        const isAuthError = 
+          errorCode === 'functions/unauthenticated' ||
+          errorCode === 'functions/permission-denied' ||
+          errorMessage.includes('permission') ||
+          errorMessage.includes('authentication');
+        
+        const isConfigError = 
+          errorCode === 'functions/failed-precondition' ||
+          errorMessage.includes('SMTP configuration') ||
+          errorMessage.includes('smtp.user') ||
+          errorMessage.includes('smtp.password');
+        
+        // Build user-friendly error message
+        let userMessage = 'Email sending failed';
+        if (isFunctionNotFound) {
+          userMessage = 'Cloud Functions are not deployed. Please deploy Firebase Cloud Functions to enable email sending.';
+        } else if (isAuthError) {
+          userMessage = 'Authentication failed. Please ensure you are logged in as an admin.';
+        } else if (isConfigError) {
+          userMessage = 'SMTP configuration is missing. Please configure email settings in Firebase Functions.';
+        } else if (errorMessage.includes('timeout')) {
+          userMessage = 'Email sending timed out. Please try again or check your network connection.';
+        } else if (errorMessage) {
+          userMessage = `Email sending failed: ${errorMessage}`;
+        } else {
+          userMessage = `Email sending failed: ${errorCode || 'Unknown error'}`;
+        }
         
         // Don't fail vendor creation if email fails
         // Throw error with password info so UI can display it
-        const errorMessage = isFunctionNotFound 
-          ? 'Cloud Functions are not deployed. Please deploy Firebase Cloud Functions to enable email sending.'
-          : `Email sending failed: ${error.message || 'Unknown error'}`;
-        
-        const emailError = new Error(`Vendor created successfully, but ${errorMessage}`) as any;
+        const emailError = new Error(`Vendor created successfully, but ${userMessage}`) as any;
         emailError.vendorCreated = true;
         emailError.vendorId = vendorRef.id;
         emailError.password = vendorData.password;
         emailError.email = emailToSend;
         emailError.isFunctionNotFound = isFunctionNotFound;
+        emailError.originalError = error;
         throw emailError;
       }
     }
