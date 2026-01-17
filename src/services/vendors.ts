@@ -178,6 +178,22 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
         console.log('Calling HTTP function with CORS:', httpFunctionUrl);
         
         try {
+          // First, test if the function is available with an OPTIONS request
+          const optionsResponse = await fetch(httpFunctionUrl, {
+            method: 'OPTIONS',
+            headers: {
+              'Origin': window.location.origin,
+              'Access-Control-Request-Method': 'POST',
+              'Access-Control-Request-Headers': 'Content-Type',
+            },
+          });
+          
+          console.log('OPTIONS preflight response:', {
+            status: optionsResponse.status,
+            headers: Object.fromEntries(optionsResponse.headers.entries())
+          });
+          
+          // Now make the actual POST request
           const response = await fetch(httpFunctionUrl, {
             method: 'POST',
             headers: {
@@ -199,20 +215,26 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
           const result = await response.json();
           console.log('Vendor password email sent successfully via HTTP function:', result);
         } catch (httpError: any) {
-          // If HTTP function fails (might not be deployed), try callable function as fallback
+          // If HTTP function fails (might not be deployed or CORS issue), try callable function as fallback
           console.warn('HTTP function failed, trying callable function:', httpError.message);
           
-          const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail', {
-            timeout: 30000
-          });
-          
-          const result = await sendVendorPasswordEmail({
-            email: emailToSend,
-            password: vendorData.password,
-            vendorName: vendorData.vendorName,
-          });
-          
-          console.log('Vendor password email sent successfully via callable function:', result);
+          try {
+            const sendVendorPasswordEmail = httpsCallable(functions, 'sendVendorPasswordEmail', {
+              timeout: 30000
+            });
+            
+            const result = await sendVendorPasswordEmail({
+              email: emailToSend,
+              password: vendorData.password,
+              vendorName: vendorData.vendorName,
+            });
+            
+            console.log('Vendor password email sent successfully via callable function:', result);
+          } catch (callableError: any) {
+            // Both functions failed - this is likely a deployment issue
+            console.error('Both HTTP and callable functions failed:', callableError);
+            throw httpError; // Throw the original HTTP error
+          }
         }
       } catch (error: any) {
         console.error('Failed to send vendor password email:', error);
