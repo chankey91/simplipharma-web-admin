@@ -140,8 +140,16 @@ export const VendorsPage: React.FC = () => {
     }
 
     // Email is optional, but if provided should be valid
-    if (formData.email && !formData.email.includes('@')) {
+    const trimmedEmail = formData.email?.trim() || '';
+    if (trimmedEmail && !trimmedEmail.includes('@')) {
       setError('Please enter a valid email address or leave it empty');
+      return;
+    }
+    
+    // Basic email validation regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (trimmedEmail && !emailRegex.test(trimmedEmail)) {
+      setError('Please enter a valid email address (e.g., vendor@example.com)');
       return;
     }
 
@@ -175,8 +183,9 @@ export const VendorsPage: React.FC = () => {
     if (formData.contactPerson && formData.contactPerson.trim() !== '') {
       vendorData.contactPerson = formData.contactPerson;
     }
-    if (formData.email && formData.email.trim() !== '') {
-      vendorData.email = formData.email;
+    // Use the already-trimmed email from validation above
+    if (trimmedEmail && trimmedEmail !== '') {
+      vendorData.email = trimmedEmail;
     }
     if (formData.address && formData.address.trim() !== '') {
       vendorData.address = formData.address;
@@ -208,10 +217,30 @@ export const VendorsPage: React.FC = () => {
           ...vendorDataWithPassword,
           password: '***' // Don't log actual password
         });
+        
+        // Check if email is provided for new vendor (reuse trimmedEmail from validation above)
+        if (!trimmedEmail) {
+          const confirmNoEmail = window.confirm(
+            'No email address provided. The vendor password will not be sent automatically.\n\n' +
+            'Password: ' + generatedPassword + '\n\n' +
+            'Please share this password with the vendor manually.\n\n' +
+            'Continue with vendor creation?'
+          );
+          if (!confirmNoEmail) {
+            return; // User cancelled
+          }
+        }
+        
         await createVendorMutation.mutateAsync(vendorDataWithPassword as Omit<Vendor, 'id'> & { password?: string });
         setOpenDialog(false);
         setGeneratedPassword(''); // Clear password after successful creation
-        // Success message is shown in the catch block if email fails, or silently succeeds if email is sent
+        
+        // Show success message if email was sent successfully
+        if (trimmedEmail) {
+          alert('Vendor created successfully! ✅\n\nPassword email has been sent to: ' + trimmedEmail);
+        } else {
+          alert('Vendor created successfully! ✅\n\n⚠️ No email provided - password was not sent.\n\nPassword: ' + generatedPassword + '\n\nPlease share this password with the vendor manually.');
+        }
       }
     } catch (error: any) {
       console.error('Vendor creation error:', error);
@@ -362,7 +391,8 @@ export const VendorsPage: React.FC = () => {
                   type="email"
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  helperText="Optional"
+                  helperText="Optional - Password will be sent to this email if provided"
+                  placeholder="vendor@example.com"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
