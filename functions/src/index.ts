@@ -1,8 +1,20 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
+import * as cors from 'cors';
 
 admin.initializeApp();
+
+// CORS configuration - allow requests from your domain
+const corsHandler = cors({
+  origin: [
+    'https://simplipharma.sanchet.in',
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://localhost:8085',
+  ],
+  credentials: true,
+});
 
 // SMTP Configuration
 const getTransporter = () => {
@@ -32,8 +44,99 @@ const getTransporter = () => {
 };
 
 /**
+ * Send password email to vendor (HTTP version with CORS)
+ * Alternative to callable function with explicit CORS handling
+ */
+export const sendVendorPasswordEmailHttp = functions.https.onRequest(async (req, res) => {
+  // Handle CORS preflight
+  corsHandler(req, res, async () => {
+    // Only allow POST requests
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
+
+    try {
+      const { email, password, vendorName, authToken } = req.body;
+
+      // Verify authentication token
+      if (!authToken) {
+        res.status(401).json({ error: 'Authentication token required' });
+        return;
+      }
+
+      let decodedToken;
+      try {
+        decodedToken = await admin.auth().verifyIdToken(authToken);
+      } catch (error: any) {
+        console.error('Token verification failed:', error);
+        res.status(401).json({ error: 'Invalid authentication token' });
+        return;
+      }
+
+      // Check if user is admin
+      const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
+      
+      if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
+        res.status(403).json({ error: 'Admin access required' });
+        return;
+      }
+
+      if (!email || !password || !vendorName) {
+        res.status(400).json({ error: 'Email, password, and vendorName are required' });
+        return;
+      }
+
+      // Check SMTP configuration
+      const smtpConfig = functions.config().smtp;
+      if (!smtpConfig || !smtpConfig.user || !smtpConfig.password) {
+        res.status(500).json({ error: 'SMTP configuration not found' });
+        return;
+      }
+
+      const transporter = getTransporter();
+      await transporter.verify();
+
+      const mailOptions = {
+        from: smtpConfig.user,
+        to: email,
+        subject: 'Your SimpliPharma Vendor Account',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
+            <p>Your vendor account has been created successfully.</p>
+            <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p><strong>Vendor Name:</strong> ${vendorName}</p>
+              <p><strong>Email:</strong> ${email}</p>
+              <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
+            </div>
+            <p><strong>Important:</strong> Please keep this password secure and change it after your first login.</p>
+            <p>If you have any questions, please contact support.</p>
+            <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+            <p style="color: #666; font-size: 12px;">This is an automated message. Please do not reply.</p>
+          </div>
+        `,
+      };
+
+      const result = await transporter.sendMail(mailOptions);
+      
+      res.status(200).json({
+        success: true,
+        message: 'Password email sent successfully',
+        messageId: result.messageId
+      });
+    } catch (error: any) {
+      console.error('Error sending vendor password email:', error);
+      res.status(500).json({ 
+        error: error.message || 'Failed to send email' 
+      });
+    }
+  });
+});
+
+/**
  * Send password email to vendor
- * Called when a new vendor is created
+ * Called when a new vendor is created (Callable function - preferred)
  */
 export const sendVendorPasswordEmail = functions.https.onCall(async (data, context) => {
   try {
