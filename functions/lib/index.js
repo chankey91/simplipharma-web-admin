@@ -8,8 +8,9 @@ admin.initializeApp();
 // Helper function to set CORS headers
 const setCorsHeaders = (res) => {
     res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Access-Control-Max-Age', '3600');
 };
 // SMTP Configuration
@@ -42,13 +43,14 @@ const getTransporter = () => {
  */
 exports.sendVendorPasswordEmailHttp = functions.https.onRequest(async (req, res) => {
     var _a;
-    // Set CORS headers for all requests
-    setCorsHeaders(res);
-    // Handle CORS preflight (OPTIONS request)
+    // Handle CORS preflight (OPTIONS request) FIRST - before anything else
     if (req.method === 'OPTIONS') {
+        setCorsHeaders(res);
         res.status(204).send('');
         return;
     }
+    // Set CORS headers for all other requests
+    setCorsHeaders(res);
     // Only allow POST requests
     if (req.method !== 'POST') {
         res.status(405).json({ error: 'Method not allowed' });
