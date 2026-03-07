@@ -103,6 +103,8 @@ export interface Order {
   paymentStatus?: PaymentStatus;
   paidAmount?: number;
   dueAmount?: number;
+  paymentMethod?: PaymentMethod; // Cash or Online when payment collected
+  transactionId?: string; // For online/bank payments
   payments?: Payment[];
   timeline: OrderTimelineEvent[];
   // NEW: Dispatch fields
@@ -120,7 +122,7 @@ export interface Order {
 }
 
 export type PaymentStatus = 'Paid' | 'Unpaid' | 'Partial';
-export type PaymentMethod = 'Cash' | 'Card' | 'UPI' | 'Bank Transfer' | 'Cheque';
+export type PaymentMethod = 'Cash' | 'Online' | 'Card' | 'UPI' | 'Bank Transfer' | 'Cheque';
 
 export interface Payment {
   id: string;
@@ -130,13 +132,15 @@ export interface Payment {
   paymentMethod: PaymentMethod;
   notes?: string;
   collectedBy?: string;
+  transactionId?: string; // For online payments
 }
 
 export interface User {
   id: string;
   uid: string;
   email: string;
-  role?: 'retailer' | 'admin';
+  role?: 'retailer' | 'admin' | 'salesOfficer';
+  salesOfficerId?: string; // For retailers: which Sales Officer manages them
   displayName?: string;
   phoneNumber?: string;
   address?: string;

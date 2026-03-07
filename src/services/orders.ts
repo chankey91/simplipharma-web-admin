@@ -1,4 +1,5 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
+import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
@@ -554,20 +555,34 @@ export const updatePaymentStatus = async (
   orderId: string,
   paymentStatus: 'Paid' | 'Unpaid' | 'Partial',
   paidAmount?: number,
-  totalAmount?: number
+  totalAmount?: number,
+  paymentMethod?: 'Cash' | 'Online',
+  transactionId?: string
 ) => {
   const orderRef = doc(db, 'orders', orderId);
   const updateData: any = {
     paymentStatus,
   };
-  
+
   if (paidAmount !== undefined) {
     updateData.paidAmount = paidAmount;
   }
-  
+
   if (totalAmount !== undefined) {
     updateData.dueAmount = totalAmount - (paidAmount || 0);
   }
-  
+
+  if (paymentMethod) {
+    updateData.paymentMethod = paymentMethod;
+  }
+
+  if (transactionId !== undefined) {
+    updateData.transactionId = transactionId || null;
+  }
+  if (paymentStatus === 'Unpaid') {
+    updateData.transactionId = deleteField();
+    updateData.paymentMethod = deleteField();
+  }
+
   await updateDoc(orderRef, updateData);
 };

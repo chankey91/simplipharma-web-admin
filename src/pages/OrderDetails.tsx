@@ -31,6 +31,9 @@ import {
   FormControl,
   InputLabel,
   Select,
+  ToggleButtonGroup,
+  ToggleButton,
+  InputAdornment,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -41,9 +44,14 @@ import {
   Print,
   Receipt,
   Edit,
+  Assignment,
+  Payment,
+  AttachMoney,
 } from '@mui/icons-material';
+import { useQueryClient } from '@tanstack/react-query';
 import { useOrder, useUpdateOrderStatus, useFulfillOrder, useUpdateOrderDispatch, useMarkOrderDelivered, useCancelOrder, useUpdatePaymentStatus } from '../hooks/useOrders';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
+import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
 import { format } from 'date-fns';
 import { auth, doc, updateDoc, db } from '../services/firebase';
 import { Loading } from '../components/Loading';
@@ -57,8 +65,12 @@ const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit'
 export const OrderDetailsPage: React.FC = () => {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: order, isLoading } = useOrder(orderId || '');
   const { data: medicines } = useMedicines();
+  const { data: trays } = useTrays();
+  const { data: operators } = useOperators();
+  const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
   
   const fulfillOrderMutation = useFulfillOrder();
   const dispatchOrderMutation = useUpdateOrderDispatch();
@@ -86,6 +98,11 @@ export const OrderDetailsPage: React.FC = () => {
   const [trayNumber, setTrayNumber] = useState('');
   const [processedBy, setProcessedBy] = useState('');
   const [selectedBatch, setSelectedBatch] = useState<string>('');
+  
+  const currentOrderTray = order?.trayNumber || trayNumber;
+  const availableTrays = trays?.filter(
+    (t) => !traysInUse.includes(t.name) || t.name === currentOrderTray
+  ) ?? [];
   const [addMedicineDialog, setAddMedicineDialog] = useState(false);
   const [newMedicineData, setNewMedicineData] = useState({
     name: '',
@@ -130,6 +147,13 @@ export const OrderDetailsPage: React.FC = () => {
 
   const [cancelReason, setCancelReason] = useState('');
   const [partialPaymentAmount, setPartialPaymentAmount] = useState<string>('');
+  const [paymentDialog, setPaymentDialog] = useState<{
+    open: boolean;
+    amount: string;
+    method: 'Cash' | 'Online';
+    isFull: boolean;
+    transactionId: string;
+  }>({ open: false, amount: '', method: 'Cash', isFull: true, transactionId: '' });
   const [dispatchInfo, setDispatchInfo] = useState({
     trackingNumber: '',
     courierName: '',
@@ -400,8 +424,8 @@ export const OrderDetailsPage: React.FC = () => {
             taxPercentage: taxPercentage,
             taxAmount,
             totalAmount,
-            trayNumber: trayNumber.trim() || undefined,
-            processedBy: processedBy.trim() || undefined
+            trayNumber: (trayNumber || order?.trayNumber || '').trim() || undefined,
+            processedBy: (processedBy || order?.processedBy || '').trim() || undefined
           }
         });
         alert('Order fulfilled successfully!');
@@ -461,11 +485,12 @@ export const OrderDetailsPage: React.FC = () => {
       // If both are empty, still save to mark as "acknowledged"
       if (Object.keys(updateData).length > 0) {
         await updateDoc(orderRef, updateData);
+        queryClient.invalidateQueries({ queryKey: ['traysInUse'] });
+        queryClient.invalidateQueries({ queryKey: ['order', trayNumberDialog.orderId] });
       }
       
       setTrayNumberDialog({ open: false, orderId: null });
-      setTrayNumber('');
-      setProcessedBy('');
+      // Keep trayNumber and processedBy in state for use when fulfilling
       
       if (order?.status === 'Pending') {
         alert('Tray number and processor information saved successfully!');
@@ -1242,74 +1267,51 @@ export const OrderDetailsPage: React.FC = () => {
                 <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
                   <strong>Address:</strong> {order.deliveryAddress || 'No address provided'}
                 </Typography>
-                <Box display="flex" alignItems="center" gap={1}>
-                  <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
-                    <strong>Payment:</strong>
-                  </Typography>
-                  <FormControl size="small" sx={{ minWidth: 100 }}>
-                    <Select
-                      value={order.paymentStatus || 'Unpaid'}
-                      onChange={(e) => {
-                        const newStatus = e.target.value as 'Paid' | 'Unpaid' | 'Partial';
-                        if (newStatus === 'Partial') {
-                          const defaultAmount = order.paidAmount !== undefined 
-                            ? order.paidAmount 
-                            : (order.totalAmount * 0.5);
-                          setPartialPaymentAmount(defaultAmount.toFixed(2));
-                          updatePaymentStatusMutation.mutate({
-                            orderId: order.id,
-                            paymentStatus: 'Partial',
-                            paidAmount: defaultAmount,
-                            totalAmount: order.totalAmount,
-                          });
-                        } else {
-                          updatePaymentStatusMutation.mutate({
-                            orderId: order.id,
-                            paymentStatus: newStatus,
-                            paidAmount: newStatus === 'Paid' ? order.totalAmount : 0,
-                            totalAmount: order.totalAmount,
-                          });
-                          setPartialPaymentAmount('');
-                        }
-                      }}
-                      sx={{ fontSize: '0.75rem', height: '28px' }}
-                    >
-                      <MenuItem value="Unpaid" sx={{ fontSize: '0.75rem' }}>Unpaid</MenuItem>
-                      <MenuItem value="Partial" sx={{ fontSize: '0.75rem' }}>Partial</MenuItem>
-                      <MenuItem value="Paid" sx={{ fontSize: '0.75rem' }}>Paid</MenuItem>
-                    </Select>
-                  </FormControl>
-                  {order.paymentStatus === 'Partial' && (
-                    <TextField
-                      label="Partial Amount"
-                      type="number"
-                      value={partialPaymentAmount}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setPartialPaymentAmount(value);
-                        const paidAmount = parseFloat(value) || 0;
-                        const totalAmount = order.totalAmount || 0;
-                        if (paidAmount > 0 && paidAmount <= totalAmount) {
-                          updatePaymentStatusMutation.mutate({
-                            orderId: order.id,
-                            paymentStatus: 'Partial',
-                            paidAmount: paidAmount,
-                            totalAmount: totalAmount,
-                          });
-                        }
-                      }}
-                      InputProps={{ 
-                        startAdornment: <Typography sx={{ mr: 0.5, fontSize: '0.75rem' }}>₹</Typography>,
-                        inputProps: { min: 0, max: order.totalAmount || 0, step: 0.01, style: { fontSize: '0.75rem', padding: '6px' } }
-                      }}
-                      size="small"
-                      sx={{ width: 120 }}
-                    />
-                  )}
-                </Box>
+                <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+                  <strong>Payment:</strong>{' '}
+                  <Chip
+                    size="small"
+                    label={`${order.paymentStatus || 'Unpaid'}${order.paymentMethod ? ` · ${order.paymentMethod}` : ''}`}
+                    color={
+                      order.paymentStatus === 'Paid' ? 'success' :
+                      order.paymentStatus === 'Partial' ? 'warning' : 'default'
+                    }
+                    sx={{ height: 20, fontSize: '0.7rem' }}
+                  />
+                </Typography>
               </Box>
             </CardContent>
           </Card>
+
+          {/* Tray & Operator - Display and option to assign/change (for Pending and Order Fulfillment) */}
+          {order.status !== 'Cancelled' && order.status !== 'Delivered' && (
+            <Card sx={{ mb: 2, p: 1 }}>
+              <CardContent sx={{ p: '8px !important', '&:last-child': { pb: '8px' } }}>
+                <Box display="flex" alignItems="center" flexWrap="wrap" gap={2}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mr: 1 }}>Order Processing:</Typography>
+                  <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+                    <strong>Tray:</strong> {order.trayNumber || trayNumber || 'Not assigned'}
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+                    <strong>Processed By:</strong> {order.processedBy || processedBy || 'Not assigned'}
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<Edit />}
+                    onClick={() => {
+                      setTrayNumber(order.trayNumber || trayNumber || '');
+                      setProcessedBy(order.processedBy || processedBy || '');
+                      setTrayNumberDialog({ open: true, orderId: order.id });
+                    }}
+                    sx={{ ml: 1 }}
+                  >
+                    {(order.trayNumber || order.processedBy || trayNumber || processedBy) ? 'Change' : 'Assign'}
+                  </Button>
+                </Box>
+              </CardContent>
+            </Card>
+          )}
         </Grid>
 
         {/* Order Items & Fulfillment */}
@@ -1773,14 +1775,96 @@ export const OrderDetailsPage: React.FC = () => {
               <Typography variant="h6">Total:</Typography>
               <Typography variant="h6">₹{grandTotal.toFixed(2)}</Typography>
             </Box>
-            <Chip
-              label={order.paymentStatus || 'Unpaid'}
-              color={
-                order.paymentStatus === 'Paid' ? 'success' :
-                order.paymentStatus === 'Partial' ? 'warning' : 'error'
-              }
-              sx={{ width: '100%', mb: 2 }}
-            />
+
+            {/* Payment Collection Card - Redesigned */}
+            <Card sx={{ mt: 2, border: '1px solid', borderColor: 'divider', borderLeft: 4, borderLeftColor: (order.paymentStatus === 'Paid' ? 'success.main' : order.paymentStatus === 'Partial' ? 'warning.main' : 'error.main') }}>
+              <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                  <Typography variant="subtitle1" fontWeight="600">Payment</Typography>
+                  <Chip
+                    size="small"
+                    label={order.paymentStatus || 'Unpaid'}
+                    color={
+                      order.paymentStatus === 'Paid' ? 'success' :
+                      order.paymentStatus === 'Partial' ? 'warning' : 'error'
+                    }
+                  />
+                </Box>
+
+                {/* Payment summary */}
+                <Box sx={{ bgcolor: 'action.hover', borderRadius: 1, p: 1.5, mb: 2 }}>
+                  <Box display="flex" justifyContent="space-between" mb={0.5}>
+                    <Typography variant="body2" color="textSecondary">Order Total</Typography>
+                    <Typography variant="body2" fontWeight="bold">₹{order.totalAmount?.toFixed(2) || grandTotal.toFixed(2)}</Typography>
+                  </Box>
+                  <Box display="flex" justifyContent="space-between" mb={0.5}>
+                    <Typography variant="body2" color="textSecondary">Paid</Typography>
+                    <Typography variant="body2" color="success.main">₹{(order.paidAmount ?? 0).toFixed(2)}</Typography>
+                  </Box>
+                  <Box display="flex" justifyContent="space-between">
+                    <Typography variant="body2" color="textSecondary">Due</Typography>
+                    <Typography variant="body2" fontWeight="bold" color={(order.dueAmount ?? (order.totalAmount || 0) - (order.paidAmount ?? 0)) > 0 ? 'error.main' : 'success.main'}>
+                      ₹{((order.dueAmount ?? (order.totalAmount || 0) - (order.paidAmount ?? 0)) || 0).toFixed(2)}
+                    </Typography>
+                  </Box>
+                  {order.paymentMethod && (
+                    <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+                      Method: {order.paymentMethod}
+                    </Typography>
+                  )}
+                  {order.transactionId && (
+                    <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+                      Txn ID: {order.transactionId}
+                    </Typography>
+                  )}
+                </Box>
+
+                {/* Actions - only when dispatched */}
+                {(order.status === 'In Transit' || order.status === 'Delivered') && (
+                  <>
+                    {(order.paymentStatus === 'Unpaid' || !order.paymentStatus || order.paymentStatus === 'Partial') ? (
+                      <Button
+                        fullWidth
+                        variant="contained"
+                        color="primary"
+                        startIcon={<Payment />}
+                        onClick={() => {
+                          const total = order.totalAmount || 0;
+                          const paid = order.paidAmount ?? 0;
+                          const due = total - paid;
+                          setPaymentDialog({
+                            open: true,
+                            amount: String(due > 0 ? due : total),
+                            method: (order.paymentMethod === 'Cash' || order.paymentMethod === 'Online' ? order.paymentMethod : 'Cash') as 'Cash' | 'Online',
+                            isFull: due >= total - 0.01,
+                            transactionId: order.transactionId || '',
+                          });
+                        }}
+                        sx={{ mb: 1 }}
+                      >
+                        Record Payment
+                      </Button>
+                    ) : (
+                      <Button
+                        fullWidth
+                        variant="outlined"
+                        size="small"
+                        color="inherit"
+                        onClick={() => updatePaymentStatusMutation.mutate({
+                          orderId: order.id,
+                          paymentStatus: 'Unpaid',
+                          paidAmount: 0,
+                          totalAmount: order.totalAmount,
+                        })}
+                        disabled={updatePaymentStatusMutation.isPending}
+                      >
+                        Mark Unpaid
+                      </Button>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
           </Paper>
         </Grid>
 
@@ -1938,41 +2022,54 @@ export const OrderDetailsPage: React.FC = () => {
                 Order has been fulfilled successfully. Please enter the tray number and processor name.
               </Alert>
             )}
-            <TextField
-              fullWidth
-              label="Tray Number"
-              margin="normal"
-              value={trayNumber}
-              onChange={(e) => setTrayNumber(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  // Move focus to next field or save
-                  const nextInput = e.currentTarget.parentElement?.querySelector('input[type="text"]:not([value=""])') as HTMLInputElement;
-                  if (nextInput) {
-                    nextInput.focus();
-                  } else {
-                    handleSaveTrayNumber();
-                  }
-                }
-              }}
-              autoFocus
-              placeholder="Enter tray number (optional)"
-              helperText="Enter the tray number for this order"
-            />
-            <TextField
-              fullWidth
-              label="Processed By"
-              margin="normal"
-              value={processedBy}
-              onChange={(e) => setProcessedBy(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  handleSaveTrayNumber();
-                }
-              }}
-              placeholder="Enter name of person processing the order (optional)"
-              helperText="Enter the name of the person who processed this order"
-            />
+            <FormControl fullWidth margin="normal">
+              <InputLabel>Tray Number</InputLabel>
+              <Select
+                value={trayNumber}
+                label="Tray Number"
+                onChange={(e) => setTrayNumber(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSaveTrayNumber()}
+              >
+                <MenuItem value="">
+                  <em>Select tray (optional)</em>
+                </MenuItem>
+                {trayNumber && !availableTrays.some((t) => t.name === trayNumber) && (
+                  <MenuItem value={trayNumber}>{trayNumber}</MenuItem>
+                )}
+                {availableTrays.map((tray) => (
+                  <MenuItem key={tray.id} value={tray.name}>
+                    {tray.name}
+                  </MenuItem>
+                ))}
+              </Select>
+              <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+                Add more trays in Operations → Tray Numbers. Trays assigned to Pending or In-Fulfillment orders are hidden until dispatched.
+              </Typography>
+            </FormControl>
+            <FormControl fullWidth margin="normal">
+              <InputLabel>Processed By</InputLabel>
+              <Select
+                value={processedBy}
+                label="Processed By"
+                onChange={(e) => setProcessedBy(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSaveTrayNumber()}
+              >
+                <MenuItem value="">
+                  <em>Select operator (optional)</em>
+                </MenuItem>
+                {processedBy && !operators?.some((o) => o.name === processedBy) && (
+                  <MenuItem value={processedBy}>{processedBy}</MenuItem>
+                )}
+                {operators?.map((op) => (
+                  <MenuItem key={op.id} value={op.name}>
+                    {op.name}
+                  </MenuItem>
+                ))}
+              </Select>
+              <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5 }}>
+                Add more operators in Operations → Operators
+              </Typography>
+            </FormControl>
           </Box>
         </DialogContent>
         <DialogActions>
@@ -1989,6 +2086,109 @@ export const OrderDetailsPage: React.FC = () => {
             onClick={handleSaveTrayNumber}
           >
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Record Payment Dialog */}
+      <Dialog
+        open={paymentDialog.open}
+        onClose={() => setPaymentDialog({ ...paymentDialog, open: false, transactionId: '' })}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 2 } }}
+      >
+        <DialogTitle sx={{ pb: 0 }}>Record Payment</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <TextField
+              fullWidth
+              label="Amount"
+              type="number"
+              value={paymentDialog.amount}
+              onChange={(e) => setPaymentDialog({ ...paymentDialog, amount: e.target.value })}
+              InputProps={{
+                startAdornment: <InputAdornment position="start">₹</InputAdornment>,
+                inputProps: { min: 0, max: order?.totalAmount || 0, step: 0.01 }
+              }}
+              helperText={`Order total: ₹${(order?.totalAmount || 0).toFixed(2)}`}
+              sx={{ mb: 2 }}
+            />
+            <Typography variant="subtitle2" color="textSecondary" gutterBottom sx={{ mb: 1 }}>
+              Payment method
+            </Typography>
+            <ToggleButtonGroup
+              value={paymentDialog.method}
+              exclusive
+              onChange={(_, val) => val && setPaymentDialog({ ...paymentDialog, method: val })}
+              fullWidth
+              sx={{ mb: 1 }}
+            >
+              <ToggleButton value="Cash" sx={{ py: 1.25 }}>
+                <AttachMoney sx={{ mr: 0.5, fontSize: 18 }} /> Cash
+              </ToggleButton>
+              <ToggleButton value="Online" sx={{ py: 1.25 }}>
+                <Payment sx={{ mr: 0.5, fontSize: 18 }} /> Online
+              </ToggleButton>
+            </ToggleButtonGroup>
+            {paymentDialog.method === 'Online' && (
+              <TextField
+                fullWidth
+                label="Transaction ID"
+                placeholder="e.g. UPI ref, bank transfer ref"
+                value={paymentDialog.transactionId}
+                onChange={(e) => setPaymentDialog({ ...paymentDialog, transactionId: e.target.value })}
+                helperText="Optional - for UPI, bank transfer, or card payment reference"
+                sx={{ mb: 2 }}
+              />
+            )}
+            <Box display="flex" gap={1} mt={2}>
+              <Button
+                fullWidth
+                variant="outlined"
+                size="small"
+                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String(order?.totalAmount || 0), isFull: true })}
+              >
+                Full amount
+              </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                size="small"
+                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String((order?.totalAmount || 0) * 0.5), isFull: false })}
+              >
+                50%
+              </Button>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPaymentDialog({ open: false, amount: '', method: 'Cash', isFull: true, transactionId: '' })}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="primary"
+            disabled={
+              !paymentDialog.amount ||
+              parseFloat(paymentDialog.amount) <= 0 ||
+              parseFloat(paymentDialog.amount) > (order?.totalAmount || 0) ||
+              updatePaymentStatusMutation.isPending
+            }
+            onClick={() => {
+              const amount = parseFloat(paymentDialog.amount) || 0;
+              const total = order?.totalAmount || 0;
+              const isPaid = Math.abs(amount - total) < 0.01;
+              updatePaymentStatusMutation.mutate({
+                orderId: order!.id,
+                paymentStatus: isPaid ? 'Paid' : 'Partial',
+                paidAmount: amount,
+                totalAmount: total,
+                paymentMethod: paymentDialog.method,
+                transactionId: paymentDialog.method === 'Online' ? paymentDialog.transactionId : undefined,
+              });
+              setPaymentDialog({ open: false, amount: '', method: 'Cash', isFull: true, transactionId: '' });
+            }}
+          >
+            {updatePaymentStatusMutation.isPending ? <CircularProgress size={24} /> : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>

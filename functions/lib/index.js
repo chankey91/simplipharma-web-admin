@@ -1,6 +1,17 @@
 "use strict";
+var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
+exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
@@ -250,6 +261,82 @@ exports.sendVendorPasswordEmail = functions.https.onCall(async (data, context) =
             errorMessage = error.message;
         }
         throw new functions.https.HttpsError('internal', errorMessage);
+    }
+});
+/**
+ * Create store/retailer or sales officer user (Firebase Auth + Firestore)
+ */
+exports.createStoreUser = functions.https.onCall(async (data, context) => {
+    var _a;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+    const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
+    if (!userDoc.exists || ((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.role) !== 'admin') {
+        throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+    }
+    const { email, password, storeData } = data || {};
+    if (!email || !password) {
+        throw new functions.https.HttpsError('invalid-argument', 'Email and password are required');
+    }
+    const role = (storeData === null || storeData === void 0 ? void 0 : storeData.role) || 'retailer';
+    const displayName = (storeData === null || storeData === void 0 ? void 0 : storeData.displayName) || (storeData === null || storeData === void 0 ? void 0 : storeData.shopName) || email;
+    try {
+        const userRecord = await admin.auth().createUser({
+            email,
+            password,
+            displayName: displayName,
+            emailVerified: false,
+            disabled: false,
+        });
+        const _b = storeData || {}, { role: _r } = _b, restStoreData = __rest(_b, ["role"]);
+        // Firestore rejects undefined - strip them
+        const cleanData = {};
+        for (const [k, v] of Object.entries(restStoreData)) {
+            if (v !== undefined)
+                cleanData[k] = v;
+        }
+        cleanData.uid = userRecord.uid;
+        cleanData.email = email;
+        cleanData.role = role;
+        cleanData.mustResetPassword = true;
+        cleanData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+        cleanData.isActive = (storeData === null || storeData === void 0 ? void 0 : storeData.isActive) !== false;
+        await admin.firestore().collection('users').doc(userRecord.uid).set(cleanData);
+        // Send password email if SMTP configured
+        let emailSent = false;
+        try {
+            const smtpConfig = functions.config().smtp;
+            if ((smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) && (smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
+                const transporter = getTransporter();
+                await transporter.sendMail({
+                    from: smtpConfig.user,
+                    to: email,
+                    subject: role === 'salesOfficer' ? 'Your SimpliPharma Sales Officer Account' : 'Your SimpliPharma Store Account',
+                    html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
+              <p>Your ${role === 'salesOfficer' ? 'Sales Officer' : 'store'} account has been created.</p>
+              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Email:</strong> ${email}</p>
+                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
+              </div>
+              <p><strong>Important:</strong> Please change your password on first login.</p>
+            </div>
+          `,
+                });
+                emailSent = true;
+            }
+        }
+        catch (emailErr) {
+            console.error('Email send failed:', emailErr === null || emailErr === void 0 ? void 0 : emailErr.message);
+            // Return success with emailSent: false so admin knows to share password manually
+        }
+        return { success: true, uid: userRecord.uid, id: userRecord.uid, emailSent };
+    }
+    catch (error) {
+        console.error('createStoreUser error:', error);
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to create user');
     }
 });
 //# sourceMappingURL=index.js.map

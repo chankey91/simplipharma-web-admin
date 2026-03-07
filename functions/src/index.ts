@@ -276,3 +276,83 @@ export const sendVendorPasswordEmail = functions.https.onCall(async (data, conte
   }
 });
 
+/**
+ * Create store/retailer or sales officer user (Firebase Auth + Firestore)
+ */
+export const createStoreUser = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
+  if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+  }
+
+  const { email, password, storeData } = data || {};
+  if (!email || !password) {
+    throw new functions.https.HttpsError('invalid-argument', 'Email and password are required');
+  }
+
+  const role = storeData?.role || 'retailer';
+  const displayName = storeData?.displayName || storeData?.shopName || email;
+
+  try {
+    const userRecord = await admin.auth().createUser({
+      email,
+      password,
+      displayName: displayName,
+      emailVerified: false,
+      disabled: false,
+    });
+
+    const { role: _r, ...restStoreData } = storeData || {};
+    // Firestore rejects undefined - strip them
+    const cleanData: Record<string, any> = {};
+    for (const [k, v] of Object.entries(restStoreData)) {
+      if (v !== undefined) cleanData[k] = v;
+    }
+    cleanData.uid = userRecord.uid;
+    cleanData.email = email;
+    cleanData.role = role;
+    cleanData.mustResetPassword = true;
+    cleanData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    cleanData.isActive = storeData?.isActive !== false;
+    await admin.firestore().collection('users').doc(userRecord.uid).set(cleanData);
+
+    // Send password email if SMTP configured
+    let emailSent = false;
+    try {
+      const smtpConfig = functions.config().smtp;
+      if (smtpConfig?.user && smtpConfig?.password) {
+        const transporter = getTransporter();
+        await transporter.sendMail({
+          from: smtpConfig.user,
+          to: email,
+          subject: role === 'salesOfficer' ? 'Your SimpliPharma Sales Officer Account' : 'Your SimpliPharma Store Account',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
+              <p>Your ${role === 'salesOfficer' ? 'Sales Officer' : 'store'} account has been created.</p>
+              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Email:</strong> ${email}</p>
+                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
+              </div>
+              <p><strong>Important:</strong> Please change your password on first login.</p>
+            </div>
+          `,
+        });
+        emailSent = true;
+      }
+    } catch (emailErr: any) {
+      console.error('Email send failed:', emailErr?.message);
+      // Return success with emailSent: false so admin knows to share password manually
+    }
+
+    return { success: true, uid: userRecord.uid, id: userRecord.uid, emailSent };
+  } catch (error: any) {
+    console.error('createStoreUser error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create user');
+  }
+});
+

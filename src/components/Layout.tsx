@@ -12,6 +12,8 @@ import {
   Receipt,
   Description,
   Campaign,
+  Group,
+  Settings,
 } from '@mui/icons-material';
 import { logout } from '../services/firebase';
 
@@ -21,9 +23,11 @@ const menuItems = [
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
   { text: 'Vendors', icon: <Business />, path: '/vendors' },
   { text: 'Medical Stores', icon: <Store />, path: '/stores' },
+  { text: 'Sales Officers', icon: <Group />, path: '/sales-officers' },
   { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
   { text: 'Purchases', icon: <Receipt />, path: '/purchases' },
   { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
+  { text: 'Operations', icon: <Settings />, path: '/operations' },
   { text: 'Invoices', icon: <Description />, path: '/invoices' },
   { text: 'Banners', icon: <Campaign />, path: '/banners' },
 ];

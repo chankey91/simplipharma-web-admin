@@ -1,35 +1,43 @@
 # SMTP Credentials Update Instructions
 
-## Current SMTP Credentials
+## Quick Start: Configure SMTP for Email Sending
 
-- **Email:** simplipharma.2025@gmail.com
-- **Password:** yyebnebjqbtuasys (App Password)
+If users are being created but **emails are not being sent**, configure SMTP with these 3 steps:
 
-## How to Update SMTP Credentials in Firebase Cloud Functions
+### Step 1: Set SMTP credentials in Firebase
 
-### Prerequisites
-
-1. Install Firebase CLI (if not already installed):
-   ```bash
-   npm install -g firebase-tools
-   ```
-
-2. Login to Firebase:
-   ```bash
-   firebase login
-   ```
-
-3. Navigate to your project directory (where `firebase.json` exists)
-
-### Update SMTP Credentials
-
-Run the following command to set/update SMTP credentials:
+From your project root (where `firebase.json` exists), run:
 
 ```bash
-firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="yyebnebjqbtuasys"
+firebase functions:config:set smtp.user="YOUR_GMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
 ```
 
-### Verify Configuration
+**Replace:**
+- `YOUR_GMAIL@gmail.com` → Your Gmail address
+- `YOUR_APP_PASSWORD` → Gmail App Password (see Step 2 if you don't have one)
+
+### Step 2: Get Gmail App Password (required for Gmail)
+
+Gmail blocks regular passwords for SMTP. Use an **App Password**:
+
+1. Go to [Google Account](https://myaccount.google.com/) → **Security**
+2. Enable **2-Step Verification** (if not already)
+3. Go to **2-Step Verification** → **App passwords**
+4. Select app: **Mail**, device: **Other** (type "SimpliPharma")
+5. Click **Generate** → Copy the 16-character password
+6. Use this password in the command above (no spaces)
+
+### Step 3: Redeploy Cloud Functions
+
+Config changes only apply after redeploying:
+
+```bash
+firebase deploy --only functions
+```
+
+---
+
+## Verify Configuration
 
 To verify the credentials were set correctly:
 
@@ -40,8 +48,8 @@ firebase functions:config:get
 You should see:
 ```
 smtp:
-  user: "simplipharma.2025@gmail.com"
-  password: "Nitin@2406"
+  user: "your-email@gmail.com"
+  password: "your-app-password"
 ```
 
 ### Important Notes
@@ -72,16 +80,34 @@ After updating credentials and redeploying:
 
 ### Troubleshooting
 
-**Email not sending:**
-- Verify credentials are correct
-- Check if Gmail requires App Password
-- Check Firebase Functions logs for errors
-- Ensure Cloud Functions are deployed
+**"535 Username and Password not accepted" / "BadCredentials":**
 
-**Authentication failed:**
-- Verify email and password are correct
-- For Gmail, ensure "Less secure app access" is enabled OR use App Password
-- Check if account has 2-Step Verification enabled
+This means Gmail is rejecting your App Password. Fix it:
+
+1. **Generate a NEW App Password** (old ones can expire or be revoked):
+   - Go to https://myaccount.google.com/apppasswords
+   - Sign in to simplipharma.2025@gmail.com
+   - If you don't see "App passwords", enable 2-Step Verification first
+   - Click "Select app" → **Mail**
+   - Click "Select device" → **Other** → type "SimpliPharma"
+   - Click **Generate** → Copy the 16-character password (e.g. `abcd efgh ijkl mnop`)
+   - **Remove all spaces** when using in the command: `abcdefghijklmnop`
+
+2. **Update and redeploy:**
+   ```bash
+   firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="NEW_16_CHAR_PASSWORD"
+   firebase deploy --only functions
+   ```
+
+3. **Check logs** after creating a user:
+   ```bash
+   firebase functions:log
+   ```
+
+**Other issues:**
+- Ensure 2-Step Verification is ON (required for App Passwords)
+- Never use your regular Gmail password - only App Passwords work for SMTP
+- If the account was recently created, wait a few hours before using SMTP
 
 ---
 

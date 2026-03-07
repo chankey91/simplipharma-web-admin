@@ -36,7 +36,14 @@ import {
   MyLocation,
   PhotoCamera,
 } from '@mui/icons-material';
+import {
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+} from '@mui/material';
 import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore } from '../hooks/useStores';
+import { getSalesOfficers } from '../services/salesOfficers';
 import { User } from '../types';
 import { Loading } from '../components/Loading';
 
@@ -62,6 +69,7 @@ export const StoresPage: React.FC = () => {
   const [openDialog, setOpenDialog] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState('');
   
+  const [salesOfficers, setSalesOfficers] = useState<User[]>([]);
   const [formData, setFormData] = useState({
     displayName: '',
     shopName: '',
@@ -76,7 +84,8 @@ export const StoresPage: React.FC = () => {
     isActive: true,
     latitude: '',
     longitude: '',
-    shopImage: ''
+    shopImage: '',
+    salesOfficerId: '',
   });
 
   const filteredStores = stores?.filter(store =>
@@ -94,7 +103,7 @@ export const StoresPage: React.FC = () => {
     setPage(value);
   };
 
-  const handleOpenCreate = () => {
+  const handleOpenCreate = async () => {
     setEditingStore(null);
     const newPassword = generatePassword();
     setGeneratedPassword(newPassword);
@@ -112,12 +121,19 @@ export const StoresPage: React.FC = () => {
       isActive: true,
       latitude: '',
       longitude: '',
-      shopImage: ''
+      shopImage: '',
+      salesOfficerId: '',
     });
+    try {
+      const so = await getSalesOfficers();
+      setSalesOfficers(so);
+    } catch {
+      setSalesOfficers([]);
+    }
     setOpenDialog(true);
   };
 
-  const handleOpenEdit = (store: User) => {
+  const handleOpenEdit = async (store: User) => {
     setEditingStore(store);
     setGeneratedPassword('');
     setFormData({
@@ -134,8 +150,15 @@ export const StoresPage: React.FC = () => {
       isActive: store.isActive !== false,
       latitude: store.location?.latitude?.toString() || '',
       longitude: store.location?.longitude?.toString() || '',
-      shopImage: store.shopImage || ''
+      shopImage: store.shopImage || '',
+      salesOfficerId: store.salesOfficerId || '',
     });
+    try {
+      const so = await getSalesOfficers();
+      setSalesOfficers(so);
+    } catch {
+      setSalesOfficers([]);
+    }
     setOpenDialog(true);
   };
 
@@ -185,6 +208,7 @@ export const StoresPage: React.FC = () => {
       gst: formData.gst,
       isActive: formData.isActive,
       shopImage: formData.shopImage,
+      salesOfficerId: formData.salesOfficerId || undefined,
       location: formData.latitude && formData.longitude ? {
         latitude: parseFloat(formData.latitude),
         longitude: parseFloat(formData.longitude)
@@ -202,13 +226,17 @@ export const StoresPage: React.FC = () => {
         // In creation, we'd also include the password to be sent to email
         console.log('Creating store with email:', formData.email, 'Password:', generatedPassword);
         try {
-          await createStoreMutation.mutateAsync({
+          const result = await createStoreMutation.mutateAsync({
             ...storeData,
             initialPassword: generatedPassword // This would be used by a Cloud Function
           });
           
-          // Success - email should have been sent
-          alert(`Store created successfully!\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nAn email with the password has been sent to ${formData.email}. If the email was not received, please share the password above with the store owner.`);
+          const emailSent = result && typeof result === 'object' && 'emailSent' in result && result.emailSent;
+          if (emailSent) {
+            alert(`Store created successfully!\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nAn email with the password has been sent to ${formData.email}.`);
+          } else {
+            alert(`Store created successfully!\n\n⚠️ Email could not be sent (SMTP authentication failed). Please share these credentials with the store owner:\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nTo fix email sending: Generate a new Gmail App Password and run:\nfirebase functions:config:set smtp.password="NEW_APP_PASSWORD"\nfirebase deploy --only functions`);
+          }
         } catch (createError: any) {
           // Check if store was created but email failed
           if (createError.storeCreated) {
@@ -236,7 +264,8 @@ export const StoresPage: React.FC = () => {
         isActive: true,
         latitude: '',
         longitude: '',
-        shopImage: ''
+        shopImage: '',
+        salesOfficerId: '',
       });
       setGeneratedPassword('');
     } catch (error: any) {
@@ -281,6 +310,7 @@ export const StoresPage: React.FC = () => {
               <TableCell>Store Code</TableCell>
               <TableCell>Shop Name</TableCell>
               <TableCell>Owner</TableCell>
+              <TableCell>Sales Officer</TableCell>
               <TableCell>Licence No.</TableCell>
               <TableCell>Contact</TableCell>
               <TableCell>Location</TableCell>
@@ -291,7 +321,7 @@ export const StoresPage: React.FC = () => {
           <TableBody>
             {paginatedStores.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={9} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No stores found</Typography>
                 </TableCell>
               </TableRow>
@@ -410,6 +440,26 @@ export const StoresPage: React.FC = () => {
                   value={formData.ownerName}
                   onChange={(e) => setFormData({ ...formData, ownerName: e.target.value })}
                 />
+              </Grid>
+            </Grid>
+
+            <Grid container spacing={2} mb={3}>
+              <Grid item xs={12}>
+                <FormControl fullWidth>
+                  <InputLabel>Assign to Sales Officer</InputLabel>
+                  <Select
+                    value={formData.salesOfficerId}
+                    label="Assign to Sales Officer"
+                    onChange={(e) => setFormData({ ...formData, salesOfficerId: e.target.value })}
+                  >
+                    <MenuItem value="">Unassigned</MenuItem>
+                    {salesOfficers.map((so: User) => (
+                      <MenuItem key={so.id} value={so.id}>
+                        {so.displayName || so.shopName || so.email}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
               </Grid>
             </Grid>
 

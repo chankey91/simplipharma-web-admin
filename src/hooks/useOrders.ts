@@ -85,6 +85,7 @@ export const useFulfillOrder = () => {
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ['medicines'] }); // Invalidate medicines to reflect stock changes
+      queryClient.invalidateQueries({ queryKey: ['traysInUse'] }); // Refresh tray availability
     }
   });
 };
@@ -100,6 +101,7 @@ export const useUpdateOrderDispatch = () => {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
+      queryClient.invalidateQueries({ queryKey: ['traysInUse'] }); // Refresh tray availability when dispatched
     }
   });
 };
@@ -119,19 +121,23 @@ export const useMarkOrderDelivered = () => {
 
 export const useUpdatePaymentStatus = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: ({ 
-      orderId, 
-      paymentStatus, 
-      paidAmount, 
-      totalAmount 
-    }: { 
-      orderId: string; 
+    mutationFn: ({
+      orderId,
+      paymentStatus,
+      paidAmount,
+      totalAmount,
+      paymentMethod,
+      transactionId,
+    }: {
+      orderId: string;
       paymentStatus: 'Paid' | 'Unpaid' | 'Partial';
       paidAmount?: number;
       totalAmount?: number;
-    }) => updatePaymentStatus(orderId, paymentStatus, paidAmount, totalAmount),
+      paymentMethod?: 'Cash' | 'Online';
+      transactionId?: string;
+    }) => updatePaymentStatus(orderId, paymentStatus, paidAmount, totalAmount, paymentMethod, transactionId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });

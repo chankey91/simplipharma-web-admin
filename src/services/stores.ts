@@ -67,11 +67,15 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
       const result = await createStoreUser({
         email: storeData.email,
         password: storeData.initialPassword,
-        storeData: cleanData,
+        storeData: {
+          ...cleanData,
+          role: 'retailer',
+          salesOfficerId: cleanData.salesOfficerId || undefined,
+        },
       });
       const data = result.data as any;
       cloudFunctionSucceeded = true;
-      return data.uid || data.id;
+      return { uid: data.uid || data.id, emailSent: data.emailSent === true };
     } catch (error: any) {
       // If Cloud Function doesn't exist or fails, fall back to Firestore-only
       const errorMessage = error.message || 'Unknown error';
@@ -113,7 +117,8 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
     role: 'retailer',
     createdAt: Timestamp.now(),
     isActive: cleanStoreData.isActive !== undefined ? cleanStoreData.isActive : true,
-    mustResetPassword: true, // Force password reset on first login
+    mustResetPassword: true,
+    ...(cleanStoreData.salesOfficerId && { salesOfficerId: cleanStoreData.salesOfficerId }),
   };
   
   // Add store code if generated

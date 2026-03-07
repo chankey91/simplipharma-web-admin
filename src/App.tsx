@@ -21,6 +21,8 @@ import { StockUpdatePage } from './pages/StockUpdate';
 import { MedicineDetailsPage } from './pages/MedicineDetails';
 import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
+import { SalesOfficersPage } from './pages/SalesOfficers';
+import { OperationsPage } from './pages/Operations';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -136,6 +138,16 @@ function App() {
                 }
               />
               <Route
+                path="/operations"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <OperationsPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="/purchases"
                 element={
                   <ProtectedRoute>
@@ -211,6 +223,16 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <BannersPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/sales-officers"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <SalesOfficersPage />
                     </Layout>
                   </ProtectedRoute>
                 }

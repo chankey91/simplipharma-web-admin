@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { 
   Box, 
   Button, 
@@ -19,18 +19,21 @@ interface QRCodeScannerProps {
   onScan: (qrCode: string) => void;
 }
 
+const SCANNER_ID = 'qr-code-scanner';
+
 export const QRCodeScanner: React.FC<QRCodeScannerProps> = ({ open, onClose, onScan }) => {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
-  const scannerId = 'qr-code-scanner';
+  const startRequestedRef = useRef(false);
 
   useEffect(() => {
     if (open) {
       checkCameraPermission();
     } else {
       stopScanning();
+      startRequestedRef.current = false;
     }
     
     return () => {
@@ -56,35 +59,72 @@ export const QRCodeScanner: React.FC<QRCodeScannerProps> = ({ open, onClose, onS
       if (!hasPermission) return;
     }
 
-    try {
-      setError(null);
-      setScanning(true);
-      
-      const html5QrCode = new Html5Qrcode(scannerId);
-      scannerRef.current = html5QrCode;
-      
-      await html5QrCode.start(
-        { facingMode: 'environment' },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 },
-          aspectRatio: 1.0
-        },
-        (decodedText) => {
-          onScan(decodedText);
-          stopScanning();
-          onClose();
-        },
-        (errorMessage) => {
-          // Ignore scanning errors (camera is still scanning)
-        }
-      );
-    } catch (err: any) {
-      console.error('Scanner error:', err);
-      setError(err.message || 'Failed to start camera. Please check camera permissions.');
-      setScanning(false);
-    }
+    setError(null);
+    startRequestedRef.current = true;
+    setScanning(true);
   };
+
+  // Start scanner after DOM has updated (div is visible with dimensions)
+  useEffect(() => {
+    if (!open || !scanning || !startRequestedRef.current) return;
+
+    const initScanner = async () => {
+      const element = document.getElementById(SCANNER_ID);
+      if (!element) return;
+
+      try {
+        // Use ZXing decoder - BarcodeDetector API can have QR code issues on some browsers
+        const html5QrCode = new Html5Qrcode(SCANNER_ID, {
+          verbose: false,
+          experimentalFeatures: { useBarCodeDetectorIfSupported: false },
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.ITF,
+          ],
+        });
+        scannerRef.current = html5QrCode;
+
+        // Dynamic qrbox: square for QR codes, uses ~80% of viewport width
+        const qrboxFunction = (viewfinderWidth: number, viewfinderHeight: number) => {
+          const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+          const qrboxSize = Math.floor(minEdge * 0.8);
+          return { width: qrboxSize, height: qrboxSize };
+        };
+
+        await html5QrCode.start(
+          { facingMode: 'environment' },
+          {
+            fps: 15,
+            qrbox: qrboxFunction,
+          },
+          (decodedText) => {
+            console.log('✅ Barcode/QR scanned successfully:', decodedText);
+            onScan(decodedText);
+            stopScanning();
+            onClose();
+          },
+          () => {
+            // Ignore scan failures (continuous scanning)
+          }
+        );
+      } catch (err: any) {
+        console.error('❌ Scanner error:', err);
+        setError(err.message || 'Failed to start camera. Please check camera permissions.');
+        setScanning(false);
+      }
+    };
+
+    // Small delay to ensure the scanner div is visible and has layout
+    const timer = setTimeout(initScanner, 100);
+    return () => clearTimeout(timer);
+  }, [open, scanning, onScan, onClose]);
 
   const stopScanning = () => {
     if (scannerRef.current) {
@@ -107,7 +147,7 @@ export const QRCodeScanner: React.FC<QRCodeScannerProps> = ({ open, onClose, onS
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>
         <Box display="flex" justifyContent="space-between" alignItems="center">
-          <Typography variant="h6">Scan QR Code</Typography>
+          <Typography variant="h6">Scan Barcode / QR Code</Typography>
           <Button onClick={handleClose} size="small">
             <Close />
           </Button>
@@ -123,17 +163,27 @@ export const QRCodeScanner: React.FC<QRCodeScannerProps> = ({ open, onClose, onS
           
           {hasPermission === false && !error && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              Camera permission is required to scan QR codes. Please enable camera access.
+              Camera permission is required to scan barcodes/QR codes. Please enable camera access.
             </Alert>
           )}
 
-          <div id={scannerId} style={{ width: '100%', display: scanning ? 'block' : 'none' }} />
+          <div
+            id={SCANNER_ID}
+            style={{
+              width: '100%',
+              minHeight: 300,
+              display: scanning ? 'block' : 'none',
+            }}
+          />
           
           {!scanning && hasPermission && (
             <Box sx={{ textAlign: 'center', mt: 4 }}>
               <QrCodeScanner sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
-              <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
                 Click the button below to start scanning
+              </Typography>
+              <Typography variant="caption" color="textSecondary" sx={{ mb: 2, display: 'block' }}>
+                Supports: QR codes, EAN-13, Code-128, and other common barcode formats
               </Typography>
               <Button
                 variant="contained"
@@ -148,8 +198,11 @@ export const QRCodeScanner: React.FC<QRCodeScannerProps> = ({ open, onClose, onS
           {scanning && (
             <Box sx={{ textAlign: 'center', mt: 2 }}>
               <CircularProgress size={24} sx={{ mr: 1 }} />
-              <Typography variant="body2" color="textSecondary">
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
                 Scanning...
+              </Typography>
+              <Typography variant="caption" color="textSecondary">
+                Position the barcode horizontally within the scanning area
               </Typography>
             </Box>
           )}
