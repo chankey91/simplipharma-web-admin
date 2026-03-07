@@ -20,6 +20,7 @@ import { InventoryPage } from './pages/Inventory';
 import { StockUpdatePage } from './pages/StockUpdate';
 import { MedicineDetailsPage } from './pages/MedicineDetails';
 import { InvoicesPage } from './pages/Invoices';
+import { BannersPage } from './pages/Banners';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -200,6 +201,16 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <InvoicesPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/banners"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <BannersPage />
                     </Layout>
                   </ProtectedRoute>
                 }

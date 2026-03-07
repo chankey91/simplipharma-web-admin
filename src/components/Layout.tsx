@@ -11,6 +11,7 @@ import {
   Business,
   Receipt,
   Description,
+  Campaign,
 } from '@mui/icons-material';
 import { logout } from '../services/firebase';
 
@@ -24,6 +25,7 @@ const menuItems = [
   { text: 'Purchases', icon: <Receipt />, path: '/purchases' },
   { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
   { text: 'Invoices', icon: <Description />, path: '/invoices' },
+  { text: 'Banners', icon: <Campaign />, path: '/banners' },
 ];
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
