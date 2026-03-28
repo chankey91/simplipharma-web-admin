@@ -3,6 +3,7 @@ import {
   getPendingRetailerRequests,
   approveRetailerRequest,
   rejectRetailerRequest,
+  RejectRetailerRequestResult,
   RetailerRegistrationRequest,
 } from '../services/pendingRetailers';
 
@@ -26,7 +27,7 @@ export const useApproveRetailerRequest = () => {
 export const useRejectRetailerRequest = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ requestId, reason }: { requestId: string; reason?: string }) =>
+    mutationFn: ({ requestId, reason }: { requestId: string; reason?: string }): Promise<RejectRetailerRequestResult> =>
       rejectRetailerRequest(requestId, reason),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pendingRetailerRequests'] });

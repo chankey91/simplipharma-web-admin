@@ -11,7 +11,7 @@ var __rest = (this && this.__rest) || function (s, e) {
     return t;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.onRetailerRegistrationRequestCreated = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
+exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
@@ -59,6 +59,18 @@ function resolveRetailerRequestCredentials(req) {
         return null;
     }
     return { email, password };
+}
+function getRetailerRegistrationEmail(req) {
+    var _a, _b, _c;
+    const email = String((_c = (_b = (_a = req.email) !== null && _a !== void 0 ? _a : req.retailerEmail) !== null && _b !== void 0 ? _b : req.contactEmail) !== null && _c !== void 0 ? _c : '').trim();
+    return email || null;
+}
+function escapeHtmlText(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
 /** Single path for transactional mail (logs failures, does not throw). */
 async function sendSmtpMail(options) {
@@ -477,6 +489,108 @@ exports.approveRetailerRequest = functions.https.onCall(async (data, context) =>
         console.error('approveRetailerRequest error:', error);
         throw new functions.https.HttpsError('internal', error.message || 'Failed to approve request');
     }
+});
+/**
+ * Reject retailer registration: update Firestore and notify retailer + Sales Officer by email.
+ */
+exports.rejectRetailerRequest = functions.https.onCall(async (data, context) => {
+    var _a, _b;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+    const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
+    if (!userDoc.exists || ((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.role) !== 'admin') {
+        throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+    }
+    const { requestId, reason } = data || {};
+    if (!requestId) {
+        throw new functions.https.HttpsError('invalid-argument', 'requestId is required');
+    }
+    const reqRef = admin.firestore().collection('retailer_registration_requests').doc(requestId);
+    const reqDoc = await reqRef.get();
+    if (!reqDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Request not found');
+    }
+    const req = reqDoc.data();
+    if (req.status !== 'pending') {
+        throw new functions.https.HttpsError('failed-precondition', 'Request already processed');
+    }
+    const rejectionReason = typeof reason === 'string' ? reason.trim() : '';
+    await reqRef.update({
+        status: 'rejected',
+        rejectionReason,
+        reviewedBy: context.auth.uid,
+        reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    const shopLabel = req.shopName || req.displayName || 'your registration';
+    const retailerEmail = getRetailerRegistrationEmail(req);
+    const reasonHtml = rejectionReason
+        ? `<p><strong>Reason:</strong> ${escapeHtmlText(rejectionReason)}</p>`
+        : '';
+    let retailerEmailSent = null;
+    let salesOfficerEmailSent = null;
+    const emailErrors = [];
+    if (retailerEmail) {
+        const mail = await sendSmtpMail({
+            to: retailerEmail,
+            subject: 'SimpliPharma — Retailer registration not approved',
+            html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #c62828;">Registration update</h2>
+          <p>We are unable to approve your retailer registration for <strong>${escapeHtmlText(String(shopLabel))}</strong> at this time.</p>
+          ${reasonHtml}
+          <p>If you have questions, please contact your Sales Officer or SimpliPharma support.</p>
+          <p style="color:#666;font-size:12px;">Reference: ${escapeHtmlText(requestId)}</p>
+        </div>`,
+        });
+        retailerEmailSent = mail.ok;
+        if (!mail.ok && mail.error)
+            emailErrors.push(`Retailer email: ${mail.error}`);
+    }
+    else {
+        console.warn('rejectRetailerRequest: no retailer email on request', requestId);
+    }
+    const soId = req.salesOfficerId;
+    if (soId) {
+        try {
+            const soDoc = await admin.firestore().collection('users').doc(String(soId)).get();
+            const soEmail = soDoc.exists ? String(((_b = soDoc.data()) === null || _b === void 0 ? void 0 : _b.email) || '').trim() : '';
+            if (soEmail) {
+                const mail = await sendSmtpMail({
+                    to: soEmail,
+                    subject: 'SimpliPharma — Retailer registration rejected',
+                    html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #c62828;">Registration rejected</h2>
+              <p>A retailer registration you submitted has been <strong>rejected</strong> by admin.</p>
+              <ul>
+                <li><strong>Shop / name:</strong> ${escapeHtmlText(String(shopLabel))}</li>
+                <li><strong>Retailer email:</strong> ${escapeHtmlText(retailerEmail || 'not on file')}</li>
+                <li><strong>Request ID:</strong> ${escapeHtmlText(requestId)}</li>
+              </ul>
+              ${reasonHtml}
+            </div>`,
+                });
+                salesOfficerEmailSent = mail.ok;
+                if (!mail.ok && mail.error)
+                    emailErrors.push(`Sales Officer email: ${mail.error}`);
+            }
+            else {
+                console.warn('rejectRetailerRequest: Sales Officer has no email', soId);
+            }
+        }
+        catch (e) {
+            console.error('rejectRetailerRequest: SO lookup failed', e === null || e === void 0 ? void 0 : e.message);
+            emailErrors.push(`SO lookup: ${(e === null || e === void 0 ? void 0 : e.message) || String(e)}`);
+        }
+    }
+    return {
+        success: true,
+        retailerEmailSent,
+        salesOfficerEmailSent,
+        emailErrors: emailErrors.length ? emailErrors.join(' | ') : undefined,
+    };
 });
 /**
  * When a retailer registration request is created, notify the retailer and the Sales Officer.

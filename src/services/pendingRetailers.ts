@@ -16,7 +16,6 @@ import { httpsCallable } from 'firebase/functions';
 export interface RetailerRegistrationRequest {
   id: string;
   email: string;
-  retailerEmail?: string;
   password?: string;
   displayName?: string;
   shopName?: string;
@@ -30,9 +29,12 @@ export interface RetailerRegistrationRequest {
   gst?: string;
   storeCode?: string;
   salesOfficerId: string;
+  /** Canonical (aligned with mobile app); also see getRegistrationRequestImageUrls */
   shopImageUrl?: string;
   licenceImageUrl?: string;
   aadharImageUrl?: string;
+  shopImage?: string;
+  licenseImageUrl?: string;
   location?: {
     latitude: number;
     longitude: number;
@@ -45,62 +47,52 @@ export interface RetailerRegistrationRequest {
   reviewedBy?: string;
   reviewedAt?: Date | any;
   rejectionReason?: string;
-  // Alternate keys some clients may use (see resolveRegistrationImageUrls)
-  shopImage?: string;
-  licenceImage?: string;
-  aadharImage?: string;
 }
 
 /**
- * Sales Officer / mobile apps may store document URLs under different field names than the admin UI expects.
- * Supports https URLs and data:image/* base64 strings.
+ * Same resolution as mobile `getRegistrationRequestImageUrls` so admin UI shows photos
+ * regardless of which Firestore keys the SO app wrote.
  */
-export function resolveRegistrationImageUrls(req: Record<string, unknown>): {
-  shop?: string;
-  licence?: string;
-  aadhar?: string;
+export function getRegistrationRequestImageUrls(req: Record<string, unknown> | null | undefined): {
+  shopImageUrl?: string;
+  licenceImageUrl?: string;
+  aadharImageUrl?: string;
 } {
-  const pick = (keys: string[]): string | undefined => {
-    for (const k of keys) {
-      const v = req[k];
-      if (typeof v === 'string' && v.trim().length > 0) {
-        const s = v.trim();
-        if (
-          s.startsWith('http://') ||
-          s.startsWith('https://') ||
-          s.startsWith('data:image')
-        ) {
-          return s;
-        }
-      }
-    }
-    return undefined;
-  };
-
+  if (!req) return {};
+  const r = req as Record<string, string | undefined>;
+  const shop =
+    r.shopImageUrl || r.shopImage || r.shopPhotoUrl;
+  const licence =
+    r.licenceImageUrl ||
+    r.licenceImage ||
+    r.licenseImageUrl ||
+    r.licenseImage;
+  const aadhar =
+    r.aadharImageUrl || r.aadharImage || r.aadharCardUrl;
   return {
-    shop: pick([
-      'shopImageUrl',
-      'shopImage',
-      'shopPhotoUrl',
-      'shop_photo_url',
-      'storeImageUrl',
-    ]),
-    licence: pick([
-      'licenceImageUrl',
-      'licenceImage',
-      'licenseImageUrl',
-      'licenseImage',
-      'drugLicenceImageUrl',
-      'drugLicenseImageUrl',
-    ]),
-    aadhar: pick([
-      'aadharImageUrl',
-      'aadharImage',
-      'aadharCardUrl',
-      'aadhaarImageUrl',
-      'aadhar_image_url',
-    ]),
+    ...(shop ? { shopImageUrl: shop } : {}),
+    ...(licence ? { licenceImageUrl: licence } : {}),
+    ...(aadhar ? { aadharImageUrl: aadhar } : {}),
   };
+}
+
+function parseRetailerRegistrationDoc(
+  id: string,
+  data: Record<string, unknown>
+): RetailerRegistrationRequest {
+  const imgs = getRegistrationRequestImageUrls(data);
+  return {
+    id,
+    ...(data as object),
+    ...(imgs.shopImageUrl !== undefined ? { shopImageUrl: imgs.shopImageUrl, shopImage: imgs.shopImageUrl } : {}),
+    ...(imgs.licenceImageUrl !== undefined
+      ? { licenceImageUrl: imgs.licenceImageUrl, licenseImageUrl: imgs.licenceImageUrl }
+      : {}),
+    ...(imgs.aadharImageUrl !== undefined ? { aadharImageUrl: imgs.aadharImageUrl } : {}),
+    createdAt: (data as any).createdAt?.toDate?.() || (data as any).createdAt,
+    updatedAt: (data as any).updatedAt?.toDate?.() || (data as any).updatedAt,
+    reviewedAt: (data as any).reviewedAt?.toDate?.() || (data as any).reviewedAt,
+  } as RetailerRegistrationRequest;
 }
 
 export const getPendingRetailerRequests = async (): Promise<RetailerRegistrationRequest[]> => {
@@ -111,32 +103,26 @@ export const getPendingRetailerRequests = async (): Promise<RetailerRegistration
     orderBy('createdAt', 'desc')
   );
   const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-    createdAt: d.data().createdAt?.toDate?.() || d.data().createdAt,
-  })) as RetailerRegistrationRequest[];
+  return snapshot.docs.map((d) => parseRetailerRegistrationDoc(d.id, d.data()));
 };
 
-export const approveRetailerRequest = async (
-  requestId: string
-): Promise<{ emailSent?: boolean; emailError?: string }> => {
+export const approveRetailerRequest = async (requestId: string): Promise<void> => {
   const approveFn = httpsCallable(functions, 'approveRetailerRequest');
-  const result = await approveFn({ requestId });
-  const data = (result.data || {}) as { emailSent?: boolean; emailError?: string };
-  return { emailSent: data.emailSent === true, emailError: data.emailError };
+  await approveFn({ requestId });
 };
+
+export interface RejectRetailerRequestResult {
+  success: boolean;
+  retailerEmailSent: boolean | null;
+  salesOfficerEmailSent: boolean | null;
+  emailErrors?: string;
+}
 
 export const rejectRetailerRequest = async (
   requestId: string,
   reason?: string
-): Promise<void> => {
-  const reqRef = doc(db, 'retailer_registration_requests', requestId);
-  await updateDoc(reqRef, {
-    status: 'rejected',
-    rejectionReason: reason || '',
-    reviewedBy: auth.currentUser?.uid,
-    reviewedAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
-  });
+): Promise<RejectRetailerRequestResult> => {
+  const rejectFn = httpsCallable(functions, 'rejectRetailerRequest');
+  const res = await rejectFn({ requestId, reason: reason ?? '' });
+  return res.data as RejectRetailerRequestResult;
 };
