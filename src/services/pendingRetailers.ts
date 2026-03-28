@@ -45,6 +45,62 @@ export interface RetailerRegistrationRequest {
   reviewedBy?: string;
   reviewedAt?: Date | any;
   rejectionReason?: string;
+  // Alternate keys some clients may use (see resolveRegistrationImageUrls)
+  shopImage?: string;
+  licenceImage?: string;
+  aadharImage?: string;
+}
+
+/**
+ * Sales Officer / mobile apps may store document URLs under different field names than the admin UI expects.
+ * Supports https URLs and data:image/* base64 strings.
+ */
+export function resolveRegistrationImageUrls(req: Record<string, unknown>): {
+  shop?: string;
+  licence?: string;
+  aadhar?: string;
+} {
+  const pick = (keys: string[]): string | undefined => {
+    for (const k of keys) {
+      const v = req[k];
+      if (typeof v === 'string' && v.trim().length > 0) {
+        const s = v.trim();
+        if (
+          s.startsWith('http://') ||
+          s.startsWith('https://') ||
+          s.startsWith('data:image')
+        ) {
+          return s;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  return {
+    shop: pick([
+      'shopImageUrl',
+      'shopImage',
+      'shopPhotoUrl',
+      'shop_photo_url',
+      'storeImageUrl',
+    ]),
+    licence: pick([
+      'licenceImageUrl',
+      'licenceImage',
+      'licenseImageUrl',
+      'licenseImage',
+      'drugLicenceImageUrl',
+      'drugLicenseImageUrl',
+    ]),
+    aadhar: pick([
+      'aadharImageUrl',
+      'aadharImage',
+      'aadharCardUrl',
+      'aadhaarImageUrl',
+      'aadhar_image_url',
+    ]),
+  };
 }
 
 export const getPendingRetailerRequests = async (): Promise<RetailerRegistrationRequest[]> => {

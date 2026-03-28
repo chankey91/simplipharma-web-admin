@@ -69,8 +69,8 @@ export const OrderDetailsPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { data: order, isLoading } = useOrder(orderId || '');
   const { data: medicines } = useMedicines();
-  const { data: trays } = useTrays();
-  const { data: operators } = useOperators();
+  const { data: trays, isError: traysQueryError, error: traysQueryErr } = useTrays();
+  const { data: operators, isError: operatorsQueryError, error: operatorsQueryErr } = useOperators();
   const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
   
   const fulfillOrderMutation = useFulfillOrder();
@@ -1288,6 +1288,24 @@ export const OrderDetailsPage: React.FC = () => {
               </Box>
             </CardContent>
           </Card>
+
+          {(traysQueryError || operatorsQueryError) && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Tray/operator lists failed to load (dropdowns may be empty). Deploy{' '}
+              <strong>firestore.rules</strong> with <code>trays</code> and <code>operators</code> rules, or check Firestore
+              permissions.
+              {traysQueryError && (
+                <Typography variant="caption" display="block">
+                  Trays: {(traysQueryErr as Error)?.message}
+                </Typography>
+              )}
+              {operatorsQueryError && (
+                <Typography variant="caption" display="block">
+                  Operators: {(operatorsQueryErr as Error)?.message}
+                </Typography>
+              )}
+            </Alert>
+          )}
 
           {/* Tray & Operator - Display and option to assign/change (for Pending and Order Fulfillment) */}
           {order.status !== 'Cancelled' && order.status !== 'Delivered' && (

@@ -19,16 +19,23 @@ service cloud.firestore {
       return get(userDocPath()).data.role;
     }
 
+    // Match client / legacy data (case variants)
     function isAdmin() {
-      return hasUserDoc() && userRole() == 'admin';
+      return hasUserDoc() && (
+        userRole() == 'admin' ||
+        userRole() == 'Admin'
+      );
     }
 
     function isSalesOfficer() {
-      return hasUserDoc() && userRole() == 'salesOfficer';
+      return hasUserDoc() && (
+        userRole() == 'salesOfficer' ||
+        userRole() == 'SalesOfficer'
+      );
     }
 
     function isAdminOrSalesOfficer() {
-      return hasUserDoc() && userRole() in ['admin', 'salesOfficer'];
+      return isAdmin() || isSalesOfficer();
     }
 
     // Retailer doc must exist and list this Sales Officer
@@ -164,14 +171,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // ----- Operations: trays & operators (admin web) -----
+    // ----- Operations: trays & operators (admin manages; any signed-in client may read for order UI) -----
     match /trays/{trayId} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
+      allow get, list: if signedIn();
+      allow create, update, delete: if isAdmin();
     }
     match /operators/{operatorId} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
+      allow get, list: if signedIn();
+      allow create, update, delete: if isAdmin();
     }
 
     // ----- Legacy / optional collections -----

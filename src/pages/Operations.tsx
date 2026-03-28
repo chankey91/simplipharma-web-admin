@@ -15,6 +15,7 @@ import {
   TableRow,
   IconButton,
   Grid,
+  Alert,
 } from '@mui/material';
 import { Add, Delete, Settings } from '@mui/icons-material';
 import {
@@ -47,8 +48,20 @@ export const OperationsPage: React.FC = () => {
   const [newTrayName, setNewTrayName] = useState('');
   const [newOperatorName, setNewOperatorName] = useState('');
 
-  const { data: trays, isLoading: traysLoading } = useTrays();
-  const { data: operators, isLoading: operatorsLoading } = useOperators();
+  const {
+    data: trays,
+    isLoading: traysLoading,
+    isError: traysIsError,
+    error: traysError,
+    refetch: refetchTrays,
+  } = useTrays();
+  const {
+    data: operators,
+    isLoading: operatorsLoading,
+    isError: operatorsIsError,
+    error: operatorsError,
+    refetch: refetchOperators,
+  } = useOperators();
   const addTrayMutation = useAddTray();
   const addOperatorMutation = useAddOperator();
   const deleteTrayMutation = useDeleteTray();
@@ -92,8 +105,19 @@ export const OperationsPage: React.FC = () => {
     }
   };
 
-  if (tabValue === 0 && traysLoading) return <Loading message="Loading trays..." />;
-  if (tabValue === 1 && operatorsLoading) return <Loading message="Loading operators..." />;
+  if (tabValue === 0 && traysLoading && !traysIsError) {
+    return <Loading message="Loading trays..." />;
+  }
+  if (tabValue === 1 && operatorsLoading && !operatorsIsError) {
+    return <Loading message="Loading operators..." />;
+  }
+
+  const traysErrMsg = traysIsError
+    ? (traysError as Error)?.message || 'Failed to load trays'
+    : '';
+  const operatorsErrMsg = operatorsIsError
+    ? (operatorsError as Error)?.message || 'Failed to load operators'
+    : '';
 
   return (
     <Box>
@@ -101,6 +125,35 @@ export const OperationsPage: React.FC = () => {
         <Settings sx={{ mr: 2, fontSize: 32 }} />
         <Typography variant="h4">Operations</Typography>
       </Box>
+
+      {(traysIsError || operatorsIsError) && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                refetchTrays();
+                refetchOperators();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          <Typography variant="subtitle2" gutterBottom>
+            Firestore permission or network error — trays/operators could not be loaded.
+          </Typography>
+          {traysIsError && <Typography variant="body2">Trays: {traysErrMsg}</Typography>}
+          {operatorsIsError && <Typography variant="body2">Operators: {operatorsErrMsg}</Typography>}
+          <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+            Deploy latest <code>firestore.rules</code> (must include <code>trays</code> and <code>operators</code>{' '}
+            matches before the catch‑all rule). Run: <code>firebase deploy --only firestore:rules</code>
+          </Typography>
+        </Alert>
+      )}
 
       <Paper sx={{ mb: 3 }}>
         <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)}>
@@ -149,7 +202,15 @@ export const OperationsPage: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {(!trays || trays.length === 0) ? (
+                  {traysIsError ? (
+                    <TableRow>
+                      <TableCell colSpan={2} align="center">
+                        <Typography color="error" sx={{ py: 2 }}>
+                          {traysErrMsg}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (!trays || trays.length === 0) ? (
                     <TableRow>
                       <TableCell colSpan={2} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>
@@ -221,7 +282,15 @@ export const OperationsPage: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {(!operators || operators.length === 0) ? (
+                  {operatorsIsError ? (
+                    <TableRow>
+                      <TableCell colSpan={2} align="center">
+                        <Typography color="error" sx={{ py: 2 }}>
+                          {operatorsErrMsg}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (!operators || operators.length === 0) ? (
                     <TableRow>
                       <TableCell colSpan={2} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>

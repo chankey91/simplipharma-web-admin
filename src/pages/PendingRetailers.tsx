@@ -20,6 +20,7 @@ import {
   Card,
   CardMedia,
   Alert,
+  Link,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -29,8 +30,52 @@ import {
 } from '@mui/icons-material';
 import { usePendingRetailerRequests, useApproveRetailerRequest, useRejectRetailerRequest } from '../hooks/usePendingRetailers';
 import { Loading } from '../components/Loading';
-import { RetailerRegistrationRequest } from '../services/pendingRetailers';
+import { RetailerRegistrationRequest, resolveRegistrationImageUrls } from '../services/pendingRetailers';
 import { format } from 'date-fns';
+
+/** Preview registration upload (HTTPS, Storage URL, or data:image base64). */
+const RegistrationDocImage: React.FC<{ label: string; url?: string }> = ({ label, url }) => {
+  const [failed, setFailed] = useState(false);
+  if (!url) {
+    return (
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="caption" display="block" color="text.secondary">
+          {label}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Not uploaded
+        </Typography>
+      </Box>
+    );
+  }
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography variant="caption" display="block" color="text.secondary">
+        {label}
+      </Typography>
+      {failed ? (
+        <Alert severity="warning" sx={{ mt: 0.5 }}>
+          Could not load preview (often Storage rules or expired link).{' '}
+          <Link href={url} target="_blank" rel="noopener noreferrer">
+            Open in new tab
+          </Link>
+        </Alert>
+      ) : (
+        <Card sx={{ maxWidth: 320, mt: 0.5 }}>
+          <CardMedia
+            component="img"
+            height={180}
+            image={url}
+            alt={label}
+            onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+            onError={() => setFailed(true)}
+            sx={{ cursor: 'pointer', objectFit: 'contain', bgcolor: 'action.hover' }}
+          />
+        </Card>
+      )}
+    </Box>
+  );
+};
 
 export const PendingRetailersPage: React.FC = () => {
   const { data: requests, isLoading, error, refetch } = usePendingRetailerRequests();
@@ -193,54 +238,40 @@ export const PendingRetailersPage: React.FC = () => {
                   </Box>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>Documents</Typography>
-                  <Grid container spacing={1}>
-                    {selectedRequest.shopImageUrl && (
-                      <Grid item xs={12}>
-                        <Typography variant="caption">Shop Photo</Typography>
-                        <Card sx={{ maxWidth: 200, mt: 0.5 }}>
-                          <CardMedia
-                            component="img"
-                            height="120"
-                            image={selectedRequest.shopImageUrl}
-                            alt="Shop"
-                            onClick={() => window.open(selectedRequest.shopImageUrl, '_blank')}
-                            sx={{ cursor: 'pointer' }}
-                          />
-                        </Card>
-                      </Grid>
-                    )}
-                    {selectedRequest.licenceImageUrl && (
-                      <Grid item xs={12}>
-                        <Typography variant="caption">Drug Licence</Typography>
-                        <Card sx={{ maxWidth: 200, mt: 0.5 }}>
-                          <CardMedia
-                            component="img"
-                            height="120"
-                            image={selectedRequest.licenceImageUrl}
-                            alt="Licence"
-                            onClick={() => window.open(selectedRequest.licenceImageUrl, '_blank')}
-                            sx={{ cursor: 'pointer' }}
-                          />
-                        </Card>
-                      </Grid>
-                    )}
-                    {selectedRequest.aadharImageUrl && (
-                      <Grid item xs={12}>
-                        <Typography variant="caption">Aadhar Card</Typography>
-                        <Card sx={{ maxWidth: 200, mt: 0.5 }}>
-                          <CardMedia
-                            component="img"
-                            height="120"
-                            image={selectedRequest.aadharImageUrl}
-                            alt="Aadhar"
-                            onClick={() => window.open(selectedRequest.aadharImageUrl, '_blank')}
-                            sx={{ cursor: 'pointer' }}
-                          />
-                        </Card>
-                      </Grid>
-                    )}
-                  </Grid>
+                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+                    Documents
+                  </Typography>
+                  {(() => {
+                    const urls = resolveRegistrationImageUrls(
+                      selectedRequest as unknown as Record<string, unknown>
+                    );
+                    const anyDoc = urls.shop || urls.licence || urls.aadhar;
+                    return (
+                      <Box>
+                        {!anyDoc && (
+                          <Alert severity="info" sx={{ mb: 1 }}>
+                            No document URLs found on this request. The mobile app may use different field names;
+                            check Firestore for this document or confirm uploads completed.
+                          </Alert>
+                        )}
+                        <RegistrationDocImage
+                          key={`${selectedRequest.id}-shop`}
+                          label="Shop photo"
+                          url={urls.shop}
+                        />
+                        <RegistrationDocImage
+                          key={`${selectedRequest.id}-lic`}
+                          label="Drug licence"
+                          url={urls.licence}
+                        />
+                        <RegistrationDocImage
+                          key={`${selectedRequest.id}-aadhar`}
+                          label="Aadhar card"
+                          url={urls.aadhar}
+                        />
+                      </Box>
+                    );
+                  })()}
                 </Grid>
               </Grid>
             </DialogContent>

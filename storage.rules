@@ -1,0 +1,46 @@
+rules_version = '2';
+// Firebase Storage: retailer registration uploads (Sales Officer) must be readable by Admin for review.
+// Requires Blaze plan for firestore.* in Storage rules. If deploy fails, use the commented Spark fallback below.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function userRole() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return request.auth != null &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        userRole() == 'admin';
+    }
+
+    function isSalesOfficer() {
+      return request.auth != null &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        userRole() == 'salesOfficer';
+    }
+
+    // Common path prefixes used by mobile apps — add more match blocks if your uploads use another folder name.
+    match /retailer_registration/{allPaths=**} {
+      allow read: if request.auth != null && (isAdmin() || isSalesOfficer());
+      allow write: if request.auth != null && isSalesOfficer();
+    }
+
+    match /retailer_registrations/{allPaths=**} {
+      allow read: if request.auth != null && (isAdmin() || isSalesOfficer());
+      allow write: if request.auth != null && isSalesOfficer();
+    }
+
+    match /registration_documents/{allPaths=**} {
+      allow read: if request.auth != null && (isAdmin() || isSalesOfficer());
+      allow write: if request.auth != null && isSalesOfficer();
+    }
+
+    match /retailer_docs/{allPaths=**} {
+      allow read: if request.auth != null && (isAdmin() || isSalesOfficer());
+      allow write: if request.auth != null && isSalesOfficer();
+    }
+
+    // Paths not matched above are denied by default.
+  }
+}
