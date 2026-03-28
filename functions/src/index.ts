@@ -40,6 +40,43 @@ const getTransporter = () => {
   });
 };
 
+/** Email/password on retailer_registration_requests may use different keys from mobile vs admin. */
+function resolveRetailerRequestCredentials(req: Record<string, any>): { email: string; password: string } | null {
+  const emailRaw = req.email ?? req.retailerEmail ?? req.contactEmail ?? '';
+  const email = String(emailRaw).trim();
+  const passwordRaw =
+    req.password ?? req.initialPassword ?? req.plainPassword ?? req.tempPassword ?? '';
+  const password = String(passwordRaw);
+  if (!email || !password) {
+    return null;
+  }
+  return { email, password };
+}
+
+/** Single path for transactional mail (logs failures, does not throw). */
+async function sendSmtpMail(options: { to: string; subject: string; html: string }): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const smtpConfig = functions.config().smtp;
+    if (!smtpConfig?.user || !smtpConfig?.password) {
+      console.warn('sendSmtpMail: smtp.user or smtp.password missing in Functions config');
+      return { ok: false, error: 'SMTP not configured' };
+    }
+    const transporter = getTransporter();
+    await transporter.sendMail({
+      from: smtpConfig.user,
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
+    });
+    return { ok: true };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    const code = err?.responseCode || err?.code;
+    console.error('sendSmtpMail failed:', { msg, code, to: options.to });
+    return { ok: false, error: msg };
+  }
+}
+
 /**
  * Send password email to vendor (HTTP version with CORS)
  * Alternative to callable function with explicit CORS handling
@@ -355,4 +392,210 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('internal', error.message || 'Failed to create user');
   }
 });
+
+/**
+ * Approve retailer registration request: create user account from pending request
+ */
+export const approveRetailerRequest = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
+  if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+  }
+
+  const { requestId } = data || {};
+  if (!requestId) {
+    throw new functions.https.HttpsError('invalid-argument', 'requestId is required');
+  }
+
+  const reqRef = admin.firestore().collection('retailer_registration_requests').doc(requestId);
+  const reqDoc = await reqRef.get();
+  if (!reqDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Request not found');
+  }
+
+  const req = reqDoc.data() as any;
+  if (req.status !== 'pending') {
+    throw new functions.https.HttpsError('failed-precondition', 'Request already processed');
+  }
+
+  const cred = resolveRetailerRequestCredentials(req);
+  if (!cred) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'Request missing email or password (expected email/retailerEmail and password/initialPassword on the registration document)'
+    );
+  }
+
+  try {
+    const userRecord = await admin.auth().createUser({
+      email: cred.email,
+      password: cred.password,
+      displayName: req.displayName || req.shopName || cred.email,
+      emailVerified: false,
+      disabled: false,
+    });
+
+    const userData: Record<string, any> = {
+      uid: userRecord.uid,
+      email: cred.email,
+      role: 'retailer',
+      displayName: req.displayName,
+      shopName: req.shopName,
+      phoneNumber: req.phoneNumber,
+      address: req.address,
+      licenceNumber: req.licenceNumber,
+      aadharNumber: req.aadharNumber,
+      ownerName: req.ownerName,
+      licenceHolderName: req.licenceHolderName,
+      pan: req.pan,
+      gst: req.gst,
+      storeCode: req.storeCode,
+      salesOfficerId: req.salesOfficerId,
+      isActive: true,
+      shopImage: req.shopImageUrl,
+      licenceImageUrl: req.licenceImageUrl,
+      aadharImageUrl: req.aadharImageUrl,
+      location: req.location,
+      mustResetPassword: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    for (const [k, v] of Object.entries(userData)) {
+      if (v === undefined) delete userData[k];
+    }
+
+    await admin.firestore().collection('users').doc(userRecord.uid).set(userData);
+
+    await reqRef.update({
+      status: 'approved',
+      reviewedBy: context.auth.uid,
+      reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const approvalMail = await sendSmtpMail({
+      to: cred.email,
+      subject: 'Your SimpliPharma Store Account - Approved',
+      html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
+              <p>Your retailer registration has been approved. Your account is now active.</p>
+              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Email:</strong> ${cred.email}</p>
+                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${cred.password}</code></p>
+              </div>
+              <p><strong>Important:</strong> Please change your password on first login.</p>
+            </div>
+          `,
+    });
+    const emailSent = approvalMail.ok;
+    if (!approvalMail.ok) {
+      console.error('approveRetailerRequest: approval email not sent:', approvalMail.error);
+    }
+
+    return {
+      success: true,
+      uid: userRecord.uid,
+      emailSent,
+      emailError: approvalMail.ok ? undefined : approvalMail.error,
+    };
+  } catch (error: any) {
+    console.error('approveRetailerRequest error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to approve request');
+  }
+});
+
+/**
+ * When a retailer registration request is created, notify the retailer and the Sales Officer.
+ * (Sales Officer registration uses createStoreUser directly; this covers the pending-retailer pipeline.)
+ */
+export const onRetailerRegistrationRequestCreated = functions.firestore
+  .document('retailer_registration_requests/{requestId}')
+  .onCreate(async (snap, context) => {
+    const data = snap.data() as Record<string, any>;
+    if (!data || data.status === 'rejected') {
+      return null;
+    }
+
+    const requestId = context.params.requestId;
+    const retailerEmail = String(data.email || data.retailerEmail || data.contactEmail || '').trim();
+    const shopLabel = data.shopName || data.displayName || 'your pharmacy';
+    const smtpConfig = functions.config().smtp;
+    if (!smtpConfig?.user || !smtpConfig?.password) {
+      console.warn('onRetailerRegistrationRequestCreated: SMTP not configured, skipping notification emails');
+      return null;
+    }
+
+    if (retailerEmail) {
+      const ack = await sendSmtpMail({
+        to: retailerEmail,
+        subject: 'SimpliPharma — Registration received',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2196F3;">Thank you for registering</h2>
+            <p>We have received your retailer registration (${String(shopLabel)}).</p>
+            <p>Your request is pending admin review. You will receive another email once your account is approved.</p>
+            <p style="color:#666;font-size:12px;">Reference: ${requestId}</p>
+          </div>`,
+      });
+      if (!ack.ok) console.error('Retailer ack email failed:', ack.error);
+    } else {
+      console.warn('onRetailerRegistrationRequestCreated: no retailer email on document, skipping retailer ack');
+    }
+
+    const soId = data.salesOfficerId;
+    if (soId) {
+      try {
+        const soDoc = await admin.firestore().collection('users').doc(String(soId)).get();
+        const soEmail = soDoc.exists ? String(soDoc.data()?.email || '').trim() : '';
+        if (soEmail) {
+          const soMail = await sendSmtpMail({
+            to: soEmail,
+            subject: 'SimpliPharma — Retailer registration submitted',
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #2196F3;">Registration pending admin approval</h2>
+                <p>A retailer registration you submitted is now in the queue:</p>
+                <ul>
+                  <li><strong>Shop / name:</strong> ${String(shopLabel)}</li>
+                  <li><strong>Email:</strong> ${retailerEmail || 'not provided'}</li>
+                  <li><strong>Request ID:</strong> ${requestId}</li>
+                </ul>
+                <p>An admin will review and approve the request in the admin portal.</p>
+              </div>`,
+          });
+          if (!soMail.ok) console.error('Sales Officer notify email failed:', soMail.error);
+        } else {
+          console.warn('onRetailerRegistrationRequestCreated: Sales Officer has no email on users/', soId);
+        }
+      } catch (e: any) {
+        console.error('onRetailerRegistrationRequestCreated: failed to load Sales Officer', e?.message);
+      }
+    }
+
+    const adminNotify = smtpConfig.admin_notify ? String(smtpConfig.admin_notify).trim() : '';
+    if (adminNotify) {
+      const adminMail = await sendSmtpMail({
+        to: adminNotify,
+        subject: 'SimpliPharma — New retailer registration pending',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2196F3;">New retailer registration</h2>
+            <p>Review pending requests in Admin → Pending Retailers.</p>
+            <ul>
+              <li><strong>Shop / name:</strong> ${String(shopLabel)}</li>
+              <li><strong>Email:</strong> ${retailerEmail || 'not provided'}</li>
+              <li><strong>Request ID:</strong> ${requestId}</li>
+            </ul>
+          </div>`,
+      });
+      if (!adminMail.ok) console.error('Admin notify email failed:', adminMail.error);
+    }
+
+    return null;
+  });
 

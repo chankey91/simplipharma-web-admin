@@ -149,6 +149,7 @@ export interface User {
   createdAt?: Date | any;
   // Store details
   licenceNumber?: string;
+  aadharNumber?: string;
   ownerName?: string;
   licenceHolderName?: string;
   pan?: string;

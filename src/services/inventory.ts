@@ -1,6 +1,42 @@
 import { collection, getDocs, doc, updateDoc, addDoc, query, where, Timestamp, getDoc, setDoc, db } from './firebase';
 import { Medicine, StockBatch } from '../types';
 
+/**
+ * Firestore Timestamp, Date, ISO string, or plain { seconds, nanoseconds } → Date.
+ * Missing or invalid → undefined (caller should treat as "no expiry" / not expired for allocation UI).
+ */
+export function normalizeFirestoreDate(val: any): Date | undefined {
+  if (val == null || val === '') return undefined;
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? undefined : val;
+  }
+  if (typeof val.toDate === 'function') {
+    try {
+      const d = val.toDate();
+      return d instanceof Date && !isNaN(d.getTime()) ? d : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof val === 'string' || typeof val === 'number') {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? undefined : d;
+  }
+  if (typeof val === 'object' && typeof val.seconds === 'number') {
+    const d = new Date(val.seconds * 1000 + (typeof val.nanoseconds === 'number' ? val.nanoseconds / 1e6 : 0));
+    return isNaN(d.getTime()) ? undefined : d;
+  }
+  return undefined;
+}
+
+function normalizeBatchQuantity(batch: any): number {
+  if (typeof batch.quantity === 'number' && !isNaN(batch.quantity)) {
+    return Math.max(0, Math.floor(batch.quantity));
+  }
+  const n = parseInt(String(batch.quantity ?? '0'), 10);
+  return isNaN(n) ? 0 : Math.max(0, n);
+}
+
 export const getAllMedicines = async (): Promise<Medicine[]> => {
   const medicinesCol = collection(db, 'medicines');
   const snapshot = await getDocs(medicinesCol);
@@ -11,7 +47,7 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
     let calculatedStock = data.stock || data.currentStock || 0;
     if (data.stockBatches && Array.isArray(data.stockBatches) && data.stockBatches.length > 0) {
       calculatedStock = data.stockBatches.reduce((sum: number, batch: any) => {
-        return sum + (batch.quantity || 0);
+        return sum + normalizeBatchQuantity(batch);
       }, 0);
     }
     
@@ -57,11 +93,11 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
       
       return {
         id: batch.id || Date.now().toString() + Math.random(),
-        batchNumber: batch.batchNumber || '',
-        quantity: batch.quantity || 0,
-        expiryDate: batch.expiryDate?.toDate ? batch.expiryDate : (batch.expiryDate ? batch.expiryDate : undefined),
-        mfgDate: batch.mfgDate?.toDate ? batch.mfgDate : (batch.mfgDate ? batch.mfgDate : undefined),
-        purchaseDate: batch.purchaseDate?.toDate ? batch.purchaseDate : (batch.purchaseDate ? batch.purchaseDate : undefined),
+        batchNumber: String(batch.batchNumber ?? '').trim(),
+        quantity: normalizeBatchQuantity(batch),
+        expiryDate: normalizeFirestoreDate(batch.expiryDate),
+        mfgDate: normalizeFirestoreDate(batch.mfgDate),
+        purchaseDate: normalizeFirestoreDate(batch.purchaseDate),
         purchasePrice: batch.purchasePrice !== undefined && batch.purchasePrice !== null 
           ? (typeof batch.purchasePrice === 'number' ? batch.purchasePrice : parseFloat(String(batch.purchasePrice))) 
           : undefined,
@@ -127,7 +163,7 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
   let calculatedStock = data.stock || data.currentStock || 0;
   if (data.stockBatches && Array.isArray(data.stockBatches) && data.stockBatches.length > 0) {
     calculatedStock = data.stockBatches.reduce((sum: number, batch: any) => {
-      return sum + (batch.quantity || 0);
+      return sum + normalizeBatchQuantity(batch);
     }, 0);
   }
   
@@ -150,11 +186,11 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
     
     return {
       id: batch.id || '',
-      batchNumber: String(batch.batchNumber || ''),
-      quantity: typeof batch.quantity === 'number' ? batch.quantity : parseInt(String(batch.quantity || 0)),
-      expiryDate: batch.expiryDate?.toDate ? batch.expiryDate.toDate() : (batch.expiryDate ? new Date(batch.expiryDate) : new Date()),
-      mfgDate: batch.mfgDate?.toDate ? batch.mfgDate.toDate() : (batch.mfgDate ? new Date(batch.mfgDate) : undefined),
-      purchaseDate: batch.purchaseDate?.toDate ? batch.purchaseDate.toDate() : (batch.purchaseDate ? new Date(batch.purchaseDate) : undefined),
+      batchNumber: String(batch.batchNumber ?? '').trim(),
+      quantity: normalizeBatchQuantity(batch),
+      expiryDate: normalizeFirestoreDate(batch.expiryDate),
+      mfgDate: normalizeFirestoreDate(batch.mfgDate),
+      purchaseDate: normalizeFirestoreDate(batch.purchaseDate),
       purchasePrice: batch.purchasePrice !== undefined && batch.purchasePrice !== null ? (typeof batch.purchasePrice === 'number' ? batch.purchasePrice : parseFloat(String(batch.purchasePrice))) : undefined,
       mrp: mrpValue,
       discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null

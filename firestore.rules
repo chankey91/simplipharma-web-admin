@@ -1,69 +1,192 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Users collection - Allow users to read/write their own profile
-    match /users/{userId} {
-      // Allow authenticated users to read and write their own profile
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-      
-      // Allow any admin user to read all user profiles
-      allow read: if request.auth != null && 
-                     exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                     get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+
+    // ----- Shared helpers -----
+    function signedIn() {
+      return request.auth != null;
     }
-    
-    // Medical Stores collection
-    match /stores/{storeId} {
-      // Allow any authenticated user to read stores
-      allow read: if request.auth != null;
-      
-      // Only admins can write stores
-      allow write: if request.auth != null && 
-                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+
+    function userDocPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
     }
-    
-    // Orders collection
+
+    function hasUserDoc() {
+      return exists(userDocPath());
+    }
+
+    function userRole() {
+      return get(userDocPath()).data.role;
+    }
+
+    function isAdmin() {
+      return hasUserDoc() && userRole() == 'admin';
+    }
+
+    function isSalesOfficer() {
+      return hasUserDoc() && userRole() == 'salesOfficer';
+    }
+
+    function isAdminOrSalesOfficer() {
+      return hasUserDoc() && userRole() in ['admin', 'salesOfficer'];
+    }
+
+    // Retailer doc must exist and list this Sales Officer
+    function retailerAssignedToSO(retailerId) {
+      return exists(/databases/$(database)/documents/users/$(retailerId))
+        && get(/databases/$(database)/documents/users/$(retailerId)).data.salesOfficerId == request.auth.uid;
+    }
+
+    function orderRetailerId(orderId) {
+      return get(/databases/$(database)/documents/orders/$(orderId)).data.retailerId;
+    }
+
+    function canModifyOrder(orderId) {
+      return isAdmin()
+        || orderRetailerId(orderId) == request.auth.uid
+        || (isSalesOfficer() && retailerAssignedToSO(orderRetailerId(orderId)));
+    }
+
+    // ----- Medicines -----
+    match /medicines/{medicineId} {
+      allow read, write: if signedIn();
+    }
+
+    // ----- Banners -----
+    match /banners/{bannerId} {
+      allow read, write: if signedIn();
+    }
+
+    // ----- Orders (tightened update; admin can create) -----
     match /orders/{orderId} {
-      // Allow any authenticated user to read orders
-      allow read: if request.auth != null;
-      
-      // Only admins can create/update orders
-      allow write: if request.auth != null && 
-                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if signedIn();
+
+      // Retailer (self), Sales Officer (assigned retailer), or Admin
+      allow create: if signedIn() && (
+        isAdmin()
+        || request.auth.uid == request.resource.data.retailerId
+        || (
+          isSalesOfficer()
+          && retailerAssignedToSO(request.resource.data.retailerId)
+        )
+      );
+
+      // Admin any; retailer own order; SO only for assigned retailers; retailerId cannot change except by admin
+      allow update: if signedIn() && (
+        isAdmin()
+        || (
+          resource.data.retailerId == request.auth.uid
+          && request.resource.data.retailerId == resource.data.retailerId
+        )
+        || (
+          isSalesOfficer()
+          && retailerAssignedToSO(resource.data.retailerId)
+          && request.resource.data.retailerId == resource.data.retailerId
+        )
+      );
+
+      // No client-side delete (use status Cancelled or Admin SDK if you need removal)
+      allow delete: if false;
+
+      // Payments subcollection (accounting) — same actors as order update
+      match /payments/{paymentId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn() && canModifyOrder(orderId);
+        allow delete: if signedIn() && isAdmin();
+      }
     }
-    
-    // Inventory collection
-    match /inventory/{inventoryId} {
-      // Allow any authenticated user to read inventory
-      allow read: if request.auth != null;
-      
-      // Only admins can write inventory
-      allow write: if request.auth != null && 
-                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+
+    // ----- Users -----
+    match /users/{userId} {
+      allow read: if signedIn() && (
+        request.auth.uid == userId
+        || isAdminOrSalesOfficer()
+        || (
+          resource.data.role == 'retailer'
+          && resource.data.salesOfficerId == request.auth.uid
+        )
+      );
+      allow write: if signedIn() && (
+        request.auth.uid == userId
+        || isAdminOrSalesOfficer()
+      );
     }
-    
-    // Operations: Trays and Operators (admin only)
+
+    // ----- Favorites -----
+    match /favorites/{favoriteId} {
+      allow read, write: if signedIn();
+    }
+
+    // ----- Expiry return requests -----
+    match /expiry_return_requests/{requestId} {
+      allow read: if signedIn() && (
+        resource.data.retailerId == request.auth.uid
+        || resource.data.salesOfficerId == request.auth.uid
+        || isAdmin()
+      );
+      allow create: if signedIn() && (
+        request.resource.data.retailerId == request.auth.uid
+        || (
+          isSalesOfficer()
+          && request.resource.data.salesOfficerId == request.auth.uid
+        )
+      );
+      allow update: if signedIn() && (
+        resource.data.salesOfficerId == request.auth.uid
+        || isAdmin()
+      );
+      allow delete: if false;
+    }
+
+    // ----- Retailer registration requests -----
+    match /retailer_registration_requests/{requestId} {
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.salesOfficerId
+        || isAdmin()
+      );
+      allow create: if signedIn() && (
+        isSalesOfficer()
+        && request.resource.data.salesOfficerId == request.auth.uid
+      );
+      allow update: if signedIn() && isAdmin();
+      allow delete: if false;
+    }
+
+    // ----- Vendors (admin web) -----
+    match /vendors/{vendorId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ----- Purchase invoices (admin web) -----
+    match /purchaseInvoices/{invoiceId} {
+      allow read: if signedIn() && isAdminOrSalesOfficer();
+      allow write: if isAdmin();
+    }
+
+    // ----- Operations: trays & operators (admin web) -----
     match /trays/{trayId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && 
-                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if signedIn();
+      allow write: if isAdmin();
     }
     match /operators/{operatorId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && 
-                      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if signedIn();
+      allow write: if isAdmin();
     }
-    
-    // Default: Deny all other access
+
+    // ----- Legacy / optional collections -----
+    match /stores/{storeId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+    match /inventory/{inventoryId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ----- Deny everything else -----
     match /{document=**} {
       allow read, write: if false;
     }
   }
 }
-

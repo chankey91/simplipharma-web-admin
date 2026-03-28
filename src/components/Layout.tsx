@@ -14,6 +14,8 @@ import {
   Campaign,
   Group,
   Settings,
+  PersonAdd,
+  Archive,
 } from '@mui/icons-material';
 import { logout } from '../services/firebase';
 
@@ -21,6 +23,8 @@ const drawerWidth = 240;
 
 const menuItems = [
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
+  { text: 'Pending Retailers', icon: <PersonAdd />, path: '/pending-retailers' },
+  { text: 'Expiry Returns', icon: <Archive />, path: '/expiry-returns' },
   { text: 'Vendors', icon: <Business />, path: '/vendors' },
   { text: 'Medical Stores', icon: <Store />, path: '/stores' },
   { text: 'Sales Officers', icon: <Group />, path: '/sales-officers' },

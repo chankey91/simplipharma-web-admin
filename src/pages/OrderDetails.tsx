@@ -59,6 +59,7 @@ import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { OrderStatus } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
+import { normalizeFirestoreDate } from '../services/inventory';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -747,8 +748,15 @@ export const OrderDetailsPage: React.FC = () => {
     }
 
     const medicine = medicines?.find(m => m.id === item.medicineId);
-    if (!medicine || !medicine.stockBatches || medicine.stockBatches.length === 0) {
-      alert('No batches available for this medicine');
+    if (!medicine) {
+      alert(
+        `Medicine not found in master data (ID: ${item.medicineId}). ` +
+          'The order may reference a deleted product or mismatched ID. Check Inventory.'
+      );
+      return;
+    }
+    if (!medicine.stockBatches || medicine.stockBatches.length === 0) {
+      alert(`No stock batches for "${medicine.name}". Add batches in Inventory before fulfilling.`);
       return;
     }
 
@@ -790,34 +798,32 @@ export const OrderDetailsPage: React.FC = () => {
     today.setHours(0, 0, 0, 0);
     
     const filteredBatches = medicine.stockBatches.filter(batch => {
-      const availableQty = batch.quantity || 0;
+      const availableQty = Number(batch.quantity) || 0;
       const isAlreadyAllocated = existingAllocations.some((a: any) => a.batchNumber === batch.batchNumber && (a.quantity || 0) > 0);
-      
-      // Check if batch is expired
-      const expiryDate = batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate();
-      const expiryDateOnly = new Date(expiryDate);
-      expiryDateOnly.setHours(0, 0, 0, 0);
-      const isExpired = expiryDateOnly.getTime() < today.getTime();
-      
-      // Show batch if:
-      // 1. It has available quantity AND not expired, OR
-      // 2. It's already allocated (so user can see existing allocation even if expired/zero)
-      if (isAlreadyAllocated) {
-        return true; // Always show already allocated batches
+
+      const expiryNorm = normalizeFirestoreDate(batch.expiryDate);
+      let isExpired = false;
+      if (expiryNorm) {
+        const expiryDateOnly = new Date(expiryNorm);
+        expiryDateOnly.setHours(0, 0, 0, 0);
+        isExpired = expiryDateOnly.getTime() < today.getTime();
       }
-      
-      // For non-allocated batches: must have stock and not be expired
+
+      if (isAlreadyAllocated) {
+        return true;
+      }
       return availableQty > 0 && !isExpired;
     });
-    
-    // Sort batches by expiry date (ascending - earliest first), then by quantity (descending - higher first)
+
     filteredBatches.sort((a, b) => {
-      const expiryA = a.expiryDate instanceof Date ? a.expiryDate : a.expiryDate.toDate();
-      const expiryB = b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate();
-      const expiryDiff = expiryA.getTime() - expiryB.getTime();
+      const expA = normalizeFirestoreDate(a.expiryDate);
+      const expB = normalizeFirestoreDate(b.expiryDate);
+      if (!expA && !expB) return (Number(b.quantity) || 0) - (Number(a.quantity) || 0);
+      if (!expA) return 1;
+      if (!expB) return -1;
+      const expiryDiff = expA.getTime() - expB.getTime();
       if (expiryDiff !== 0) return expiryDiff;
-      // If expiry dates are same, sort by quantity (descending)
-      return (b.quantity || 0) - (a.quantity || 0);
+      return (Number(b.quantity) || 0) - (Number(a.quantity) || 0);
     });
     
     // If no batches are available and none are allocated, show alert

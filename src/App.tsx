@@ -23,6 +23,8 @@ import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
 import { SalesOfficersPage } from './pages/SalesOfficers';
 import { OperationsPage } from './pages/Operations';
+import { PendingRetailersPage } from './pages/PendingRetailers';
+import { ExpiryReturnsPage } from './pages/ExpiryReturns';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -233,6 +235,26 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <SalesOfficersPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/pending-retailers"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <PendingRetailersPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/expiry-returns"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <ExpiryReturnsPage />
                     </Layout>
                   </ProtectedRoute>
                 }
