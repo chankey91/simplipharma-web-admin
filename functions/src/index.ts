@@ -722,3 +722,5 @@ export const onRetailerRegistrationRequestCreated = functions.firestore
     return null;
   });
 
+export { onBulkMedicineJobCreated } from './bulkMedicineJob';
+

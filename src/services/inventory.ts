@@ -37,6 +37,25 @@ function normalizeBatchQuantity(batch: any): number {
   return isNaN(n) ? 0 : Math.max(0, n);
 }
 
+/** Buy schemePaidQty, get schemeFreeQty free; accepts legacy purchaseSchemeDeal / purchaseSchemeFree on batches. */
+function normalizeSchemeFromBatch(batch: any): { schemePaidQty?: number; schemeFreeQty?: number } {
+  const paidRaw = batch.schemePaidQty ?? batch.purchaseSchemeDeal;
+  const freeRaw = batch.schemeFreeQty ?? batch.purchaseSchemeFree;
+  if (paidRaw == null || paidRaw === '' || freeRaw == null || freeRaw === '') return {};
+  const p = typeof paidRaw === 'number' ? paidRaw : parseFloat(String(paidRaw));
+  const f = typeof freeRaw === 'number' ? freeRaw : parseFloat(String(freeRaw));
+  if (isNaN(p) || isNaN(f) || p <= 0 || f <= 0) return {};
+  return { schemePaidQty: Math.floor(p), schemeFreeQty: Math.floor(f) };
+}
+
+function appendSchemeFieldsToFirestoreBatch(firestoreBatch: any, b: any) {
+  const s = normalizeSchemeFromBatch(b);
+  if (s.schemePaidQty != null && s.schemeFreeQty != null) {
+    firestoreBatch.schemePaidQty = s.schemePaidQty;
+    firestoreBatch.schemeFreeQty = s.schemeFreeQty;
+  }
+}
+
 export const getAllMedicines = async (): Promise<Medicine[]> => {
   const medicinesCol = collection(db, 'medicines');
   const snapshot = await getDocs(medicinesCol);
@@ -105,6 +124,7 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
         discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
           ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
           : undefined,
+        ...normalizeSchemeFromBatch(batch),
       };
     }) : undefined;
     
@@ -196,6 +216,7 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
       discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
         ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
         : undefined,
+      ...normalizeSchemeFromBatch(batch),
     };
   }) : [];
   
@@ -293,6 +314,12 @@ export const addStockBatch = async (
   if (batch.discountPercentage !== undefined && batch.discountPercentage !== null) {
     newBatch.discountPercentage = batch.discountPercentage;
   }
+
+  const schemeFields = normalizeSchemeFromBatch(batch);
+  if (schemeFields.schemePaidQty != null && schemeFields.schemeFreeQty != null) {
+    newBatch.schemePaidQty = schemeFields.schemePaidQty;
+    newBatch.schemeFreeQty = schemeFields.schemeFreeQty;
+  }
   
   // Check if batch with same batch number already exists
   const existingBatchIndex = batches.findIndex(b => b.batchNumber === batch.batchNumber);
@@ -319,6 +346,10 @@ export const addStockBatch = async (
     if (newBatch.discountPercentage !== undefined && newBatch.discountPercentage !== null) {
       batches[existingBatchIndex].discountPercentage = newBatch.discountPercentage;
       console.log(`Updated discountPercentage for batch ${batch.batchNumber} to ${newBatch.discountPercentage}`);
+    }
+    if (schemeFields.schemePaidQty != null && schemeFields.schemeFreeQty != null) {
+      batches[existingBatchIndex].schemePaidQty = schemeFields.schemePaidQty;
+      batches[existingBatchIndex].schemeFreeQty = schemeFields.schemeFreeQty;
     }
   } else {
     // Add new batch
@@ -383,6 +414,8 @@ export const addStockBatch = async (
         console.warn(`Invalid discountPercentage value for batch ${b.batchNumber}: ${b.discountPercentage}`);
       }
     }
+
+    appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
     
     return firestoreBatch;
   });
@@ -483,6 +516,8 @@ export const reduceStockFromBatch = async (
         console.log(`[reduceStockFromBatch] Preserving discountPercentage: ${discountValue}% for batch ${b.batchNumber}`);
       }
     }
+
+    appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
     
     return firestoreBatch;
   });
@@ -574,6 +609,8 @@ export const restoreStockToBatch = async (
         firestoreBatch.discountPercentage = discountValue;
       }
     }
+
+    appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
     
     return firestoreBatch;
   });

@@ -43,6 +43,9 @@ export interface StockBatch {
   purchasePrice?: number;
   mrp?: number;
   discountPercentage?: number;
+  /** Retailer-facing purchase offer: pay for this many units, get schemeFreeQty free (e.g. 10 + 1). */
+  schemePaidQty?: number;
+  schemeFreeQty?: number;
 }
 
 export type OrderStatus = 'Pending' | 'Order Fulfillment' | 'In Transit' | 'Delivered' | 'Cancelled';
@@ -191,6 +194,9 @@ export interface PurchaseInvoiceItem {
   expiryDate: Date | any;
   quantity: number;
   freeQuantity?: number;
+  /** Shown to retailers: buy schemePaidQty, get schemeFreeQty free (same batch). */
+  schemePaidQty?: number;
+  schemeFreeQty?: number;
   unitPrice: number;
   purchasePrice: number;
   mrp?: number;
@@ -218,4 +224,28 @@ export interface PurchaseInvoice {
   notes?: string;
   createdAt: Date | any;
   createdBy: string;
+}
+
+export type ProductDemandStatus = 'pending' | 'fulfilled' | 'rejected';
+
+export interface ProductDemand {
+  id: string;
+  retailerId: string;
+  retailerEmail?: string;
+  retailerName?: string;
+  productName: string;
+  manufacturerName: string;
+  notes?: string;
+  status: ProductDemandStatus;
+  createdAt: Date | any;
+  updatedAt?: Date | any;
+  fulfilledMedicineId?: string;
+  fulfilledMedicineName?: string;
+  fulfilledBy?: string;
+  fulfilledAt?: Date | any;
+  fulfillmentNote?: string;
+  purchaseInvoiceId?: string;
+  rejectionReason?: string;
+  rejectedAt?: Date | any;
+  rejectedBy?: string;
 }

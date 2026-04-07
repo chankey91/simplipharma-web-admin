@@ -89,6 +89,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     expiryDate?: string;
     quantity?: string | number;
     freeQuantity?: string | number;
+    schemePaidQty?: string | number;
+    schemeFreeQty?: string | number;
     unitPrice?: string | number;
     purchasePrice?: string | number;
     mrp?: string | number;
@@ -101,6 +103,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     expiryDate: '', // MM/YYYY format
     quantity: '',
     freeQuantity: '',
+    schemePaidQty: '',
+    schemeFreeQty: '',
     unitPrice: '',
     purchasePrice: '',
     mrp: '',
@@ -188,6 +192,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       expiryDate: '', // MM/YYYY format
       quantity: '',
       freeQuantity: '',
+      schemePaidQty: '',
+      schemeFreeQty: '',
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
@@ -265,6 +271,16 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
     const quantity = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
     const freeQuantity = currentItem.freeQuantity ? (typeof currentItem.freeQuantity === 'number' ? currentItem.freeQuantity : parseFloat(String(currentItem.freeQuantity || '0'))) : 0;
+    const spRaw = currentItem.schemePaidQty !== '' && currentItem.schemePaidQty != null
+      ? (typeof currentItem.schemePaidQty === 'number' ? currentItem.schemePaidQty : parseFloat(String(currentItem.schemePaidQty)))
+      : NaN;
+    const sfRaw = currentItem.schemeFreeQty !== '' && currentItem.schemeFreeQty != null
+      ? (typeof currentItem.schemeFreeQty === 'number' ? currentItem.schemeFreeQty : parseFloat(String(currentItem.schemeFreeQty)))
+      : NaN;
+    const schemePaidQty =
+      !isNaN(spRaw) && !isNaN(sfRaw) && spRaw > 0 && sfRaw > 0 ? Math.floor(spRaw) : undefined;
+    const schemeFreeQty =
+      schemePaidQty != null ? Math.floor(sfRaw) : undefined;
     const purchasePrice = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
     const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
     // Get GST rate from medicine master data (from selectedMedicine)
@@ -302,6 +318,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       expiryDate: format(expiryDate, 'MM/yyyy'),
       quantity,
       freeQuantity,
+      schemePaidQty,
+      schemeFreeQty,
       purchasePrice,
       mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
     });
@@ -314,6 +332,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       expiryDate,
       quantity,
       freeQuantity: freeQuantity > 0 ? freeQuantity : undefined,
+      ...(schemePaidQty != null && schemeFreeQty != null
+        ? { schemePaidQty, schemeFreeQty }
+        : {}),
       unitPrice: purchasePrice,
       purchasePrice,
       mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
@@ -342,6 +363,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       expiryDate: '',
       quantity: '',
       freeQuantity: '',
+      schemePaidQty: '',
+      schemeFreeQty: '',
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
@@ -361,6 +384,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       expiryDate: format(expiryDate, 'MM/yyyy'), // Single field in MM/YYYY format
       quantity: item.quantity.toString(),
       freeQuantity: item.freeQuantity?.toString() || '',
+      schemePaidQty: item.schemePaidQty?.toString() || '',
+      schemeFreeQty: item.schemeFreeQty?.toString() || '',
       unitPrice: item.unitPrice.toString(),
       purchasePrice: item.purchasePrice.toString(),
       mrp: item.mrp?.toString() || '',
@@ -656,6 +681,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     <TableCell>Batch</TableCell>
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Free Qty</TableCell>
+                    <TableCell align="center">Scheme</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">Price</TableCell>
                     <TableCell align="right">GST %</TableCell>
@@ -668,7 +694,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 <TableBody>
                   {items.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={11} align="center">
+                      <TableCell colSpan={12} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>
                           No items added. Search and add medicines to create invoice.
                         </Typography>
@@ -687,6 +713,16 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                         <TableCell align="right">{item.quantity}</TableCell>
                         <TableCell align="right">
                           {item.freeQuantity && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                        </TableCell>
+                        <TableCell align="center">
+                          <Typography variant="caption">
+                            {item.schemePaidQty != null &&
+                            item.schemeFreeQty != null &&
+                            item.schemePaidQty > 0 &&
+                            item.schemeFreeQty > 0
+                              ? `${item.schemeFreeQty} free / ${item.schemePaidQty}`
+                              : '—'}
+                          </Typography>
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">
@@ -770,10 +806,36 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Free Quantity"
+                label="Free quantity (this bill)"
                 type="number"
+                helperText="Extra strips/units free on this invoice (stock)"
                 value={currentItem.freeQuantity}
                 onChange={(e) => setCurrentItem({ ...currentItem, freeQuantity: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                Retailer scheme (optional): e.g. 1 free on 10 strips → pay for = 10, free = 1. Shown in the retailer app for this batch.
+              </Typography>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Scheme — pay for (qty)"
+                type="number"
+                inputProps={{ min: 1 }}
+                value={currentItem.schemePaidQty}
+                onChange={(e) => setCurrentItem({ ...currentItem, schemePaidQty: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Scheme — get free (qty)"
+                type="number"
+                inputProps={{ min: 1 }}
+                value={currentItem.schemeFreeQty}
+                onChange={(e) => setCurrentItem({ ...currentItem, schemeFreeQty: e.target.value })}
               />
             </Grid>
             <Grid item xs={12} sm={6}>

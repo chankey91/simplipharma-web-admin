@@ -138,6 +138,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                     <TableCell>Batch</TableCell>
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Free Qty</TableCell>
+                    <TableCell align="center">Scheme</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">MRP</TableCell>
                     <TableCell align="right">Price</TableCell>
@@ -178,6 +179,14 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                         <TableCell align="right">{item.quantity}</TableCell>
                         <TableCell align="right">
                           {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                        </TableCell>
+                        <TableCell align="center">
+                          {item.schemePaidQty != null &&
+                          item.schemeFreeQty != null &&
+                          item.schemePaidQty > 0 &&
+                          item.schemeFreeQty > 0
+                            ? `${item.schemeFreeQty} free / ${item.schemePaidQty}`
+                            : '—'}
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">

@@ -1,0 +1,90 @@
+import {
+  db,
+  auth,
+  collection,
+  doc,
+  getDocs,
+  getDoc,
+  updateDoc,
+  Timestamp,
+  writeBatch,
+} from './firebase';
+import { ProductDemand } from '../types';
+
+function parseDemandDoc(id: string, data: Record<string, unknown>): ProductDemand {
+  return {
+    id,
+    ...(data as object),
+    createdAt: (data.createdAt as any)?.toDate?.() || data.createdAt,
+    updatedAt: (data.updatedAt as any)?.toDate?.() || data.updatedAt,
+    fulfilledAt: (data.fulfilledAt as any)?.toDate?.() || data.fulfilledAt,
+    rejectedAt: (data.rejectedAt as any)?.toDate?.() || data.rejectedAt,
+  } as ProductDemand;
+}
+
+export const getAllProductDemands = async (): Promise<ProductDemand[]> => {
+  const snap = await getDocs(collection(db, 'product_demands'));
+  const list = snap.docs.map((d) => parseDemandDoc(d.id, d.data()));
+  return list.sort((a, b) => {
+    const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : new Date(a.createdAt).getTime();
+    const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : new Date(b.createdAt).getTime();
+    return tb - ta;
+  });
+};
+
+export const fulfillProductDemand = async (
+  demandId: string,
+  medicineId: string,
+  options?: { quantity?: number; fulfillmentNote?: string; purchaseInvoiceId?: string }
+): Promise<void> => {
+  const demandRef = doc(db, 'product_demands', demandId);
+  const demandSnap = await getDoc(demandRef);
+  if (!demandSnap.exists()) throw new Error('Demand not found');
+  const d = demandSnap.data() as Record<string, unknown>;
+  if (d.status !== 'pending') throw new Error('Demand is not pending');
+
+  const medSnap = await getDoc(doc(db, 'medicines', medicineId));
+  if (!medSnap.exists()) throw new Error('Medicine not found');
+  const med = medSnap.data() as Record<string, unknown>;
+
+  const uid = auth.currentUser?.uid || '';
+  const batch = writeBatch(db);
+
+  batch.update(demandRef, {
+    status: 'fulfilled',
+    fulfilledMedicineId: medicineId,
+    fulfilledMedicineName: (med.name as string) || d.productName,
+    fulfilledAt: Timestamp.now(),
+    fulfilledBy: uid,
+    fulfillmentNote: options?.fulfillmentNote?.trim() || '',
+    purchaseInvoiceId: options?.purchaseInvoiceId?.trim() || '',
+    updatedAt: Timestamp.now(),
+  });
+
+  const queueRef = doc(collection(db, 'users', String(d.retailerId), 'demandCartQueue'));
+  batch.set(queueRef, {
+    medicineId,
+    quantity: options?.quantity && options.quantity > 0 ? Math.floor(options.quantity) : 1,
+    demandId,
+    productName: d.productName,
+    createdAt: Timestamp.now(),
+  });
+
+  await batch.commit();
+};
+
+export const rejectProductDemand = async (demandId: string, reason: string): Promise<void> => {
+  const demandRef = doc(db, 'product_demands', demandId);
+  const demandSnap = await getDoc(demandRef);
+  if (!demandSnap.exists()) throw new Error('Demand not found');
+  const d = demandSnap.data() as Record<string, unknown>;
+  if (d.status !== 'pending') throw new Error('Demand is not pending');
+
+  await updateDoc(demandRef, {
+    status: 'rejected',
+    rejectionReason: reason.trim(),
+    rejectedAt: Timestamp.now(),
+    rejectedBy: auth.currentUser?.uid || '',
+    updatedAt: Timestamp.now(),
+  });
+};

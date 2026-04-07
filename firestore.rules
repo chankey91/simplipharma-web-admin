@@ -181,6 +181,40 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // ----- Product demands (retailer requests; admin fulfills) -----
+    match /product_demands/{demandId} {
+      allow read: if signedIn() && (
+        isAdmin()
+        || resource.data.retailerId == request.auth.uid
+      );
+      allow create: if signedIn()
+        && request.resource.data.retailerId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.productName is string
+        && request.resource.data.productName.size() > 0
+        && request.resource.data.manufacturerName is string
+        && request.resource.data.manufacturerName.size() > 0;
+      allow update, delete: if signedIn() && isAdmin();
+    }
+
+    // ----- Bulk medicine import jobs (admin queues Excel; Cloud Function processes) -----
+    match /bulk_medicine_jobs/{jobId} {
+      allow read: if signedIn() && isAdmin();
+      allow create: if signedIn() && isAdmin()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'queued'
+        && request.resource.data.storagePath is string
+        && request.resource.data.notifyEmail is string;
+      allow update, delete: if false;
+    }
+
+    // ----- Queued cart items from fulfilled product demands -----
+    match /users/{userId}/demandCartQueue/{queueId} {
+      allow read, delete: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn() && isAdmin();
+      allow update: if false;
+    }
+
     // ----- Legacy / optional collections -----
     match /stores/{storeId} {
       allow read: if signedIn();

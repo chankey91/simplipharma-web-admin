@@ -21,8 +21,10 @@ import {
   setDoc,
   getDoc,
   onSnapshot,
-  deleteDoc
+  deleteDoc,
+  writeBatch
 } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 // Firebase configuration
 const firebaseConfig = {
@@ -38,6 +40,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+export const storage = getStorage(app);
 // Initialize Functions with region (us-central1 is default, but explicit is better)
 export const functions = getFunctions(app, 'us-central1');
 
@@ -110,6 +113,7 @@ export {
   setDoc, 
   getDoc, 
   onSnapshot, 
-  deleteDoc
+  deleteDoc,
+  writeBatch
 };
 

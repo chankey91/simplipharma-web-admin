@@ -142,6 +142,19 @@ export const createPurchaseInvoice = async (
     if (item.freeQuantity !== undefined && item.freeQuantity !== null) {
       cleanedItem.freeQuantity = item.freeQuantity;
     }
+    if (
+      item.schemePaidQty !== undefined &&
+      item.schemePaidQty !== null &&
+      item.schemeFreeQty !== undefined &&
+      item.schemeFreeQty !== null
+    ) {
+      const sp = typeof item.schemePaidQty === 'number' ? item.schemePaidQty : parseFloat(String(item.schemePaidQty));
+      const sf = typeof item.schemeFreeQty === 'number' ? item.schemeFreeQty : parseFloat(String(item.schemeFreeQty));
+      if (!isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0) {
+        cleanedItem.schemePaidQty = Math.floor(sp);
+        cleanedItem.schemeFreeQty = Math.floor(sf);
+      }
+    }
     if (item.gstRate !== undefined && item.gstRate !== null) {
       cleanedItem.gstRate = item.gstRate;
     }
@@ -247,6 +260,19 @@ export const createPurchaseInvoice = async (
             if (isNaN(batchData.discountPercentage)) {
               console.warn(`Invalid discountPercentage value for item ${item.medicineName}: ${item.discountPercentage}`);
               delete batchData.discountPercentage;
+            }
+          }
+          if (
+            item.schemePaidQty !== undefined &&
+            item.schemePaidQty !== null &&
+            item.schemeFreeQty !== undefined &&
+            item.schemeFreeQty !== null
+          ) {
+            const sp = typeof item.schemePaidQty === 'number' ? item.schemePaidQty : parseFloat(String(item.schemePaidQty));
+            const sf = typeof item.schemeFreeQty === 'number' ? item.schemeFreeQty : parseFloat(String(item.schemeFreeQty));
+            if (!isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0) {
+              batchData.schemePaidQty = Math.floor(sp);
+              batchData.schemeFreeQty = Math.floor(sf);
             }
           }
           
@@ -361,6 +387,19 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
           if (isNaN(batchData.discountPercentage)) {
             console.warn(`Invalid discountPercentage value for item ${item.medicineName}: ${item.discountPercentage}`);
             delete batchData.discountPercentage;
+          }
+        }
+        if (
+          item.schemePaidQty !== undefined &&
+          item.schemePaidQty !== null &&
+          item.schemeFreeQty !== undefined &&
+          item.schemeFreeQty !== null
+        ) {
+          const sp = typeof item.schemePaidQty === 'number' ? item.schemePaidQty : parseFloat(String(item.schemePaidQty));
+          const sf = typeof item.schemeFreeQty === 'number' ? item.schemeFreeQty : parseFloat(String(item.schemeFreeQty));
+          if (!isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0) {
+            batchData.schemePaidQty = Math.floor(sp);
+            batchData.schemeFreeQty = Math.floor(sf);
           }
         }
         

@@ -25,6 +25,7 @@ import { SalesOfficersPage } from './pages/SalesOfficers';
 import { OperationsPage } from './pages/Operations';
 import { PendingRetailersPage } from './pages/PendingRetailers';
 import { ExpiryReturnsPage } from './pages/ExpiryReturns';
+import { ProductDemandsPage } from './pages/ProductDemandsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -255,6 +256,16 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <ExpiryReturnsPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/product-demands"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <ProductDemandsPage />
                     </Layout>
                   </ProtectedRoute>
                 }

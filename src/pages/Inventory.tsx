@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -35,19 +35,21 @@ import {
   Upload,
   Download,
 } from '@mui/icons-material';
-import { useMedicines, useExpiringMedicines, useExpiredMedicines, useCreateMedicine, useUpdateMedicine } from '../hooks/useInventory';
-import { Medicine } from '../types';
+import { useQueryClient } from '@tanstack/react-query';
+import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
 import * as XLSX from 'xlsx';
+import { doc, setDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { ref as storageRef, uploadBytes } from 'firebase/storage';
+import { auth, db, storage } from '../services/firebase';
 
 export const InventoryPage: React.FC = () => {
+  const queryClient = useQueryClient();
   const { data: medicines, isLoading } = useMedicines();
   const { data: expiringMedicines } = useExpiringMedicines(30);
   const { data: expiredMedicines } = useExpiredMedicines();
-  const createMedicineMutation = useCreateMedicine();
-  const updateMedicineMutation = useUpdateMedicine();
   const navigate = useNavigate();
   
   const [searchTerm, setSearchTerm] = useState('');
@@ -56,9 +58,31 @@ export const InventoryPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState<string>('');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  /** Client upload + server job lifecycle */
+  const [bulkPhase, setBulkPhase] = useState<'idle' | 'uploading' | 'running' | 'done' | 'error'>('idle');
+  const [jobStatusLine, setJobStatusLine] = useState('');
+  const jobUnsubRef = useRef<(() => void) | null>(null);
+
+  const stopJobListener = () => {
+    jobUnsubRef.current?.();
+    jobUnsubRef.current = null;
+  };
+
+  useEffect(() => {
+    return () => stopJobListener();
+  }, []);
+
+  useEffect(() => {
+    if (bulkUploadOpen) {
+      setBulkPhase('idle');
+      setJobStatusLine('');
+      setUploadError(null);
+      stopJobListener();
+    } else {
+      stopJobListener();
+    }
+  }, [bulkUploadOpen]);
 
   const categories = Array.from(new Set(medicines?.map(m => m.category).filter(Boolean) || []));
 
@@ -129,9 +153,15 @@ export const InventoryPage: React.FC = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const user = auth.currentUser;
+    if (!user) {
+      setUploadError('You must be signed in to run a bulk import.');
+      return;
+    }
+
     setUploadError(null);
-    setUploadStatus('Reading Excel file...');
-    setUploadProgress(10);
+    setBulkPhase('uploading');
+    setJobStatusLine('Reading and validating Excel…');
 
     try {
       const data = await file.arrayBuffer();
@@ -144,137 +174,85 @@ export const InventoryPage: React.FC = () => {
         throw new Error('Excel file is empty. Please add medicine data.');
       }
 
-      setUploadStatus(`Processing ${jsonData.length} medicines...`);
-      setUploadProgress(30);
-
-      const medicinesToUpload: Omit<Medicine, 'id'>[] = [];
-      const errors: string[] = [];
-
+      let validPreview = 0;
       for (let i = 0; i < jsonData.length; i++) {
-        const row = jsonData[i] as any;
-        const rowNum = i + 2; // +2 because Excel is 1-indexed and has header
-
-        try {
-          // Validate required fields
-          if (!row['Medicine Name']) {
-            errors.push(`Row ${rowNum}: Medicine Name is required`);
-            continue;
-          }
-          if (!row['Manufacturer']) {
-            errors.push(`Row ${rowNum}: Manufacturer is required`);
-            continue;
-          }
-          if (!row['Type']) {
-            errors.push(`Row ${rowNum}: Type is required`);
-            continue;
-          }
-          if (!row['Packaging']) {
-            errors.push(`Row ${rowNum}: Packaging is required`);
-            continue;
-          }
-
-          const medicine: Omit<Medicine, 'id'> = {
-            name: String(row['Medicine Name'] || '').trim(),
-            code: row['Code'] ? String(row['Code']).trim() : undefined,
-            category: String(row['Type'] || '').trim(), // Type maps to category
-            unit: String(row['Packaging'] || '').trim(), // Packaging maps to unit
-            manufacturer: String(row['Manufacturer'] || '').trim(),
-            stock: 0, // Default to 0, stock should not come from Excel
-            currentStock: 0, // Default to 0
-            price: 0, // Default price, not from Excel
-            gstRate: row['GST Rate (%)'] ? parseFloat(String(row['GST Rate (%)'])) : 5,
-            description: row['Description'] ? String(row['Description']).trim() : undefined,
-          };
-
-          medicinesToUpload.push(medicine);
-        } catch (error: any) {
-          errors.push(`Row ${rowNum}: ${error.message || 'Invalid data'}`);
+        const row = jsonData[i] as Record<string, unknown>;
+        if (row['Medicine Name'] && row['Manufacturer'] && row['Type'] && row['Packaging']) {
+          validPreview++;
         }
-
-        setUploadProgress(30 + (i / jsonData.length) * 50);
+      }
+      if (validPreview === 0) {
+        throw new Error(
+          'No valid rows found. Required columns: Medicine Name, Type, Packaging, Manufacturer.'
+        );
       }
 
-      if (errors.length > 0) {
-        setUploadError(`Found ${errors.length} error(s):\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
+      setJobStatusLine('Uploading file to cloud storage…');
+      const jobRef = doc(collection(db, 'bulk_medicine_jobs'));
+      const jobId = jobRef.id;
+      const storagePath = `bulk_medicine_uploads/${user.uid}/${jobId}.xlsx`;
+      const fileRef = storageRef(storage, storagePath);
+      const contentType =
+        file.type ||
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      await uploadBytes(fileRef, new Uint8Array(data), { contentType });
+
+      const notifyEmail = String(user.email || '').trim();
+      if (!notifyEmail) {
+        throw new Error(
+          'Your account has no email address. Add an email to your Firebase user to receive completion notifications.'
+        );
       }
 
-      if (medicinesToUpload.length === 0) {
-        throw new Error('No valid medicines found in the file.');
-      }
+      await setDoc(jobRef, {
+        status: 'queued',
+        storagePath,
+        notifyEmail,
+        createdBy: user.uid,
+        fileName: file.name,
+        createdAt: serverTimestamp(),
+      });
 
-      setUploadStatus(`Processing ${medicinesToUpload.length} medicines (checking for duplicates)...`);
-      setUploadProgress(80);
+      setBulkPhase('running');
+      setJobStatusLine('Job queued — processing on the server (up to several minutes for large files)…');
 
-      // Process medicines - check for duplicates by name and update or create
-      let successCount = 0;
-      let updateCount = 0;
-      let createCount = 0;
-      let failCount = 0;
-
-      for (let i = 0; i < medicinesToUpload.length; i++) {
-        try {
-          const medicineToUpload = medicinesToUpload[i];
-          
-          // Check if medicine with same name exists in database (case-insensitive)
-          const existingMedicine = medicines?.find(
-            m => m.name.toLowerCase().trim() === medicineToUpload.name.toLowerCase().trim()
+      stopJobListener();
+      jobUnsubRef.current = onSnapshot(jobRef, (snap) => {
+        const d = snap.data() as Record<string, unknown> | undefined;
+        if (!d) return;
+        const st = String(d.status || '');
+        if (d.progressNote) {
+          setJobStatusLine(String(d.progressNote));
+        } else if (st === 'processing') {
+          setJobStatusLine('Server is importing medicines…');
+        }
+        if (st === 'completed') {
+          const c = Number(d.createCount ?? 0);
+          const u = Number(d.updateCount ?? 0);
+          const f = Number(d.failCount ?? 0);
+          setBulkPhase('done');
+          setJobStatusLine(
+            `Import finished: ${c} created, ${u} updated, ${f} row failures. Check your email (${notifyEmail}) for the full report.`
           );
-          
-          if (existingMedicine) {
-            // Update existing medicine - overwrite all fields except stock
-            await updateMedicineMutation.mutateAsync({
-              medicineId: existingMedicine.id,
-              updates: {
-                name: medicineToUpload.name,
-                code: medicineToUpload.code,
-                category: medicineToUpload.category,
-                unit: medicineToUpload.unit,
-                manufacturer: medicineToUpload.manufacturer,
-                gstRate: medicineToUpload.gstRate,
-                description: medicineToUpload.description,
-                // Stock is not updated from Excel upload
-              }
-            });
-            
-            updateCount++;
-            successCount++;
-            console.log(`Updated existing medicine: ${medicineToUpload.name}`);
-          } else {
-            // Create new medicine
-            await createMedicineMutation.mutateAsync(medicineToUpload);
-            createCount++;
-            successCount++;
-            console.log(`Created new medicine: ${medicineToUpload.name}`);
-          }
-        } catch (error: any) {
-          failCount++;
-          console.error(`Failed to process medicine ${medicinesToUpload[i].name}:`, error);
-          errors.push(`Failed to process ${medicinesToUpload[i].name}: ${error.message || 'Unknown error'}`);
+          void queryClient.invalidateQueries({ queryKey: ['medicines'] });
+          stopJobListener();
         }
-        setUploadProgress(80 + ((i + 1) / medicinesToUpload.length) * 20);
-      }
-
-      setUploadStatus(`Upload complete! ${successCount} processed (${createCount} created, ${updateCount} updated), ${failCount} failed.`);
-      setUploadProgress(100);
-
-      if (errors.length > 0 && failCount > 0) {
-        setUploadError(`Found ${errors.length} error(s):\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
-      }
-
-      setTimeout(() => {
-        setBulkUploadOpen(false);
-        setUploadProgress(0);
-        setUploadStatus('');
-        setUploadError(null);
-        // Reset file input
-        const fileInput = document.getElementById('bulk-upload-file') as HTMLInputElement;
-        if (fileInput) fileInput.value = '';
-      }, 2000);
-    } catch (error: any) {
-      setUploadError(error.message || 'Failed to process Excel file');
-      setUploadStatus('');
-      setUploadProgress(0);
+        if (st === 'failed') {
+          setBulkPhase('error');
+          setJobStatusLine(String(d.errorMessage || 'Import failed'));
+          void queryClient.invalidateQueries({ queryKey: ['medicines'] });
+          stopJobListener();
+        }
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to start bulk import';
+      setUploadError(message);
+      setBulkPhase('error');
+      setJobStatusLine('');
     }
+
+    const fileInput = document.getElementById('bulk-upload-file') as HTMLInputElement;
+    if (fileInput) fileInput.value = '';
   };
 
   if (isLoading) return <Loading message="Loading inventory..." />;
@@ -452,8 +430,13 @@ export const InventoryPage: React.FC = () => {
       )}
 
       {/* Bulk Upload Dialog */}
-      <Dialog open={bulkUploadOpen} onClose={() => !uploadProgress && setBulkUploadOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Bulk Upload Medicines</DialogTitle>
+      <Dialog
+        open={bulkUploadOpen}
+        onClose={() => bulkPhase !== 'uploading' && setBulkUploadOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Bulk upload medicines (async)</DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
             {uploadError && (
@@ -461,16 +444,23 @@ export const InventoryPage: React.FC = () => {
                 {uploadError}
               </Alert>
             )}
-            {uploadStatus && (
-              <Alert severity={uploadProgress === 100 ? 'success' : 'info'} sx={{ mb: 2 }}>
-                {uploadStatus}
+            {jobStatusLine && (
+              <Alert
+                severity={
+                  bulkPhase === 'error' ? 'error' : bulkPhase === 'done' ? 'success' : 'info'
+                }
+                sx={{ mb: 2 }}
+              >
+                {jobStatusLine}
               </Alert>
             )}
-            {uploadProgress > 0 && uploadProgress < 100 && (
-              <LinearProgress variant="determinate" value={uploadProgress} sx={{ mb: 2 }} />
+            {(bulkPhase === 'uploading' || bulkPhase === 'running') && (
+              <LinearProgress sx={{ mb: 2 }} />
             )}
             <Typography variant="body2" color="textSecondary" paragraph>
-              Upload an Excel file (.xlsx) with medicine data. Download the template to see the required format.
+              The Excel file is uploaded to secure storage and processed by a Cloud Function on the server.
+              You can close this dialog; the import continues in the background. When it finishes, you will
+              receive an email at your signed-in admin address (SMTP must be configured on Firebase Functions).
             </Typography>
             <input
               accept=".xlsx,.xls"
@@ -478,7 +468,7 @@ export const InventoryPage: React.FC = () => {
               id="bulk-upload-file"
               type="file"
               onChange={handleFileUpload}
-              disabled={uploadProgress > 0 && uploadProgress < 100}
+              disabled={bulkPhase === 'uploading' || bulkPhase === 'running'}
             />
             <label htmlFor="bulk-upload-file">
               <Button
@@ -486,9 +476,9 @@ export const InventoryPage: React.FC = () => {
                 component="span"
                 fullWidth
                 startIcon={<Upload />}
-                disabled={uploadProgress > 0 && uploadProgress < 100}
+                disabled={bulkPhase === 'uploading' || bulkPhase === 'running'}
               >
-                {uploadProgress > 0 ? 'Uploading...' : 'Select Excel File'}
+                {bulkPhase === 'uploading' ? 'Uploading…' : 'Select Excel file'}
               </Button>
             </label>
             <Typography variant="caption" color="textSecondary" sx={{ mt: 2, display: 'block' }}>
@@ -496,23 +486,21 @@ export const InventoryPage: React.FC = () => {
               <br />
               Optional columns: Code, Description
               <br />
-              Note: Medicines with the same name will be updated (not duplicated)
+              Same as before: matching by name (case-insensitive) updates existing rows; stock is not changed
+              from the sheet.
             </Typography>
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => {
-            if (uploadProgress === 0 || uploadProgress === 100) {
+          <Button
+            onClick={() => {
               setBulkUploadOpen(false);
-              setUploadProgress(0);
-              setUploadStatus('');
-              setUploadError(null);
-              // Reset file input
               const fileInput = document.getElementById('bulk-upload-file') as HTMLInputElement;
               if (fileInput) fileInput.value = '';
-            }
-          }} disabled={uploadProgress > 0 && uploadProgress < 100}>
-            {uploadProgress === 100 ? 'Close' : 'Cancel'}
+            }}
+            disabled={bulkPhase === 'uploading'}
+          >
+            {bulkPhase === 'done' || bulkPhase === 'error' ? 'Close' : 'Close (job continues)'}
           </Button>
         </DialogActions>
       </Dialog>

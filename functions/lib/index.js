@@ -11,7 +11,7 @@ var __rest = (this && this.__rest) || function (s, e) {
     return t;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
+exports.onBulkMedicineJobCreated = exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
@@ -683,4 +683,6 @@ exports.onRetailerRegistrationRequestCreated = functions.firestore
     }
     return null;
 });
+var bulkMedicineJob_1 = require("./bulkMedicineJob");
+Object.defineProperty(exports, "onBulkMedicineJobCreated", { enumerable: true, get: function () { return bulkMedicineJob_1.onBulkMedicineJobCreated; } });
 //# sourceMappingURL=index.js.map

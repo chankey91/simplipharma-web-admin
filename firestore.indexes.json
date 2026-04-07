@@ -1,0 +1,87 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "role", "order": "ASCENDING" },
+        { "fieldPath": "salesOfficerId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "retailer_registration_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "retailer_registration_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "salesOfficerId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "retailer_registration_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "salesOfficerId", "order": "ASCENDING" },
+        { "fieldPath": "licenceNumber", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "retailer_registration_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "salesOfficerId", "order": "ASCENDING" },
+        { "fieldPath": "aadharNumber", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "expiry_return_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "expiry_return_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "retailerId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "expiry_return_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "salesOfficerId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "so_visit_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "salesOfficerId", "order": "ASCENDING" },
+        { "fieldPath": "visitedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "medicines",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
