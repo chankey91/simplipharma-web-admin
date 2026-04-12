@@ -1,4 +1,4 @@
-import { collection, getDocs, query, where, db, functions } from './firebase';
+import { collection, getDocs, query, where, doc, updateDoc, db, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
 
@@ -52,4 +52,17 @@ export const createSalesOfficer = async (
   });
   const data = result.data as any;
   return data.uid || data.id;
+};
+
+/** Update Sales Officer profile fields on `users/{salesOfficerId}` (not email — that is Auth). */
+export const updateSalesOfficerProfile = async (
+  salesOfficerId: string,
+  data: { displayName?: string; phoneNumber?: string }
+): Promise<void> => {
+  const ref = doc(db, 'users', salesOfficerId);
+  const payload: Record<string, string> = {};
+  if (data.displayName !== undefined) payload.displayName = data.displayName.trim();
+  if (data.phoneNumber !== undefined) payload.phoneNumber = data.phoneNumber.trim();
+  if (Object.keys(payload).length === 0) return;
+  await updateDoc(ref, payload);
 };

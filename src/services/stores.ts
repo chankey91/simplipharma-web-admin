@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, db, functions } from './firebase';
+import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, deleteField, db, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
 import { generateStoreCode } from '../utils/storeCode';
@@ -154,4 +154,17 @@ export const toggleStoreStatus = async (storeId: string, isActive: boolean) => {
 
 export const resetStorePassword = async (storeId: string) => {
   await updateStore(storeId, { mustResetPassword: true });
+};
+
+/** Set or clear which Sales Officer manages this retailer (`users` doc, role retailer). */
+export const assignRetailerToSalesOfficer = async (
+  retailerUserId: string,
+  salesOfficerId: string | null
+): Promise<void> => {
+  const storeRef = doc(db, 'users', retailerUserId);
+  if (salesOfficerId === null || salesOfficerId === '') {
+    await updateDoc(storeRef, { salesOfficerId: deleteField() });
+  } else {
+    await updateDoc(storeRef, { salesOfficerId });
+  }
 };

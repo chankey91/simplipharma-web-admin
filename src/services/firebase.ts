@@ -22,7 +22,8 @@ import {
   getDoc,
   onSnapshot,
   deleteDoc,
-  writeBatch
+  writeBatch,
+  deleteField
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
@@ -114,6 +115,7 @@ export {
   getDoc, 
   onSnapshot, 
   deleteDoc,
-  writeBatch
+  writeBatch,
+  deleteField
 };
 

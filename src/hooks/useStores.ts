@@ -1,5 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getAllStores, updateStore, toggleStoreStatus, createStore } from '../services/stores';
+import {
+  getAllStores,
+  updateStore,
+  toggleStoreStatus,
+  createStore,
+  assignRetailerToSalesOfficer,
+} from '../services/stores';
 import { User } from '../types';
 
 export const useStores = () => {
@@ -41,5 +47,17 @@ export const useToggleStoreStatus = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] });
     }
+  });
+};
+
+export const useAssignRetailerToSalesOfficer = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { retailerUserId: string; salesOfficerId: string | null }) =>
+      assignRetailerToSalesOfficer(args.retailerUserId, args.salesOfficerId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
+      queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });
+    },
   });
 };
