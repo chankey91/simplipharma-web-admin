@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -54,6 +54,7 @@ export const InventoryPage: React.FC = () => {
   
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
+  const [manufacturerFilter, setManufacturerFilter] = useState<string>('All');
   const [stockFilter, setStockFilter] = useState<string>('All');
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
@@ -86,15 +87,31 @@ export const InventoryPage: React.FC = () => {
 
   const categories = Array.from(new Set(medicines?.map(m => m.category).filter(Boolean) || []));
 
+  const manufacturers = useMemo(() => {
+    const set = new Set<string>();
+    medicines?.forEach((m) => {
+      const mf = String(m.manufacturer || m.company || '').trim();
+      if (mf) set.add(mf);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [medicines]);
+
   const filteredMedicines = medicines?.filter(medicine => {
     const name = String(medicine.name || '').toLowerCase();
     const code = String(medicine.code || '').toLowerCase();
-    const manufacturer = String(medicine.manufacturer || '').toLowerCase();
+    const manufacturerLower = String(medicine.manufacturer || '').toLowerCase();
     const search = searchTerm.toLowerCase();
 
-    const matchesSearch = name.includes(search) || code.includes(search) || manufacturer.includes(search);
+    const matchesSearch =
+      name.includes(search) ||
+      code.includes(search) ||
+      manufacturerLower.includes(search);
     
     const matchesCategory = categoryFilter === 'All' || medicine.category === categoryFilter;
+
+    const mfLabel = String(medicine.manufacturer || medicine.company || '').trim();
+    const matchesManufacturer =
+      manufacturerFilter === 'All' || mfLabel === manufacturerFilter;
     
     const currentStock = medicine.currentStock ?? medicine.stock ?? 0;
     const matchesStock =
@@ -103,7 +120,7 @@ export const InventoryPage: React.FC = () => {
       (stockFilter === 'Out' && currentStock === 0) ||
       (stockFilter === 'In Stock' && currentStock > 0);
     
-    return matchesSearch && matchesCategory && matchesStock;
+    return matchesSearch && matchesCategory && matchesManufacturer && matchesStock;
   }) || [];
 
   // Pagination
@@ -315,7 +332,7 @@ export const InventoryPage: React.FC = () => {
               }}
             />
           </Grid>
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} sm={6} md={2}>
             <FormControl fullWidth>
               <InputLabel>Type</InputLabel>
               <Select
@@ -333,7 +350,28 @@ export const InventoryPage: React.FC = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} sm={6} md={2}>
+            <FormControl fullWidth>
+              <InputLabel>Manufacturer</InputLabel>
+              <Select
+                value={manufacturerFilter}
+                label="Manufacturer"
+                onChange={(e) => {
+                  setManufacturerFilter(e.target.value);
+                  setPage(1);
+                }}
+                MenuProps={{ PaperProps: { style: { maxHeight: 320 } } }}
+              >
+                <MenuItem value="All">All manufacturers</MenuItem>
+                {manufacturers.map((mf) => (
+                  <MenuItem key={mf} value={mf}>
+                    {mf}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid item xs={12} sm={6} md={2}>
             <FormControl fullWidth>
               <InputLabel>Stock Status</InputLabel>
               <Select

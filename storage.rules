@@ -41,9 +41,12 @@ service firebase.storage {
       allow write: if request.auth != null && isSalesOfficer();
     }
 
-    // Admin bulk medicine Excel → processed by Cloud Function
-    match /bulk_medicine_uploads/{userId}/{fileName} {
-      allow read, write: if request.auth != null && isAdmin() && request.auth.uid == userId;
+    // Bulk medicine Excel → admin app uploads here, Cloud Function reads it.
+    // NOTE: Do not use isAdmin() + Firestore here: Storage rules that call firestore.get()
+    // require the Blaze plan; on Spark they fail and uploads get "permission denied".
+    // Access control: only this user can write under their uid; creating bulk_medicine_jobs stays admin-only in Firestore.
+    match /bulk_medicine_uploads/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
     // Paths not matched above are denied by default.
