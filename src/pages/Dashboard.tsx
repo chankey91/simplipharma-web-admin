@@ -274,7 +274,7 @@ export const DashboardPage: React.FC = () => {
             caption="Under 10 units (in stock)"
             accent={accent.error}
             icon={<Warning sx={{ fontSize: 40 }} />}
-            onClick={() => navigate('/inventory')}
+            onClick={() => navigate('/inventory?stockFilter=Low')}
           />
         </Grid>
       </Grid>
@@ -439,7 +439,11 @@ export const DashboardPage: React.FC = () => {
                   </Alert>
                 )}
                 {stats.lowStock > 0 && (
-                  <Alert severity="info" onClick={() => navigate('/inventory')} sx={{ cursor: 'pointer' }}>
+                  <Alert
+                    severity="info"
+                    onClick={() => navigate('/inventory?stockFilter=Low')}
+                    sx={{ cursor: 'pointer' }}
+                  >
                     {stats.lowStock} product{stats.lowStock !== 1 ? 's' : ''} under 10 units
                   </Alert>
                 )}

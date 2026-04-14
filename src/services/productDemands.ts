@@ -12,9 +12,23 @@ import {
 import { ProductDemand } from '../types';
 
 function parseDemandDoc(id: string, data: Record<string, unknown>): ProductDemand {
+  const rqRaw = data.requestedQuantity;
+  let requestedQuantity = 1;
+  if (typeof rqRaw === 'number' && Number.isFinite(rqRaw)) {
+    requestedQuantity = Math.max(1, Math.floor(rqRaw));
+  } else if (rqRaw != null && rqRaw !== '') {
+    const p = parseInt(String(rqRaw), 10);
+    if (!isNaN(p) && p >= 1) requestedQuantity = p;
+  }
+  const ruRaw = data.requestedUnit;
+  const requestedUnit =
+    typeof ruRaw === 'string' && ruRaw.trim().length > 0 ? ruRaw.trim() : '—';
+
   return {
     id,
     ...(data as object),
+    requestedQuantity,
+    requestedUnit,
     createdAt: (data.createdAt as any)?.toDate?.() || data.createdAt,
     updatedAt: (data.updatedAt as any)?.toDate?.() || data.updatedAt,
     fulfilledAt: (data.fulfilledAt as any)?.toDate?.() || data.fulfilledAt,
@@ -61,10 +75,15 @@ export const fulfillProductDemand = async (
     updatedAt: Timestamp.now(),
   });
 
+  const rq = d.requestedQuantity;
+  const defaultFromDemand =
+    typeof rq === 'number' && Number.isFinite(rq) && rq >= 1 ? Math.floor(rq) : 1;
+
   const queueRef = doc(collection(db, 'users', String(d.retailerId), 'demandCartQueue'));
   batch.set(queueRef, {
     medicineId,
-    quantity: options?.quantity && options.quantity > 0 ? Math.floor(options.quantity) : 1,
+    quantity:
+      options?.quantity && options.quantity > 0 ? Math.floor(options.quantity) : defaultFromDemand,
     demandId,
     productName: d.productName,
     createdAt: Timestamp.now(),

@@ -61,7 +61,9 @@ export const ProductDemandsPage: React.FC = () => {
     setSelectedMedicine(null);
     setFulfillNote('');
     setPurchaseInvoiceId('');
-    setCartQty('1');
+    const q = d.requestedQuantity;
+    const n = typeof q === 'number' && !isNaN(q) && q >= 1 ? Math.floor(q) : 1;
+    setCartQty(String(n));
     setFulfillOpen(true);
   };
 
@@ -146,6 +148,7 @@ export const ProductDemandsPage: React.FC = () => {
             <TableRow>
               <TableCell>Requested product</TableCell>
               <TableCell>Manufacturer</TableCell>
+              <TableCell align="right">Qty</TableCell>
               <TableCell>Retailer</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Created</TableCell>
@@ -155,7 +158,7 @@ export const ProductDemandsPage: React.FC = () => {
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">
+                <TableCell colSpan={7} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
                     No demands in this view.
                   </Typography>
@@ -183,6 +186,14 @@ export const ProductDemandsPage: React.FC = () => {
                     ) : null}
                   </TableCell>
                   <TableCell>{row.manufacturerName}</TableCell>
+                  <TableCell align="right">
+                    <Typography variant="body2" fontWeight={600}>
+                      {row.requestedQuantity}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      {row.requestedUnit}
+                    </Typography>
+                  </TableCell>
                   <TableCell>
                     <Typography variant="body2">{row.retailerName || '—'}</Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -238,6 +249,13 @@ export const ProductDemandsPage: React.FC = () => {
         <DialogContent>
           <Typography variant="body2" color="text.secondary" gutterBottom>
             Requested: <strong>{selectedDemand?.productName}</strong> — {selectedDemand?.manufacturerName}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            Retailer needs:{' '}
+            <strong>
+              {selectedDemand?.requestedQuantity} {selectedDemand?.requestedUnit}
+            </strong>{' '}
+            (cart quantity below defaults to this; adjust if needed)
           </Typography>
           <Autocomplete
             sx={{ mt: 2 }}

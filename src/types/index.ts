@@ -235,6 +235,10 @@ export interface ProductDemand {
   retailerName?: string;
   productName: string;
   manufacturerName: string;
+  /** How many units the retailer needs supplied (mandatory on new requests). */
+  requestedQuantity: number;
+  /** Unit of measure (e.g. strips, bottles, pcs). */
+  requestedUnit: string;
   notes?: string;
   status: ProductDemandStatus;
   createdAt: Date | any;

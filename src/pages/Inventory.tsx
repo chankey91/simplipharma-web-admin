@@ -38,7 +38,8 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
 import { format } from 'date-fns';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { categoriesMatch } from '../utils/categoryMatch';
 import { Loading } from '../components/Loading';
 import * as XLSX from 'xlsx';
 import { doc, setDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore';
@@ -51,11 +52,23 @@ export const InventoryPage: React.FC = () => {
   const { data: expiringMedicines } = useExpiringMedicines(30);
   const { data: expiredMedicines } = useExpiredMedicines();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [manufacturerFilter, setManufacturerFilter] = useState<string>('All');
   const [stockFilter, setStockFilter] = useState<string>('All');
+
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q != null && q.length > 0) setSearchTerm(q);
+    const cat = searchParams.get('category');
+    if (cat != null && cat.length > 0) setCategoryFilter(cat);
+    const stock = searchParams.get('stockFilter');
+    if (stock === 'Low' || stock === 'Out' || stock === 'In Stock' || stock === 'All') {
+      setStockFilter(stock);
+    }
+  }, [searchParams]);
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
@@ -87,6 +100,14 @@ export const InventoryPage: React.FC = () => {
 
   const categories = Array.from(new Set(medicines?.map(m => m.category).filter(Boolean) || []));
 
+  useEffect(() => {
+    if (categoryFilter === 'All' || !medicines?.length) return;
+    const list = Array.from(new Set(medicines.map((m) => m.category).filter(Boolean))) as string[];
+    if (list.some((c) => c === categoryFilter)) return;
+    const canon = list.find((c) => categoriesMatch(c, categoryFilter));
+    if (canon) setCategoryFilter(canon);
+  }, [medicines, categoryFilter]);
+
   const manufacturers = useMemo(() => {
     const set = new Set<string>();
     medicines?.forEach((m) => {
@@ -107,7 +128,8 @@ export const InventoryPage: React.FC = () => {
       code.includes(search) ||
       manufacturerLower.includes(search);
     
-    const matchesCategory = categoryFilter === 'All' || medicine.category === categoryFilter;
+    const matchesCategory =
+      categoryFilter === 'All' || categoriesMatch(medicine.category, categoryFilter);
 
     const mfLabel = String(medicine.manufacturer || medicine.company || '').trim();
     const matchesManufacturer =

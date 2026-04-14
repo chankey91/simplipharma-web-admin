@@ -193,7 +193,11 @@ service cloud.firestore {
         && request.resource.data.productName is string
         && request.resource.data.productName.size() > 0
         && request.resource.data.manufacturerName is string
-        && request.resource.data.manufacturerName.size() > 0;
+        && request.resource.data.manufacturerName.size() > 0
+        && request.resource.data.requestedQuantity is number
+        && request.resource.data.requestedQuantity >= 1
+        && request.resource.data.requestedUnit is string
+        && request.resource.data.requestedUnit.size() > 0;
       allow update, delete: if signedIn() && isAdmin();
     }
 
