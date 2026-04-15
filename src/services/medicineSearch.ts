@@ -46,6 +46,8 @@ export type SearchMedicinesOptions = {
   /**
    * Tighter Typesense ranking (no prefix fan-out, fewer typos). Use for admin pickers so unrelated
    * products don’t appear when typing an exact name/code.
+   * Server-side: for text queries, HSN (`code`) is omitted from Typesense `query_by` (shared HSN
+   * skews relevance); digit-only queries still search `code` for HSN lookup.
    */
   strict?: boolean;
 };

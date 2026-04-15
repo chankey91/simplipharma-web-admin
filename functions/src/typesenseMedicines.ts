@@ -257,6 +257,21 @@ function medicinesFromTypesenseHitsOnly(hits: { document?: unknown }[]): Record<
 }
 
 /**
+ * `code` in the index is often GST HSN — shared by many SKUs. Searching it in Typesense with
+ * name/manufacturer pollutes ranking for text queries (e.g. product names). For strict admin search,
+ * only search `code` when the query looks like an HSN / numeric lookup.
+ */
+function typesenseQueryBy(query: string, strict: boolean): string {
+  if (!strict) return 'name,code,manufacturer';
+  const t = query.trim();
+  const digitsOnly = t.replace(/\D/g, '');
+  const hasLetter = /[a-zA-Z]/.test(t);
+  const looksNumericLookup = digitsOnly.length >= 2 && !hasLetter;
+  if (looksNumericLookup) return 'name,code,manufacturer';
+  return 'name,manufacturer';
+}
+
+/**
  * Authenticated catalog search (Typesense + optional Firestore hydrate).
  * minInstances keeps one instance warm to reduce cold-start latency (requires Blaze; billed while idle).
  */
@@ -286,9 +301,10 @@ export const searchMedicinesTypesense = functions
 
   try {
     await ensureCollection(client);
+    const queryBy = typesenseQueryBy(query, strict);
     const res = await client.collections(TYPESENSE_COLLECTION).documents().search({
       q: query,
-      query_by: 'name,code,manufacturer',
+      query_by: queryBy,
       per_page: limit,
       // strict (admin): no prefix fan-out + 1 typo — cuts unrelated fuzzy matches vs loose retailer search
       prefix: !strict,

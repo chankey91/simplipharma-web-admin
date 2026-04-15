@@ -784,7 +784,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     <TextField
                       {...params}
                       label="Search Medicine"
-                      placeholder="Type 2+ letters — name, HSN, or manufacturer..."
+                      placeholder="Search by medicine name or manufacturer..."
                       size="small"
                       sx={{ minWidth: 300 }}
                       InputProps={{
