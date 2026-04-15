@@ -1,0 +1,8 @@
+{
+  "typesense": {
+    "host": "103.230.227.5",
+    "protocol": "http",
+    "port": "8088",
+    "api_key": "PASTE_YOUR_TYPESENSE_API_KEY_HERE"
+  }
+}

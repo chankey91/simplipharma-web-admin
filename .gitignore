@@ -16,6 +16,9 @@ dist-ssr
 # Firebase credentials
 firebase-service-account.json
 *-firebase-adminsdk-*.json
+# Local Functions emulator config (may contain secrets)
+.runtimeconfig.json
+functions/.runtimeconfig.json
 
 # IDE
 .vscode/*

@@ -34,6 +34,7 @@ import {
   Visibility,
   Upload,
   Download,
+  CloudSync,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
 import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
@@ -44,7 +45,8 @@ import { Loading } from '../components/Loading';
 import * as XLSX from 'xlsx';
 import { doc, setDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes } from 'firebase/storage';
-import { auth, db, storage } from '../services/firebase';
+import { auth, db, storage, functions } from '../services/firebase';
+import { httpsCallable } from 'firebase/functions';
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
@@ -76,6 +78,8 @@ export const InventoryPage: React.FC = () => {
   /** Client upload + server job lifecycle */
   const [bulkPhase, setBulkPhase] = useState<'idle' | 'uploading' | 'running' | 'done' | 'error'>('idle');
   const [jobStatusLine, setJobStatusLine] = useState('');
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMessage, setReindexMessage] = useState<string | null>(null);
   const jobUnsubRef = useRef<(() => void) | null>(null);
 
   const stopJobListener = () => {
@@ -157,6 +161,26 @@ export const InventoryPage: React.FC = () => {
     if (stock === 0) return 'error';
     if (stock < 10) return 'warning';
     return 'success';
+  };
+
+  const handleReindexTypesense = async () => {
+    setReindexing(true);
+    setReindexMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'adminReindexMedicinesTypesense');
+      const res = await fn({});
+      const d = res.data as { indexed?: number; totalDocs?: number; ok?: boolean };
+      setReindexMessage(
+        `Search index updated: ${d.indexed ?? 0} documents indexed (${d.totalDocs ?? 0} Firestore docs scanned).`
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setReindexMessage(
+        `Search index rebuild failed: ${msg}. Set Typesense config on Cloud Functions and deploy, then try again.`
+      );
+    } finally {
+      setReindexing(false);
+    }
   };
 
   const handleDownloadTemplate = () => {
@@ -310,6 +334,16 @@ export const InventoryPage: React.FC = () => {
             Download Template
           </Button>
           <Button
+            variant="outlined"
+            color="secondary"
+            startIcon={<CloudSync />}
+            onClick={() => void handleReindexTypesense()}
+            disabled={reindexing}
+            sx={{ mr: 2 }}
+          >
+            {reindexing ? 'Indexing…' : 'Rebuild search index'}
+          </Button>
+          <Button
             variant="contained"
             startIcon={<Upload />}
             onClick={() => setBulkUploadOpen(true)}
@@ -318,6 +352,16 @@ export const InventoryPage: React.FC = () => {
           </Button>
         </Box>
       </Box>
+
+      {reindexMessage && (
+        <Alert
+          severity={reindexMessage.startsWith('Search index updated') ? 'success' : 'error'}
+          onClose={() => setReindexMessage(null)}
+          sx={{ mb: 2 }}
+        >
+          {reindexMessage}
+        </Alert>
+      )}
 
       {/* Alerts */}
       <Grid container spacing={2} sx={{ mb: 3 }}>

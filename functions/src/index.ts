@@ -724,3 +724,8 @@ export const onRetailerRegistrationRequestCreated = functions.firestore
 
 export { onBulkMedicineJobCreated } from './bulkMedicineJob';
 
+export {
+  onMedicineWriteTypesense,
+  searchMedicinesTypesense,
+  adminReindexMedicinesTypesense,
+} from './typesenseMedicines';
