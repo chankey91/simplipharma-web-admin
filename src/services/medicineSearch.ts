@@ -50,6 +50,16 @@ export type SearchMedicinesOptions = {
   strict?: boolean;
 };
 
+/** Case-insensitive match on name, code (often shared HSN), or manufacturer (code may be number in Firestore). */
+export function medicineMatchesSearchInput(m: Medicine, inputValue: string): boolean {
+  const t = inputValue.trim().toLowerCase();
+  if (t.length === 0) return true;
+  const n = (m.name || '').toLowerCase();
+  const c = String(m.code ?? '').toLowerCase();
+  const f = (m.manufacturer || '').toLowerCase();
+  return n.includes(t) || c.includes(t) || f.includes(t);
+}
+
 /**
  * Prefer rows whose name, code, or manufacturer contain the query (case-insensitive).
  * Falls back to the loaded Firestore catalog when Typesense returns noisy fuzzy matches.
@@ -59,20 +69,13 @@ export function refineMedicineSearchResults(
   query: string,
   fallbackCatalog: Medicine[]
 ): Medicine[] {
-  const t = query.trim().toLowerCase();
-  if (t.length < 2) return typesenseHits;
+  const t = query.trim();
+  if (t.length < 2) return [];
 
-  const match = (m: Medicine) => {
-    const n = (m.name || '').toLowerCase();
-    const c = (m.code || '').toLowerCase();
-    const f = (m.manufacturer || '').toLowerCase();
-    return n.includes(t) || c.includes(t) || f.includes(t);
-  };
-
-  const fromTs = typesenseHits.filter(match);
+  const fromTs = typesenseHits.filter((m) => medicineMatchesSearchInput(m, t));
   if (fromTs.length > 0) return fromTs;
 
-  return fallbackCatalog.filter(match).slice(0, 80);
+  return fallbackCatalog.filter((m) => medicineMatchesSearchInput(m, t)).slice(0, 80);
 }
 
 /** Typesense search; use `hydrate: false` for fast purchase/autocomplete pickers. */

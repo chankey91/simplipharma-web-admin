@@ -1,6 +1,7 @@
 // Reuse existing types and extend them
 export interface Medicine {
   id: string;
+  /** Often the GST HSN item code — the same HSN may apply to many different products/SKUs. */
   code?: string;
   name: string;
   category: string;

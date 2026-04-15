@@ -2352,9 +2352,10 @@ export const OrderDetailsPage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Code"
+                label="HSN / item code"
                 value={newMedicineData.code}
                 onChange={(e) => setNewMedicineData({ ...newMedicineData, code: e.target.value })}
+                helperText="GST HSN — same value can apply to many products"
               />
             </Grid>
             <Grid item xs={12} sm={6}>

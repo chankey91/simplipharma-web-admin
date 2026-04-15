@@ -51,10 +51,11 @@ import {
   searchMedicinesTypesenseAdmin,
   resolveMedicineAfterPickerSelection,
   refineMedicineSearchResults,
+  medicineMatchesSearchInput,
 } from '../services/medicineSearch';
 
 function getMedicinePickerLabel(option: Medicine): string {
-  const code = option.code ? ` (${option.code})` : '';
+  const code = option.code ? ` (HSN ${option.code})` : '';
   const manufacturer = option.manufacturer ? ` - ${option.manufacturer}` : '';
   return `${option.name}${code}${manufacturer}`;
 }
@@ -775,25 +776,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                       }
                     );
                   }}
-                  filterOptions={(options, { inputValue }) => {
-                    if (inputValue.trim().length >= 2) {
-                      return options;
-                    }
-                    const searchTerm = inputValue.toLowerCase();
-                    return options.filter(
-                      (option) =>
-                        option.name.toLowerCase().includes(searchTerm) ||
-                        (option.code && option.code.toLowerCase().includes(searchTerm)) ||
-                        (option.manufacturer &&
-                          option.manufacturer.toLowerCase().includes(searchTerm))
-                    );
-                  }}
+                  filterOptions={(options, { inputValue }) =>
+                    options.filter((option) => medicineMatchesSearchInput(option, inputValue))
+                  }
                   isOptionEqualToValue={(a, b) => a.id === b.id}
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       label="Search Medicine"
-                      placeholder="Type 2+ letters for index search (name, code, manufacturer)..."
+                      placeholder="Type 2+ letters — name, HSN, or manufacturer..."
                       size="small"
                       sx={{ minWidth: 300 }}
                       InputProps={{
@@ -1267,20 +1258,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 onInputChange={(_, newInputValue) => {
                   setNewMedicineData({ ...newMedicineData, name: newInputValue });
                 }}
-                filterOptions={(options, { inputValue }) => {
-                  if (inputValue.trim().length >= 2) {
-                    return options;
-                  }
-                  const searchTerm = inputValue.toLowerCase();
-                  return options.filter(
-                    (option) =>
-                      typeof option === 'string' ||
-                      option.name.toLowerCase().includes(searchTerm) ||
-                      (option.code && option.code.toLowerCase().includes(searchTerm)) ||
-                      (option.manufacturer &&
-                        option.manufacturer.toLowerCase().includes(searchTerm))
-                  );
-                }}
+                filterOptions={(options, { inputValue }) =>
+                  options.filter((option) => medicineMatchesSearchInput(option, inputValue))
+                }
                 onChange={(_, newValue) => {
                   if (newValue && typeof newValue === 'object') {
                     const selectedMed = newValue as Medicine;
@@ -1316,10 +1296,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Code"
+                label="HSN / item code"
                 required
                 value={newMedicineData.code}
                 onChange={(e) => setNewMedicineData({ ...newMedicineData, code: e.target.value })}
+                helperText="GST HSN — same value can apply to many products"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
