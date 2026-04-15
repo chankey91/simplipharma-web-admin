@@ -167,7 +167,10 @@ export const InventoryPage: React.FC = () => {
     setReindexing(true);
     setReindexMessage(null);
     try {
-      const fn = httpsCallable(functions, 'adminReindexMedicinesTypesense');
+      // Server allows up to 540s; default client timeout is ~60s and causes deadline-exceeded.
+      const fn = httpsCallable(functions, 'adminReindexMedicinesTypesense', {
+        timeout: 600000,
+      });
       const res = await fn({});
       const d = res.data as { indexed?: number; totalDocs?: number; ok?: boolean };
       setReindexMessage(
@@ -175,9 +178,11 @@ export const InventoryPage: React.FC = () => {
       );
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      setReindexMessage(
-        `Search index rebuild failed: ${msg}. Set Typesense config on Cloud Functions and deploy, then try again.`
-      );
+      const hint =
+        msg.includes('deadline') || msg.includes('DEADLINE')
+          ? ' Large catalogs can take several minutes; the client timeout is now 10 minutes. If this persists, check Functions logs.'
+          : ' Set Typesense config on Cloud Functions and deploy, then try again.';
+      setReindexMessage(`Search index rebuild failed: ${msg}.${hint}`);
     } finally {
       setReindexing(false);
     }
