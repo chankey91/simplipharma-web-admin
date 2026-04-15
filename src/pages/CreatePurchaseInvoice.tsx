@@ -50,6 +50,7 @@ import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
 import {
   searchMedicinesTypesenseAdmin,
   resolveMedicineAfterPickerSelection,
+  refineMedicineSearchResults,
 } from '../services/medicineSearch';
 
 function getMedicinePickerLabel(option: Medicine): string {
@@ -131,6 +132,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [addMedicineSearchHits, setAddMedicineSearchHits] = useState<Medicine[]>([]);
   const addMedicineSearchSeq = useRef(0);
 
+  const medicineSearchInputRef = useRef(medicineSearchInput);
+  medicineSearchInputRef.current = medicineSearchInput;
+  const newMedicineNameRef = useRef(newMedicineData.name);
+  newMedicineNameRef.current = newMedicineData.name;
+
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
 
   // Auto-generate invoice number on mount
@@ -168,11 +174,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const seq = ++medicineSearchSeq.current;
     setMedicineSearchLoading(true);
     const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40 })
+      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
         .then((rows) => {
-          if (medicineSearchSeq.current === seq) {
-            setMedicineSearchHits(rows);
-          }
+          if (medicineSearchSeq.current !== seq) return;
+          if (medicineSearchInputRef.current.trim() !== trimmed) return;
+          setMedicineSearchHits(rows);
         })
         .finally(() => {
           if (medicineSearchSeq.current === seq) {
@@ -195,10 +201,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
     const seq = ++addMedicineSearchSeq.current;
     const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(q, { hydrate: false, limit: 40 }).then((rows) => {
-        if (addMedicineSearchSeq.current === seq) {
-          setAddMedicineSearchHits(rows);
-        }
+      searchMedicinesTypesenseAdmin(q, { hydrate: false, limit: 40, strict: true }).then((rows) => {
+        if (addMedicineSearchSeq.current !== seq) return;
+        if (newMedicineNameRef.current.trim() !== q) return;
+        setAddMedicineSearchHits(rows);
       });
     }, 200);
     return () => clearTimeout(t);
@@ -215,20 +221,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return [selectedMedicine];
     }
 
-    const lower = q.toLowerCase();
-
     if (q.length >= 2) {
-      let list =
-        medicineSearchHits.length > 0
-          ? medicineSearchHits
-          : all
-              .filter(
-                (option) =>
-                  option.name.toLowerCase().includes(lower) ||
-                  (option.code && option.code.toLowerCase().includes(lower)) ||
-                  (option.manufacturer && option.manufacturer.toLowerCase().includes(lower))
-              )
-              .slice(0, 120);
+      let list = refineMedicineSearchResults(medicineSearchHits, q, all);
       if (selectedMedicine && !list.some((m) => m.id === selectedMedicine.id)) {
         return [selectedMedicine, ...list];
       }
@@ -243,22 +237,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const addMedicineOptions = useMemo(() => {
     const q = newMedicineData.name.trim();
-    const lower = q.toLowerCase();
     const all = medicines || [];
 
     if (q.length >= 2) {
-      let list =
-        addMedicineSearchHits.length > 0
-          ? addMedicineSearchHits
-          : all
-              .filter(
-                (option) =>
-                  option.name.toLowerCase().includes(lower) ||
-                  (option.code && option.code.toLowerCase().includes(lower)) ||
-                  (option.manufacturer && option.manufacturer.toLowerCase().includes(lower))
-              )
-              .slice(0, 120);
-      return list;
+      return refineMedicineSearchResults(addMedicineSearchHits, q, all);
     }
     return all;
   }, [newMedicineData.name, addMedicineSearchHits, medicines]);

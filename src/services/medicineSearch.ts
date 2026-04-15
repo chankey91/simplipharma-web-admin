@@ -43,7 +43,37 @@ export type SearchMedicinesOptions = {
   hydrate?: boolean;
   /** Max results (1–120). Smaller = slightly faster payloads. Default 40 for admin search helper. */
   limit?: number;
+  /**
+   * Tighter Typesense ranking (no prefix fan-out, fewer typos). Use for admin pickers so unrelated
+   * products don’t appear when typing an exact name/code.
+   */
+  strict?: boolean;
 };
+
+/**
+ * Prefer rows whose name, code, or manufacturer contain the query (case-insensitive).
+ * Falls back to the loaded Firestore catalog when Typesense returns noisy fuzzy matches.
+ */
+export function refineMedicineSearchResults(
+  typesenseHits: Medicine[],
+  query: string,
+  fallbackCatalog: Medicine[]
+): Medicine[] {
+  const t = query.trim().toLowerCase();
+  if (t.length < 2) return typesenseHits;
+
+  const match = (m: Medicine) => {
+    const n = (m.name || '').toLowerCase();
+    const c = (m.code || '').toLowerCase();
+    const f = (m.manufacturer || '').toLowerCase();
+    return n.includes(t) || c.includes(t) || f.includes(t);
+  };
+
+  const fromTs = typesenseHits.filter(match);
+  if (fromTs.length > 0) return fromTs;
+
+  return fallbackCatalog.filter(match).slice(0, 80);
+}
 
 /** Typesense search; use `hydrate: false` for fast purchase/autocomplete pickers. */
 export async function searchMedicinesTypesenseAdmin(
@@ -54,8 +84,9 @@ export async function searchMedicinesTypesenseAdmin(
   if (q.length < 2) return [];
   const hydrate = opts?.hydrate ?? true;
   const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 120);
+  const strict = opts?.strict === true;
   try {
-    const res = await searchMedicinesCallable({ query: q, limit, hydrate });
+    const res = await searchMedicinesCallable({ query: q, limit, hydrate, strict });
     const data = res.data as { medicines?: unknown[] };
     const rows = data.medicines;
     if (!Array.isArray(rows)) return [];

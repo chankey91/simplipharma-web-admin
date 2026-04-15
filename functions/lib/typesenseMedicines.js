@@ -260,6 +260,8 @@ exports.searchMedicinesTypesense = functions
     }
     const query = String(data.query || '').trim();
     const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
+    /** Admin UIs: stricter matching so unrelated products (e.g. fuzzy noise) don’t rank in. */
+    const strict = data.strict === true;
     /** Default true: full lite docs from Firestore. Set false for autocomplete speed (Typesense fields only). */
     const hydrate = data.hydrate !== false;
     if (query.length < 2) {
@@ -275,8 +277,9 @@ exports.searchMedicinesTypesense = functions
             q: query,
             query_by: 'name,code,manufacturer',
             per_page: limit,
-            prefix: true,
-            num_typos: 2,
+            // strict (admin): no prefix fan-out + 1 typo — cuts unrelated fuzzy matches vs loose retailer search
+            prefix: !strict,
+            num_typos: strict ? 1 : 2,
         });
         const hits = res.hits || [];
         if (!hydrate) {
