@@ -1,5 +1,6 @@
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
+import { getMedicineById } from './inventory';
 import { Medicine } from '../types';
 
 const searchMedicinesCallable = httpsCallable(functions, 'searchMedicinesTypesense', {
@@ -37,12 +38,24 @@ function mapLiteToMedicine(raw: Record<string, unknown>): Medicine {
   };
 }
 
-/** Typesense + Firestore hydrate (same callable as retailer app). */
-export async function searchMedicinesTypesenseAdmin(query: string): Promise<Medicine[]> {
+export type SearchMedicinesOptions = {
+  /** false = Typesense hits only (no Firestore reads) — much faster for autocomplete. Default true. */
+  hydrate?: boolean;
+  /** Max results (1–120). Smaller = slightly faster payloads. Default 40 for admin search helper. */
+  limit?: number;
+};
+
+/** Typesense search; use `hydrate: false` for fast purchase/autocomplete pickers. */
+export async function searchMedicinesTypesenseAdmin(
+  query: string,
+  opts?: SearchMedicinesOptions
+): Promise<Medicine[]> {
   const q = query.trim();
   if (q.length < 2) return [];
+  const hydrate = opts?.hydrate ?? true;
+  const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 120);
   try {
-    const res = await searchMedicinesCallable({ query: q, limit: 120 });
+    const res = await searchMedicinesCallable({ query: q, limit, hydrate });
     const data = res.data as { medicines?: unknown[] };
     const rows = data.medicines;
     if (!Array.isArray(rows)) return [];
@@ -51,4 +64,20 @@ export async function searchMedicinesTypesenseAdmin(query: string): Promise<Medi
     console.warn('searchMedicinesTypesenseAdmin failed', e);
     return [];
   }
+}
+
+/** After picking from index-only search, merge with master list or one Firestore read for GST, batches, etc. */
+export async function resolveMedicineAfterPickerSelection(
+  picked: Medicine,
+  masterList: Medicine[] | undefined
+): Promise<Medicine> {
+  const cached = masterList?.find((m) => m.id === picked.id);
+  if (cached) return cached;
+  try {
+    const full = await getMedicineById(picked.id);
+    if (full) return full;
+  } catch {
+    // ignore
+  }
+  return { ...picked, gstRate: picked.gstRate ?? 5, category: picked.category || '' };
 }

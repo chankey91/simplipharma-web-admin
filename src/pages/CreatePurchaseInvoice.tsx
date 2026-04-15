@@ -47,7 +47,10 @@ import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
-import { searchMedicinesTypesenseAdmin } from '../services/medicineSearch';
+import {
+  searchMedicinesTypesenseAdmin,
+  resolveMedicineAfterPickerSelection,
+} from '../services/medicineSearch';
 
 function getMedicinePickerLabel(option: Medicine): string {
   const code = option.code ? ` (${option.code})` : '';
@@ -165,7 +168,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const seq = ++medicineSearchSeq.current;
     setMedicineSearchLoading(true);
     const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(trimmed)
+      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40 })
         .then((rows) => {
           if (medicineSearchSeq.current === seq) {
             setMedicineSearchHits(rows);
@@ -176,7 +179,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             setMedicineSearchLoading(false);
           }
         });
-    }, 300);
+    }, 200);
     return () => clearTimeout(t);
   }, [medicineSearchInput, selectedMedicine]);
 
@@ -192,12 +195,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
     const seq = ++addMedicineSearchSeq.current;
     const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(q).then((rows) => {
+      searchMedicinesTypesenseAdmin(q, { hydrate: false, limit: 40 }).then((rows) => {
         if (addMedicineSearchSeq.current === seq) {
           setAddMedicineSearchHits(rows);
         }
       });
-    }, 300);
+    }, 200);
     return () => clearTimeout(t);
   }, [addMedicineDialog, newMedicineData.name]);
 
@@ -777,9 +780,18 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     setMedicineSearchInput(newInputValue);
                   }}
                   onChange={(_, newValue) => {
-                    setSelectedMedicine(newValue);
-                    setMedicineSearchInput(newValue ? getMedicinePickerLabel(newValue) : '');
                     setMedicineSearchHits([]);
+                    if (!newValue) {
+                      setSelectedMedicine(null);
+                      setMedicineSearchInput('');
+                      return;
+                    }
+                    void resolveMedicineAfterPickerSelection(newValue, medicines ?? undefined).then(
+                      (merged) => {
+                        setSelectedMedicine(merged);
+                        setMedicineSearchInput(getMedicinePickerLabel(merged));
+                      }
+                    );
                   }}
                   filterOptions={(options, { inputValue }) => {
                     if (inputValue.trim().length >= 2) {
@@ -1289,17 +1301,20 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 }}
                 onChange={(_, newValue) => {
                   if (newValue && typeof newValue === 'object') {
-                    // User selected existing medicine - auto-fill all fields
                     const selectedMed = newValue as Medicine;
                     setAddMedicineSearchHits([]);
-                    setNewMedicineData({
-                      name: selectedMed.name || '',
-                      code: selectedMed.code || '',
-                      type: selectedMed.category || '',
-                      packaging: selectedMed.unit || '',
-                      manufacturer: selectedMed.manufacturer || '',
-                      gstRate: String(selectedMed.gstRate || 5),
-                    });
+                    void resolveMedicineAfterPickerSelection(selectedMed, medicines ?? undefined).then(
+                      (merged) => {
+                        setNewMedicineData({
+                          name: merged.name || '',
+                          code: merged.code || '',
+                          type: merged.category || '',
+                          packaging: merged.unit || '',
+                          manufacturer: merged.manufacturer || '',
+                          gstRate: String(merged.gstRate ?? 5),
+                        });
+                      }
+                    );
                   } else if (typeof newValue === 'string') {
                     // User typed new name - keep the typed value
                     setNewMedicineData({ ...newMedicineData, name: newValue });

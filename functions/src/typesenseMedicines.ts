@@ -227,13 +227,49 @@ async function fetchMedicinesOrderedByIds(ids: string[]): Promise<Record<string,
   return out;
 }
 
-/** Retailer / SO: authenticated catalog search (Typesense + Firestore hydrate). */
-export const searchMedicinesTypesense = functions.https.onCall(async (data, context) => {
+/** Map Typesense hit documents only (no Firestore) — fast path for autocomplete UIs. */
+function medicinesFromTypesenseHitsOnly(hits: { document?: unknown }[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const h of hits) {
+    const d = (h.document && typeof h.document === 'object' ? h.document : {}) as Record<
+      string,
+      unknown
+    >;
+    const id = String(d.id || '').trim();
+    if (!id) continue;
+    const rawPrice = d.price;
+    const price =
+      typeof rawPrice === 'number'
+        ? rawPrice
+        : parseFloat(String(rawPrice ?? 0)) || 0;
+    const codeRaw = d.code;
+    out.push({
+      id,
+      name: String(d.name || ''),
+      code: codeRaw != null && String(codeRaw).trim() !== '' ? String(codeRaw) : undefined,
+      category: String(d.category || ''),
+      manufacturer: String(d.manufacturer || ''),
+      price,
+      stock: 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Authenticated catalog search (Typesense + optional Firestore hydrate).
+ * minInstances keeps one instance warm to reduce cold-start latency (requires Blaze; billed while idle).
+ */
+export const searchMedicinesTypesense = functions
+  .runWith({ minInstances: 1 })
+  .https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
   }
   const query = String(data.query || '').trim();
   const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
+  /** Default true: full lite docs from Firestore. Set false for autocomplete speed (Typesense fields only). */
+  const hydrate = data.hydrate !== false;
   if (query.length < 2) {
     return { medicines: [], source: 'typesense' as const };
   }
@@ -257,6 +293,10 @@ export const searchMedicinesTypesense = functions.https.onCall(async (data, cont
     });
 
     const hits = res.hits || [];
+    if (!hydrate) {
+      const medicines = medicinesFromTypesenseHitsOnly(hits);
+      return { medicines, source: 'typesense_index' as const };
+    }
     const ids = hits.map((h) => String((h.document as { id?: string })?.id || '')).filter(Boolean);
     const medicines = await fetchMedicinesOrderedByIds(ids);
     return { medicines, source: 'typesense' as const };
