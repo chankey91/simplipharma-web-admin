@@ -148,16 +148,24 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   }, []); // Run once on mount
 
   useEffect(() => {
-    const q = medicineSearchInput.trim();
-    if (q.length < 2) {
+    const trimmed = medicineSearchInput.trim();
+    if (trimmed.length < 2) {
       setMedicineSearchHits([]);
+      setMedicineSearchLoading(false);
+      return;
+    }
+    // After a selection, input is the long label ("Name (code) - mfr"). Do not search on that string.
+    if (
+      selectedMedicine &&
+      trimmed === getMedicinePickerLabel(selectedMedicine).trim()
+    ) {
       setMedicineSearchLoading(false);
       return;
     }
     const seq = ++medicineSearchSeq.current;
     setMedicineSearchLoading(true);
     const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(q)
+      searchMedicinesTypesenseAdmin(trimmed)
         .then((rows) => {
           if (medicineSearchSeq.current === seq) {
             setMedicineSearchHits(rows);
@@ -170,7 +178,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         });
     }, 300);
     return () => clearTimeout(t);
-  }, [medicineSearchInput]);
+  }, [medicineSearchInput, selectedMedicine]);
 
   useEffect(() => {
     if (!addMedicineDialog) {
@@ -195,8 +203,16 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const purchaseMedicineOptions = useMemo(() => {
     const q = medicineSearchInput.trim();
-    const lower = q.toLowerCase();
     const all = medicines || [];
+
+    if (
+      selectedMedicine &&
+      q === getMedicinePickerLabel(selectedMedicine).trim()
+    ) {
+      return [selectedMedicine];
+    }
+
+    const lower = q.toLowerCase();
 
     if (q.length >= 2) {
       let list =
@@ -763,6 +779,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   onChange={(_, newValue) => {
                     setSelectedMedicine(newValue);
                     setMedicineSearchInput(newValue ? getMedicinePickerLabel(newValue) : '');
+                    setMedicineSearchHits([]);
                   }}
                   filterOptions={(options, { inputValue }) => {
                     if (inputValue.trim().length >= 2) {
@@ -1274,6 +1291,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   if (newValue && typeof newValue === 'object') {
                     // User selected existing medicine - auto-fill all fields
                     const selectedMed = newValue as Medicine;
+                    setAddMedicineSearchHits([]);
                     setNewMedicineData({
                       name: selectedMed.name || '',
                       code: selectedMed.code || '',
