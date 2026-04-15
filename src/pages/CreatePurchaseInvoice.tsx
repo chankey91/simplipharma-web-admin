@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -47,6 +47,13 @@ import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
+import { searchMedicinesTypesenseAdmin } from '../services/medicineSearch';
+
+function getMedicinePickerLabel(option: Medicine): string {
+  const code = option.code ? ` (${option.code})` : '';
+  const manufacturer = option.manufacturer ? ` - ${option.manufacturer}` : '';
+  return `${option.name}${code}${manufacturer}`;
+}
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -113,6 +120,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   });
   const [expiryDateError, setExpiryDateError] = useState<string>('');
 
+  const [medicineSearchInput, setMedicineSearchInput] = useState('');
+  const [medicineSearchHits, setMedicineSearchHits] = useState<Medicine[]>([]);
+  const [medicineSearchLoading, setMedicineSearchLoading] = useState(false);
+  const medicineSearchSeq = useRef(0);
+
+  const [addMedicineSearchHits, setAddMedicineSearchHits] = useState<Medicine[]>([]);
+  const addMedicineSearchSeq = useRef(0);
+
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
 
   // Auto-generate invoice number on mount
@@ -131,6 +146,103 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       loadInvoiceNumber();
     }
   }, []); // Run once on mount
+
+  useEffect(() => {
+    const q = medicineSearchInput.trim();
+    if (q.length < 2) {
+      setMedicineSearchHits([]);
+      setMedicineSearchLoading(false);
+      return;
+    }
+    const seq = ++medicineSearchSeq.current;
+    setMedicineSearchLoading(true);
+    const t = setTimeout(() => {
+      searchMedicinesTypesenseAdmin(q)
+        .then((rows) => {
+          if (medicineSearchSeq.current === seq) {
+            setMedicineSearchHits(rows);
+          }
+        })
+        .finally(() => {
+          if (medicineSearchSeq.current === seq) {
+            setMedicineSearchLoading(false);
+          }
+        });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [medicineSearchInput]);
+
+  useEffect(() => {
+    if (!addMedicineDialog) {
+      setAddMedicineSearchHits([]);
+      return;
+    }
+    const q = newMedicineData.name.trim();
+    if (q.length < 2) {
+      setAddMedicineSearchHits([]);
+      return;
+    }
+    const seq = ++addMedicineSearchSeq.current;
+    const t = setTimeout(() => {
+      searchMedicinesTypesenseAdmin(q).then((rows) => {
+        if (addMedicineSearchSeq.current === seq) {
+          setAddMedicineSearchHits(rows);
+        }
+      });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [addMedicineDialog, newMedicineData.name]);
+
+  const purchaseMedicineOptions = useMemo(() => {
+    const q = medicineSearchInput.trim();
+    const lower = q.toLowerCase();
+    const all = medicines || [];
+
+    if (q.length >= 2) {
+      let list =
+        medicineSearchHits.length > 0
+          ? medicineSearchHits
+          : all
+              .filter(
+                (option) =>
+                  option.name.toLowerCase().includes(lower) ||
+                  (option.code && option.code.toLowerCase().includes(lower)) ||
+                  (option.manufacturer && option.manufacturer.toLowerCase().includes(lower))
+              )
+              .slice(0, 120);
+      if (selectedMedicine && !list.some((m) => m.id === selectedMedicine.id)) {
+        return [selectedMedicine, ...list];
+      }
+      return list;
+    }
+
+    if (selectedMedicine && !all.some((m) => m.id === selectedMedicine.id)) {
+      return [selectedMedicine, ...all];
+    }
+    return all;
+  }, [medicineSearchInput, medicineSearchHits, medicines, selectedMedicine]);
+
+  const addMedicineOptions = useMemo(() => {
+    const q = newMedicineData.name.trim();
+    const lower = q.toLowerCase();
+    const all = medicines || [];
+
+    if (q.length >= 2) {
+      let list =
+        addMedicineSearchHits.length > 0
+          ? addMedicineSearchHits
+          : all
+              .filter(
+                (option) =>
+                  option.name.toLowerCase().includes(lower) ||
+                  (option.code && option.code.toLowerCase().includes(lower)) ||
+                  (option.manufacturer && option.manufacturer.toLowerCase().includes(lower))
+              )
+              .slice(0, 120);
+      return list;
+    }
+    return all;
+  }, [newMedicineData.name, addMedicineSearchHits, medicines]);
 
   const calculateTotals = () => {
     // Calculate subtotal: sum of (purchasePrice * quantity) for all items
@@ -625,27 +737,52 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               <Typography variant="h6">Invoice Items</Typography>
               <Box display="flex" gap={2}>
                 <Autocomplete
-                  options={medicines || []}
-                  getOptionLabel={(option) => {
-                    const code = option.code ? ` (${option.code})` : '';
-                    const manufacturer = option.manufacturer ? ` - ${option.manufacturer}` : '';
-                    return `${option.name}${code}${manufacturer}`;
-                  }}
+                  loading={medicineSearchLoading}
+                  options={purchaseMedicineOptions}
+                  getOptionLabel={getMedicinePickerLabel}
                   value={selectedMedicine}
-                  onChange={(_, newValue) => setSelectedMedicine(newValue)}
+                  inputValue={medicineSearchInput}
+                  onInputChange={(_, newInputValue, reason) => {
+                    if (reason === 'clear') {
+                      setMedicineSearchInput('');
+                      setSelectedMedicine(null);
+                      return;
+                    }
+                    if (reason === 'input') {
+                      setMedicineSearchInput(newInputValue);
+                      if (
+                        selectedMedicine &&
+                        newInputValue !== getMedicinePickerLabel(selectedMedicine)
+                      ) {
+                        setSelectedMedicine(null);
+                      }
+                      return;
+                    }
+                    setMedicineSearchInput(newInputValue);
+                  }}
+                  onChange={(_, newValue) => {
+                    setSelectedMedicine(newValue);
+                    setMedicineSearchInput(newValue ? getMedicinePickerLabel(newValue) : '');
+                  }}
                   filterOptions={(options, { inputValue }) => {
+                    if (inputValue.trim().length >= 2) {
+                      return options;
+                    }
                     const searchTerm = inputValue.toLowerCase();
-                    return options.filter(option => 
-                      option.name.toLowerCase().includes(searchTerm) ||
-                      (option.code && option.code.toLowerCase().includes(searchTerm)) ||
-                      (option.manufacturer && option.manufacturer.toLowerCase().includes(searchTerm))
+                    return options.filter(
+                      (option) =>
+                        option.name.toLowerCase().includes(searchTerm) ||
+                        (option.code && option.code.toLowerCase().includes(searchTerm)) ||
+                        (option.manufacturer &&
+                          option.manufacturer.toLowerCase().includes(searchTerm))
                     );
                   }}
+                  isOptionEqualToValue={(a, b) => a.id === b.id}
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       label="Search Medicine"
-                      placeholder="Search by name, code, or manufacturer..."
+                      placeholder="Type 2+ letters for index search (name, code, manufacturer)..."
                       size="small"
                       sx={{ minWidth: 300 }}
                       InputProps={{
@@ -1110,14 +1247,28 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12}>
               <Autocomplete
                 freeSolo
-                options={medicines || []}
+                options={addMedicineOptions}
                 getOptionLabel={(option) => {
                   if (typeof option === 'string') return option;
-                  return option.name || '';
+                  return getMedicinePickerLabel(option);
                 }}
                 inputValue={newMedicineData.name}
                 onInputChange={(_, newInputValue) => {
                   setNewMedicineData({ ...newMedicineData, name: newInputValue });
+                }}
+                filterOptions={(options, { inputValue }) => {
+                  if (inputValue.trim().length >= 2) {
+                    return options;
+                  }
+                  const searchTerm = inputValue.toLowerCase();
+                  return options.filter(
+                    (option) =>
+                      typeof option === 'string' ||
+                      option.name.toLowerCase().includes(searchTerm) ||
+                      (option.code && option.code.toLowerCase().includes(searchTerm)) ||
+                      (option.manufacturer &&
+                        option.manufacturer.toLowerCase().includes(searchTerm))
+                  );
                 }}
                 onChange={(_, newValue) => {
                   if (newValue && typeof newValue === 'object') {
@@ -1142,7 +1293,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     fullWidth
                     label="Medicine Name"
                     required
-                    helperText="Start typing to see suggestions or type a new name"
+                    helperText="Type 2+ letters for search; or type a new name"
                   />
                 )}
               />
