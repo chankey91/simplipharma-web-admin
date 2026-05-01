@@ -51,7 +51,6 @@ import {
   searchMedicinesTypesenseAdmin,
   resolveMedicineAfterPickerSelection,
   refineMedicineSearchResults,
-  medicineMatchesSearchInput,
 } from '../services/medicineSearch';
 
 function getMedicinePickerLabel(option: Medicine): string {
@@ -61,7 +60,7 @@ function getMedicinePickerLabel(option: Medicine): string {
 }
 
 /** Wait after typing stops before calling Typesense (reduces API load). */
-const MEDICINE_SEARCH_DEBOUNCE_MS = 1200;
+const MEDICINE_SEARCH_DEBOUNCE_MS = 350;
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -180,6 +179,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return;
     }
     const seq = ++medicineSearchSeq.current;
+    setMedicineSearchHits([]);
     setMedicineSearchLoading(true);
     const t = setTimeout(() => {
       searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
@@ -210,6 +210,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return;
     }
     const seq = ++addMedicineSearchSeq.current;
+    setAddMedicineSearchHits([]);
     const t = setTimeout(() => {
       searchMedicinesTypesenseAdmin(q, { hydrate: false, limit: 40, strict: true }).then((rows) => {
         if (addMedicineSearchSeq.current !== seq) return;
@@ -240,9 +241,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     if (selectedMedicine && !all.some((m) => m.id === selectedMedicine.id)) {
-      return [selectedMedicine, ...all];
+      return [selectedMedicine];
     }
-    return all;
+    return [];
   }, [medicineSearchInput, medicineSearchHits, medicines, selectedMedicine]);
 
   const addMedicineOptions = useMemo(() => {
@@ -252,7 +253,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     if (q.length >= 2) {
       return refineMedicineSearchResults(addMedicineSearchHits, q, all);
     }
-    return all;
+    return [];
   }, [newMedicineData.name, addMedicineSearchHits, medicines]);
 
   const calculateTotals = () => {
@@ -821,9 +822,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                       }
                     );
                   }}
-                  filterOptions={(options, { inputValue }) =>
-                    options.filter((option) => medicineMatchesSearchInput(option, inputValue))
-                  }
+                  filterOptions={(options) => options}
                   isOptionEqualToValue={(a, b) => a.id === b.id}
                   renderInput={(params) => (
                     <TextField
@@ -1301,9 +1300,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 onInputChange={(_, newInputValue) => {
                   setNewMedicineData({ ...newMedicineData, name: newInputValue });
                 }}
-                filterOptions={(options, { inputValue }) =>
-                  options.filter((option) => medicineMatchesSearchInput(option, inputValue))
-                }
+                filterOptions={(options) => options}
                 onChange={(_, newValue) => {
                   if (newValue && typeof newValue === 'object') {
                     const selectedMed = newValue as Medicine;
