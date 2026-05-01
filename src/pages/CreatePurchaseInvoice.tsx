@@ -60,6 +60,9 @@ function getMedicinePickerLabel(option: Medicine): string {
   return `${option.name}${code}${manufacturer}`;
 }
 
+/** Wait after typing stops before calling Typesense (reduces API load). */
+const MEDICINE_SEARCH_DEBOUNCE_MS = 1200;
+
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
   const { data: vendors } = useVendors();
@@ -188,7 +191,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             setMedicineSearchLoading(false);
           }
         });
-    }, 200);
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [medicineSearchInput, selectedMedicine]);
 
@@ -209,7 +212,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         if (newMedicineNameRef.current.trim() !== q) return;
         setAddMedicineSearchHits(rows);
       });
-    }, 200);
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [addMedicineDialog, newMedicineData.name]);
 
