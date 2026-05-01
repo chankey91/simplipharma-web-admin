@@ -38,21 +38,24 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   if (isLoading) return <Loading message="Loading invoice..." />;
   if (!invoice) return <Typography>Invoice not found</Typography>;
 
-  // Calculate subtotal: sum of all "Total" column values (Price * Quantity)
-  // Price is calculated from MRP: (MRP * 0.80) / (1 + GST/100)
-  const recalculatedSubTotal = invoice.items.reduce((sum, item) => {
-    const quantity = item.quantity || 0;
+  const getPurchasePriceFromItem = (item: (typeof invoice.items)[number]) => {
     const mrp = item.mrp || 0;
     const gstRate = item.gstRate || 5;
-    
-    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
-    let purchasePrice = 0;
+    const standardDiscount = item.standardDiscount ?? 20;
+
     if (mrp > 0) {
-      const afterDiscount = mrp * 0.80; // Apply 20% discount
-      purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-    } else {
-      purchasePrice = item.purchasePrice || 0;
+      const afterStandardDiscount = mrp * (1 - standardDiscount / 100);
+      return afterStandardDiscount / (1 + gstRate / 100);
     }
+
+    return item.purchasePrice || 0;
+  };
+
+  // Calculate subtotal: sum of all "Total" column values (Price * Quantity)
+  // Price is calculated from MRP using item standardDiscount (fallback 20%)
+  const recalculatedSubTotal = invoice.items.reduce((sum, item) => {
+    const quantity = item.quantity || 0;
+    const purchasePrice = getPurchasePriceFromItem(item);
     
     // Total = Price * Quantity (simple calculation for display)
     return sum + (purchasePrice * quantity);
@@ -61,18 +64,8 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   // Calculate total discount amount: sum of (Price * Quantity * discountPercentage / 100)
   const recalculatedDiscount = invoice.items.reduce((sum, item) => {
     const quantity = item.quantity || 0;
-    const mrp = item.mrp || 0;
-    const gstRate = item.gstRate || 5;
     const discountPercentage = item.discountPercentage || 0;
-    
-    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
-    let purchasePrice = 0;
-    if (mrp > 0) {
-      const afterDiscount = mrp * 0.80; // Apply 20% discount
-      purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-    } else {
-      purchasePrice = item.purchasePrice || 0;
-    }
+    const purchasePrice = getPurchasePriceFromItem(item);
     
     const totalAmount = purchasePrice * quantity;
     const discountAmount = (totalAmount * discountPercentage) / 100;
@@ -150,16 +143,8 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 </TableHead>
                 <TableBody>
                   {invoice.items.map((item, index) => {
-                    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
                     const mrp = item.mrp || 0;
-                    const gstRate = item.gstRate || 5;
-                    let purchasePrice = 0;
-                    if (mrp > 0) {
-                      const afterDiscount = mrp * 0.80; // Apply 20% discount
-                      purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-                    } else {
-                      purchasePrice = item.purchasePrice || 0;
-                    }
+                    const purchasePrice = getPurchasePriceFromItem(item);
                     
                     // Total = Price * Quantity (simple calculation for display)
                     const total = purchasePrice * (item.quantity || 0);
