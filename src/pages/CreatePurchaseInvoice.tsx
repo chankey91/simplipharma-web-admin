@@ -52,15 +52,8 @@ import {
   resolveMedicineAfterPickerSelection,
   refineMedicineSearchResults,
 } from '../services/medicineSearch';
-
-function getMedicinePickerLabel(option: Medicine): string {
-  const code = option.code ? ` (HSN ${option.code})` : '';
-  const manufacturer = option.manufacturer ? ` - ${option.manufacturer}` : '';
-  return `${option.name}${code}${manufacturer}`;
-}
-
-/** Wait after typing stops before calling Typesense (reduces API load). */
-const MEDICINE_SEARCH_DEBOUNCE_MS = 350;
+import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
