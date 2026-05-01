@@ -165,6 +165,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   useEffect(() => {
     const trimmed = medicineSearchInput.trim();
     if (trimmed.length < 2) {
+      medicineSearchSeq.current += 1;
       setMedicineSearchHits([]);
       setMedicineSearchLoading(false);
       return;
@@ -174,6 +175,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       selectedMedicine &&
       trimmed === getMedicinePickerLabel(selectedMedicine).trim()
     ) {
+      medicineSearchSeq.current += 1;
       setMedicineSearchLoading(false);
       return;
     }
@@ -197,11 +199,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   useEffect(() => {
     if (!addMedicineDialog) {
+      addMedicineSearchSeq.current += 1;
       setAddMedicineSearchHits([]);
       return;
     }
     const q = newMedicineData.name.trim();
     if (q.length < 2) {
+      addMedicineSearchSeq.current += 1;
       setAddMedicineSearchHits([]);
       return;
     }
