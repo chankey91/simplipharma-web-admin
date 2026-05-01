@@ -19,6 +19,7 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
           mfgDate: item.mfgDate?.toDate() || undefined,
           expiryDate: item.expiryDate?.toDate() || undefined,
           mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp)) : undefined,
+          standardDiscount: item.standardDiscount !== undefined && item.standardDiscount !== null ? (typeof item.standardDiscount === 'number' ? item.standardDiscount : parseFloat(String(item.standardDiscount))) : undefined,
         })) || []
       } as PurchaseInvoice;
     });
@@ -37,6 +38,7 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
           mfgDate: item.mfgDate?.toDate() || undefined,
           expiryDate: item.expiryDate?.toDate() || undefined,
           mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(String(item.mrp))) : undefined,
+          standardDiscount: item.standardDiscount !== undefined && item.standardDiscount !== null ? (typeof item.standardDiscount === 'number' ? item.standardDiscount : parseFloat(String(item.standardDiscount))) : undefined,
           freeQuantity: item.freeQuantity !== undefined && item.freeQuantity !== null ? (typeof item.freeQuantity === 'number' ? item.freeQuantity : parseFloat(String(item.freeQuantity))) : undefined,
           gstRate: item.gstRate !== undefined && item.gstRate !== null ? (typeof item.gstRate === 'number' ? item.gstRate : parseFloat(String(item.gstRate))) : undefined,
           discountPercentage: item.discountPercentage !== undefined && item.discountPercentage !== null ? (typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage))) : undefined,
@@ -70,6 +72,7 @@ export const getPurchaseInvoiceById = async (invoiceId: string): Promise<Purchas
           mfgDate: item.mfgDate?.toDate() || undefined,
           expiryDate: item.expiryDate?.toDate() || undefined,
           mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(String(item.mrp))) : undefined,
+          standardDiscount: item.standardDiscount !== undefined && item.standardDiscount !== null ? (typeof item.standardDiscount === 'number' ? item.standardDiscount : parseFloat(String(item.standardDiscount))) : undefined,
           freeQuantity: item.freeQuantity !== undefined && item.freeQuantity !== null ? (typeof item.freeQuantity === 'number' ? item.freeQuantity : parseFloat(String(item.freeQuantity))) : undefined,
           gstRate: item.gstRate !== undefined && item.gstRate !== null ? (typeof item.gstRate === 'number' ? item.gstRate : parseFloat(String(item.gstRate))) : undefined,
           discountPercentage: item.discountPercentage !== undefined && item.discountPercentage !== null ? (typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage))) : undefined,
@@ -157,6 +160,12 @@ export const createPurchaseInvoice = async (
     }
     if (item.gstRate !== undefined && item.gstRate !== null) {
       cleanedItem.gstRate = item.gstRate;
+    }
+    if (item.standardDiscount !== undefined && item.standardDiscount !== null) {
+      const sd = typeof item.standardDiscount === 'number' ? item.standardDiscount : parseFloat(String(item.standardDiscount));
+      if (!isNaN(sd)) {
+        cleanedItem.standardDiscount = sd;
+      }
     }
     if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
       cleanedItem.discountPercentage = item.discountPercentage;

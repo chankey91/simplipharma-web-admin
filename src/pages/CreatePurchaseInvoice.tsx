@@ -107,6 +107,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     purchasePrice?: string | number;
     mrp?: string | number;
     gstRate?: string | number;
+    standardDiscount?: string | number;
     discountPercentage?: string | number;
   }>({
     medicineId: '',
@@ -121,6 +122,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     purchasePrice: '',
     mrp: '',
     gstRate: '',
+    standardDiscount: '20',
     discountPercentage: '',
   });
   const [expiryDateError, setExpiryDateError] = useState<string>('');
@@ -293,6 +295,37 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const { subTotal, totalDiscount, totalTax, roundoff, grandTotal } = calculateTotals();
 
+  const parseNumber = (value: string | number | undefined): number => {
+    if (value === undefined || value === null || value === '') return 0;
+    const parsed = typeof value === 'number' ? value : parseFloat(String(value));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const getCurrentItemGstRate = () => {
+    const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+    return selectedMed?.gstRate || parseNumber(currentItem.gstRate) || 5;
+  };
+
+  const calculatePurchasePriceFromMrpAndDiscount = (
+    mrp: number,
+    gstRate: number,
+    standardDiscount: number
+  ): number => {
+    if (mrp <= 0) return 0;
+    const discountedMrp = mrp * (1 - standardDiscount / 100);
+    return discountedMrp / (1 + gstRate / 100);
+  };
+
+  const calculateStandardDiscountFromMrpAndPurchasePrice = (
+    mrp: number,
+    purchasePrice: number,
+    gstRate: number
+  ): number => {
+    if (mrp <= 0 || purchasePrice <= 0) return 20;
+    const priceWithGST = purchasePrice * (1 + gstRate / 100);
+    return (1 - (priceWithGST / mrp)) * 100;
+  };
+
   const handleAddItem = () => {
     if (!selectedMedicine) {
       alert('Please select a medicine');
@@ -312,6 +345,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       purchasePrice: '',
       mrp: '',
       gstRate: selectedMedicine.gstRate || 5, // Get GST rate from medicine master data
+      standardDiscount: '20',
       discountPercentage: '',
     });
     setItemDialog({ open: true, itemIndex: null });
@@ -402,16 +436,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
     const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
     
-    // Calculate standard discount from MRP and Purchase Price
-    // Formula: Standard Discount = (1 - (Purchase Price * (1 + GST/100) / MRP)) * 100
-    let standardDiscount: number | undefined = undefined;
-    if (mrp > 0 && purchasePrice > 0) {
-      const priceWithGST = purchasePrice * (1 + gstRate / 100);
-      standardDiscount = (1 - (priceWithGST / mrp)) * 100;
-    } else {
-      // Default to 20% if MRP or Purchase Price not available
-      standardDiscount = 20;
-    }
+    const enteredStandardDiscount = parseNumber(currentItem.standardDiscount);
+    const standardDiscount =
+      currentItem.standardDiscount !== '' && currentItem.standardDiscount !== undefined
+        ? enteredStandardDiscount
+        : calculateStandardDiscountFromMrpAndPurchasePrice(mrp, purchasePrice, gstRate);
     
     // Calculate total: (purchasePrice * quantity) - discount + GST
     // Formula: Purchase Price - Discount + GST
@@ -453,7 +482,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       purchasePrice,
       mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
       gstRate: gstRate > 0 ? gstRate : undefined,
-      standardDiscount: standardDiscount !== undefined ? standardDiscount : undefined,
+      standardDiscount: Number.isFinite(standardDiscount) ? standardDiscount : undefined,
       discountPercentage: discountPercentage > 0 ? discountPercentage : undefined,
       totalAmount,
       qrCode: qrCode || undefined,
@@ -483,6 +512,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       purchasePrice: '',
       mrp: '',
       gstRate: selectedMedicine?.gstRate || 5, // Reset to medicine's GST rate
+      standardDiscount: '20',
       discountPercentage: '',
     });
   };
@@ -504,6 +534,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       purchasePrice: item.purchasePrice.toString(),
       mrp: item.mrp?.toString() || '',
       gstRate: item.gstRate || selectedMedicine?.gstRate || 5, // Use item's GST rate or medicine's default
+      standardDiscount:
+        item.standardDiscount !== undefined && item.standardDiscount !== null
+          ? item.standardDiscount.toString()
+          : calculateStandardDiscountFromMrpAndPurchasePrice(
+              item.mrp || 0,
+              item.purchasePrice || 0,
+              item.gstRate || selectedMedicine?.gstRate || 5
+            ).toFixed(2),
       discountPercentage: item.discountPercentage?.toString() || '',
     });
     setItemDialog({ open: true, itemIndex: index });
@@ -1072,21 +1110,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 value={currentItem.mrp}
                 onChange={(e) => {
                   const mrpValue = e.target.value;
-                  const mrp = mrpValue ? (typeof mrpValue === 'number' ? mrpValue : parseFloat(String(mrpValue || '0'))) : 0;
-                  
-                  // Get GST rate from medicine master data
-                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
-                  const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
-                  
-                  // Calculate Purchase Price: (MRP * 0.80) / (1 + GST rate/100)
-                  // Step 1: Apply 20% standard discount
-                  // Step 2: Remove inclusive GST
-                  let calculatedPurchasePrice = '';
-                  if (mrp > 0) {
-                    const afterDiscount = mrp * 0.80;
-                    const purchasePrice = afterDiscount / (1 + gstRate / 100);
-                    calculatedPurchasePrice = purchasePrice.toFixed(2);
-                  }
+                  const mrp = parseNumber(mrpValue);
+                  const gstRate = getCurrentItemGstRate();
+                  const standardDiscount =
+                    currentItem.standardDiscount === '' || currentItem.standardDiscount === undefined
+                      ? 20
+                      : parseNumber(currentItem.standardDiscount);
+                  const purchasePrice = calculatePurchasePriceFromMrpAndDiscount(mrp, gstRate, standardDiscount);
+                  const calculatedPurchasePrice = mrp > 0 ? purchasePrice.toFixed(2) : '';
                   
                   setCurrentItem({ 
                     ...currentItem, 
@@ -1098,7 +1129,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   });
                 }}
                 InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
-                helperText="Enter MRP to auto-calculate Purchase Price (20% discount + GST removal)"
+                helperText="Purchase Price is calculated from MRP, Standard Discount and GST"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -1122,28 +1153,24 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 fullWidth
                 label="Standard Discount (%)"
                 type="number"
-                value={(() => {
-                  const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
-                  const purchasePrice = currentItem.purchasePrice ? (typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'))) : 0;
-                  
-                  // Get GST rate from medicine master data
-                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
-                  const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
-                  
-                  // Calculate standard discount from MRP and Purchase Price
-                  // Formula: Standard Discount = (1 - (Purchase Price * (1 + GST/100) / MRP)) * 100
-                  if (mrp > 0 && purchasePrice > 0) {
-                    const priceWithGST = purchasePrice * (1 + gstRate / 100);
-                    const standardDiscount = (1 - (priceWithGST / mrp)) * 100;
-                    return standardDiscount.toFixed(2);
-                  }
-                  // Default to 20% if MRP or Purchase Price not available
-                  return '20.00';
-                })()}
-                InputProps={{ 
-                  readOnly: true
+                value={currentItem.standardDiscount}
+                onChange={(e) => {
+                  const standardDiscountValue = e.target.value;
+                  const mrp = parseNumber(currentItem.mrp);
+                  const gstRate = getCurrentItemGstRate();
+                  const standardDiscount = parseNumber(standardDiscountValue);
+                  const purchasePrice = calculatePurchasePriceFromMrpAndDiscount(mrp, gstRate, standardDiscount);
+
+                  setCurrentItem({
+                    ...currentItem,
+                    standardDiscount: standardDiscountValue,
+                    ...(mrp > 0 && {
+                      purchasePrice: purchasePrice.toFixed(2),
+                      unitPrice: purchasePrice.toFixed(2),
+                    }),
+                  });
                 }}
-                helperText="Calculated from MRP and Purchase Price"
+                helperText="Change this to auto-update Purchase Price from MRP"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -1154,10 +1181,19 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 required
                 value={currentItem.purchasePrice}
                 onChange={(e) => {
+                  const purchasePriceValue = e.target.value;
+                  const mrp = parseNumber(currentItem.mrp);
+                  const gstRate = getCurrentItemGstRate();
+                  const purchasePrice = parseNumber(purchasePriceValue);
+                  const standardDiscount = calculateStandardDiscountFromMrpAndPurchasePrice(mrp, purchasePrice, gstRate);
+
                   setCurrentItem({ 
                     ...currentItem, 
-                    purchasePrice: e.target.value,
-                    unitPrice: e.target.value,
+                    purchasePrice: purchasePriceValue,
+                    unitPrice: purchasePriceValue,
+                    ...(mrp > 0 && {
+                      standardDiscount: standardDiscount.toFixed(2),
+                    }),
                   });
                 }}
                 InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
