@@ -63,6 +63,32 @@ export function medicineMatchesSearchInput(m: Medicine, inputValue: string): boo
 }
 
 /**
+ * Autocomplete-friendly order: name prefix, then name substring, then code/manufacturer;
+ * tie-break by display name.
+ */
+export function rankMedicinesForAutocompleteQuery(medicines: Medicine[], query: string): Medicine[] {
+  const ql = query.trim().toLowerCase();
+  if (ql.length === 0) return [...medicines];
+
+  const tier = (m: Medicine): number => {
+    const n = (m.name || '').toLowerCase();
+    const c = String(m.code ?? '').toLowerCase();
+    const f = (m.manufacturer || '').toLowerCase();
+    if (n.startsWith(ql)) return 0;
+    if (n.includes(ql)) return 1;
+    if (c.includes(ql) || f.includes(ql)) return 2;
+    return 3;
+  };
+
+  return [...medicines].sort((a, b) => {
+    const ta = tier(a);
+    const tb = tier(b);
+    if (ta !== tb) return ta - tb;
+    return (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
+  });
+}
+
+/**
  * Prefer rows whose name, code, or manufacturer contain the query (case-insensitive).
  * Falls back to the loaded Firestore catalog when Typesense returns noisy fuzzy matches.
  */
@@ -75,9 +101,12 @@ export function refineMedicineSearchResults(
   if (t.length < 2) return [];
 
   const fromTs = typesenseHits.filter((m) => medicineMatchesSearchInput(m, t));
-  if (fromTs.length > 0) return fromTs;
+  if (fromTs.length > 0) return rankMedicinesForAutocompleteQuery(fromTs, t);
 
-  return fallbackCatalog.filter((m) => medicineMatchesSearchInput(m, t)).slice(0, 80);
+  return rankMedicinesForAutocompleteQuery(
+    fallbackCatalog.filter((m) => medicineMatchesSearchInput(m, t)).slice(0, 80),
+    t
+  );
 }
 
 /** Typesense search; use `hydrate: false` for fast purchase/autocomplete pickers. */
