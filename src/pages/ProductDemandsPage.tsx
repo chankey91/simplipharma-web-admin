@@ -24,7 +24,8 @@ import {
   ToggleButton,
 } from '@mui/material';
 import { format } from 'date-fns';
-import { PostAdd, Search } from '@mui/icons-material';
+import * as XLSX from 'xlsx';
+import { FileDownload, PostAdd, Search } from '@mui/icons-material';
 import { useProductDemands, useFulfillProductDemand, useRejectProductDemand } from '../hooks/useProductDemands';
 import { useMedicines } from '../hooks/useInventory';
 import { ProductDemand, Medicine } from '../types';
@@ -184,6 +185,39 @@ export const ProductDemandsPage: React.FC = () => {
     }
   };
 
+  const downloadDemandsExcel = () => {
+    if (filtered.length === 0) {
+      alert('No demands in this view to export');
+      return;
+    }
+    const rows = filtered.map((d) => ({
+      'Requested product': d.productName,
+      Manufacturer: d.manufacturerName,
+      Quantity: d.requestedQuantity,
+      Unit: d.requestedUnit,
+      Notes: d.notes ?? '',
+      Retailer: d.retailerName ?? '',
+      'Retailer email': d.retailerEmail ?? '',
+      'Retailer id': d.retailerId,
+      Status: d.status,
+      'Created at': d.createdAt
+        ? format(
+            d.createdAt instanceof Date ? d.createdAt : new Date(d.createdAt as string | number),
+            'yyyy-MM-dd HH:mm'
+          )
+        : '',
+      'Fulfilled as': d.fulfilledMedicineName ?? '',
+      'Fulfillment note': d.fulfillmentNote ?? '',
+      'Purchase invoice ref': d.purchaseInvoiceId ?? '',
+      'Rejection reason': d.rejectionReason ?? '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Product demands');
+    const stamp = format(new Date(), 'yyyy-MM-dd');
+    XLSX.writeFile(wb, `product-demands-${stamp}.xlsx`);
+  };
+
   const handleReject = async () => {
     if (!selectedDemand || !rejectReason.trim()) {
       alert('Enter a rejection reason');
@@ -209,15 +243,26 @@ export const ProductDemandsPage: React.FC = () => {
           <PostAdd color="primary" />
           Product demands
         </Typography>
-        <ToggleButtonGroup
-          value={filter}
-          exclusive
-          onChange={(_, v) => v && setFilter(v)}
-          size="small"
-        >
-          <ToggleButton value="pending">Pending</ToggleButton>
-          <ToggleButton value="all">All</ToggleButton>
-        </ToggleButtonGroup>
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <ToggleButtonGroup
+            value={filter}
+            exclusive
+            onChange={(_, v) => v && setFilter(v)}
+            size="small"
+          >
+            <ToggleButton value="pending">Pending</ToggleButton>
+            <ToggleButton value="all">All</ToggleButton>
+          </ToggleButtonGroup>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<FileDownload />}
+            onClick={downloadDemandsExcel}
+            disabled={!demands?.length || filtered.length === 0}
+          >
+            Download Excel
+          </Button>
+        </Box>
       </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>
