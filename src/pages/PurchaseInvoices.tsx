@@ -33,7 +33,9 @@ import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
-import { PurchaseInvoice } from '../types';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 export const PurchaseInvoicesPage: React.FC = () => {
   const { data: invoices, isLoading } = usePurchaseInvoices();
@@ -44,9 +46,11 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
 
+  const { sortKey, sortDirection, requestSort } = useTableSort('invoiceDate', 'desc');
+
   const filteredInvoices = useMemo(() => {
     if (!invoices) return [];
-    const filtered = invoices.filter((invoice) => {
+    return invoices.filter((invoice) => {
       const matchesSearch =
         invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
         invoice.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -56,19 +60,51 @@ export const PurchaseInvoicesPage: React.FC = () => {
 
       return matchesSearch && matchesStatus;
     });
-    filtered.sort((a, b) => {
-      const dateA = a.invoiceDate instanceof Date ? a.invoiceDate : new Date(a.invoiceDate as string | number);
-      const dateB = b.invoiceDate instanceof Date ? b.invoiceDate : new Date(b.invoiceDate as string | number);
-      const byDate = dateB.getTime() - dateA.getTime();
-      if (byDate !== 0) return byDate;
-      return b.invoiceNumber.localeCompare(a.invoiceNumber, undefined, { numeric: true, sensitivity: 'base' });
-    });
-    return filtered;
   }, [invoices, searchTerm, statusFilter]);
 
+  const sortedInvoices = useMemo(() => {
+    const list = [...filteredInvoices];
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'invoiceNumber':
+          cmp = compareAsc(a.invoiceNumber, b.invoiceNumber);
+          break;
+        case 'invoiceDate':
+          cmp = compareAsc(toTimeMs(a.invoiceDate), toTimeMs(b.invoiceDate));
+          break;
+        case 'vendorName':
+          cmp = compareAsc(a.vendorName, b.vendorName);
+          break;
+        case 'items':
+          cmp = compareAsc(a.items.length, b.items.length);
+          break;
+        case 'totalAmount':
+          cmp = compareAsc(a.totalAmount, b.totalAmount);
+          break;
+        case 'paymentStatus':
+          cmp = compareAsc(a.paymentStatus, b.paymentStatus);
+          break;
+        default:
+          cmp = compareAsc(toTimeMs(a.invoiceDate), toTimeMs(b.invoiceDate));
+      }
+      if (cmp !== 0) return applyDirection(cmp, sortDirection);
+      return applyDirection(
+        compareAsc(a.invoiceNumber, b.invoiceNumber),
+        sortDirection
+      );
+    });
+    return list;
+  }, [filteredInvoices, sortKey, sortDirection]);
+
+  const requestSortResetPage = (key: string) => {
+    requestSort(key);
+    setPage(1);
+  };
+
   // Pagination
-  const totalPages = Math.ceil(filteredInvoices.length / rowsPerPage);
-  const paginatedInvoices = filteredInvoices.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  const totalPages = Math.ceil(sortedInvoices.length / rowsPerPage);
+  const paginatedInvoices = sortedInvoices.slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
@@ -166,17 +202,17 @@ export const PurchaseInvoicesPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Invoice Number</TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>Vendor</TableCell>
-              <TableCell>Items</TableCell>
-              <TableCell align="right">Amount</TableCell>
-              <TableCell>Payment Status</TableCell>
+              <SortableTableHeadCell columnId="invoiceNumber" label="Invoice Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="invoiceDate" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="vendorName" label="Vendor" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="totalAmount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="paymentStatus" label="Payment Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredInvoices.length === 0 ? (
+            {sortedInvoices.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No invoices found</Typography>
@@ -220,7 +256,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
       </TableContainer>
 
       {/* Pagination */}
-      {filteredInvoices.length > 0 && (
+      {sortedInvoices.length > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
@@ -231,7 +267,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
             showLastButton
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredInvoices.length)} of {filteredInvoices.length} invoices
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, sortedInvoices.length)} of {sortedInvoices.length} invoices
           </Typography>
         </Box>
       )}

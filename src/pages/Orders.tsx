@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -41,6 +41,9 @@ import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
 import { exportPendingOrdersByStore } from '../utils/export';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 export const OrdersPage: React.FC = () => {
   const { data: orders, isLoading } = useOrders();
@@ -59,6 +62,8 @@ export const OrdersPage: React.FC = () => {
     reason: ''
   });
 
+  const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
+
   const filteredOrders = orders?.filter(order => {
     const matchesSearch = 
       order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -70,9 +75,43 @@ export const OrdersPage: React.FC = () => {
     return matchesSearch && matchesStatus;
   }) || [];
 
+  const sortedOrders = useMemo(() => {
+    const list = [...filteredOrders];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'id':
+          return applyDirection(compareAsc(a.id, b.id), sortDirection);
+        case 'orderDate':
+          return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), sortDirection);
+        case 'retailer':
+          return applyDirection(
+            compareAsc((a.retailerEmail || '').toLowerCase(), (b.retailerEmail || '').toLowerCase()),
+            sortDirection
+          );
+        case 'items':
+          return applyDirection(compareAsc(a.medicines.length, b.medicines.length), sortDirection);
+        case 'amount': {
+          const va = a.status === 'Pending' ? 0 : a.totalAmount;
+          const vb = b.status === 'Pending' ? 0 : b.totalAmount;
+          return applyDirection(compareAsc(va, vb), sortDirection);
+        }
+        case 'status':
+          return applyDirection(compareAsc(a.status, b.status), sortDirection);
+        default:
+          return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), 'desc');
+      }
+    });
+    return list;
+  }, [filteredOrders, sortKey, sortDirection]);
+
+  const requestSortResetPage = (key: string) => {
+    requestSort(key);
+    setPage(1);
+  };
+
   // Pagination
-  const totalPages = Math.ceil(filteredOrders.length / rowsPerPage);
-  const paginatedOrders = filteredOrders.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  const totalPages = Math.ceil(sortedOrders.length / rowsPerPage);
+  const paginatedOrders = sortedOrders.slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
@@ -215,17 +254,17 @@ export const OrdersPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Order ID</TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>Retailer</TableCell>
-              <TableCell>Items</TableCell>
-              <TableCell>Amount</TableCell>
-              <TableCell>Status</TableCell>
+              <SortableTableHeadCell columnId="id" label="Order ID" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="orderDate" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredOrders.length === 0 ? (
+            {sortedOrders.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
@@ -289,7 +328,7 @@ export const OrdersPage: React.FC = () => {
       </TableContainer>
 
       {/* Pagination */}
-      {filteredOrders.length > 0 && (
+      {sortedOrders.length > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
@@ -300,7 +339,7 @@ export const OrdersPage: React.FC = () => {
             showLastButton
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredOrders.length)} of {filteredOrders.length} orders
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, sortedOrders.length)} of {sortedOrders.length} orders
           </Typography>
         </Box>
       )}

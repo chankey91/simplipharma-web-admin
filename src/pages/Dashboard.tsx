@@ -40,6 +40,9 @@ import { format, startOfMonth, isBefore } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
 import type { Order } from '../types';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -193,6 +196,39 @@ export const DashboardPage: React.FC = () => {
     };
   }, [orders, medicines, stores, pendingRetailerRequests]);
 
+  const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
+  const sortedRecentOrders = useMemo(() => {
+    const list = [...stats.recent];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'id':
+          return applyDirection(compareAsc(a.id, b.id), sortDirection);
+        case 'orderDate':
+          return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), sortDirection);
+        case 'retailer':
+          return applyDirection(
+            compareAsc(
+              `${a.retailerEmail || a.retailerName || ''}`.toLowerCase(),
+              `${b.retailerEmail || b.retailerName || ''}`.toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'amount':
+          return applyDirection(compareAsc(a.totalAmount ?? 0, b.totalAmount ?? 0), sortDirection);
+        case 'status':
+          return applyDirection(compareAsc(a.status, b.status), sortDirection);
+        case 'payment':
+          return applyDirection(
+            compareAsc(a.paymentStatus || '', b.paymentStatus || ''),
+            sortDirection
+          );
+        default:
+          return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), 'desc');
+      }
+    });
+    return list;
+  }, [stats.recent, sortKey, sortDirection]);
+
   if (ordersLoading || storesLoading || medicinesLoading) {
     return <Loading message="Loading dashboard..." />;
   }
@@ -334,16 +370,16 @@ export const DashboardPage: React.FC = () => {
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Order</TableCell>
-                      <TableCell>Date</TableCell>
-                      <TableCell>Retailer</TableCell>
-                      <TableCell align="right">Amount</TableCell>
-                      <TableCell align="center">Status</TableCell>
-                      <TableCell align="center">Payment</TableCell>
+                      <SortableTableHeadCell columnId="id" label="Order" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+                      <SortableTableHeadCell columnId="orderDate" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+                      <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+                      <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} align="right" />
+                      <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} align="center" />
+                      <SortableTableHeadCell columnId="payment" label="Payment" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} align="center" />
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {stats.recent.length === 0 ? (
+                    {sortedRecentOrders.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={6} align="center">
                           <Typography color="text.secondary" sx={{ py: 4 }}>
@@ -352,7 +388,7 @@ export const DashboardPage: React.FC = () => {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      stats.recent.map((order) => {
+                      sortedRecentOrders.map((order) => {
                         const od = order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate);
                         return (
                           <TableRow

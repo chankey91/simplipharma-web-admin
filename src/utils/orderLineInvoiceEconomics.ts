@@ -15,6 +15,11 @@ const schemePair = (source: any) => ({
   free: source?.schemeFreeQty ?? source?.purchaseSchemeFree,
 });
 
+const hasExplicitAllocationFreeQty = (allocs: any[] | undefined) =>
+  allocs?.some(
+    (a) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
+  ) ?? false;
+
 export type OrderLineInvoiceEconomics = {
   totalO: number;
   schemeP?: number;
@@ -67,7 +72,11 @@ export function orderLineInvoiceEconomics(
 
   let paidQty: number;
   if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
-    paidQty = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF).billQty;
+    if (hasExplicitAllocationFreeQty(allocs) && allocs && allocs.length > 0) {
+      paidQty = allocs.reduce((s: number, a: any) => s + toNum(a.quantity), 0);
+    } else {
+      paidQty = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF).billQty;
+    }
   } else if (allocs && allocs.length > 0) {
     paidQty = allocs.reduce((s: number, a: any) => s + toNum(a.quantity), 0);
   } else {

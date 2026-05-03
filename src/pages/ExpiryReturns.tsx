@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -39,6 +39,9 @@ import {
 } from '../services/expiryReturns';
 import { Loading } from '../components/Loading';
 import { format } from 'date-fns';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 const STATUS_OPTIONS: { value: ExpiryReturnStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -83,6 +86,35 @@ export const ExpiryReturnsPage: React.FC = () => {
       setSelectedRequest(null);
     },
   });
+
+  const { sortKey, sortDirection, requestSort } = useTableSort('createdAt', 'desc');
+
+  const sortedExpiryRequests = useMemo(() => {
+    const list = [...(requests || [])];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'retailer':
+          return applyDirection(
+            compareAsc(
+              `${a.retailerName || ''} ${a.retailerEmail || ''}`.toLowerCase(),
+              `${b.retailerName || ''} ${b.retailerEmail || ''}`.toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'amount':
+          return applyDirection(compareAsc(a.totalRefundAmount ?? 0, b.totalRefundAmount ?? 0), sortDirection);
+        case 'items':
+          return applyDirection(compareAsc(a.items?.length ?? 0, b.items?.length ?? 0), sortDirection);
+        case 'status':
+          return applyDirection(compareAsc(a.status, b.status), sortDirection);
+        case 'createdAt':
+          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), sortDirection);
+        default:
+          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), 'desc');
+      }
+    });
+    return list;
+  }, [requests, sortKey, sortDirection]);
 
   const paymentMutation = useMutation({
     mutationFn: ({
@@ -207,7 +239,7 @@ export const ExpiryReturnsPage: React.FC = () => {
         ))}
       </Tabs>
 
-      {requests?.length === 0 && (
+      {sortedExpiryRequests.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>
           No {statusFilter === 'all' ? '' : statusFilter} requests.
         </Alert>
@@ -217,16 +249,16 @@ export const ExpiryReturnsPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Retailer</TableCell>
-              <TableCell>Amount</TableCell>
-              <TableCell>Items</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Submitted</TableCell>
+              <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="createdAt" label="Submitted" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {requests?.map((req) => (
+            {sortedExpiryRequests.map((req) => (
               <TableRow key={req.id} hover>
                 <TableCell>
                   <Typography fontWeight={500}>

@@ -38,6 +38,9 @@ import {
 } from '../services/medicineSearch';
 import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 type Filter = 'pending' | 'all';
 
@@ -70,6 +73,37 @@ export const ProductDemandsPage: React.FC = () => {
     if (filter === 'pending') return demands.filter((d) => d.status === 'pending');
     return demands;
   }, [demands, filter]);
+
+  const { sortKey, sortDirection, requestSort } = useTableSort('createdAt', 'desc');
+
+  const sortedDemands = useMemo(() => {
+    const list = [...filtered];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'productName':
+          return applyDirection(compareAsc(a.productName, b.productName), sortDirection);
+        case 'manufacturerName':
+          return applyDirection(compareAsc(a.manufacturerName, b.manufacturerName), sortDirection);
+        case 'requestedQuantity':
+          return applyDirection(compareAsc(a.requestedQuantity, b.requestedQuantity), sortDirection);
+        case 'retailer':
+          return applyDirection(
+            compareAsc(
+              `${a.retailerName || ''} ${a.retailerEmail || ''}`.toLowerCase(),
+              `${b.retailerName || ''} ${b.retailerEmail || ''}`.toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'status':
+          return applyDirection(compareAsc(a.status, b.status), sortDirection);
+        case 'createdAt':
+          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), sortDirection);
+        default:
+          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), 'desc');
+      }
+    });
+    return list;
+  }, [filtered, sortKey, sortDirection]);
 
   useEffect(() => {
     if (!fulfillOpen) {
@@ -186,11 +220,11 @@ export const ProductDemandsPage: React.FC = () => {
   };
 
   const downloadDemandsExcel = () => {
-    if (filtered.length === 0) {
+    if (sortedDemands.length === 0) {
       alert('No demands in this view to export');
       return;
     }
-    const rows = filtered.map((d) => ({
+    const rows = sortedDemands.map((d) => ({
       'Requested product': d.productName,
       Manufacturer: d.manufacturerName,
       Quantity: d.requestedQuantity,
@@ -258,7 +292,7 @@ export const ProductDemandsPage: React.FC = () => {
             size="small"
             startIcon={<FileDownload />}
             onClick={downloadDemandsExcel}
-            disabled={!demands?.length || filtered.length === 0}
+            disabled={!demands?.length || sortedDemands.length === 0}
           >
             Download Excel
           </Button>
@@ -281,17 +315,17 @@ export const ProductDemandsPage: React.FC = () => {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Requested product</TableCell>
-              <TableCell>Manufacturer</TableCell>
-              <TableCell align="right">Qty</TableCell>
-              <TableCell>Retailer</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Created</TableCell>
+              <SortableTableHeadCell columnId="productName" label="Requested product" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="manufacturerName" label="Manufacturer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="requestedQuantity" label="Qty" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} align="right" />
+              <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="createdAt" label="Created" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {filtered.length === 0 ? (
+            {sortedDemands.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
@@ -300,7 +334,7 @@ export const ProductDemandsPage: React.FC = () => {
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((row) => (
+              sortedDemands.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell>
                     <Typography fontWeight={600}>{row.productName}</Typography>

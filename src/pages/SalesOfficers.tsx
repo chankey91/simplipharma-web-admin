@@ -38,6 +38,9 @@ import {
 import { useStores, useAssignRetailerToSalesOfficer } from '../hooks/useStores';
 import { Loading } from '../components/Loading';
 import { User } from '../types';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc } from '../utils/tableSort';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -79,6 +82,41 @@ export const SalesOfficersPage: React.FC = () => {
     });
     return m;
   }, [salesOfficers]);
+
+  const { sortKey, sortDirection, requestSort } = useTableSort('displayName', 'asc');
+
+  const sortedOfficers = useMemo(() => {
+    const list = [...(salesOfficers || [])];
+    list.sort((a, b) => {
+      const countA = (allRetailers || []).filter((r) => r.salesOfficerId === a.id).length;
+      const countB = (allRetailers || []).filter((r) => r.salesOfficerId === b.id).length;
+      switch (sortKey) {
+        case 'displayName':
+          return applyDirection(
+            compareAsc(
+              (a.displayName || a.email || '').toLowerCase(),
+              (b.displayName || b.email || '').toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'email':
+          return applyDirection(compareAsc((a.email || '').toLowerCase(), (b.email || '').toLowerCase()), sortDirection);
+        case 'phoneNumber':
+          return applyDirection(compareAsc(a.phoneNumber || '', b.phoneNumber || ''), sortDirection);
+        case 'retailers':
+          return applyDirection(compareAsc(countA, countB), sortDirection);
+        default:
+          return applyDirection(
+            compareAsc(
+              (a.displayName || a.email || '').toLowerCase(),
+              (b.displayName || b.email || '').toLowerCase()
+            ),
+            'asc'
+          );
+      }
+    });
+    return list;
+  }, [salesOfficers, allRetailers, sortKey, sortDirection]);
 
   const handleOpenCreate = () => {
     setFormData({
@@ -211,15 +249,15 @@ export const SalesOfficersPage: React.FC = () => {
           <TableHead>
             <TableRow>
               <TableCell width={48} />
-              <TableCell>Name</TableCell>
-              <TableCell>Email</TableCell>
-              <TableCell>Contact</TableCell>
-              <TableCell align="right">Retailers</TableCell>
+              <SortableTableHeadCell columnId="displayName" label="Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="email" label="Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="phoneNumber" label="Contact" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="retailers" label="Retailers" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} align="right" />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {!salesOfficers?.length ? (
+            {!sortedOfficers.length ? (
               <TableRow>
                 <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
                   <Typography color="textSecondary">No Sales Officers yet</Typography>
@@ -229,7 +267,7 @@ export const SalesOfficersPage: React.FC = () => {
                 </TableCell>
               </TableRow>
             ) : (
-              salesOfficers.map((so) => (
+              sortedOfficers.map((so) => (
                 <SalesOfficerRow
                   key={so.id}
                   officer={so}

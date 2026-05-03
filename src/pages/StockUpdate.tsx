@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -33,6 +33,9 @@ import { Medicine } from '../types';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
 import { format } from 'date-fns';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 export const StockUpdatePage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -58,6 +61,36 @@ export const StockUpdatePage: React.FC = () => {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const batchSort = useTableSort('expiryDate', 'asc');
+  const sortedBatches = useMemo(() => {
+    const batches = selectedMedicine?.stockBatches;
+    if (!batches?.length) return [];
+    const list = [...batches];
+    list.sort((a, b) => {
+      const mfgMs = (x: typeof a) => {
+        if (!x.mfgDate) return 0;
+        return toTimeMs(x.mfgDate instanceof Date ? x.mfgDate : x.mfgDate.toDate());
+      };
+      const expMs = (x: typeof a) =>
+        toTimeMs(x.expiryDate instanceof Date ? x.expiryDate : x.expiryDate.toDate());
+      switch (batchSort.sortKey) {
+        case 'batchNumber':
+          return applyDirection(compareAsc(a.batchNumber, b.batchNumber), batchSort.sortDirection);
+        case 'quantity':
+          return applyDirection(compareAsc(a.quantity, b.quantity), batchSort.sortDirection);
+        case 'mfgDate':
+          return applyDirection(compareAsc(mfgMs(a), mfgMs(b)), batchSort.sortDirection);
+        case 'expiryDate':
+          return applyDirection(compareAsc(expMs(a), expMs(b)), batchSort.sortDirection);
+        case 'mrp':
+          return applyDirection(compareAsc(a.mrp ?? 0, b.mrp ?? 0), batchSort.sortDirection);
+        default:
+          return applyDirection(compareAsc(expMs(a), expMs(b)), 'asc');
+      }
+    });
+    return list;
+  }, [selectedMedicine?.stockBatches, selectedMedicine?.id, batchSort.sortKey, batchSort.sortDirection]);
 
   useEffect(() => {
     if (medicineIdFromUrl && medicines) {
@@ -301,15 +334,47 @@ export const StockUpdatePage: React.FC = () => {
                   <Table size="small">
                     <TableHead>
                       <TableRow>
-                        <TableCell>Batch</TableCell>
-                        <TableCell align="right">Qty</TableCell>
-                        <TableCell>MFG</TableCell>
-                        <TableCell>Expiry</TableCell>
-                        <TableCell align="right">MRP</TableCell>
+                        <SortableTableHeadCell
+                          columnId="batchNumber"
+                          label="Batch"
+                          sortKey={batchSort.sortKey}
+                          sortDirection={batchSort.sortDirection}
+                          onRequestSort={batchSort.requestSort}
+                        />
+                        <SortableTableHeadCell
+                          columnId="quantity"
+                          label="Qty"
+                          sortKey={batchSort.sortKey}
+                          sortDirection={batchSort.sortDirection}
+                          onRequestSort={batchSort.requestSort}
+                          align="right"
+                        />
+                        <SortableTableHeadCell
+                          columnId="mfgDate"
+                          label="MFG"
+                          sortKey={batchSort.sortKey}
+                          sortDirection={batchSort.sortDirection}
+                          onRequestSort={batchSort.requestSort}
+                        />
+                        <SortableTableHeadCell
+                          columnId="expiryDate"
+                          label="Expiry"
+                          sortKey={batchSort.sortKey}
+                          sortDirection={batchSort.sortDirection}
+                          onRequestSort={batchSort.requestSort}
+                        />
+                        <SortableTableHeadCell
+                          columnId="mrp"
+                          label="MRP"
+                          sortKey={batchSort.sortKey}
+                          sortDirection={batchSort.sortDirection}
+                          onRequestSort={batchSort.requestSort}
+                          align="right"
+                        />
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {selectedMedicine.stockBatches.map((batch) => (
+                      {sortedBatches.map((batch) => (
                         <TableRow key={batch.id}>
                           <TableCell>{batch.batchNumber}</TableCell>
                           <TableCell align="right">{batch.quantity}</TableCell>
