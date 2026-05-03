@@ -271,6 +271,14 @@ function typesenseQueryBy(query: string, strict: boolean): string {
   return 'name,manufacturer';
 }
 
+/** Comma-separated weights 1:1 with `query_by` field order (name strongest; code between name and mfr when present). */
+function typesenseQueryByWeights(queryBy: string): string {
+  const n = queryBy.split(',').map((s) => s.trim()).filter(Boolean).length;
+  if (n === 3) return '4,2,1';
+  if (n === 2) return '4,1';
+  return '1';
+}
+
 /**
  * Authenticated catalog search (Typesense + optional Firestore hydrate).
  * minInstances keeps one instance warm to reduce cold-start latency (requires Blaze; billed while idle).
@@ -305,10 +313,13 @@ export const searchMedicinesTypesense = functions
     const res = await client.collections(TYPESENSE_COLLECTION).documents().search({
       q: query,
       query_by: queryBy,
+      query_by_weights: typesenseQueryByWeights(queryBy),
       per_page: limit,
       // strict (admin): no prefix fan-out + 1 typo — cuts unrelated fuzzy matches vs loose retailer search
       prefix: !strict,
       num_typos: strict ? 1 : 2,
+      sort_by: '_text_match:desc',
+      prioritize_exact_match: true,
     });
 
     const hits = res.hits || [];

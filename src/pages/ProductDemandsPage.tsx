@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -24,12 +24,19 @@ import {
   ToggleButton,
 } from '@mui/material';
 import { format } from 'date-fns';
-import { PostAdd } from '@mui/icons-material';
+import { PostAdd, Search } from '@mui/icons-material';
 import { useProductDemands, useFulfillProductDemand, useRejectProductDemand } from '../hooks/useProductDemands';
 import { useMedicines } from '../hooks/useInventory';
 import { ProductDemand, Medicine } from '../types';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
+import {
+  searchMedicinesTypesenseAdmin,
+  resolveMedicineAfterPickerSelection,
+  refineMedicineSearchResults,
+} from '../services/medicineSearch';
+import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 
 type Filter = 'pending' | 'all';
 
@@ -50,15 +57,97 @@ export const ProductDemandsPage: React.FC = () => {
   const [cartQty, setCartQty] = useState('1');
   const [rejectReason, setRejectReason] = useState('');
 
+  const [fulfillMedicineSearchInput, setFulfillMedicineSearchInput] = useState('');
+  const [fulfillMedicineSearchHits, setFulfillMedicineSearchHits] = useState<Medicine[]>([]);
+  const [fulfillMedicineSearchLoading, setFulfillMedicineSearchLoading] = useState(false);
+  const fulfillMedicineSearchSeq = useRef(0);
+  const fulfillMedicineSearchInputRef = useRef(fulfillMedicineSearchInput);
+  fulfillMedicineSearchInputRef.current = fulfillMedicineSearchInput;
+
   const filtered = useMemo(() => {
     if (!demands) return [];
     if (filter === 'pending') return demands.filter((d) => d.status === 'pending');
     return demands;
   }, [demands, filter]);
 
+  useEffect(() => {
+    if (!fulfillOpen) {
+      fulfillMedicineSearchSeq.current += 1;
+      setFulfillMedicineSearchInput('');
+      setFulfillMedicineSearchHits([]);
+      setFulfillMedicineSearchLoading(false);
+      setSelectedMedicine(null);
+    }
+  }, [fulfillOpen]);
+
+  useEffect(() => {
+    if (!fulfillOpen) return;
+
+    const trimmed = fulfillMedicineSearchInput.trim();
+    if (trimmed.length < 2) {
+      fulfillMedicineSearchSeq.current += 1;
+      setFulfillMedicineSearchHits([]);
+      setFulfillMedicineSearchLoading(false);
+      return;
+    }
+    if (
+      selectedMedicine &&
+      trimmed === getMedicinePickerLabel(selectedMedicine).trim()
+    ) {
+      fulfillMedicineSearchSeq.current += 1;
+      setFulfillMedicineSearchLoading(false);
+      return;
+    }
+    const seq = ++fulfillMedicineSearchSeq.current;
+    setFulfillMedicineSearchHits([]);
+    setFulfillMedicineSearchLoading(true);
+    const t = setTimeout(() => {
+      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
+        .then((rows) => {
+          if (fulfillMedicineSearchSeq.current !== seq) return;
+          if (fulfillMedicineSearchInputRef.current.trim() !== trimmed) return;
+          setFulfillMedicineSearchHits(rows);
+        })
+        .finally(() => {
+          if (fulfillMedicineSearchSeq.current === seq) {
+            setFulfillMedicineSearchLoading(false);
+          }
+        });
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [fulfillOpen, fulfillMedicineSearchInput, selectedMedicine]);
+
+  const fulfillMasterMedicineOptions = useMemo(() => {
+    const q = fulfillMedicineSearchInput.trim();
+    const all = medicines || [];
+
+    if (
+      selectedMedicine &&
+      q === getMedicinePickerLabel(selectedMedicine).trim()
+    ) {
+      return [selectedMedicine];
+    }
+
+    if (q.length >= 2) {
+      let list = refineMedicineSearchResults(fulfillMedicineSearchHits, q, all);
+      if (selectedMedicine && !list.some((m) => m.id === selectedMedicine.id)) {
+        return [selectedMedicine, ...list];
+      }
+      return list;
+    }
+
+    if (selectedMedicine && !all.some((m) => m.id === selectedMedicine.id)) {
+      return [selectedMedicine];
+    }
+    return [];
+  }, [fulfillMedicineSearchInput, fulfillMedicineSearchHits, medicines, selectedMedicine]);
+
   const openFulfill = (d: ProductDemand) => {
     setSelectedDemand(d);
     setSelectedMedicine(null);
+    setFulfillMedicineSearchInput('');
+    setFulfillMedicineSearchHits([]);
+    fulfillMedicineSearchSeq.current += 1;
     setFulfillNote('');
     setPurchaseInvoiceId('');
     const q = d.requestedQuantity;
@@ -89,6 +178,7 @@ export const ProductDemandsPage: React.FC = () => {
       });
       setFulfillOpen(false);
       setSelectedDemand(null);
+      setSelectedMedicine(null);
     } catch (e: any) {
       alert(e?.message || 'Failed to fulfill');
     }
@@ -259,12 +349,54 @@ export const ProductDemandsPage: React.FC = () => {
           </Typography>
           <Autocomplete
             sx={{ mt: 2 }}
-            options={medicines || []}
-            getOptionLabel={(m) => `${m.name} (${m.manufacturer || ''}) [${m.code || m.id}]`}
+            loading={fulfillMedicineSearchLoading}
+            options={fulfillMasterMedicineOptions}
+            getOptionLabel={getMedicinePickerLabel}
             value={selectedMedicine}
-            onChange={(_, v) => setSelectedMedicine(v)}
+            inputValue={fulfillMedicineSearchInput}
+            onInputChange={(_, newInputValue, reason) => {
+              if (reason === 'clear') {
+                setFulfillMedicineSearchInput('');
+                setSelectedMedicine(null);
+                return;
+              }
+              if (reason === 'input') {
+                setFulfillMedicineSearchInput(newInputValue);
+                if (
+                  selectedMedicine &&
+                  newInputValue !== getMedicinePickerLabel(selectedMedicine)
+                ) {
+                  setSelectedMedicine(null);
+                }
+                return;
+              }
+              setFulfillMedicineSearchInput(newInputValue);
+            }}
+            onChange={(_, newValue) => {
+              setFulfillMedicineSearchHits([]);
+              if (!newValue) {
+                setSelectedMedicine(null);
+                setFulfillMedicineSearchInput('');
+                return;
+              }
+              void resolveMedicineAfterPickerSelection(newValue, medicines ?? undefined).then((merged) => {
+                setSelectedMedicine(merged);
+                setFulfillMedicineSearchInput(getMedicinePickerLabel(merged));
+              });
+            }}
+            filterOptions={(options) => options}
+            isOptionEqualToValue={(a, b) => a.id === b.id}
             renderInput={(params) => (
-              <TextField {...params} label="Medicine in master (after you added + purchased stock)" required />
+              <TextField
+                {...params}
+                label="Medicine in master (after you added + purchased stock)"
+                required
+                placeholder="Type 2+ letters to search by name or manufacturer…"
+                InputProps={{
+                  ...params.InputProps,
+                  startAdornment: <Search sx={{ mr: 1, color: 'text.secondary' }} />,
+                }}
+              />
             )}
           />
           <TextField

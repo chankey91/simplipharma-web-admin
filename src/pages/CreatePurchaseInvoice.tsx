@@ -51,14 +51,9 @@ import {
   searchMedicinesTypesenseAdmin,
   resolveMedicineAfterPickerSelection,
   refineMedicineSearchResults,
-  medicineMatchesSearchInput,
 } from '../services/medicineSearch';
-
-function getMedicinePickerLabel(option: Medicine): string {
-  const code = option.code ? ` (HSN ${option.code})` : '';
-  const manufacturer = option.manufacturer ? ` - ${option.manufacturer}` : '';
-  return `${option.name}${code}${manufacturer}`;
-}
+import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -162,6 +157,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   useEffect(() => {
     const trimmed = medicineSearchInput.trim();
     if (trimmed.length < 2) {
+      medicineSearchSeq.current += 1;
       setMedicineSearchHits([]);
       setMedicineSearchLoading(false);
       return;
@@ -171,10 +167,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       selectedMedicine &&
       trimmed === getMedicinePickerLabel(selectedMedicine).trim()
     ) {
+      medicineSearchSeq.current += 1;
       setMedicineSearchLoading(false);
       return;
     }
     const seq = ++medicineSearchSeq.current;
+    setMedicineSearchHits([]);
     setMedicineSearchLoading(true);
     const t = setTimeout(() => {
       searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
@@ -188,28 +186,31 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             setMedicineSearchLoading(false);
           }
         });
-    }, 200);
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [medicineSearchInput, selectedMedicine]);
 
   useEffect(() => {
     if (!addMedicineDialog) {
+      addMedicineSearchSeq.current += 1;
       setAddMedicineSearchHits([]);
       return;
     }
     const q = newMedicineData.name.trim();
     if (q.length < 2) {
+      addMedicineSearchSeq.current += 1;
       setAddMedicineSearchHits([]);
       return;
     }
     const seq = ++addMedicineSearchSeq.current;
+    setAddMedicineSearchHits([]);
     const t = setTimeout(() => {
       searchMedicinesTypesenseAdmin(q, { hydrate: false, limit: 40, strict: true }).then((rows) => {
         if (addMedicineSearchSeq.current !== seq) return;
         if (newMedicineNameRef.current.trim() !== q) return;
         setAddMedicineSearchHits(rows);
       });
-    }, 200);
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [addMedicineDialog, newMedicineData.name]);
 
@@ -233,9 +234,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     if (selectedMedicine && !all.some((m) => m.id === selectedMedicine.id)) {
-      return [selectedMedicine, ...all];
+      return [selectedMedicine];
     }
-    return all;
+    return [];
   }, [medicineSearchInput, medicineSearchHits, medicines, selectedMedicine]);
 
   const addMedicineOptions = useMemo(() => {
@@ -245,7 +246,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     if (q.length >= 2) {
       return refineMedicineSearchResults(addMedicineSearchHits, q, all);
     }
-    return all;
+    return [];
   }, [newMedicineData.name, addMedicineSearchHits, medicines]);
 
   const calculateTotals = () => {
@@ -814,9 +815,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                       }
                     );
                   }}
-                  filterOptions={(options, { inputValue }) =>
-                    options.filter((option) => medicineMatchesSearchInput(option, inputValue))
-                  }
+                  filterOptions={(options) => options}
                   isOptionEqualToValue={(a, b) => a.id === b.id}
                   renderInput={(params) => (
                     <TextField
@@ -1294,9 +1293,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 onInputChange={(_, newInputValue) => {
                   setNewMedicineData({ ...newMedicineData, name: newInputValue });
                 }}
-                filterOptions={(options, { inputValue }) =>
-                  options.filter((option) => medicineMatchesSearchInput(option, inputValue))
-                }
+                filterOptions={(options) => options}
                 onChange={(_, newValue) => {
                   if (newValue && typeof newValue === 'object') {
                     const selectedMed = newValue as Medicine;
