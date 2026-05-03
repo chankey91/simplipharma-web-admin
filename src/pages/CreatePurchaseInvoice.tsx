@@ -53,6 +53,7 @@ import {
   refineMedicineSearchResults,
 } from '../services/medicineSearch';
 import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
@@ -892,12 +893,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                         </TableCell>
                         <TableCell align="center">
                           <Typography variant="caption">
-                            {item.schemePaidQty != null &&
-                            item.schemeFreeQty != null &&
-                            item.schemePaidQty > 0 &&
-                            item.schemeFreeQty > 0
-                              ? `${item.schemeFreeQty} free / ${item.schemePaidQty}`
-                              : '—'}
+                            {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">

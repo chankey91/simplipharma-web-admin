@@ -39,6 +39,7 @@ import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
+import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 
 export const MedicineDetailsPage: React.FC = () => {
   const { medicineId } = useParams<{ medicineId: string }>();
@@ -366,6 +367,7 @@ export const MedicineDetailsPage: React.FC = () => {
                     <TableCell align="right">GST %</TableCell>
                     <TableCell align="right">Standard Discount %</TableCell>
                     <TableCell align="right">Discount %</TableCell>
+                    <TableCell align="center">Scheme</TableCell>
                     <TableCell align="right">QR Code</TableCell>
                   </TableRow>
                 </TableHead>
@@ -503,6 +505,11 @@ export const MedicineDetailsPage: React.FC = () => {
                             ? `${discountPercentageValue.toFixed(2)}%`
                             : '-'}
                         </TableCell>
+                        <TableCell align="center">
+                          <Typography variant="body2">
+                            {formatPurchaseSchemeLabel(batch.schemePaidQty, batch.schemeFreeQty)}
+                          </Typography>
+                        </TableCell>
                         <TableCell align="right">
                           <IconButton 
                             size="small" 
@@ -517,7 +524,7 @@ export const MedicineDetailsPage: React.FC = () => {
                     })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={9} align="center">
+                      <TableCell colSpan={10} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>No batches found.</Typography>
                       </TableCell>
                     </TableRow>

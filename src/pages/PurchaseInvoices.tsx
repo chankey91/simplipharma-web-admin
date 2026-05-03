@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -44,16 +44,27 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
 
-  const filteredInvoices = invoices?.filter(invoice => {
-    const matchesSearch = 
-      invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      invoice.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      invoice.items.some(item => item.medicineName.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const matchesStatus = statusFilter === 'All' || invoice.paymentStatus === statusFilter;
-    
-    return matchesSearch && matchesStatus;
-  }) || [];
+  const filteredInvoices = useMemo(() => {
+    if (!invoices) return [];
+    const filtered = invoices.filter((invoice) => {
+      const matchesSearch =
+        invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        invoice.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        invoice.items.some((item) => item.medicineName.toLowerCase().includes(searchTerm.toLowerCase()));
+
+      const matchesStatus = statusFilter === 'All' || invoice.paymentStatus === statusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+    filtered.sort((a, b) => {
+      const dateA = a.invoiceDate instanceof Date ? a.invoiceDate : new Date(a.invoiceDate as string | number);
+      const dateB = b.invoiceDate instanceof Date ? b.invoiceDate : new Date(b.invoiceDate as string | number);
+      const byDate = dateB.getTime() - dateA.getTime();
+      if (byDate !== 0) return byDate;
+      return b.invoiceNumber.localeCompare(a.invoiceNumber, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    return filtered;
+  }, [invoices, searchTerm, statusFilter]);
 
   // Pagination
   const totalPages = Math.ceil(filteredInvoices.length / rowsPerPage);

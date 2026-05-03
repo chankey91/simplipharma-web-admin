@@ -26,6 +26,7 @@ import {
 } from '@mui/icons-material';
 import { usePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
+import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
@@ -166,12 +167,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                           {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
                         </TableCell>
                         <TableCell align="center">
-                          {item.schemePaidQty != null &&
-                          item.schemeFreeQty != null &&
-                          item.schemePaidQty > 0 &&
-                          item.schemeFreeQty > 0
-                            ? `${item.schemeFreeQty} free / ${item.schemePaidQty}`
-                            : '—'}
+                          {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">

@@ -67,6 +67,7 @@ import {
   schemeOrderLineDisplayTotals,
 } from '../utils/schemeFulfillment';
 import { orderLineInvoiceEconomics, orderLineTaxableBeforeDiscount } from '../utils/orderLineInvoiceEconomics';
+import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -90,7 +91,7 @@ const getSchemeLabels = (item: any): string[] => {
       const paid = toNumber(allocation?.schemePaidQty);
       const free = toNumber(allocation?.schemeFreeQty);
       if (paid > 0 && free > 0) {
-        labels.add(`${paid}+${free}`);
+        labels.add(formatPurchaseSchemeLabel(paid, free));
       }
     });
   }
@@ -2488,6 +2489,7 @@ export const OrderDetailsPage: React.FC = () => {
                     <TableCell align="right">Allocate</TableCell>
                     <TableCell align="right">Price</TableCell>
                     <TableCell align="right">MRP</TableCell>
+                    <TableCell align="center">Scheme</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -2551,6 +2553,11 @@ export const OrderDetailsPage: React.FC = () => {
                       </TableCell>
                       <TableCell align="right">
                         ₹{allocation.mrp?.toFixed(2) || '-'}
+                      </TableCell>
+                      <TableCell align="center">
+                        <Typography variant="body2">
+                          {formatPurchaseSchemeLabel(allocation.schemePaidQty, allocation.schemeFreeQty)}
+                        </Typography>
                       </TableCell>
                     </TableRow>
                   ))}
