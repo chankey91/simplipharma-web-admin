@@ -56,6 +56,7 @@ export interface OrderMedicine {
   name: string;
   price: number;
   quantity: number;
+  freeQuantity?: number;
   originalQuantity?: number; // Original ordered quantity (for partial fulfillment tracking)
   batchNumber?: string; // Keep for backward compatibility
   expiryDate?: Date | any;
@@ -71,6 +72,10 @@ export interface OrderMedicine {
     purchasePrice?: number;
     gstRate?: number;
     discountPercentage?: number;
+    schemePaidQty?: number;
+    schemeFreeQty?: number;
+    /** Scheme free units for this allocation; stock deduct = quantity + allocationFreeQty */
+    allocationFreeQty?: number;
   }>;
 }
 

@@ -3,6 +3,7 @@ import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
+import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -195,14 +196,15 @@ export const fulfillOrder = async (
     if (item.batchAllocations && item.batchAllocations.length > 0) {
       // Process each batch allocation
       for (const allocation of item.batchAllocations) {
-        if (allocation.batchNumber && allocation.quantity > 0) {
+        if (allocation.batchNumber && physicalQtyFromAllocation(allocation) > 0) {
           try {
+            const deductQty = physicalQtyFromAllocation(allocation);
             await reduceStockFromBatch(
               item.medicineId,
               allocation.batchNumber,
-              allocation.quantity
+              deductQty
             );
-            console.log(`✓ Stock reduced for medicine ${item.medicineId}, batch ${allocation.batchNumber}, quantity: ${allocation.quantity}`);
+            console.log(`✓ Stock reduced for medicine ${item.medicineId}, batch ${allocation.batchNumber}, quantity: ${deductQty}`);
           } catch (error: any) {
             const errorMsg = `Failed to reduce stock for ${item.name || item.medicineId} (batch ${allocation.batchNumber}): ${error.message || error}`;
             console.error(errorMsg, error);
@@ -300,11 +302,13 @@ export const fulfillOrder = async (
           : purchasePrice;
         
         // Create a clean medicine item for this batch (no undefined values)
+        const { paid: allocPaid, free: allocFree } = paidFreeFromAllocation(allocation);
         const batchItem: any = {
           medicineId: item.medicineId,
           name: item.name,
           price: priceAfterDiscount, // Price after discount
-          quantity: allocation.quantity || 0,
+          quantity: allocPaid,
+          freeQuantity: allocFree,
           batchNumber: allocation.batchNumber,
           gstRate: allocation.gstRate || item.gstRate || 5,
         };
@@ -348,6 +352,7 @@ export const fulfillOrder = async (
         name: item.name,
         price: item.price || 0,
         quantity: item.quantity || 0,
+        freeQuantity: item.freeQuantity || 0,
       };
       
       // Add expiryDate only if it exists
@@ -407,6 +412,11 @@ export const fulfillOrder = async (
         }
         if (allocation.mrp !== undefined && allocation.mrp !== null) cleanItem.mrp = allocation.mrp;
         if (allocation.gstRate !== undefined && allocation.gstRate !== null) cleanItem.gstRate = allocation.gstRate;
+        if (allocation.schemePaidQty && allocation.schemeFreeQty) {
+          const { paid: ap, free: af } = paidFreeFromAllocation(allocation);
+          cleanItem.quantity = ap;
+          cleanItem.freeQuantity = af;
+        }
         // ALWAYS include discountPercentage (even if 0) - it's important to preserve this value
         cleanItem.discountPercentage = finalDiscountPct;
       } else {

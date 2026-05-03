@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Order, PurchaseInvoice } from '../types';
+import { orderedUnitsFromAllocation, schemeOrderLineDisplayTotals } from './schemeFulfillment';
 import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
@@ -59,15 +60,30 @@ const numberToWords = (num: number): string => {
 // HTML Template for Order Invoice
 const getOrderInvoiceHTML = async (order: Order) => {
   const invoiceDate = order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate);
+
+  const toNumber = (value: unknown): number => {
+    if (value === undefined || value === null || value === '') return 0;
+    const parsed = typeof value === 'number' ? value : parseFloat(String(value));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const getSchemePair = (source: any) => {
+    return {
+      paid: source?.schemePaidQty ?? source?.purchaseSchemeDeal,
+      free: source?.schemeFreeQty ?? source?.purchaseSchemeFree,
+    };
+  };
   
   // Fetch all medicines to get packaging info
   const medicineMap = new Map<string, string>();
+  const medicineDetailsMap = new Map<string, any>();
   await Promise.all(
     order.medicines.map(async (item) => {
       if (item.medicineId) {
         try {
           const medicine = await getMedicineById(item.medicineId);
           if (medicine) {
+            medicineDetailsMap.set(item.medicineId, medicine);
             // Check unit field first
             let packaging = medicine.unit;
             
@@ -102,10 +118,78 @@ const getOrderInvoiceHTML = async (order: Order) => {
   let totalProductDiscount = 0;
   
   const items = order.medicines.map((item, index) => {
-    const quantity = item.quantity || 0;
-    const freeQuantity = 0; // Order items don't have free quantity typically
-    const totalQty = quantity + freeQuantity;
-    const mrp = (item as any).mrp || 0;
+    const medicineDetails = item.medicineId ? medicineDetailsMap.get(item.medicineId) : undefined;
+
+    /** Resolve P/F from batch allocations + inventory (same as fulfillment). */
+    const resolveSchemePF = (
+      allocations: any[] | undefined,
+      batchNumber?: string
+    ): { p?: number; f?: number; totalO: number } => {
+      if (allocations && allocations.length > 0) {
+        const totalO = allocations.reduce(
+          (s, allocation: any) => s + orderedUnitsFromAllocation(allocation),
+          0
+        );
+        let p: number | undefined;
+        let f: number | undefined;
+        for (const allocation of allocations) {
+          const batchFromInventory = medicineDetails?.stockBatches?.find(
+            (b: any) => b.batchNumber === allocation.batchNumber
+          );
+          const allocationScheme = getSchemePair(allocation);
+          const inventoryScheme = getSchemePair(batchFromInventory);
+          const pp = toNumber(allocationScheme.paid ?? inventoryScheme.paid);
+          const ff = toNumber(allocationScheme.free ?? inventoryScheme.free);
+          if (pp > 0 && ff > 0) {
+            p = pp;
+            f = ff;
+            break;
+          }
+        }
+        return { p, f, totalO };
+      }
+      const stockBatch = medicineDetails?.stockBatches?.find((b: any) => b.batchNumber === batchNumber);
+      const pair = getSchemePair(stockBatch);
+      return {
+        p: toNumber(pair.paid) || undefined,
+        f: toNumber(pair.free) || undefined,
+        totalO: toNumber(item.quantity),
+      };
+    };
+
+    const allocs = item.batchAllocations;
+    const { p: schemeP, f: schemeF, totalO } = resolveSchemePF(allocs, item.batchNumber);
+
+    const displayCols = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF);
+
+    let paidQty: number;
+    let freeQty: number;
+    let physicalQty: number;
+
+    if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
+      paidQty = displayCols.billQty;
+      freeQty = displayCols.freeQty;
+      physicalQty = totalO;
+    } else if (allocs && allocs.length > 0) {
+      paidQty = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
+      freeQty = allocs.reduce((s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0), 0);
+      physicalQty = allocs.reduce((s: number, a: any) => s + orderedUnitsFromAllocation(a), 0);
+    } else {
+      paidQty = toNumber(item.quantity);
+      freeQty =
+        item.freeQuantity !== undefined && item.freeQuantity !== null
+          ? toNumber(item.freeQuantity)
+          : 0;
+      physicalQty = paidQty + freeQty;
+    }
+    const quantity = displayCols.billQty;
+    const freeQuantity = displayCols.freeQty;
+    const totalQty = displayCols.totalQty;
+
+    let mrp = (item as any).mrp || 0;
+    if (!mrp && allocs?.[0]?.mrp) {
+      mrp = allocs[0].mrp;
+    }
     const discountPercentage = (item as any).discountPercentage !== undefined ? (item as any).discountPercentage : 0;
     const gstRate = (item as any).gstRate !== undefined ? (item as any).gstRate : (order.taxPercentage || 5);
     
@@ -120,8 +204,8 @@ const getOrderInvoiceHTML = async (order: Order) => {
       price = item.price || 0;
     }
     
-    // Total Amount = Price * Quantity (this is what's shown in the "Total" column)
-    const totalAmount = price * quantity;
+    // Total Amount = Price × billable (paid) qty — free units are not charged
+    const totalAmount = price * paidQty;
     
     // Discount = Total Amount * discountPercentage / 100
     const discountAmount = discountPercentage > 0 && totalAmount > 0
@@ -161,9 +245,9 @@ const getOrderInvoiceHTML = async (order: Order) => {
       hsn: (item as any).hsn || '300490',
       batch: item.batchNumber || '-',
       exp: expDate,
-      qty: quantity.toFixed(1),
-      free: freeQuantity > 0 ? freeQuantity.toFixed(1) : '0.0',
-      totalQty: totalQty.toFixed(0),
+      qty: quantity.toFixed(2),
+      free: freeQuantity > 0 ? freeQuantity.toFixed(2) : '0.00',
+      totalQty: totalQty.toFixed(2),
       mrp: mrp > 0 ? mrp.toFixed(2) : '-',
       rate: price.toFixed(2), // Price is already after discount
       disc: discountPercentage > 0 ? discountPercentage.toFixed(2) : '0.00',
