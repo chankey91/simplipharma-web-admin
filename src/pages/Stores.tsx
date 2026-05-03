@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -46,6 +46,9 @@ import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore } from 
 import { getSalesOfficers } from '../services/salesOfficers';
 import { User } from '../types';
 import { Loading } from '../components/Loading';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc } from '../utils/tableSort';
 
 const generatePassword = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -70,6 +73,7 @@ export const StoresPage: React.FC = () => {
   const [generatedPassword, setGeneratedPassword] = useState('');
   
   const [salesOfficers, setSalesOfficers] = useState<User[]>([]);
+  const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
   const [formData, setFormData] = useState({
     displayName: '',
     shopName: '',
@@ -95,9 +99,47 @@ export const StoresPage: React.FC = () => {
     store.storeCode?.toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
 
+  const sortedStores = useMemo(() => {
+    const list = [...filteredStores];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'storeCode':
+          return applyDirection(compareAsc(a.storeCode || '', b.storeCode || ''), sortDirection);
+        case 'shopName':
+          return applyDirection(compareAsc((a.shopName || '').toLowerCase(), (b.shopName || '').toLowerCase()), sortDirection);
+        case 'owner':
+          return applyDirection(
+            compareAsc(
+              (a.ownerName || a.displayName || '').toLowerCase(),
+              (b.ownerName || b.displayName || '').toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'salesOfficer':
+          return applyDirection(compareAsc(a.salesOfficerId || '', b.salesOfficerId || ''), sortDirection);
+        case 'licenceNumber':
+          return applyDirection(compareAsc(a.licenceNumber || '', b.licenceNumber || ''), sortDirection);
+        case 'phoneNumber':
+          return applyDirection(compareAsc(a.phoneNumber || '', b.phoneNumber || ''), sortDirection);
+        case 'location':
+          return applyDirection(compareAsc(a.location ? 1 : 0, b.location ? 1 : 0), sortDirection);
+        case 'isActive':
+          return applyDirection(compareAsc(a.isActive !== false ? 1 : 0, b.isActive !== false ? 1 : 0), sortDirection);
+        default:
+          return applyDirection(compareAsc((a.shopName || '').toLowerCase(), (b.shopName || '').toLowerCase()), 'asc');
+      }
+    });
+    return list;
+  }, [filteredStores, sortKey, sortDirection]);
+
+  const requestSortResetPage = (key: string) => {
+    requestSort(key);
+    setPage(1);
+  };
+
   // Pagination
-  const totalPages = Math.ceil(filteredStores.length / rowsPerPage);
-  const paginatedStores = filteredStores.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  const totalPages = Math.ceil(sortedStores.length / rowsPerPage);
+  const paginatedStores = sortedStores.slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
@@ -307,14 +349,14 @@ export const StoresPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Store Code</TableCell>
-              <TableCell>Shop Name</TableCell>
-              <TableCell>Owner</TableCell>
-              <TableCell>Sales Officer</TableCell>
-              <TableCell>Licence No.</TableCell>
-              <TableCell>Contact</TableCell>
-              <TableCell>Location</TableCell>
-              <TableCell>Status</TableCell>
+              <SortableTableHeadCell columnId="storeCode" label="Store Code" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="shopName" label="Shop Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="owner" label="Owner" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="salesOfficer" label="Sales Officer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="licenceNumber" label="Licence No." sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="phoneNumber" label="Contact" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="location" label="Location" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="isActive" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -378,7 +420,7 @@ export const StoresPage: React.FC = () => {
       </TableContainer>
 
       {/* Pagination */}
-      {filteredStores.length > 0 && (
+      {sortedStores.length > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
@@ -389,7 +431,7 @@ export const StoresPage: React.FC = () => {
             showLastButton
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredStores.length)} of {filteredStores.length} stores
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, sortedStores.length)} of {sortedStores.length} stores
           </Typography>
         </Box>
       )}

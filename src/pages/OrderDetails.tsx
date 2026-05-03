@@ -62,8 +62,8 @@ import { generateOrderInvoice } from '../utils/invoice';
 import { normalizeFirestoreDate } from '../services/inventory';
 import {
   computeSchemeFulfillmentFreeQty,
-  computeSchemeFulfillmentSplit,
   orderedUnitsFromAllocation,
+  schemeLinePaidFreeConserved,
   schemeOrderLineDisplayTotals,
 } from '../utils/schemeFulfillment';
 import { orderLineInvoiceEconomics, orderLineTaxableBeforeDiscount } from '../utils/orderLineInvoiceEconomics';
@@ -275,6 +275,15 @@ export const OrderDetailsPage: React.FC = () => {
             const computedFreeQuantity =
               batchAllocations && batchAllocations.length > 0
                 ? (() => {
+                    const hasPerAllocFree = batchAllocations.some(
+                      (a: any) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
+                    );
+                    if (hasPerAllocFree) {
+                      return batchAllocations.reduce(
+                        (s, allocation) => s + toNumber((allocation as any).allocationFreeQty ?? 0),
+                        0
+                      );
+                    }
                     const totalO = batchAllocations.reduce(
                       (s, allocation) => s + orderedUnitsFromAllocation(allocation as any),
                       0
@@ -607,7 +616,7 @@ export const OrderDetailsPage: React.FC = () => {
           }
           // Create batchAllocations entry to ensure discountPercentage is preserved
           const foundBatchScheme = getSchemeFromAny(foundBatch);
-          const lineSplit = computeSchemeFulfillmentSplit(
+          const lineSplit = schemeLinePaidFreeConserved(
             toNumber(item.quantity),
             foundBatchScheme.schemePaidQty,
             foundBatchScheme.schemeFreeQty
@@ -703,7 +712,7 @@ export const OrderDetailsPage: React.FC = () => {
             }
             // Create batchAllocations entry to ensure discountPercentage is preserved
             const foundBatchScheme = getSchemeFromAny(foundBatch);
-            const lineSplit = computeSchemeFulfillmentSplit(
+            const lineSplit = schemeLinePaidFreeConserved(
               toNumber(item.quantity),
               foundBatchScheme.schemePaidQty,
               foundBatchScheme.schemeFreeQty
@@ -761,7 +770,7 @@ export const OrderDetailsPage: React.FC = () => {
             }
             // Create batchAllocations entry to ensure discountPercentage is preserved
             const selectedBatchScheme = getSchemeFromAny(batch);
-            const lineSplit = computeSchemeFulfillmentSplit(
+            const lineSplit = schemeLinePaidFreeConserved(
               toNumber(item.quantity),
               selectedBatchScheme.schemePaidQty,
               selectedBatchScheme.schemeFreeQty
@@ -1007,7 +1016,7 @@ export const OrderDetailsPage: React.FC = () => {
         break;
       }
     }
-    const lineSplit = computeSchemeFulfillmentSplit(O, schemePaid, schemeFree);
+    const lineSplit = schemeLinePaidFreeConserved(O, schemePaid, schemeFree);
 
     // Update fulfillment data - store individual batch allocations (quantity = billable paid, allocationFreeQty = scheme free)
     const newMedicines = [...fulfillmentData.medicines];
@@ -1200,37 +1209,47 @@ export const OrderDetailsPage: React.FC = () => {
                         batchNumber = m.batchAllocations[0].batchNumber;
                         expiryDate = m.batchAllocations[0].expiryDate || expiryDate;
 
-                        const allocationFree = (() => {
-                          const medicine = medicines?.find((med) => med.id === m.medicineId);
-                          const totalO = m.batchAllocations.reduce(
-                            (s: number, allocation: any) => s + orderedUnitsFromAllocation(allocation),
+                        const hasPerAllocFree = m.batchAllocations.some(
+                          (a: any) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
+                        );
+                        if (hasPerAllocFree) {
+                          freeQuantity = m.batchAllocations.reduce(
+                            (s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0),
                             0
                           );
-                          let schemePaidQty: number | undefined;
-                          let schemeFreeQty: number | undefined;
-                          for (const allocation of m.batchAllocations) {
-                            const stockBatch = medicine?.stockBatches?.find(
-                              (b) => b.batchNumber === allocation.batchNumber
+                        } else {
+                          const allocationFree = (() => {
+                            const medicine = medicines?.find((med) => med.id === m.medicineId);
+                            const totalO = m.batchAllocations.reduce(
+                              (s: number, allocation: any) => s + orderedUnitsFromAllocation(allocation),
+                              0
                             );
-                            const allocationScheme = getSchemeFromAny(allocation);
-                            const stockBatchScheme = getSchemeFromAny(stockBatch);
-                            const p = allocationScheme.schemePaidQty || stockBatchScheme.schemePaidQty;
-                            const f = allocationScheme.schemeFreeQty || stockBatchScheme.schemeFreeQty;
-                            if (p > 0 && f > 0) {
-                              schemePaidQty = p;
-                              schemeFreeQty = f;
-                              break;
+                            let schemePaidQty: number | undefined;
+                            let schemeFreeQty: number | undefined;
+                            for (const allocation of m.batchAllocations) {
+                              const stockBatch = medicine?.stockBatches?.find(
+                                (b) => b.batchNumber === allocation.batchNumber
+                              );
+                              const allocationScheme = getSchemeFromAny(allocation);
+                              const stockBatchScheme = getSchemeFromAny(stockBatch);
+                              const p = allocationScheme.schemePaidQty || stockBatchScheme.schemePaidQty;
+                              const f = allocationScheme.schemeFreeQty || stockBatchScheme.schemeFreeQty;
+                              if (p > 0 && f > 0) {
+                                schemePaidQty = p;
+                                schemeFreeQty = f;
+                                break;
+                              }
                             }
-                          }
-                          return computeSchemeFulfillmentSplit(
-                            totalO,
-                            schemePaidQty,
-                            schemeFreeQty
-                          ).freeQty;
-                        })();
+                            return schemeLinePaidFreeConserved(
+                              totalO,
+                              schemePaidQty,
+                              schemeFreeQty
+                            ).freeQty;
+                          })();
 
-                        if (allocationFree > 0) {
-                          freeQuantity = allocationFree;
+                          if (allocationFree > 0) {
+                            freeQuantity = allocationFree;
+                          }
                         }
                       }
                       

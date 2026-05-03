@@ -34,6 +34,9 @@ import {
   getRegistrationRequestImageUrls,
 } from '../services/pendingRetailers';
 import { format } from 'date-fns';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 export const PendingRetailersPage: React.FC = () => {
   const { data: requests, isLoading, error, refetch } = usePendingRetailerRequests();
@@ -48,6 +51,31 @@ export const PendingRetailersPage: React.FC = () => {
         : null,
     [selectedRequest]
   );
+  const { sortKey, sortDirection, requestSort } = useTableSort('createdAt', 'desc');
+
+  const sortedRequests = useMemo(() => {
+    const list = [...(requests || [])];
+    list.sort((a, b) => {
+      const nameA = (a.displayName || a.shopName || '').toLowerCase();
+      const nameB = (b.displayName || b.shopName || '').toLowerCase();
+      switch (sortKey) {
+        case 'name':
+          return applyDirection(compareAsc(nameA, nameB), sortDirection);
+        case 'email':
+          return applyDirection(compareAsc((a.email || '').toLowerCase(), (b.email || '').toLowerCase()), sortDirection);
+        case 'licence':
+          return applyDirection(compareAsc(a.licenceNumber || '', b.licenceNumber || ''), sortDirection);
+        case 'aadhar':
+          return applyDirection(compareAsc(a.aadharNumber || '', b.aadharNumber || ''), sortDirection);
+        case 'createdAt':
+          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), sortDirection);
+        default:
+          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), 'desc');
+      }
+    });
+    return list;
+  }, [requests, sortKey, sortDirection]);
+
   const hasAnyRegistrationDoc = useMemo(
     () =>
       !!(
@@ -117,7 +145,7 @@ export const PendingRetailersPage: React.FC = () => {
         Retailer registration requests submitted by Sales Officers. Verify details and documents, then approve or reject.
       </Typography>
 
-      {requests?.length === 0 && (
+      {sortedRequests.length === 0 && (
         <Alert severity="success" sx={{ mb: 2 }}>
           No pending requests. All retailer registrations have been processed.
         </Alert>
@@ -127,16 +155,16 @@ export const PendingRetailersPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Name / Shop</TableCell>
-              <TableCell>Email</TableCell>
-              <TableCell>Licence</TableCell>
-              <TableCell>Aadhar</TableCell>
-              <TableCell>Submitted</TableCell>
+              <SortableTableHeadCell columnId="name" label="Name / Shop" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="email" label="Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="licence" label="Licence" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="aadhar" label="Aadhar" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="createdAt" label="Submitted" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {requests?.map((req) => (
+            {sortedRequests.map((req) => (
               <TableRow key={req.id} hover>
                 <TableCell>
                   <Typography fontWeight={500}>{req.displayName || req.shopName || 'Unnamed'}</Typography>

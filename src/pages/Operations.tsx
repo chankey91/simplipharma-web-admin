@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -27,6 +27,9 @@ import {
   useDeleteOperator,
 } from '../hooks/useOperations';
 import { Loading } from '../components/Loading';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc } from '../utils/tableSort';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -66,6 +69,20 @@ export const OperationsPage: React.FC = () => {
   const addOperatorMutation = useAddOperator();
   const deleteTrayMutation = useDeleteTray();
   const deleteOperatorMutation = useDeleteOperator();
+
+  const traySort = useTableSort('name', 'asc');
+  const sortedTrays = useMemo(() => {
+    const list = [...(trays || [])];
+    list.sort((a, b) => applyDirection(compareAsc(a.name, b.name), traySort.sortDirection));
+    return list;
+  }, [trays, traySort.sortKey, traySort.sortDirection]);
+
+  const operatorSort = useTableSort('name', 'asc');
+  const sortedOperators = useMemo(() => {
+    const list = [...(operators || [])];
+    list.sort((a, b) => applyDirection(compareAsc(a.name, b.name), operatorSort.sortDirection));
+    return list;
+  }, [operators, operatorSort.sortKey, operatorSort.sortDirection]);
 
   const handleAddTray = async () => {
     if (!newTrayName.trim()) return;
@@ -197,7 +214,13 @@ export const OperationsPage: React.FC = () => {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Tray Number</TableCell>
+                    <SortableTableHeadCell
+                      columnId="name"
+                      label="Tray Number"
+                      sortKey={traySort.sortKey}
+                      sortDirection={traySort.sortDirection}
+                      onRequestSort={traySort.requestSort}
+                    />
                     <TableCell align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
@@ -219,7 +242,7 @@ export const OperationsPage: React.FC = () => {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    trays.map((tray) => (
+                    sortedTrays.map((tray) => (
                       <TableRow key={tray.id}>
                         <TableCell>{tray.name}</TableCell>
                         <TableCell align="right">
@@ -277,7 +300,13 @@ export const OperationsPage: React.FC = () => {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Operator Name</TableCell>
+                    <SortableTableHeadCell
+                      columnId="name"
+                      label="Operator Name"
+                      sortKey={operatorSort.sortKey}
+                      sortDirection={operatorSort.sortDirection}
+                      onRequestSort={operatorSort.requestSort}
+                    />
                     <TableCell align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
@@ -299,7 +328,7 @@ export const OperationsPage: React.FC = () => {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    operators.map((op) => (
+                    sortedOperators.map((op) => (
                       <TableRow key={op.id}>
                         <TableCell>{op.name}</TableCell>
                         <TableCell align="right">

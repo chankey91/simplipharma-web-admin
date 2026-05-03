@@ -37,6 +37,9 @@ import { PurchaseInvoice, Order } from '../types';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { generatePurchaseInvoice, generateOrderInvoice } from '../utils/invoice';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 interface InvoiceItem {
   id: string;
@@ -98,11 +101,14 @@ export const InvoicesPage: React.FC = () => {
         });
     }
 
-    // Sort by date (newest first)
-    return items.sort((a, b) => b.date.getTime() - a.date.getTime());
+    return items;
   }, [purchaseInvoices, orders]);
 
-  const filteredInvoices = allInvoices.filter((invoice) => {
+  const { sortKey, sortDirection, requestSort } = useTableSort('date', 'desc');
+
+  const filteredInvoices = useMemo(
+    () =>
+      allInvoices.filter((invoice) => {
     const matchesSearch =
       invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
       invoice.vendorOrStore.toLowerCase().includes(searchTerm.toLowerCase());
@@ -111,12 +117,51 @@ export const InvoicesPage: React.FC = () => {
 
     const matchesStatus = statusFilter === 'All' || invoice.status === statusFilter;
 
-    return matchesSearch && matchesType && matchesStatus;
-  });
+        return matchesSearch && matchesType && matchesStatus;
+      }),
+    [allInvoices, searchTerm, typeFilter, statusFilter]
+  );
+
+  const sortedInvoices = useMemo(() => {
+    const list = [...filteredInvoices];
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'type':
+          cmp = compareAsc(a.type, b.type);
+          break;
+        case 'invoiceNumber':
+          cmp = compareAsc(a.invoiceNumber, b.invoiceNumber);
+          break;
+        case 'date':
+          cmp = compareAsc(toTimeMs(a.date), toTimeMs(b.date));
+          break;
+        case 'vendorOrStore':
+          cmp = compareAsc(a.vendorOrStore, b.vendorOrStore);
+          break;
+        case 'amount':
+          cmp = compareAsc(a.amount, b.amount);
+          break;
+        case 'status':
+          cmp = compareAsc(a.status, b.status);
+          break;
+        default:
+          cmp = compareAsc(toTimeMs(a.date), toTimeMs(b.date));
+      }
+      if (cmp !== 0) return applyDirection(cmp, sortDirection);
+      return applyDirection(compareAsc(a.invoiceNumber, b.invoiceNumber), sortDirection);
+    });
+    return list;
+  }, [filteredInvoices, sortKey, sortDirection]);
+
+  const requestSortResetPage = (key: string) => {
+    requestSort(key);
+    setPage(1);
+  };
 
   // Pagination
-  const totalPages = Math.ceil(filteredInvoices.length / rowsPerPage);
-  const paginatedInvoices = filteredInvoices.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  const totalPages = Math.ceil(sortedInvoices.length / rowsPerPage);
+  const paginatedInvoices = sortedInvoices.slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
@@ -256,12 +301,12 @@ export const InvoicesPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Type</TableCell>
-              <TableCell>Invoice Number</TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>Vendor/Store</TableCell>
-              <TableCell align="right">Amount</TableCell>
-              <TableCell>Status</TableCell>
+              <SortableTableHeadCell columnId="type" label="Type" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="invoiceNumber" label="Invoice Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="date" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="vendorOrStore" label="Vendor/Store" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="center">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -326,7 +371,7 @@ export const InvoicesPage: React.FC = () => {
       </TableContainer>
 
       {/* Pagination */}
-      {filteredInvoices.length > 0 && (
+      {sortedInvoices.length > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
@@ -338,8 +383,8 @@ export const InvoicesPage: React.FC = () => {
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
             Showing {(page - 1) * rowsPerPage + 1} to{' '}
-            {Math.min(page * rowsPerPage, filteredInvoices.length)} of{' '}
-            {filteredInvoices.length} invoices
+            {Math.min(page * rowsPerPage, sortedInvoices.length)} of{' '}
+            {sortedInvoices.length} invoices
           </Typography>
         </Box>
       )}

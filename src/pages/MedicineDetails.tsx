@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -40,6 +40,9 @@ import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 export const MedicineDetailsPage: React.FC = () => {
   const { medicineId } = useParams<{ medicineId: string }>();
@@ -78,6 +81,54 @@ export const MedicineDetailsPage: React.FC = () => {
   });
   
   const medicine = medicines?.find(m => m.id === medicineId);
+
+  const batchTableSort = useTableSort('expiry', 'asc');
+  const batchesSortedForTable = useMemo(() => {
+    const batches = medicine?.stockBatches;
+    if (!batches?.length) return [];
+    const list = [...batches];
+    list.sort((a, b) => {
+      const expA = toTimeMs(a.expiryDate instanceof Date ? a.expiryDate : a.expiryDate.toDate());
+      const expB = toTimeMs(b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate());
+      switch (batchTableSort.sortKey) {
+        case 'batchNumber':
+          return applyDirection(compareAsc(a.batchNumber, b.batchNumber), batchTableSort.sortDirection);
+        case 'quantity':
+          return applyDirection(compareAsc(a.quantity, b.quantity), batchTableSort.sortDirection);
+        case 'expiry':
+          return applyDirection(compareAsc(expA, expB), batchTableSort.sortDirection);
+        case 'mrp': {
+          const mrpA = typeof a.mrp === 'number' ? a.mrp : parseFloat(String(a.mrp || 0)) || 0;
+          const mrpB = typeof b.mrp === 'number' ? b.mrp : parseFloat(String(b.mrp || 0)) || 0;
+          return applyDirection(compareAsc(mrpA, mrpB), batchTableSort.sortDirection);
+        }
+        case 'purchasePrice':
+          return applyDirection(compareAsc(a.purchasePrice ?? 0, b.purchasePrice ?? 0), batchTableSort.sortDirection);
+        case 'discountPct': {
+          const da =
+            typeof a.discountPercentage === 'number'
+              ? a.discountPercentage
+              : parseFloat(String(a.discountPercentage ?? '')) || 0;
+          const db =
+            typeof b.discountPercentage === 'number'
+              ? b.discountPercentage
+              : parseFloat(String(b.discountPercentage ?? '')) || 0;
+          return applyDirection(compareAsc(da, db), batchTableSort.sortDirection);
+        }
+        case 'scheme':
+          return applyDirection(
+            compareAsc(
+              formatPurchaseSchemeLabel(a.schemePaidQty, a.schemeFreeQty),
+              formatPurchaseSchemeLabel(b.schemePaidQty, b.schemeFreeQty)
+            ),
+            batchTableSort.sortDirection
+          );
+        default:
+          return applyDirection(compareAsc(expA, expB), 'asc');
+      }
+    });
+    return list;
+  }, [medicine?.stockBatches, medicineId, batchTableSort.sortKey, batchTableSort.sortDirection]);
 
   // Initialize edit data when medicine loads or edit dialog opens
   React.useEffect(() => {
@@ -359,29 +410,68 @@ export const MedicineDetailsPage: React.FC = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Batch No.</TableCell>
-                    <TableCell align="right">Qty</TableCell>
-                    <TableCell>Expiry</TableCell>
-                    <TableCell align="right">MRP</TableCell>
-                    <TableCell align="right">Purchase Price</TableCell>
+                    <SortableTableHeadCell
+                      columnId="batchNumber"
+                      label="Batch No."
+                      sortKey={batchTableSort.sortKey}
+                      sortDirection={batchTableSort.sortDirection}
+                      onRequestSort={batchTableSort.requestSort}
+                    />
+                    <SortableTableHeadCell
+                      columnId="quantity"
+                      label="Qty"
+                      sortKey={batchTableSort.sortKey}
+                      sortDirection={batchTableSort.sortDirection}
+                      onRequestSort={batchTableSort.requestSort}
+                      align="right"
+                    />
+                    <SortableTableHeadCell
+                      columnId="expiry"
+                      label="Expiry"
+                      sortKey={batchTableSort.sortKey}
+                      sortDirection={batchTableSort.sortDirection}
+                      onRequestSort={batchTableSort.requestSort}
+                    />
+                    <SortableTableHeadCell
+                      columnId="mrp"
+                      label="MRP"
+                      sortKey={batchTableSort.sortKey}
+                      sortDirection={batchTableSort.sortDirection}
+                      onRequestSort={batchTableSort.requestSort}
+                      align="right"
+                    />
+                    <SortableTableHeadCell
+                      columnId="purchasePrice"
+                      label="Purchase Price"
+                      sortKey={batchTableSort.sortKey}
+                      sortDirection={batchTableSort.sortDirection}
+                      onRequestSort={batchTableSort.requestSort}
+                      align="right"
+                    />
                     <TableCell align="right">GST %</TableCell>
                     <TableCell align="right">Standard Discount %</TableCell>
-                    <TableCell align="right">Discount %</TableCell>
-                    <TableCell align="center">Scheme</TableCell>
+                    <SortableTableHeadCell
+                      columnId="discountPct"
+                      label="Discount %"
+                      sortKey={batchTableSort.sortKey}
+                      sortDirection={batchTableSort.sortDirection}
+                      onRequestSort={batchTableSort.requestSort}
+                      align="right"
+                    />
+                    <SortableTableHeadCell
+                      columnId="scheme"
+                      label="Scheme"
+                      sortKey={batchTableSort.sortKey}
+                      sortDirection={batchTableSort.sortDirection}
+                      onRequestSort={batchTableSort.requestSort}
+                      align="center"
+                    />
                     <TableCell align="right">QR Code</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {medicine.stockBatches && medicine.stockBatches.length > 0 ? (
-                    // Sort batches by expiry date (ascending - earliest first), then by quantity (descending - higher first)
-                    [...medicine.stockBatches].sort((a, b) => {
-                      const expiryA = a.expiryDate instanceof Date ? a.expiryDate : a.expiryDate.toDate();
-                      const expiryB = b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate();
-                      const expiryDiff = expiryA.getTime() - expiryB.getTime();
-                      if (expiryDiff !== 0) return expiryDiff;
-                      // If expiry dates are same, sort by quantity (descending)
-                      return (b.quantity || 0) - (a.quantity || 0);
-                    }).map((batch) => {
+                  {batchesSortedForTable.length > 0 ? (
+                    batchesSortedForTable.map((batch) => {
                       // Ensure MRP is properly converted to number - handle all cases
                       let mrpValue: number | null = null;
                       

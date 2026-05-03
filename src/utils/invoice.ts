@@ -161,14 +161,23 @@ const getOrderInvoiceHTML = async (order: Order) => {
     const { p: schemeP, f: schemeF, totalO } = resolveSchemePF(allocs, item.batchNumber);
 
     const displayCols = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF);
+    const schemeAllocFreeExplicit =
+      allocs?.some(
+        (a: any) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
+      ) ?? false;
 
     let paidQty: number;
     let freeQty: number;
     let physicalQty: number;
 
     if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
-      paidQty = displayCols.billQty;
-      freeQty = displayCols.freeQty;
+      if (schemeAllocFreeExplicit && allocs && allocs.length > 0) {
+        paidQty = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
+        freeQty = allocs.reduce((s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0), 0);
+      } else {
+        paidQty = displayCols.billQty;
+        freeQty = displayCols.freeQty;
+      }
       physicalQty = totalO;
     } else if (allocs && allocs.length > 0) {
       paidQty = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
@@ -182,9 +191,9 @@ const getOrderInvoiceHTML = async (order: Order) => {
           : 0;
       physicalQty = paidQty + freeQty;
     }
-    const quantity = displayCols.billQty;
-    const freeQuantity = displayCols.freeQty;
-    const totalQty = displayCols.totalQty;
+    const quantity = paidQty;
+    const freeQuantity = freeQty;
+    const totalQty = physicalQty;
 
     let mrp = (item as any).mrp || 0;
     if (!mrp && allocs?.[0]?.mrp) {

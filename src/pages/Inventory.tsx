@@ -42,6 +42,9 @@ import { format } from 'date-fns';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { categoriesMatch } from '../utils/categoryMatch';
 import { Loading } from '../components/Loading';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc } from '../utils/tableSort';
 import * as XLSX from 'xlsx';
 import { doc, setDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -73,6 +76,7 @@ export const InventoryPage: React.FC = () => {
   }, [searchParams]);
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
+  const { sortKey, sortDirection, requestSort } = useTableSort('name', 'asc');
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   /** Client upload + server job lifecycle */
@@ -149,9 +153,46 @@ export const InventoryPage: React.FC = () => {
     return matchesSearch && matchesCategory && matchesManufacturer && matchesStock;
   }) || [];
 
+  const sortedMedicines = useMemo(() => {
+    const list = [...filteredMedicines];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'name':
+          return applyDirection(compareAsc(a.name, b.name), sortDirection);
+        case 'type':
+          return applyDirection(compareAsc(a.category, b.category), sortDirection);
+        case 'packaging':
+          return applyDirection(compareAsc(a.unit || '', b.unit || ''), sortDirection);
+        case 'manufacturer':
+          return applyDirection(
+            compareAsc(
+              (a.manufacturer || a.company || '').toLowerCase(),
+              (b.manufacturer || b.company || '').toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'gst':
+          return applyDirection(compareAsc(a.gstRate ?? 5, b.gstRate ?? 5), sortDirection);
+        case 'stock':
+          return applyDirection(
+            compareAsc(a.currentStock ?? a.stock ?? 0, b.currentStock ?? b.stock ?? 0),
+            sortDirection
+          );
+        default:
+          return applyDirection(compareAsc(a.name, b.name), 'asc');
+      }
+    });
+    return list;
+  }, [filteredMedicines, sortKey, sortDirection]);
+
+  const requestSortResetPage = (key: string) => {
+    requestSort(key);
+    setPage(1);
+  };
+
   // Pagination
-  const totalPages = Math.ceil(filteredMedicines.length / rowsPerPage);
-  const paginatedMedicines = filteredMedicines.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  const totalPages = Math.ceil(sortedMedicines.length / rowsPerPage);
+  const paginatedMedicines = sortedMedicines.slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
@@ -468,12 +509,12 @@ export const InventoryPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Medicine Details</TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Packaging</TableCell>
-              <TableCell>Manufacturer</TableCell>
-              <TableCell align="right">GST Rate</TableCell>
-              <TableCell align="right">Stock</TableCell>
+              <SortableTableHeadCell columnId="name" label="Medicine Details" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="type" label="Type" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="packaging" label="Packaging" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="manufacturer" label="Manufacturer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="gst" label="GST Rate" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="stock" label="Stock" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -522,7 +563,7 @@ export const InventoryPage: React.FC = () => {
       </TableContainer>
 
       {/* Pagination */}
-      {filteredMedicines.length > 0 && (
+      {sortedMedicines.length > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
@@ -533,7 +574,7 @@ export const InventoryPage: React.FC = () => {
             showLastButton
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, filteredMedicines.length)} of {filteredMedicines.length} medicines
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, sortedMedicines.length)} of {sortedMedicines.length} medicines
           </Typography>
         </Box>
       )}

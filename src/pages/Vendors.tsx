@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -35,6 +35,9 @@ import {
 import { useVendors, useCreateVendor, useUpdateVendor, useToggleVendorStatus } from '../hooks/useVendors';
 import { Vendor } from '../types';
 import { Loading } from '../components/Loading';
+import { useTableSort } from '../hooks/useTableSort';
+import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
+import { applyDirection, compareAsc } from '../utils/tableSort';
 
 const generatePassword = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -58,7 +61,9 @@ export const VendorsPage: React.FC = () => {
   const [openDialog, setOpenDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedPassword, setGeneratedPassword] = useState('');
-  
+
+  const { sortKey, sortDirection, requestSort } = useTableSort('vendorName', 'asc');
+
   const [formData, setFormData] = useState({
     vendorName: '',
     contactPerson: '',
@@ -81,9 +86,44 @@ export const VendorsPage: React.FC = () => {
     vendor.drugLicenseNumber?.toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
 
+  const sortedVendors = useMemo(() => {
+    const list = [...filteredVendors];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'vendorName':
+          return applyDirection(compareAsc(a.vendorName || '', b.vendorName || ''), sortDirection);
+        case 'contact':
+          return applyDirection(
+            compareAsc(
+              `${a.contactPerson || ''} ${a.phoneNumber || ''}`.trim().toLowerCase(),
+              `${b.contactPerson || ''} ${b.phoneNumber || ''}`.trim().toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'gstNumber':
+          return applyDirection(compareAsc(a.gstNumber || '', b.gstNumber || ''), sortDirection);
+        case 'drugLicenseNumber':
+          return applyDirection(compareAsc(a.drugLicenseNumber || '', b.drugLicenseNumber || ''), sortDirection);
+        case 'isActive':
+          return applyDirection(
+            compareAsc(a.isActive !== false ? 1 : 0, b.isActive !== false ? 1 : 0),
+            sortDirection
+          );
+        default:
+          return applyDirection(compareAsc(a.vendorName || '', b.vendorName || ''), 'asc');
+      }
+    });
+    return list;
+  }, [filteredVendors, sortKey, sortDirection]);
+
+  const requestSortResetPage = (key: string) => {
+    requestSort(key);
+    setPage(1);
+  };
+
   // Pagination
-  const totalPages = Math.ceil(filteredVendors.length / rowsPerPage);
-  const paginatedVendors = filteredVendors.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  const totalPages = Math.ceil(sortedVendors.length / rowsPerPage);
+  const paginatedVendors = sortedVendors.slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
@@ -336,16 +376,16 @@ export const VendorsPage: React.FC = () => {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Vendor Name</TableCell>
-              <TableCell>Contact</TableCell>
-              <TableCell>GST Number</TableCell>
-              <TableCell>License Number</TableCell>
-              <TableCell>Status</TableCell>
+              <SortableTableHeadCell columnId="vendorName" label="Vendor Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="contact" label="Contact" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="gstNumber" label="GST Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="drugLicenseNumber" label="License Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="isActive" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredVendors.length === 0 ? (
+            {sortedVendors.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No vendors found</Typography>
