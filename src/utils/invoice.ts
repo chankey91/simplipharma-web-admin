@@ -656,12 +656,13 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     const totalQty = quantity + freeQuantity;
     const mrp = item.mrp || 0;
     const discountPercentage = item.discountPercentage || 0;
+    const standardDiscount = (item as any).standardDiscount ?? 20;
     const gstRate = item.gstRate || 5;
     
-    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
+    // Calculate price from MRP: apply item standard discount (fallback 20%), then remove inclusive GST.
     let price = 0;
     if (mrp > 0) {
-      const afterDiscount = mrp * 0.80; // Apply 20% discount
+      const afterDiscount = mrp * (1 - standardDiscount / 100);
       price = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
     } else {
       price = item.purchasePrice || 0;
