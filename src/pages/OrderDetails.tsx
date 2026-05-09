@@ -62,6 +62,7 @@ import { generateOrderInvoice } from '../utils/invoice';
 import { normalizeFirestoreDate } from '../services/inventory';
 import {
   computeSchemeFulfillmentFreeQty,
+  orderLineSchemeDisplayPhysical,
   orderedUnitsFromAllocation,
   schemeLinePaidFreeConserved,
   schemeOrderLineDisplayTotals,
@@ -284,10 +285,6 @@ export const OrderDetailsPage: React.FC = () => {
                         0
                       );
                     }
-                    const totalO = batchAllocations.reduce(
-                      (s, allocation) => s + orderedUnitsFromAllocation(allocation as any),
-                      0
-                    );
                     let schemePaid: number | undefined;
                     let schemeFree: number | undefined;
                     for (const allocation of batchAllocations) {
@@ -304,6 +301,11 @@ export const OrderDetailsPage: React.FC = () => {
                         break;
                       }
                     }
+                    const totalO = orderLineSchemeDisplayPhysical(
+                      { ...m, batchAllocations },
+                      schemePaid,
+                      schemeFree
+                    );
                     return computeSchemeFulfillmentFreeQty(
                       totalO,
                       schemePaid,
@@ -1220,10 +1222,6 @@ export const OrderDetailsPage: React.FC = () => {
                         } else {
                           const allocationFree = (() => {
                             const medicine = medicines?.find((med) => med.id === m.medicineId);
-                            const totalO = m.batchAllocations.reduce(
-                              (s: number, allocation: any) => s + orderedUnitsFromAllocation(allocation),
-                              0
-                            );
                             let schemePaidQty: number | undefined;
                             let schemeFreeQty: number | undefined;
                             for (const allocation of m.batchAllocations) {
@@ -1240,6 +1238,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 break;
                               }
                             }
+                            const totalO = orderLineSchemeDisplayPhysical(m, schemePaidQty, schemeFreeQty);
                             return schemeLinePaidFreeConserved(
                               totalO,
                               schemePaidQty,
@@ -1435,10 +1434,6 @@ export const OrderDetailsPage: React.FC = () => {
                       );
                       const invoiceAmtDen =
                         econLine.paidQty > 0 ? econLine.paidQty : sumAllocQtyForLine > 0 ? sumAllocQtyForLine : 1;
-                      const physicalSum = item.batchAllocations.reduce(
-                        (sum: number, allocation: any) => sum + orderedUnitsFromAllocation(allocation),
-                        0
-                      );
                       let schemePLine: number | undefined;
                       let schemeFLine: number | undefined;
                       for (const allocation of item.batchAllocations) {
@@ -1452,6 +1447,7 @@ export const OrderDetailsPage: React.FC = () => {
                           break;
                         }
                       }
+                      const physicalSum = orderLineSchemeDisplayPhysical(item, schemePLine, schemeFLine);
                       const lineDisplay = schemeOrderLineDisplayTotals(
                         physicalSum,
                         schemePLine,
@@ -1460,6 +1456,10 @@ export const OrderDetailsPage: React.FC = () => {
                       const paidQtyForLine = lineDisplay.billQty;
                       const physicalQtyForLine = lineDisplay.totalQty;
                       const schemeLabels = getSchemeLabels(item);
+                      const fromAllocsSumForWeights = item.batchAllocations.reduce(
+                        (s: number, a: any) => s + orderedUnitsFromAllocation(a),
+                        0
+                      );
                       
                       return (
                         <React.Fragment key={item.medicineId || index}>
@@ -1538,9 +1538,13 @@ export const OrderDetailsPage: React.FC = () => {
                           
                           {/* Individual Batch Rows */}
                           {item.batchAllocations.map((allocation: any, batchIdx: number) => {
-                            const batchQty = allocation.quantity || 0;
-                            const batchFree = toNumber(allocation.allocationFreeQty);
                             const batchPhysical = orderedUnitsFromAllocation(allocation);
+                            const w =
+                              fromAllocsSumForWeights > 0
+                                ? batchPhysical / fromAllocsSumForWeights
+                                : 0;
+                            const batchQty = lineDisplay.billQty * w;
+                            const batchFree = lineDisplay.freeQty * w;
                             const batchMRP = allocation.mrp || 0;
                             const gstRate = allocation.gstRate || item.gstRate || 5;
                             const discountPct = allocation.discountPercentage !== undefined ? allocation.discountPercentage : (item.discountPercentage !== undefined ? item.discountPercentage : 0);
@@ -1555,7 +1559,9 @@ export const OrderDetailsPage: React.FC = () => {
                             }
 
                             const batchTotal =
-                              lineInvoiceAmt * (toNumber(allocation.quantity) / invoiceAmtDen);
+                              paidQtyForLine > 0
+                                ? lineInvoiceAmt * (batchQty / paidQtyForLine)
+                                : lineInvoiceAmt * (batchPhysical / (physicalQtyForLine || 1));
                             
                             return (
                               <TableRow 
@@ -1624,11 +1630,9 @@ export const OrderDetailsPage: React.FC = () => {
                         ? item.batchAllocations[0]
                         : null;
                     const medSingle = medicines?.find((m) => m.id === item.medicineId);
-                    let totalOSingle = toNumber(item.quantity);
                     let schemePS: number | undefined;
                     let schemeFS: number | undefined;
                     if (singleAlloc != null) {
-                      totalOSingle = orderedUnitsFromAllocation(singleAlloc);
                       const b = medSingle?.stockBatches?.find(
                         (x: any) => x.batchNumber === singleAlloc.batchNumber
                       );
@@ -1645,6 +1649,7 @@ export const OrderDetailsPage: React.FC = () => {
                         schemeFS = s.schemeFreeQty;
                       }
                     }
+                    const totalOSingle = orderLineSchemeDisplayPhysical(item, schemePS, schemeFS);
                     const singleLineDisplay = schemeOrderLineDisplayTotals(
                       totalOSingle,
                       schemePS,
@@ -1695,13 +1700,16 @@ export const OrderDetailsPage: React.FC = () => {
                         <TableCell align="right">
                           {item.originalQuantity && item.originalQuantity !== item.quantity ? (
                             <Box>
-                              <Typography variant="body2">
-                                {item.quantity} / {item.originalQuantity}
+                              <Typography variant="body2" fontWeight="medium">
+                                {paidForDisplay}
                               </Typography>
-                              <Chip 
-                                label="Partial" 
-                                size="small" 
-                                color="warning" 
+                              <Typography variant="caption" color="text.secondary" display="block">
+                                Line strips fulfilled: {item.quantity} / {item.originalQuantity}
+                              </Typography>
+                              <Chip
+                                label="Partial"
+                                size="small"
+                                color="warning"
                                 sx={{ mt: 0.5 }}
                               />
                             </Box>
