@@ -28,6 +28,7 @@ import {
   Add,
   Visibility,
   Receipt,
+  PictureAsPdf,
 } from '@mui/icons-material';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
@@ -120,9 +121,14 @@ export const PurchaseInvoicesPage: React.FC = () => {
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Purchase Invoice Management</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={() => navigate('/purchases/new')}>
-          Add Invoice
-        </Button>
+        <Box display="flex" gap={1}>
+          <Button variant="outlined" startIcon={<PictureAsPdf />} onClick={() => navigate('/purchases/import-pdf')}>
+            Import PDF
+          </Button>
+          <Button variant="contained" startIcon={<Add />} onClick={() => navigate('/purchases/new')}>
+            Add Invoice
+          </Button>
+        </Box>
       </Box>
 
       {/* Statistics Cards */}

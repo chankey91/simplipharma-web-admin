@@ -15,6 +15,7 @@ import { OrdersPage } from './pages/Orders';
 import { OrderDetailsPage } from './pages/OrderDetails';
 import { PurchaseInvoicesPage } from './pages/PurchaseInvoices';
 import { CreatePurchaseInvoicePage } from './pages/CreatePurchaseInvoice';
+import { ImportPurchaseInvoicePdfPage } from './pages/ImportPurchaseInvoicePdf';
 import { PurchaseInvoiceDetailsPage } from './pages/PurchaseInvoiceDetails';
 import { InventoryPage } from './pages/Inventory';
 import { StockUpdatePage } from './pages/StockUpdate';
@@ -166,6 +167,16 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <CreatePurchaseInvoicePage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/purchases/import-pdf"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <ImportPurchaseInvoicePdfPage />
                     </Layout>
                   </ProtectedRoute>
                 }
