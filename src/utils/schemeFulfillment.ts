@@ -116,10 +116,62 @@ export function schemeOrderLineDisplayTotals(
   return { billQty, freeQty, totalQty: physicalO };
 }
 
+/**
+ * When summed allocation physical is just below a whole strip (e.g. 2.75) but scheme free matches the
+ * "quarter slab" tier, bumping O by F/4 can land on a whole strip (3) with the **same** free qty and a
+ * higher billable qty — matching how retailers count strips vs raw float sums.
+ */
+export function schemeBumpedPhysicalForOrderDisplay(
+  physicalOFromAllocOrLine: number,
+  schemeP: number,
+  schemeF: number
+): number {
+  const P = schemeP;
+  const F = schemeF;
+  if (!(P > 0 && F > 0) || !Number.isFinite(physicalOFromAllocOrLine) || physicalOFromAllocOrLine <= 0) {
+    return physicalOFromAllocOrLine;
+  }
+  const O0 = physicalOFromAllocOrLine;
+  const step = F / 4;
+  if (!(step > 0)) return O0;
+  const O1 = O0 + step;
+  const d0 = schemeOrderLineDisplayTotals(O0, P, F);
+  const d1 = schemeOrderLineDisplayTotals(O1, P, F);
+  if (Math.abs(d0.freeQty - d1.freeQty) > 1e-3) return O0;
+  if (d1.billQty <= d0.billQty + 1e-9) return O0;
+  /** Only snap up to the next whole-strip boundary (e.g. 2.75 → 3, not 3 → 3.25). */
+  if (Math.abs(O1 - Math.ceil(O0 - 1e-9)) > 1e-6) return O0;
+  return O1;
+}
+
+/** Physical O for scheme UI / invoice: max(line & allocs) then optional quarter-strip bump. */
+export function orderLineSchemeDisplayPhysical(
+  lineItem: {
+    quantity?: number;
+    originalQuantity?: number | null;
+    batchAllocations?: Array<{ quantity?: number; allocationFreeQty?: number | null }>;
+  },
+  schemeP?: number | null,
+  schemeF?: number | null
+): number {
+  const allocs = lineItem.batchAllocations;
+  const sumPhys =
+    allocs && allocs.length > 0
+      ? allocs.reduce((s, a) => s + orderedUnitsFromAllocation(a), 0)
+      : Number(lineItem.quantity) || 0;
+  const base = Math.max(orderLinePhysicalO(lineItem), sumPhys);
+  const P = Number(schemeP) || 0;
+  const F = Number(schemeF) || 0;
+  if (P > 0 && F > 0) {
+    return schemeBumpedPhysicalForOrderDisplay(base, P, F);
+  }
+  return base;
+}
+
 /** Ordered / physical units represented by this allocation row */
 export function orderedUnitsFromAllocation(allocation: {
   quantity?: number;
-  allocationFreeQty?: number;
+  allocationFreeQty?: number | null;
 }): number {
   const q = Number(allocation.quantity) || 0;
   if (allocation.allocationFreeQty !== undefined && allocation.allocationFreeQty !== null) {
@@ -128,17 +180,62 @@ export function orderedUnitsFromAllocation(allocation: {
   return q;
 }
 
+/**
+ * Physical strips on an order medicine line. Prefer max(line `quantity`, sum of allocation physical)
+ * so scheme split uses the fulfilled line total when per-allocation paid+free sums drift below it.
+ */
+export function orderLinePhysicalO(lineItem: {
+  quantity?: number;
+  freeQuantity?: number | null;
+  originalQuantity?: number | null;
+  batchAllocations?: Array<{ quantity?: number; allocationFreeQty?: number | null }>;
+}): number {
+  const lineQ = Number(lineItem.quantity) || 0;
+  const allocs = lineItem.batchAllocations;
+  if (!allocs || allocs.length === 0) {
+    const orig = Number(lineItem.originalQuantity) || 0;
+    if (orig > lineQ && orig - lineQ <= 0.51) {
+      return orig;
+    }
+    return lineQ;
+  }
+  const fromAllocs = allocs.reduce((s, a) => s + orderedUnitsFromAllocation(a), 0);
+  let base = Math.max(lineQ, fromAllocs);
+  /** If requested strips (original) are just above alloc sum, trust original (fixes paid/free drift vs true physical). */
+  const orig = Number(lineItem.originalQuantity) || 0;
+  if (orig > base && orig - base <= 0.51) {
+    base = orig;
+  }
+  return base;
+}
+
+/**
+ * Billable (paid) qty from allocation rows when not using scheme formulas: keep paid + free = line physical.
+ * If summed paid+free is below `orderLinePhysicalO`, use physical − summed free (fixes stored paid rounding).
+ */
+export function billablePaidFromAllocationSums(
+  lineItem: { quantity?: number; freeQuantity?: number | null; batchAllocations?: Array<any> },
+  sumPaid: number,
+  sumFree: number
+): number {
+  const physicalO = orderLinePhysicalO(lineItem);
+  if (sumFree > 0) {
+    return Math.max(0, physicalO - sumFree);
+  }
+  return sumPaid;
+}
+
 /** Stock deduction = paid + scheme-applied free */
 export function physicalQtyFromAllocation(allocation: {
   quantity?: number;
-  allocationFreeQty?: number;
+  allocationFreeQty?: number | null;
 }): number {
   return orderedUnitsFromAllocation(allocation);
 }
 
 type SchemeAlloc = {
   quantity?: number;
-  allocationFreeQty?: number;
+  allocationFreeQty?: number | null;
   schemePaidQty?: number;
   schemeFreeQty?: number;
 };

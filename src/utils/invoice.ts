@@ -1,7 +1,13 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Order, PurchaseInvoice } from '../types';
-import { orderedUnitsFromAllocation, schemeOrderLineDisplayTotals } from './schemeFulfillment';
+import {
+  billablePaidFromAllocationSums,
+  orderedUnitsFromAllocation,
+  orderLinePhysicalO,
+  orderLineSchemeDisplayPhysical,
+  schemeOrderLineDisplayTotals,
+} from './schemeFulfillment';
 import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
@@ -125,13 +131,9 @@ const getOrderInvoiceHTML = async (order: Order) => {
       allocations: any[] | undefined,
       batchNumber?: string
     ): { p?: number; f?: number; totalO: number } => {
+      let p: number | undefined;
+      let f: number | undefined;
       if (allocations && allocations.length > 0) {
-        const totalO = allocations.reduce(
-          (s, allocation: any) => s + orderedUnitsFromAllocation(allocation),
-          0
-        );
-        let p: number | undefined;
-        let f: number | undefined;
         for (const allocation of allocations) {
           const batchFromInventory = medicineDetails?.stockBatches?.find(
             (b: any) => b.batchNumber === allocation.batchNumber
@@ -146,43 +148,36 @@ const getOrderInvoiceHTML = async (order: Order) => {
             break;
           }
         }
-        return { p, f, totalO };
+      } else {
+        const stockBatch = medicineDetails?.stockBatches?.find((b: any) => b.batchNumber === batchNumber);
+        const pair = getSchemePair(stockBatch);
+        p = toNumber(pair.paid) || undefined;
+        f = toNumber(pair.free) || undefined;
       }
-      const stockBatch = medicineDetails?.stockBatches?.find((b: any) => b.batchNumber === batchNumber);
-      const pair = getSchemePair(stockBatch);
-      return {
-        p: toNumber(pair.paid) || undefined,
-        f: toNumber(pair.free) || undefined,
-        totalO: toNumber(item.quantity),
-      };
+      const totalO = orderLineSchemeDisplayPhysical(item, p, f);
+      return { p, f, totalO };
     };
 
     const allocs = item.batchAllocations;
     const { p: schemeP, f: schemeF, totalO } = resolveSchemePF(allocs, item.batchNumber);
 
     const displayCols = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF);
-    const schemeAllocFreeExplicit =
-      allocs?.some(
-        (a: any) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
-      ) ?? false;
 
     let paidQty: number;
     let freeQty: number;
     let physicalQty: number;
 
     if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
-      if (schemeAllocFreeExplicit && allocs && allocs.length > 0) {
-        paidQty = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
-        freeQty = allocs.reduce((s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0), 0);
-      } else {
-        paidQty = displayCols.billQty;
-        freeQty = displayCols.freeQty;
-      }
+      paidQty = displayCols.billQty;
+      freeQty = displayCols.freeQty;
       physicalQty = totalO;
     } else if (allocs && allocs.length > 0) {
-      paidQty = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
-      freeQty = allocs.reduce((s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0), 0);
-      physicalQty = allocs.reduce((s: number, a: any) => s + orderedUnitsFromAllocation(a), 0);
+      const sumPaid = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
+      const sumFree = allocs.reduce((s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0), 0);
+      const physicalO = orderLinePhysicalO(item);
+      paidQty = billablePaidFromAllocationSums(item, sumPaid, sumFree);
+      freeQty = sumFree;
+      physicalQty = physicalO;
     } else {
       paidQty = toNumber(item.quantity);
       freeQty =

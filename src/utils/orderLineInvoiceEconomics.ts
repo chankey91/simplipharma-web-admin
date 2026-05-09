@@ -2,7 +2,11 @@
  * Same economics as order tax invoice (`getOrderInvoiceHTML` in invoice.ts):
  * billable qty = scheme order-line display bill qty (same as invoice); unit price from first allocation MRP (or item).
  */
-import { orderedUnitsFromAllocation, schemeOrderLineDisplayTotals } from './schemeFulfillment';
+import {
+  billablePaidFromAllocationSums,
+  orderLineSchemeDisplayPhysical,
+  schemeOrderLineDisplayTotals,
+} from './schemeFulfillment';
 
 const toNum = (v: unknown): number => {
   if (v === undefined || v === null || v === '') return 0;
@@ -14,11 +18,6 @@ const schemePair = (source: any) => ({
   paid: source?.schemePaidQty ?? source?.purchaseSchemeDeal,
   free: source?.schemeFreeQty ?? source?.purchaseSchemeFree,
 });
-
-const hasExplicitAllocationFreeQty = (allocs: any[] | undefined) =>
-  allocs?.some(
-    (a) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
-  ) ?? false;
 
 export type OrderLineInvoiceEconomics = {
   totalO: number;
@@ -38,12 +37,10 @@ export function orderLineInvoiceEconomics(
 ): OrderLineInvoiceEconomics {
   const allocs = item.batchAllocations as any[] | undefined;
 
-  let totalO = 0;
   let schemeP: number | undefined;
   let schemeF: number | undefined;
 
   if (allocs && allocs.length > 0) {
-    totalO = allocs.reduce((s, a) => s + orderedUnitsFromAllocation(a), 0);
     for (const a of allocs) {
       const b = medicine?.stockBatches?.find((x: any) => x.batchNumber === a.batchNumber);
       const ap = schemePair(a);
@@ -57,7 +54,6 @@ export function orderLineInvoiceEconomics(
       }
     }
   } else {
-    totalO = toNum(item.quantity);
     const b = medicine?.stockBatches?.find((x: any) => x.batchNumber === item.batchNumber);
     if (b) {
       const p = schemePair(b);
@@ -70,15 +66,15 @@ export function orderLineInvoiceEconomics(
     }
   }
 
+  const totalO = orderLineSchemeDisplayPhysical(item, schemeP, schemeF);
+
   let paidQty: number;
   if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
-    if (hasExplicitAllocationFreeQty(allocs) && allocs && allocs.length > 0) {
-      paidQty = allocs.reduce((s: number, a: any) => s + toNum(a.quantity), 0);
-    } else {
-      paidQty = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF).billQty;
-    }
+    paidQty = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF).billQty;
   } else if (allocs && allocs.length > 0) {
-    paidQty = allocs.reduce((s: number, a: any) => s + toNum(a.quantity), 0);
+    const sumPaid = allocs.reduce((s: number, a: any) => s + toNum(a.quantity), 0);
+    const sumFree = allocs.reduce((s: number, a: any) => s + toNum(a.allocationFreeQty ?? 0), 0);
+    paidQty = billablePaidFromAllocationSums(item, sumPaid, sumFree);
   } else {
     paidQty = toNum(item.quantity);
   }
