@@ -17,6 +17,7 @@ import {
   PersonAdd,
   Archive,
   PostAdd,
+  TrendingUp,
 } from '@mui/icons-material';
 import { logout } from '../services/firebase';
 
@@ -32,6 +33,7 @@ const menuItems = [
   { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
   { text: 'Purchases', icon: <Receipt />, path: '/purchases' },
   { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
+  { text: 'Gross margin', icon: <TrendingUp />, path: '/margin' },
   { text: 'Product demands', icon: <PostAdd />, path: '/product-demands' },
   { text: 'Operations', icon: <Settings />, path: '/operations' },
   { text: 'Invoices', icon: <Description />, path: '/invoices' },

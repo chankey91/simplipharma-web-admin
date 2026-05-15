@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -51,6 +51,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { useOrder, useUpdateOrderStatus, useFulfillOrder, useUpdateOrderDispatch, useMarkOrderDelivered, useCancelOrder, useUpdatePaymentStatus } from '../hooks/useOrders';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
+import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
 import { format } from 'date-fns';
 import { auth, doc, updateDoc, db } from '../services/firebase';
@@ -69,6 +70,11 @@ import {
 } from '../utils/schemeFulfillment';
 import { orderLineInvoiceEconomics, orderLineTaxableBeforeDiscount } from '../utils/orderLineInvoiceEconomics';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
+import {
+  applyDefaultDiscountToFulfillmentLine,
+  buildPurchaseBatchDiscountLookup,
+  resolveOrderLineDiscountPct,
+} from '../utils/orderFulfillmentDiscount';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -76,6 +82,13 @@ const toNumber = (value: unknown): number => {
   if (value === undefined || value === null || value === '') return 0;
   const parsed = typeof value === 'number' ? value : parseFloat(String(value));
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const parseDiscountPct = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = typeof value === 'number' ? value : parseFloat(String(value));
+  if (!Number.isFinite(n) || n < 0 || n > 100) return undefined;
+  return n;
 };
 
 const getSchemeFromAny = (source: any) => ({
@@ -106,6 +119,32 @@ export const OrderDetailsPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { data: order, isLoading } = useOrder(orderId || '');
   const { data: medicines } = useMedicines();
+  const { data: purchaseInvoices } = usePurchaseInvoices();
+  const purchaseDiscountLookup = useMemo(
+    () => buildPurchaseBatchDiscountLookup(purchaseInvoices || []),
+    [purchaseInvoices]
+  );
+
+  const resolveFulfillmentDiscountPct = useCallback(
+    (
+      medicineId: string | undefined,
+      batchNumber: string | undefined,
+      itemDiscount?: unknown,
+      allocationDiscount?: unknown,
+      batch?: { purchasePrice?: number; discountPercentage?: number },
+      discountManuallySet?: boolean
+    ) =>
+      resolveOrderLineDiscountPct({
+        itemDiscount,
+        allocationDiscount,
+        medicineId,
+        batchNumber,
+        purchaseLookup: purchaseDiscountLookup,
+        batch,
+        discountManuallySet,
+      }),
+    [purchaseDiscountLookup]
+  );
   const { data: trays, isError: traysQueryError, error: traysQueryErr } = useTrays();
   const { data: operators, isError: operatorsQueryError, error: operatorsQueryErr } = useOperators();
   const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
@@ -232,46 +271,7 @@ export const OrderDetailsPage: React.FC = () => {
               );
             };
             
-            // Preserve batchAllocations with discountPercentage from each allocation
             let batchAllocations = m.batchAllocations;
-            if (batchAllocations && batchAllocations.length > 0) {
-              // Ensure each allocation has discountPercentage from inventory batch if missing
-              batchAllocations = batchAllocations.map(allocation => {
-                // If allocation doesn't have discountPercentage, fetch it from inventory batch
-                if (allocation.discountPercentage === undefined || allocation.discountPercentage === null) {
-                  if (medicine && medicine.stockBatches) {
-                    const batch = medicine.stockBatches.find(b => b.batchNumber === allocation.batchNumber);
-                    if (batch && batch.discountPercentage !== undefined && batch.discountPercentage !== null) {
-                      const batchDiscount = typeof batch.discountPercentage === 'number'
-                        ? batch.discountPercentage
-                        : parseFloat(String(batch.discountPercentage));
-                      if (!isNaN(batchDiscount)) {
-                        console.log(`[OrderDetails useEffect] Fetched discountPercentage ${batchDiscount}% from inventory for batch ${allocation.batchNumber}`);
-                        return {
-                          ...allocation,
-                          discountPercentage: batchDiscount
-                        };
-                      }
-                    }
-                  }
-                  // Fallback to item discountPercentage if batch doesn't have it
-                  if (m.discountPercentage !== undefined && m.discountPercentage !== null) {
-                    return {
-                      ...allocation,
-                      discountPercentage: typeof m.discountPercentage === 'number'
-                        ? m.discountPercentage
-                        : parseFloat(String(m.discountPercentage))
-                    };
-                  }
-                }
-                return allocation;
-              });
-              
-              // Use discountPercentage from first batch allocation if available
-              discountPct = batchAllocations[0]?.discountPercentage !== undefined
-                ? batchAllocations[0].discountPercentage
-                : m.discountPercentage;
-            }
 
             const computedFreeQuantity =
               batchAllocations && batchAllocations.length > 0
@@ -313,17 +313,29 @@ export const OrderDetailsPage: React.FC = () => {
                     );
                   })()
                 : lineSchemeFreeQty(m.batchNumber, toNumber(m.quantity));
+
+            const withDefaults = applyDefaultDiscountToFulfillmentLine(
+              {
+                ...m,
+                batchAllocations,
+                discountManuallySet: (m as { discountManuallySet?: boolean }).discountManuallySet,
+              },
+              purchaseDiscountLookup,
+              (batchNumber) =>
+                medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+            );
+            discountPct = withDefaults.discountPercentage;
             
             return {
-              ...m,
+              ...withDefaults,
               medicineId: m.medicineId, // Ensure medicineId exists
               verified: !!m.batchNumber || !!(m.batchAllocations && m.batchAllocations.length > 0), // Auto-verify if batch already assigned
               scannedQRCode: '',
               batchExpiryDate: m.batchAllocations && m.batchAllocations.length > 0 
                 ? m.batchAllocations[0].expiryDate 
                 : m.expiryDate, // Use expiryDate from first batch allocation or OrderMedicine
-              discountPercentage: discountPct, // Explicitly preserve discountPercentage
-              batchAllocations: batchAllocations, // Preserve updated batchAllocations with discountPercentage
+              discountPercentage: discountPct,
+              batchAllocations: withDefaults.batchAllocations ?? batchAllocations,
               freeQuantity:
                 m.freeQuantity !== undefined && m.freeQuantity !== null
                   ? toNumber(m.freeQuantity)
@@ -359,7 +371,43 @@ export const OrderDetailsPage: React.FC = () => {
         setProcessedBy(order.processedBy || '');
       }
     }
-  }, [order, medicines]);
+  }, [order, medicines, purchaseDiscountLookup]);
+
+  // Re-apply PI-based defaults when purchase invoices finish loading (lookup was empty on first pass).
+  useEffect(() => {
+    if (order?.status !== 'Pending' || purchaseDiscountLookup.size === 0) return;
+
+    setFulfillmentData((prev) => {
+      if (!prev.medicines.length) return prev;
+
+      let changed = false;
+      const nextMedicines = prev.medicines.map((m) => {
+        if (m.discountManuallySet) return m;
+        if (!m.batchNumber && !(m.batchAllocations && m.batchAllocations.length > 0)) {
+          return m;
+        }
+        const medicine = medicines?.find((med) => med.id === m.medicineId);
+        const updated = applyDefaultDiscountToFulfillmentLine(
+          m,
+          purchaseDiscountLookup,
+          (batchNumber) =>
+            medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+        );
+        if (updated.discountPercentage !== m.discountPercentage) {
+          changed = true;
+        } else if (updated.batchAllocations?.length && m.batchAllocations?.length) {
+          const allocDiscChanged = updated.batchAllocations.some(
+            (a: { batchNumber: string; discountPercentage?: number }, i: number) =>
+              a.discountPercentage !== m.batchAllocations?.[i]?.discountPercentage
+          );
+          if (allocDiscChanged) changed = true;
+        }
+        return updated;
+      });
+
+      return changed ? { ...prev, medicines: nextMedicines } : prev;
+    });
+  }, [purchaseDiscountLookup, order?.status, medicines]);
 
   if (isLoading) return <Loading message="Loading order details..." />;
   if (!order) return <Alert severity="error">Order not found</Alert>;
@@ -608,15 +656,16 @@ export const OrderDetailsPage: React.FC = () => {
               calculatedPrice = newMedicines[scanningItemIndex].price;
             }
           }
-          // Copy discount percentage from batch
-          const batchDiscountPercentage = foundBatch.discountPercentage !== undefined && foundBatch.discountPercentage !== null
-            ? (typeof foundBatch.discountPercentage === 'number' ? foundBatch.discountPercentage : parseFloat(String(foundBatch.discountPercentage)))
-            : undefined;
-          
-          if (batchDiscountPercentage !== undefined && !isNaN(batchDiscountPercentage)) {
-            newMedicines[scanningItemIndex].discountPercentage = batchDiscountPercentage;
-          }
-          // Create batchAllocations entry to ensure discountPercentage is preserved
+          const discountPct = resolveFulfillmentDiscountPct(
+            item.medicineId,
+            foundBatch.batchNumber,
+            item.discountPercentage,
+            undefined,
+            foundBatch,
+            item.discountManuallySet
+          );
+          newMedicines[scanningItemIndex].discountPercentage = discountPct;
+          newMedicines[scanningItemIndex].discountManuallySet = false;
           const foundBatchScheme = getSchemeFromAny(foundBatch);
           const lineSplit = schemeLinePaidFreeConserved(
             toNumber(item.quantity),
@@ -631,7 +680,7 @@ export const OrderDetailsPage: React.FC = () => {
             mrp: foundBatch.mrp,
             purchasePrice: calculatedPrice,
             gstRate: gstRate,
-            discountPercentage: batchDiscountPercentage !== undefined && !isNaN(batchDiscountPercentage) ? batchDiscountPercentage : undefined,
+            discountPercentage: discountPct,
             schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
             schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
           }];
@@ -704,15 +753,16 @@ export const OrderDetailsPage: React.FC = () => {
                 calculatedPrice = newMedicines[itemIndex].price;
               }
             }
-            // Copy discount percentage from batch - handle both number and string types
-            const batchDiscountPercentage = foundBatch.discountPercentage !== undefined && foundBatch.discountPercentage !== null
-              ? (typeof foundBatch.discountPercentage === 'number' ? foundBatch.discountPercentage : parseFloat(String(foundBatch.discountPercentage)))
-              : undefined;
-            
-            if (batchDiscountPercentage !== undefined && !isNaN(batchDiscountPercentage)) {
-              newMedicines[itemIndex].discountPercentage = batchDiscountPercentage;
-            }
-            // Create batchAllocations entry to ensure discountPercentage is preserved
+            const discountPct = resolveFulfillmentDiscountPct(
+              item.medicineId,
+              foundBatch.batchNumber,
+              item.discountPercentage,
+              undefined,
+              foundBatch,
+              item.discountManuallySet
+            );
+            newMedicines[itemIndex].discountPercentage = discountPct;
+            newMedicines[itemIndex].discountManuallySet = false;
             const foundBatchScheme = getSchemeFromAny(foundBatch);
             const lineSplit = schemeLinePaidFreeConserved(
               toNumber(item.quantity),
@@ -727,7 +777,7 @@ export const OrderDetailsPage: React.FC = () => {
               mrp: foundBatch.mrp,
               purchasePrice: calculatedPrice,
               gstRate: gstRate,
-              discountPercentage: batchDiscountPercentage !== undefined && !isNaN(batchDiscountPercentage) ? batchDiscountPercentage : undefined,
+              discountPercentage: discountPct,
               schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
               schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
             }];
@@ -762,15 +812,16 @@ export const OrderDetailsPage: React.FC = () => {
                 calculatedPrice = newMedicines[itemIndex].price;
               }
             }
-            // Copy discount percentage from batch - handle both number and string types
-            const batchDiscountPercentage = batch.discountPercentage !== undefined && batch.discountPercentage !== null
-              ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
-              : undefined;
-            
-            if (batchDiscountPercentage !== undefined && !isNaN(batchDiscountPercentage)) {
-              newMedicines[itemIndex].discountPercentage = batchDiscountPercentage;
-            }
-            // Create batchAllocations entry to ensure discountPercentage is preserved
+            const discountPct = resolveFulfillmentDiscountPct(
+              item.medicineId,
+              batch.batchNumber,
+              item.discountPercentage,
+              undefined,
+              batch,
+              item.discountManuallySet
+            );
+            newMedicines[itemIndex].discountPercentage = discountPct;
+            newMedicines[itemIndex].discountManuallySet = false;
             const selectedBatchScheme = getSchemeFromAny(batch);
             const lineSplit = schemeLinePaidFreeConserved(
               toNumber(item.quantity),
@@ -785,7 +836,7 @@ export const OrderDetailsPage: React.FC = () => {
               mrp: batch.mrp,
               purchasePrice: calculatedPrice,
               gstRate: gstRate,
-              discountPercentage: batchDiscountPercentage !== undefined && !isNaN(batchDiscountPercentage) ? batchDiscountPercentage : undefined,
+              discountPercentage: discountPct,
               schemePaidQty: toNumber(batch.schemePaidQty) || undefined,
               schemeFreeQty: toNumber(batch.schemeFreeQty) || undefined,
             }];
@@ -832,12 +883,14 @@ export const OrderDetailsPage: React.FC = () => {
       // Migrate from old single batch to new structure
       const existingBatch = medicine.stockBatches.find(b => b.batchNumber === item.batchNumber);
       if (existingBatch) {
-        // Preserve discountPercentage - prefer from existingBatch, then from item
-        const discountPct = existingBatch.discountPercentage !== undefined && existingBatch.discountPercentage !== null
-          ? (typeof existingBatch.discountPercentage === 'number' ? existingBatch.discountPercentage : parseFloat(String(existingBatch.discountPercentage)))
-          : (item.discountPercentage !== undefined && item.discountPercentage !== null
-            ? (typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage)))
-            : undefined);
+        const discountPct = resolveFulfillmentDiscountPct(
+          item.medicineId,
+          item.batchNumber,
+          item.discountPercentage,
+          undefined,
+          existingBatch,
+          item.discountManuallySet
+        );
         
         existingAllocations.push({
           batchNumber: item.batchNumber,
@@ -846,7 +899,7 @@ export const OrderDetailsPage: React.FC = () => {
           mrp: existingBatch.mrp,
           purchasePrice: existingBatch.purchasePrice,
           gstRate: item.gstRate || medicine.gstRate || 5,
-          discountPercentage: discountPct !== undefined && !isNaN(discountPct) ? discountPct : undefined,
+          discountPercentage: discountPct,
           schemePaidQty: toNumber(existingBatch.schemePaidQty) || undefined,
           schemeFreeQty: toNumber(existingBatch.schemeFreeQty) || undefined,
         });
@@ -1026,18 +1079,15 @@ export const OrderDetailsPage: React.FC = () => {
       const gstRate = a.gstRate || defaultGstRate;
       const calculatedPrice = calculatePriceFromMRP(a.mrp, gstRate);
 
-      // Get the actual batch from medicine to ensure we have the latest discountPercentage
       const actualBatch = medicine?.stockBatches?.find((b) => b.batchNumber === a.batchNumber);
-      const discountPct =
-        actualBatch?.discountPercentage !== undefined && actualBatch?.discountPercentage !== null
-          ? typeof actualBatch.discountPercentage === 'number'
-            ? actualBatch.discountPercentage
-            : parseFloat(String(actualBatch.discountPercentage))
-          : a.discountPercentage !== undefined && a.discountPercentage !== null
-            ? typeof a.discountPercentage === 'number'
-              ? a.discountPercentage
-              : parseFloat(String(a.discountPercentage))
-            : undefined;
+      const discountPct = resolveFulfillmentDiscountPct(
+        item.medicineId,
+        a.batchNumber,
+        item.discountPercentage,
+        a.discountPercentage,
+        actualBatch,
+        item.discountManuallySet
+      );
 
       const qi = orderedUnitsFromAllocation(a);
       const free_i = O > 0 ? (qi / O) * lineSplit.freeQty : 0;
@@ -1065,26 +1115,26 @@ export const OrderDetailsPage: React.FC = () => {
 
     const totalFreeQuantity = lineSplit.freeQty;
 
-    newMedicines[itemIndex] = {
-      ...item,
-      batchAllocations: processedAllocations,
-      // Store original ordered quantity if this is partial fulfillment
-      originalQuantity: totalAllocated < requiredQuantity ? requiredQuantity : item.originalQuantity || item.quantity,
-      // Update quantity to fulfilled quantity
-      quantity: totalAllocated, // This is the fulfilled quantity
-      freeQuantity: totalFreeQuantity,
-      // Keep batchNumber for backward compatibility (use first allocation)
-      batchNumber: validAllocations[0].batchNumber,
-      batchExpiryDate: validAllocations[0].expiryDate,
-      // Only set price/mrp for single batch items - for multiple batches, calculations use batchAllocations
-      price: validAllocations.length === 1 ? (processedAllocations[0].purchasePrice || 0) : 0,
-      mrp: validAllocations.length === 1 ? validAllocations[0].mrp : undefined,
-      gstRate: defaultGstRate,
-      discountPercentage: processedAllocations[0]?.discountPercentage !== undefined 
-        ? processedAllocations[0].discountPercentage 
-        : item.discountPercentage, // Preserve discountPercentage from allocations or existing item
-      verified: true,
-    };
+    const lineAfterBatches = applyDefaultDiscountToFulfillmentLine(
+      {
+        ...item,
+        batchAllocations: processedAllocations,
+        originalQuantity: totalAllocated < requiredQuantity ? requiredQuantity : item.originalQuantity || item.quantity,
+        quantity: totalAllocated,
+        freeQuantity: totalFreeQuantity,
+        batchNumber: validAllocations[0].batchNumber,
+        batchExpiryDate: validAllocations[0].expiryDate,
+        price: validAllocations.length === 1 ? (processedAllocations[0].purchasePrice || 0) : 0,
+        mrp: validAllocations.length === 1 ? validAllocations[0].mrp : undefined,
+        gstRate: defaultGstRate,
+        discountManuallySet: item.discountManuallySet,
+        verified: true,
+      },
+      purchaseDiscountLookup,
+      (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+    );
+
+    newMedicines[itemIndex] = lineAfterBatches;
 
     setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
     setBatchAllocationDialog({ ...batchAllocationDialog, open: false });
@@ -1101,6 +1151,83 @@ export const OrderDetailsPage: React.FC = () => {
       newMedicines[index].verified = !newMedicines[index].verified;
       setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
     }
+  };
+
+  const handleLineDiscountChange = (itemIndex: number, raw: string, batchIdx?: number) => {
+    const parsed = raw === '' ? 0 : parseFloat(raw);
+    const value = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0;
+
+    setFulfillmentData((prev) => {
+      const medicines = [...prev.medicines];
+      const item = { ...medicines[itemIndex] };
+
+      if (batchIdx !== undefined && item.batchAllocations?.length) {
+        const allocs = item.batchAllocations.map((a: any, i: number) =>
+          i === batchIdx ? { ...a, discountPercentage: value } : a
+        );
+        item.batchAllocations = allocs;
+        item.discountPercentage = value;
+      } else {
+        item.discountPercentage = value;
+        if (item.batchAllocations?.length) {
+          item.batchAllocations = item.batchAllocations.map((a: any) => ({
+            ...a,
+            discountPercentage: value,
+          }));
+        }
+      }
+
+      item.discountManuallySet = true;
+      medicines[itemIndex] = item;
+      return { ...prev, medicines };
+    });
+  };
+
+  const renderDiscPctCell = (
+    item: any,
+    itemIndex: number,
+    allocation?: any,
+    batchIdx?: number
+  ) => {
+    const med = medicines?.find((m) => m.id === item.medicineId);
+    const batchNumber =
+      allocation?.batchNumber ?? item.batchNumber ?? item.batchAllocations?.[0]?.batchNumber;
+    const batch = batchNumber
+      ? med?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+      : undefined;
+
+    const discountPct = batchNumber
+      ? resolveFulfillmentDiscountPct(
+          item.medicineId,
+          batchNumber,
+          item.discountPercentage,
+          allocation?.discountPercentage,
+          batch,
+          item.discountManuallySet
+        )
+      : 0;
+
+    if (order?.status === 'Pending') {
+      return (
+        <TextField
+          size="small"
+          type="number"
+          value={discountPct}
+          onChange={(e) => handleLineDiscountChange(itemIndex, e.target.value, batchIdx)}
+          inputProps={{ min: 0, max: 100, step: 0.01, style: { textAlign: 'right', padding: '4px 6px' } }}
+          sx={{ width: 76, '& .MuiInputBase-input': { fontSize: '0.75rem' } }}
+          InputProps={{
+            endAdornment: <InputAdornment position="end" sx={{ '& p': { fontSize: '0.7rem' } }}>%</InputAdornment>,
+          }}
+        />
+      );
+    }
+
+    return (
+      <Typography variant={allocation ? 'caption' : 'body2'}>
+        {discountPct}%
+      </Typography>
+    );
   };
 
   const handleAddMedicineToMaster = async () => {
@@ -1514,7 +1641,7 @@ export const OrderDetailsPage: React.FC = () => {
                                   >
                                     <QrCodeScanner fontSize="small" />
                                   </IconButton>
-                                  <Button
+                                    <Button
                                     size="small"
                                     variant="outlined"
                                     onClick={() => handleAssignBatches(index)}
@@ -1547,8 +1674,6 @@ export const OrderDetailsPage: React.FC = () => {
                             const batchFree = lineDisplay.freeQty * w;
                             const batchMRP = allocation.mrp || 0;
                             const gstRate = allocation.gstRate || item.gstRate || 5;
-                            const discountPct = allocation.discountPercentage !== undefined ? allocation.discountPercentage : (item.discountPercentage !== undefined ? item.discountPercentage : 0);
-                            
                             // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
                             let batchPurchasePrice = 0;
                             if (batchMRP > 0) {
@@ -1562,7 +1687,6 @@ export const OrderDetailsPage: React.FC = () => {
                               paidQtyForLine > 0
                                 ? lineInvoiceAmt * (batchQty / paidQtyForLine)
                                 : lineInvoiceAmt * (batchPhysical / (physicalQtyForLine || 1));
-                            
                             return (
                               <TableRow 
                                 key={`${item.medicineId}-batch-${batchIdx}`}
@@ -1608,7 +1732,7 @@ export const OrderDetailsPage: React.FC = () => {
                                   <Typography variant="caption">{gstRate}%</Typography>
                                 </TableCell>
                                 <TableCell align="right">
-                                  <Typography variant="caption">{discountPct}%</Typography>
+                                  {renderDiscPctCell(item, index, allocation, batchIdx)}
                                 </TableCell>
                                 <TableCell align="right">
                                   <Typography variant="body2" fontWeight="medium">
@@ -1782,8 +1906,10 @@ export const OrderDetailsPage: React.FC = () => {
                         </TableCell>
                         <TableCell align="right">
                           {item.batchAllocations && item.batchAllocations.length === 1
-                            ? `${item.batchAllocations[0].discountPercentage !== undefined ? item.batchAllocations[0].discountPercentage : (item.discountPercentage !== undefined ? item.discountPercentage : 0)}%`
-                            : item.discountPercentage !== undefined ? `${item.discountPercentage}%` : '-'
+                            ? renderDiscPctCell(item, index, item.batchAllocations[0], 0)
+                            : item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0)
+                              ? renderDiscPctCell(item, index)
+                              : <Typography variant="caption" color="textSecondary">-</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">

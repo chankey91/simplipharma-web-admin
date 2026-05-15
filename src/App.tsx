@@ -27,6 +27,7 @@ import { OperationsPage } from './pages/Operations';
 import { PendingRetailersPage } from './pages/PendingRetailers';
 import { ExpiryReturnsPage } from './pages/ExpiryReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
+import { MarginReportPage } from './pages/MarginReport';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -267,6 +268,16 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <ExpiryReturnsPage />
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/margin"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <MarginReportPage />
                     </Layout>
                   </ProtectedRoute>
                 }
