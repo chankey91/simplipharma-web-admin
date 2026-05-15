@@ -1,6 +1,7 @@
 import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
 import { PurchaseInvoice, PurchaseInvoiceItem } from '../types';
 import { addStockBatch } from './inventory';
+import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 
 export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
   const invoicesCol = collection(db, 'purchaseInvoices');
@@ -244,6 +245,7 @@ export const createPurchaseInvoice = async (
             quantity: totalQuantity, // Use quantity + free quantity
             purchasePrice: item.purchasePrice || 0,
           };
+          attachLandedCostToBatchData(batchData, item);
           
           // Add optional fields only if they exist
           if (item.mfgDate) {
@@ -371,6 +373,7 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
           quantity: totalQuantity, // Use quantity + free quantity
           purchasePrice: item.purchasePrice || 0,
         };
+        attachLandedCostToBatchData(batchData, item);
         
         // Add optional fields only if they exist
         if (item.mfgDate) {
