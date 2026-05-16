@@ -8,29 +8,31 @@ import {
   Typography,
   Alert,
   CircularProgress,
+  Link,
 } from '@mui/material';
-import { login, onAuthChange } from '../services/firebase';
+import { login, onAuthChange, getUserPanelRole } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
-import { isUserAdmin } from '../services/firebase';
 import { BrandLogo } from '../components/BrandLogo';
+import { ChangePasswordDialog } from '../components/ChangePasswordDialog';
 
 export const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     const unsubscribe = onAuthChange(async (user) => {
       if (user) {
         try {
-          const admin = await isUserAdmin(user.uid);
-          if (admin) {
+          const role = await getUserPanelRole(user.uid);
+          if (role) {
             navigate('/');
           }
-        } catch (error) {
-          console.error('Error checking admin status:', error);
+        } catch (err) {
+          console.error('Error checking panel access:', err);
         }
       }
     });
@@ -44,23 +46,17 @@ export const LoginPage: React.FC = () => {
     setLoading(true);
 
     try {
-      console.log('Attempting login...');
       const userCredential = await login(email, password);
-      console.log('Login successful, checking admin status...');
-      console.log('User ID:', userCredential.user.uid);
-      
-      const admin = await isUserAdmin(userCredential.user.uid);
-      
-      if (admin) {
-        console.log('Admin access granted, redirecting...');
+      const role = await getUserPanelRole(userCredential.user.uid);
+
+      if (role) {
         navigate('/');
       } else {
-        console.error('Admin check failed. User does not have admin role.');
-        setError('Access denied. Admin privileges required. Check browser console (F12) for details.');
+        setError('Access denied. Admin or operations privileges required.');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Login error:', err);
-      setError(err.message || 'Login failed. Check console for details.');
+      setError(err instanceof Error ? err.message : 'Login failed.');
     } finally {
       setLoading(false);
     }
@@ -81,7 +77,7 @@ export const LoginPage: React.FC = () => {
             <BrandLogo variant="horizontal" height={56} />
           </Box>
           <Typography variant="body2" align="center" color="textSecondary" sx={{ mb: 3 }}>
-            Login to access admin panel
+            Login to access the panel
           </Typography>
 
           {error && (
@@ -111,6 +107,17 @@ export const LoginPage: React.FC = () => {
               required
               autoComplete="current-password"
             />
+            <Box sx={{ textAlign: 'right', mt: 0.5 }}>
+              <Link
+                component="button"
+                type="button"
+                variant="body2"
+                onClick={() => setResetOpen(true)}
+                sx={{ cursor: 'pointer' }}
+              >
+                Forgot password?
+              </Link>
+            </Box>
             <Button
               type="submit"
               fullWidth
@@ -123,6 +130,13 @@ export const LoginPage: React.FC = () => {
           </form>
         </Paper>
       </Box>
+
+      <ChangePasswordDialog
+        open={resetOpen}
+        mode="reset"
+        defaultEmail={email}
+        onClose={() => setResetOpen(false)}
+      />
     </Container>
   );
 };

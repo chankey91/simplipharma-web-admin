@@ -3,7 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.onBulkMedicineJobCreated = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
-const XLSX = require("xlsx");
 const nodemailer = require("nodemailer");
 function escapeHtmlText(s) {
     return String(s)
@@ -125,6 +124,8 @@ exports.onBulkMedicineJobCreated = functions
     const processErrors = [];
     const BATCH_SIZE = 400;
     try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const XLSX = require('xlsx');
         const bucket = admin.storage().bucket();
         const [fileBuf] = await bucket.file(storagePath).download();
         const workbook = XLSX.read(fileBuf, { type: 'buffer' });
