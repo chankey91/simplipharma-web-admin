@@ -1,6 +1,12 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
+import {
+  assertAdmin,
+  getUserRole,
+  isAdminOrOperationsRole,
+  isPanelRole,
+} from './panelAuth';
 
 admin.initializeApp();
 
@@ -129,11 +135,9 @@ export const sendVendorPasswordEmailHttp = functions.https.onRequest(async (req,
       return;
     }
 
-    // Check if user is admin
-    const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
-    
-    if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
-      res.status(403).json({ error: 'Admin access required' });
+    const role = await getUserRole(decodedToken.uid);
+    if (!isAdminOrOperationsRole(role)) {
+      res.status(403).json({ error: 'Admin or operations access required' });
       return;
     }
 
@@ -221,12 +225,13 @@ export const sendVendorPasswordEmail = functions.https.onCall(async (data, conte
       throw new functions.https.HttpsError('internal', 'Failed to verify user permissions');
     }
 
-    if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
-      console.error('User is not admin:', {
+    const callerRole = userDoc.data()?.role;
+    if (!userDoc.exists || !isAdminOrOperationsRole(callerRole)) {
+      console.error('User lacks panel access:', {
         exists: userDoc.exists,
-        role: userDoc.data()?.role
+        role: callerRole
       });
-      throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+      throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
     }
 
     const { email, password, vendorName } = data || {};
@@ -334,8 +339,9 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
 
-  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
-  if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
+  try {
+    await assertAdmin(context.auth.uid);
+  } catch {
     throw new functions.https.HttpsError('permission-denied', 'Admin access required');
   }
 
@@ -346,6 +352,18 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
 
   const role = storeData?.role || 'retailer';
   const displayName = storeData?.displayName || storeData?.shopName || email;
+
+  const allowedRoles = ['retailer', 'salesOfficer', 'operations'];
+  if (!allowedRoles.includes(role)) {
+    throw new functions.https.HttpsError('invalid-argument', `Invalid role: ${role}`);
+  }
+
+  const accountLabel =
+    role === 'salesOfficer'
+      ? 'Sales Officer'
+      : role === 'operations'
+        ? 'Operations'
+        : 'store';
 
   try {
     const userRecord = await admin.auth().createUser({
@@ -379,11 +397,12 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
         await transporter.sendMail({
           from: smtpConfig.user,
           to: email,
-          subject: role === 'salesOfficer' ? 'Your SimpliPharma Sales Officer Account' : 'Your SimpliPharma Store Account',
+          subject: `Your SimpliPharma ${accountLabel} Account`,
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
-              <p>Your ${role === 'salesOfficer' ? 'Sales Officer' : 'store'} account has been created.</p>
+              <p>Your ${accountLabel} account has been created.</p>
+              ${role === 'operations' ? '<p>Sign in to the SimpliPharma Operations panel to manage orders, inventory, purchases, and warehouse tasks.</p>' : ''}
               <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <p><strong>Email:</strong> ${email}</p>
                 <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
@@ -414,8 +433,9 @@ export const approveRetailerRequest = functions.https.onCall(async (data, contex
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
 
-  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
-  if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
+  try {
+    await assertAdmin(context.auth.uid);
+  } catch {
     throw new functions.https.HttpsError('permission-denied', 'Admin access required');
   }
 
@@ -530,8 +550,9 @@ export const rejectRetailerRequest = functions.https.onCall(async (data, context
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
 
-  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
-  if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
+  try {
+    await assertAdmin(context.auth.uid);
+  } catch {
     throw new functions.https.HttpsError('permission-denied', 'Admin access required');
   }
 
@@ -721,6 +742,109 @@ export const onRetailerRegistrationRequestCreated = functions.firestore
 
     return null;
   });
+
+function getPanelLoginUrl(): string {
+  const cfg = functions.config().app as { panel_url?: string } | undefined;
+  const base = (cfg?.panel_url || 'http://localhost:3001').replace(/\/$/, '');
+  return base.endsWith('/login') ? base : `${base}/login`;
+}
+
+async function isActivePanelUserByEmail(email: string): Promise<boolean> {
+  try {
+    const userRecord = await admin.auth().getUserByEmail(email.trim());
+    const role = await getUserRole(userRecord.uid);
+    if (!isPanelRole(role)) return false;
+    const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
+    return userDoc.exists && userDoc.data()?.isActive !== false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Send password reset link via SMTP (Gmail) for admin / operations panel users.
+ * Uses Firebase Admin generatePasswordResetLink + existing smtp.* Functions config.
+ */
+export const sendPanelPasswordResetEmail = functions.https.onCall(async (data, context) => {
+  let email = String(data?.email || '').trim();
+  if (!email && context.auth) {
+    try {
+      const userRecord = await admin.auth().getUser(context.auth.uid);
+      email = String(userRecord.email || '').trim();
+    } catch {
+      email = '';
+    }
+  }
+  if (!email) {
+    throw new functions.https.HttpsError('invalid-argument', 'Email is required');
+  }
+
+  const genericMessage =
+    'If this email is registered for the admin or operations panel, you will receive a reset link shortly.';
+
+  const isPanelUser = await isActivePanelUserByEmail(email);
+  if (!isPanelUser) {
+    return { success: true, message: genericMessage, emailSent: false };
+  }
+
+  if (context.auth) {
+    const callerRole = await getUserRole(context.auth.uid);
+    if (!isAdminOrOperationsRole(callerRole)) {
+      throw new functions.https.HttpsError('permission-denied', 'Panel access required');
+    }
+    const caller = await admin.auth().getUser(context.auth.uid);
+    if (caller.email?.toLowerCase() !== email.toLowerCase()) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'You can only request a reset for your own account'
+      );
+    }
+  }
+
+  let resetLink: string;
+  try {
+    resetLink = await admin.auth().generatePasswordResetLink(email, {
+      url: getPanelLoginUrl(),
+      handleCodeInApp: false,
+    });
+  } catch (err: any) {
+    console.error('generatePasswordResetLink failed:', err?.message);
+    throw new functions.https.HttpsError('internal', 'Could not generate password reset link');
+  }
+
+  const mail = await sendSmtpMail({
+    to: email,
+    subject: 'SimpliPharma — Reset your panel password',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2196F3;">Password reset</h2>
+        <p>We received a request to reset the password for your SimpliPharma admin/operations panel account.</p>
+        <p style="margin: 24px 0;">
+          <a href="${resetLink}"
+             style="background: #00a99d; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Reset password
+          </a>
+        </p>
+        <p style="color: #666; font-size: 14px;">Or copy this link into your browser:</p>
+        <p style="word-break: break-all; font-size: 13px; color: #333;">${escapeHtmlText(resetLink)}</p>
+        <p style="color: #666; font-size: 12px; margin-top: 24px;">If you did not request this, you can ignore this email. The link expires after a short time.</p>
+      </div>
+    `,
+  });
+
+  if (!mail.ok) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      mail.error || 'SMTP is not configured. Set smtp.user and smtp.password in Firebase Functions config.'
+    );
+  }
+
+  return {
+    success: true,
+    message: 'Password reset link sent to your email.',
+    emailSent: true,
+  };
+});
 
 export { onBulkMedicineJobCreated } from './bulkMedicineJob';
 

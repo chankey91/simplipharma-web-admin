@@ -8,10 +8,11 @@ import {
 } from '../services/stores';
 import { User } from '../types';
 
-export const useStores = () => {
+export const useStores = (enabled = true) => {
   return useQuery({
     queryKey: ['stores'],
-    queryFn: getAllStores
+    queryFn: getAllStores,
+    enabled,
   });
 };
 

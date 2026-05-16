@@ -34,8 +34,19 @@ service cloud.firestore {
       );
     }
 
+    function isOperations() {
+      return hasUserDoc() && (
+        userRole() == 'operations' ||
+        userRole() == 'Operations'
+      );
+    }
+
     function isAdminOrSalesOfficer() {
       return isAdmin() || isSalesOfficer();
+    }
+
+    function isAdminOrOperations() {
+      return isAdmin() || isOperations();
     }
 
     // Retailer doc must exist and list this Sales Officer
@@ -49,7 +60,7 @@ service cloud.firestore {
     }
 
     function canModifyOrder(orderId) {
-      return isAdmin()
+      return isAdminOrOperations()
         || orderRetailerId(orderId) == request.auth.uid
         || (isSalesOfficer() && retailerAssignedToSO(orderRetailerId(orderId)));
     }
@@ -70,7 +81,7 @@ service cloud.firestore {
 
       // Retailer (self), Sales Officer (assigned retailer), or Admin
       allow create: if signedIn() && (
-        isAdmin()
+        isAdminOrOperations()
         || request.auth.uid == request.resource.data.retailerId
         || (
           isSalesOfficer()
@@ -80,7 +91,7 @@ service cloud.firestore {
 
       // Admin any; retailer own order; SO only for assigned retailers; retailerId cannot change except by admin
       allow update: if signedIn() && (
-        isAdmin()
+        isAdminOrOperations()
         || (
           resource.data.retailerId == request.auth.uid
           && request.resource.data.retailerId == resource.data.retailerId
@@ -99,7 +110,7 @@ service cloud.firestore {
       match /payments/{paymentId} {
         allow read: if signedIn();
         allow create, update: if signedIn() && canModifyOrder(orderId);
-        allow delete: if signedIn() && isAdmin();
+        allow delete: if signedIn() && isAdminOrOperations();
       }
     }
 
@@ -108,6 +119,7 @@ service cloud.firestore {
       allow read: if signedIn() && (
         request.auth.uid == userId
         || isAdminOrSalesOfficer()
+        || isOperations()
         || (
           resource.data.role == 'retailer'
           && resource.data.salesOfficerId == request.auth.uid
@@ -129,7 +141,7 @@ service cloud.firestore {
       allow read: if signedIn() && (
         resource.data.retailerId == request.auth.uid
         || resource.data.salesOfficerId == request.auth.uid
-        || isAdmin()
+        || isAdminOrOperations()
       );
       allow create: if signedIn() && (
         request.resource.data.retailerId == request.auth.uid
@@ -140,7 +152,7 @@ service cloud.firestore {
       );
       allow update: if signedIn() && (
         resource.data.salesOfficerId == request.auth.uid
-        || isAdmin()
+        || isAdminOrOperations()
       );
       allow delete: if false;
     }
@@ -162,29 +174,29 @@ service cloud.firestore {
     // ----- Vendors (admin web) -----
     match /vendors/{vendorId} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow write: if isAdminOrOperations();
     }
 
     // ----- Purchase invoices (admin web) -----
     match /purchaseInvoices/{invoiceId} {
-      allow read: if signedIn() && isAdminOrSalesOfficer();
-      allow write: if isAdmin();
+      allow read: if signedIn() && (isAdminOrOperations() || isSalesOfficer());
+      allow write: if isAdminOrOperations();
     }
 
     // ----- Operations: trays & operators (admin manages; any signed-in client may read for order UI) -----
     match /trays/{trayId} {
       allow get, list: if signedIn();
-      allow create, update, delete: if isAdmin();
+      allow create, update, delete: if isAdminOrOperations();
     }
     match /operators/{operatorId} {
       allow get, list: if signedIn();
-      allow create, update, delete: if isAdmin();
+      allow create, update, delete: if isAdminOrOperations();
     }
 
     // ----- Product demands (retailer requests; admin fulfills) -----
     match /product_demands/{demandId} {
       allow read: if signedIn() && (
-        isAdmin()
+        isAdminOrOperations()
         || resource.data.retailerId == request.auth.uid
       );
       allow create: if signedIn()
@@ -198,13 +210,13 @@ service cloud.firestore {
         && request.resource.data.requestedQuantity >= 1
         && request.resource.data.requestedUnit is string
         && request.resource.data.requestedUnit.size() > 0;
-      allow update, delete: if signedIn() && isAdmin();
+      allow update, delete: if signedIn() && isAdminOrOperations();
     }
 
     // ----- Bulk medicine import jobs (admin queues Excel; Cloud Function processes) -----
     match /bulk_medicine_jobs/{jobId} {
-      allow read: if signedIn() && isAdmin();
-      allow create: if signedIn() && isAdmin()
+      allow read: if signedIn() && isAdminOrOperations();
+      allow create: if signedIn() && isAdminOrOperations()
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.status == 'queued'
         && request.resource.data.storagePath is string
@@ -215,7 +227,7 @@ service cloud.firestore {
     // ----- Queued cart items from fulfilled product demands -----
     match /users/{userId}/demandCartQueue/{queueId} {
       allow read, delete: if signedIn() && request.auth.uid == userId;
-      allow create: if signedIn() && isAdmin();
+      allow create: if signedIn() && isAdminOrOperations();
       allow update: if false;
     }
 
@@ -226,7 +238,7 @@ service cloud.firestore {
     }
     match /inventory/{inventoryId} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow write: if isAdminOrOperations();
     }
 
     // ----- Deny everything else -----

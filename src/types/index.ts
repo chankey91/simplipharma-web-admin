@@ -42,6 +42,8 @@ export interface StockBatch {
   mfgDate?: Date | any;
   purchaseDate?: Date | any;
   purchasePrice?: number;
+  /** Ex-GST landed cost per strip from PI: (paid cost − line disc) ÷ physical qty */
+  landedUnitCostExGst?: number;
   mrp?: number;
   discountPercentage?: number;
   /** Retailer-facing purchase offer: pay for this many units, get schemeFreeQty free (e.g. 10 + 1). */
@@ -148,7 +150,7 @@ export interface User {
   id: string;
   uid: string;
   email: string;
-  role?: 'retailer' | 'admin' | 'salesOfficer';
+  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations';
   salesOfficerId?: string; // For retailers: which Sales Officer manages them
   displayName?: string;
   phoneNumber?: string;

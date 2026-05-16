@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { onAuthChange, isUserAdmin } from './services/firebase';
+import { onAuthChange, getUserPanelRole } from './services/firebase';
+import { canAccessPath, type PanelRole } from './auth/permissions';
+import { AuthProvider } from './context/AuthContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Loading } from './components/Loading';
 import { Layout } from './components/Layout';
@@ -23,10 +25,13 @@ import { MedicineDetailsPage } from './pages/MedicineDetails';
 import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
 import { SalesOfficersPage } from './pages/SalesOfficers';
+import { OperationsUsersPage } from './pages/OperationsUsers';
 import { OperationsPage } from './pages/Operations';
 import { PendingRetailersPage } from './pages/PendingRetailers';
 import { ExpiryReturnsPage } from './pages/ExpiryReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
+import { MarginReportPage } from './pages/MarginReport';
+import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,30 +45,37 @@ const queryClient = new QueryClient({
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#2196F3',
+      main: brandColors.teal,
+      dark: '#008f85',
+      light: '#33b9af',
+      contrastText: '#ffffff',
     },
     secondary: {
-      main: '#4CAF50',
+      main: brandColors.navy,
+      dark: '#091336',
+      light: '#3d4a70',
+      contrastText: '#ffffff',
     },
   },
 });
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [panelRole, setPanelRole] = useState<PanelRole | null>(null);
+  const location = useLocation();
 
   useEffect(() => {
     const unsubscribe = onAuthChange(async (user) => {
       if (user) {
         try {
-          const admin = await isUserAdmin(user.uid);
-          setIsAdmin(admin);
+          const role = await getUserPanelRole(user.uid);
+          setPanelRole(role);
         } catch (error) {
-          console.error('Error checking admin status:', error);
-          setIsAdmin(false);
+          console.error('Error checking panel access:', error);
+          setPanelRole(null);
         }
       } else {
-        setIsAdmin(false);
+        setPanelRole(null);
       }
       setLoading(false);
     });
@@ -75,12 +87,51 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     return <Loading message="Checking authentication..." />;
   }
 
-  if (!isAdmin) {
-    return <Navigate to="/login" />;
+  if (!panelRole) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (!canAccessPath(panelRole, location.pathname)) {
+    return <Navigate to="/" replace />;
   }
 
   return <>{children}</>;
 };
+
+const withLayout = (page: React.ReactNode) => (
+  <ProtectedRoute>
+    <Layout>{page}</Layout>
+  </ProtectedRoute>
+);
+
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/" element={withLayout(<DashboardPage />)} />
+      <Route path="/stores" element={withLayout(<StoresPage />)} />
+      <Route path="/vendors" element={withLayout(<VendorsPage />)} />
+      <Route path="/orders" element={withLayout(<OrdersPage />)} />
+      <Route path="/orders/:orderId" element={withLayout(<OrderDetailsPage />)} />
+      <Route path="/operations" element={withLayout(<OperationsPage />)} />
+      <Route path="/purchases" element={withLayout(<PurchaseInvoicesPage />)} />
+      <Route path="/purchases/new" element={withLayout(<CreatePurchaseInvoicePage />)} />
+      <Route path="/purchases/import-pdf" element={withLayout(<ImportPurchaseInvoicePdfPage />)} />
+      <Route path="/purchases/:invoiceId" element={withLayout(<PurchaseInvoiceDetailsPage />)} />
+      <Route path="/inventory" element={withLayout(<InventoryPage />)} />
+      <Route path="/inventory/:medicineId" element={withLayout(<MedicineDetailsPage />)} />
+      <Route path="/inventory/stock-update" element={withLayout(<StockUpdatePage />)} />
+      <Route path="/invoices" element={withLayout(<InvoicesPage />)} />
+      <Route path="/banners" element={withLayout(<BannersPage />)} />
+      <Route path="/sales-officers" element={withLayout(<SalesOfficersPage />)} />
+      <Route path="/operations-users" element={withLayout(<OperationsUsersPage />)} />
+      <Route path="/pending-retailers" element={withLayout(<PendingRetailersPage />)} />
+      <Route path="/expiry-returns" element={withLayout(<ExpiryReturnsPage />)} />
+      <Route path="/margin" element={withLayout(<MarginReportPage />)} />
+      <Route path="/product-demands" element={withLayout(<ProductDemandsPage />)} />
+    </Routes>
+  );
+}
 
 function App() {
   return (
@@ -89,199 +140,9 @@ function App() {
         <ThemeProvider theme={theme}>
           <CssBaseline />
           <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <DashboardPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/stores"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <StoresPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/vendors"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <VendorsPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/orders"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <OrdersPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/orders/:orderId"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <OrderDetailsPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/operations"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <OperationsPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/purchases"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <PurchaseInvoicesPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/purchases/new"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <CreatePurchaseInvoicePage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/purchases/import-pdf"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <ImportPurchaseInvoicePdfPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/purchases/:invoiceId"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <PurchaseInvoiceDetailsPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/inventory"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <InventoryPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/inventory/:medicineId"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <MedicineDetailsPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/inventory/stock-update"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <StockUpdatePage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/invoices"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <InvoicesPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/banners"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <BannersPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/sales-officers"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <SalesOfficersPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/pending-retailers"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <PendingRetailersPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/expiry-returns"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <ExpiryReturnsPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/product-demands"
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <ProductDemandsPage />
-                    </Layout>
-                  </ProtectedRoute>
-                }
-              />
-            </Routes>
+            <AuthProvider>
+              <AppRoutes />
+            </AuthProvider>
           </BrowserRouter>
         </ThemeProvider>
       </QueryClientProvider>
@@ -290,4 +151,3 @@ function App() {
 }
 
 export default App;
-

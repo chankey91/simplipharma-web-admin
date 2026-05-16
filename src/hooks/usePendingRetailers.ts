@@ -7,10 +7,11 @@ import {
   RetailerRegistrationRequest,
 } from '../services/pendingRetailers';
 
-export const usePendingRetailerRequests = () => {
+export const usePendingRetailerRequests = (enabled = true) => {
   return useQuery({
     queryKey: ['pendingRetailerRequests'],
     queryFn: getPendingRetailerRequests,
+    enabled,
   });
 };
 

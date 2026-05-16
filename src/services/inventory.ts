@@ -37,6 +37,24 @@ function normalizeBatchQuantity(batch: any): number {
   return isNaN(n) ? 0 : Math.max(0, n);
 }
 
+function parseOptionalPositiveNumber(val: unknown): number | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  const n = typeof val === 'number' ? val : parseFloat(String(val));
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function mapBatchLandedCost(batch: any): { landedUnitCostExGst?: number } {
+  const landed = parseOptionalPositiveNumber(batch.landedUnitCostExGst);
+  return landed !== undefined ? { landedUnitCostExGst: landed } : {};
+}
+
+function appendLandedCostToFirestoreBatch(firestoreBatch: Record<string, unknown>, b: any): void {
+  const landed = parseOptionalPositiveNumber(b.landedUnitCostExGst);
+  if (landed !== undefined) {
+    firestoreBatch.landedUnitCostExGst = landed;
+  }
+}
+
 /** Buy schemePaidQty, get schemeFreeQty free; accepts legacy purchaseSchemeDeal / purchaseSchemeFree on batches. */
 function normalizeSchemeFromBatch(batch: any): { schemePaidQty?: number; schemeFreeQty?: number } {
   const paidRaw = batch.schemePaidQty ?? batch.purchaseSchemeDeal;
@@ -124,6 +142,7 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
         discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
           ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
           : undefined,
+        ...mapBatchLandedCost(batch),
         ...normalizeSchemeFromBatch(batch),
       };
     }) : undefined;
@@ -216,6 +235,7 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
       discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
         ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
         : undefined,
+      ...mapBatchLandedCost(batch),
       ...normalizeSchemeFromBatch(batch),
     };
   }) : [];
@@ -315,6 +335,11 @@ export const addStockBatch = async (
     newBatch.discountPercentage = batch.discountPercentage;
   }
 
+  const landed = parseOptionalPositiveNumber((batch as StockBatch).landedUnitCostExGst);
+  if (landed !== undefined) {
+    newBatch.landedUnitCostExGst = landed;
+  }
+
   const schemeFields = normalizeSchemeFromBatch(batch);
   if (schemeFields.schemePaidQty != null && schemeFields.schemeFreeQty != null) {
     newBatch.schemePaidQty = schemeFields.schemePaidQty;
@@ -346,6 +371,9 @@ export const addStockBatch = async (
     if (newBatch.discountPercentage !== undefined && newBatch.discountPercentage !== null) {
       batches[existingBatchIndex].discountPercentage = newBatch.discountPercentage;
       console.log(`Updated discountPercentage for batch ${batch.batchNumber} to ${newBatch.discountPercentage}`);
+    }
+    if (newBatch.landedUnitCostExGst !== undefined && newBatch.landedUnitCostExGst !== null) {
+      batches[existingBatchIndex].landedUnitCostExGst = newBatch.landedUnitCostExGst;
     }
     if (schemeFields.schemePaidQty != null && schemeFields.schemeFreeQty != null) {
       batches[existingBatchIndex].schemePaidQty = schemeFields.schemePaidQty;
@@ -415,6 +443,7 @@ export const addStockBatch = async (
       }
     }
 
+    appendLandedCostToFirestoreBatch(firestoreBatch, b);
     appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
     
     return firestoreBatch;
@@ -517,6 +546,7 @@ export const reduceStockFromBatch = async (
       }
     }
 
+    appendLandedCostToFirestoreBatch(firestoreBatch, b);
     appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
     
     return firestoreBatch;
@@ -610,6 +640,7 @@ export const restoreStockToBatch = async (
       }
     }
 
+    appendLandedCostToFirestoreBatch(firestoreBatch, b);
     appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
     
     return firestoreBatch;

@@ -1,6 +1,5 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import * as XLSX from 'xlsx';
 import * as nodemailer from 'nodemailer';
 
 function escapeHtmlText(s: string): string {
@@ -148,6 +147,8 @@ export const onBulkMedicineJobCreated = functions
     const BATCH_SIZE = 400;
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const XLSX = require('xlsx') as typeof import('xlsx');
       const bucket = admin.storage().bucket();
       const [fileBuf] = await bucket.file(storagePath).download();
       const workbook = XLSX.read(fileBuf, { type: 'buffer' });

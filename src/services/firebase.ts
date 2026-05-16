@@ -1,10 +1,13 @@
 import { initializeApp } from 'firebase/app';
-import { 
+import {
   getAuth,
-  signInWithEmailAndPassword, 
+  signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  User as FirebaseUser
+  updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  User as FirebaseUser,
 } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { 
@@ -26,6 +29,7 @@ import {
   deleteField
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import { canAccessPanel, type PanelRole } from '../auth/permissions';
 
 // Firebase configuration
 const firebaseConfig = {
@@ -58,6 +62,66 @@ export const onAuthChange = (callback: (user: FirebaseUser | null) => void) => {
   return onAuthStateChanged(auth, callback);
 };
 
+/** Password reset via Cloud Function + SMTP (same Gmail setup as vendor/store emails). */
+export const sendPasswordReset = async (email: string): Promise<{ message: string }> => {
+  const fn = httpsCallable<
+    { email: string },
+    { success?: boolean; message?: string; emailSent?: boolean }
+  >(functions, 'sendPanelPasswordResetEmail');
+  const result = await fn({ email: email.trim() });
+  const data = result.data;
+  if (!data?.success) {
+    throw new Error(data?.message || 'Failed to send password reset email');
+  }
+  return { message: data.message || 'If this email is registered, you will receive a reset link shortly.' };
+};
+
+export const changeUserPassword = async (
+  currentPassword: string,
+  newPassword: string
+): Promise<void> => {
+  const user = auth.currentUser;
+  if (!user?.email) {
+    throw new Error('You must be signed in to change your password.');
+  }
+  const credential = EmailAuthProvider.credential(user.email, currentPassword);
+  await reauthenticateWithCredential(user, credential);
+  await updatePassword(user, newPassword);
+  await updateDoc(doc(db, 'users', user.uid), {
+    mustResetPassword: false,
+    updatedAt: Timestamp.now(),
+  });
+};
+
+/** Map Firebase Auth errors to short user-facing messages. */
+export function getAuthErrorMessage(err: unknown): string {
+  const code = (err as { code?: string })?.code;
+  switch (code) {
+    case 'auth/invalid-email':
+      return 'Invalid email address.';
+    case 'auth/user-not-found':
+      return 'No account found for this email.';
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+      return 'Current password is incorrect.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please try again later.';
+    case 'auth/network-request-failed':
+      return 'Network error. Check your connection and try again.';
+    case 'functions/failed-precondition':
+      return (err as { message?: string }).message || 'Email could not be sent. Check SMTP configuration.';
+    case 'functions/permission-denied':
+      return (err as { message?: string }).message || 'Permission denied.';
+    default: {
+      const msg = (err as { message?: string })?.message;
+      if (msg) return msg;
+      return err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+    }
+  }
+}
+
 // User helpers
 export const getUserProfile = async (userId: string): Promise<{ id: string; role?: string; [key: string]: any } | null> => {
   const userRef = doc(db, 'users', userId);
@@ -72,28 +136,41 @@ export const getUserProfile = async (userId: string): Promise<{ id: string; role
   return null;
 };
 
-export const isUserAdmin = async (userId: string): Promise<boolean> => {
+/** Web panel access: admin or operations. Does not auto-create profiles. */
+export const getUserPanelRole = async (userId: string): Promise<PanelRole | null> => {
   try {
-    console.log('Checking admin status for userId:', userId);
     const profile = await getUserProfile(userId);
-    
+    if (!profile?.role || !canAccessPanel(profile.role)) {
+      return null;
+    }
+    if (profile.isActive === false) {
+      return null;
+    }
+    return profile.role;
+  } catch (error) {
+    console.error('Error checking panel role:', error);
+    return null;
+  }
+};
+
+/** @deprecated Use getUserPanelRole — true only for admin. */
+export const isUserAdmin = async (userId: string): Promise<boolean> => {
+  const role = await getUserPanelRole(userId);
+  if (role === 'admin') return true;
+
+  try {
+    const profile = await getUserProfile(userId);
     if (!profile) {
       console.warn('User profile does not exist in Firestore. Creating admin profile...');
-      // Auto-create admin profile if it doesn't exist
       const userRef = doc(db, 'users', userId);
-      const newProfile = {
-        role: 'admin',
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now()
-      };
-      await setDoc(userRef, newProfile, { merge: true });
-      console.log('Admin profile created successfully');
+      await setDoc(
+        userRef,
+        { role: 'admin', createdAt: Timestamp.now(), updatedAt: Timestamp.now() },
+        { merge: true }
+      );
       return true;
     }
-    
-    const isAdmin = profile.role === 'admin';
-    console.log('Is admin?', isAdmin, '| Role:', profile.role);
-    return isAdmin;
+    return profile.role === 'admin';
   } catch (error) {
     console.error('Error checking admin status:', error);
     return false;
