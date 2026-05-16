@@ -12,6 +12,7 @@ import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
+import { getProductDemandsByIds } from '../services/productDemands';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -118,12 +119,44 @@ const getOrderInvoiceHTML = async (order: Order) => {
       }
     })
   );
+
+  const productDemandIds = order.medicines
+    .filter((m) => m.lineType === 'product_demand' && m.productDemandId)
+    .map((m) => m.productDemandId as string);
+  const demandById = await getProductDemandsByIds(productDemandIds);
   
   // Calculate totals
   let totalSubTotal = 0;
   let totalProductDiscount = 0;
   
   const items = order.medicines.map((item, index) => {
+    if (item.lineType === 'product_demand') {
+      const gstRate =
+        (item as any).gstRate !== undefined ? (item as any).gstRate : order.taxPercentage || 5;
+      const demand = item.productDemandId ? demandById.get(item.productDemandId) : undefined;
+      const isRejected = demand?.status === 'rejected';
+      const qty = toNumber(item.quantity);
+      const nameBase = item.name || 'Product request';
+      return {
+        sn: index + 1,
+        name: isRejected ? `${nameBase} — not supplied` : `${nameBase} (product request)`,
+        pack: '—',
+        hsn: '—',
+        batch: '—',
+        exp: '—',
+        qty: qty.toFixed(2),
+        free: '0.00',
+        totalQty: qty.toFixed(2),
+        mrp: '-',
+        rate: '0.00',
+        disc: '0.00',
+        sgst: `${(gstRate / 2).toFixed(1)}%`,
+        cgst: `${(gstRate / 2).toFixed(1)}%`,
+        amount: '0.00',
+        rowClass: isRejected ? 'line-rejected' : '',
+      };
+    }
+
     const medicineDetails = item.medicineId ? medicineDetailsMap.get(item.medicineId) : undefined;
 
     /** Resolve P/F from batch allocations + inventory (same as fulfillment). */
@@ -257,7 +290,8 @@ const getOrderInvoiceHTML = async (order: Order) => {
       disc: discountPercentage > 0 ? discountPercentage.toFixed(2) : '0.00',
       sgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
       cgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
-      amount: itemAmount.toFixed(2)
+      amount: itemAmount.toFixed(2),
+      rowClass: '',
     };
   });
   
@@ -346,7 +380,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
   
   // Generate items HTML
   const itemsHTML = items.map(item => `
-    <tr class="center">
+    <tr class="center ${item.rowClass || ''}">
       <td>${item.sn}</td>
       <td style="text-align:left">${item.name}</td>
       <td>${item.pack}</td>
@@ -414,6 +448,10 @@ const getOrderInvoiceHTML = async (order: Order) => {
   .right  { text-align: right; }
   .bold   { font-weight: bold; }
   .title  { font-size: 16px; font-weight: bold; text-align: center; }
+  .line-rejected td {
+    text-decoration: line-through;
+    color: #666;
+  }
   @media print {
     body { margin: 0; }
   }

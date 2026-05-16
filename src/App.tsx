@@ -29,6 +29,7 @@ import { OperationsUsersPage } from './pages/OperationsUsers';
 import { OperationsPage } from './pages/Operations';
 import { PendingRetailersPage } from './pages/PendingRetailers';
 import { ExpiryReturnsPage } from './pages/ExpiryReturns';
+import { OrderReturnsPage } from './pages/OrderReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { MarginReportPage } from './pages/MarginReport';
 import { brandColors } from './theme/brand';
@@ -127,6 +128,7 @@ function AppRoutes() {
       <Route path="/operations-users" element={withLayout(<OperationsUsersPage />)} />
       <Route path="/pending-retailers" element={withLayout(<PendingRetailersPage />)} />
       <Route path="/expiry-returns" element={withLayout(<ExpiryReturnsPage />)} />
+      <Route path="/order-returns" element={withLayout(<OrderReturnsPage />)} />
       <Route path="/margin" element={withLayout(<MarginReportPage />)} />
       <Route path="/product-demands" element={withLayout(<ProductDemandsPage />)} />
     </Routes>

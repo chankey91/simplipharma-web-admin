@@ -36,6 +36,25 @@ function parseDemandDoc(id: string, data: Record<string, unknown>): ProductDeman
   } as ProductDemand;
 }
 
+/** Load demand docs by id (e.g. for order lines / invoice). */
+export const getProductDemandsByIds = async (ids: string[]): Promise<Map<string, ProductDemand>> => {
+  const unique = [...new Set(ids.filter((id) => typeof id === 'string' && id.length > 0))];
+  const map = new Map<string, ProductDemand>();
+  await Promise.all(
+    unique.map(async (id) => {
+      try {
+        const snap = await getDoc(doc(db, 'product_demands', id));
+        if (snap.exists()) {
+          map.set(id, parseDemandDoc(id, snap.data() as Record<string, unknown>));
+        }
+      } catch {
+        /* ignore missing / permission */
+      }
+    })
+  );
+  return map;
+};
+
 export const getAllProductDemands = async (): Promise<ProductDemand[]> => {
   const snap = await getDocs(collection(db, 'product_demands'));
   const list = snap.docs.map((d) => parseDemandDoc(d.id, d.data()));
@@ -73,20 +92,6 @@ export const fulfillProductDemand = async (
     fulfillmentNote: options?.fulfillmentNote?.trim() || '',
     purchaseInvoiceId: options?.purchaseInvoiceId?.trim() || '',
     updatedAt: Timestamp.now(),
-  });
-
-  const rq = d.requestedQuantity;
-  const defaultFromDemand =
-    typeof rq === 'number' && Number.isFinite(rq) && rq >= 1 ? Math.floor(rq) : 1;
-
-  const queueRef = doc(collection(db, 'users', String(d.retailerId), 'demandCartQueue'));
-  batch.set(queueRef, {
-    medicineId,
-    quantity:
-      options?.quantity && options.quantity > 0 ? Math.floor(options.quantity) : defaultFromDemand,
-    demandId,
-    productName: d.productName,
-    createdAt: Timestamp.now(),
   });
 
   await batch.commit();

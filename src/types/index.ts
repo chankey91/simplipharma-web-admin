@@ -58,6 +58,11 @@ export interface OrderMedicine {
   name: string;
   price: number;
   quantity: number;
+  lineType?: 'medicine' | 'product_demand';
+  productDemandId?: string;
+  manufacturerName?: string;
+  requestedUnit?: string;
+  notes?: string;
   freeQuantity?: number;
   originalQuantity?: number; // Original ordered quantity (for partial fulfillment tracking)
   batchNumber?: string; // Keep for backward compatibility
@@ -249,6 +254,8 @@ export interface ProductDemand {
   requestedUnit: string;
   notes?: string;
   status: ProductDemandStatus;
+  /** Set when the retailer checked out with this request on an order */
+  orderId?: string;
   createdAt: Date | any;
   updatedAt?: Date | any;
   fulfilledMedicineId?: string;

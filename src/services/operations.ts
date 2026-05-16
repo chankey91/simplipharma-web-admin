@@ -1,4 +1,4 @@
-import { collection, getDocs, addDoc, deleteDoc, doc, Timestamp, db, query, where } from './firebase';
+import { collection, getDocs, addDoc, deleteDoc, doc, Timestamp, db, query, where, auth } from './firebase';
 
 export interface Tray {
   id: string;
@@ -15,15 +15,42 @@ export interface Operator {
 const TRAYS_COLLECTION = 'trays';
 const OPERATORS_COLLECTION = 'operators';
 
+/** Firestore tray docs may use different field names across deployments. */
+function resolveTrayName(data: Record<string, unknown>): string {
+  const keys = ['name', 'trayName', 'label', 'tray', 'trayNumber', 'title', 'number'] as const;
+  for (const k of keys) {
+    const v = data[k];
+    if (v !== undefined && v !== null && String(v).trim() !== '') {
+      return String(v).trim();
+    }
+  }
+  return '';
+}
+
+/** Wait until Firebase Auth has resolved the initial user/token so Firestore rules see request.auth. */
+async function ensureAuthReady(): Promise<void> {
+  await auth.authStateReady();
+}
+
 export const getTrays = async (): Promise<Tray[]> => {
+  await ensureAuthReady();
   const traysRef = collection(db, TRAYS_COLLECTION);
   const snapshot = await getDocs(traysRef);
-  const trays = snapshot.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-    createdAt: d.data().createdAt,
-  } as Tray));
-  return trays.sort((a, b) => a.name.localeCompare(b.name));
+  const rows: Tray[] = snapshot.docs.map((d) => {
+    const data = d.data() as Record<string, unknown>;
+    const name = resolveTrayName(data);
+    return {
+      id: d.id,
+      name,
+      createdAt: data.createdAt as Tray['createdAt'],
+    };
+  });
+  const byName = new Map<string, Tray>();
+  for (const t of rows) {
+    if (!t.name) continue;
+    if (!byName.has(t.name)) byName.set(t.name, t);
+  }
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 };
 
 /**
@@ -35,6 +62,7 @@ export const getTrays = async (): Promise<Tray[]> => {
  * Exclude the given orderId so the current order's tray remains selectable when editing.
  */
 export const getTraysInUse = async (excludeOrderId?: string): Promise<string[]> => {
+  await ensureAuthReady();
   const ordersRef = collection(db, 'orders');
   const trayNumbers = new Set<string>();
   
@@ -45,7 +73,8 @@ export const getTraysInUse = async (excludeOrderId?: string): Promise<string[]> 
     snapshot.docs.forEach((d) => {
       if (d.id === excludeOrderId) return;
       const data = d.data();
-      const trayNum = data.trayNumber?.trim();
+      const raw = data.trayNumber;
+      const trayNum = raw === undefined || raw === null ? '' : String(raw).trim();
       if (trayNum) {
         trayNumbers.add(trayNum);
       }
@@ -56,6 +85,7 @@ export const getTraysInUse = async (excludeOrderId?: string): Promise<string[]> 
 };
 
 export const getOperators = async (): Promise<Operator[]> => {
+  await ensureAuthReady();
   const operatorsRef = collection(db, OPERATORS_COLLECTION);
   const snapshot = await getDocs(operatorsRef);
   const operators = snapshot.docs.map((d) => ({

@@ -51,6 +51,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { useOrder, useUpdateOrderStatus, useFulfillOrder, useUpdateOrderDispatch, useMarkOrderDelivered, useCancelOrder, useUpdatePaymentStatus } from '../hooks/useOrders';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
+import { useProductDemands } from '../hooks/useProductDemands';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
 import { format } from 'date-fns';
@@ -58,7 +59,7 @@ import { auth, doc, updateDoc, db } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import { OrderStatus } from '../types';
+import { OrderMedicine, OrderStatus, ProductDemand } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
 import { normalizeFirestoreDate } from '../services/inventory';
 import {
@@ -119,6 +120,14 @@ export const OrderDetailsPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { data: order, isLoading } = useOrder(orderId || '');
   const { data: medicines } = useMedicines();
+  const { data: productDemands } = useProductDemands();
+  const demandById = useMemo(() => {
+    const m = new Map<string, ProductDemand>();
+    for (const d of productDemands || []) {
+      m.set(d.id, d);
+    }
+    return m;
+  }, [productDemands]);
   const { data: purchaseInvoices } = usePurchaseInvoices();
   const purchaseDiscountLookup = useMemo(
     () => buildPurchaseBatchDiscountLookup(purchaseInvoices || []),
@@ -145,7 +154,7 @@ export const OrderDetailsPage: React.FC = () => {
       }),
     [purchaseDiscountLookup]
   );
-  const { data: trays, isError: traysQueryError, error: traysQueryErr } = useTrays();
+  const { data: trays, isError: traysQueryError, error: traysQueryErr, isFetching: traysFetching } = useTrays();
   const { data: operators, isError: operatorsQueryError, error: operatorsQueryErr } = useOperators();
   const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
   
@@ -175,11 +184,33 @@ export const OrderDetailsPage: React.FC = () => {
   const [trayNumber, setTrayNumber] = useState('');
   const [processedBy, setProcessedBy] = useState('');
   const [selectedBatch, setSelectedBatch] = useState<string>('');
-  
-  const currentOrderTray = order?.trayNumber || trayNumber;
-  const availableTrays = trays?.filter(
-    (t) => !traysInUse.includes(t.name) || t.name === currentOrderTray
-  ) ?? [];
+
+  /** Trays not assigned to another Pending / Order Fulfillment order; current order's tray stays listed for edits. Trays on In Transit+ are free (see getTraysInUse). */
+  const traysInUseNorm = useMemo(
+    () => new Set(traysInUse.map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean)),
+    [traysInUse]
+  );
+  const currentTrayNorm = useMemo(
+    () => String(order?.trayNumber ?? trayNumber ?? '').trim().toLowerCase(),
+    [order?.trayNumber, trayNumber]
+  );
+  const availableTrays = useMemo(() => {
+    if (!trays?.length) return [];
+    const out: NonNullable<typeof trays> = [];
+    const seen = new Set<string>();
+    for (const t of trays) {
+      const name = String(t.name ?? '').trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      const inUseElsewhere = traysInUseNorm.has(key);
+      if (!inUseElsewhere || key === currentTrayNorm) {
+        seen.add(key);
+        out.push(t);
+      }
+    }
+    return out;
+  }, [trays, traysInUseNorm, currentTrayNorm]);
   const [addMedicineDialog, setAddMedicineDialog] = useState(false);
   const [newMedicineData, setNewMedicineData] = useState({
     name: '',
@@ -250,6 +281,25 @@ export const OrderDetailsPage: React.FC = () => {
         setFulfillmentData(prev => ({
           ...prev,
           medicines: order.medicines.map(m => {
+            if ((m as any).lineType === 'product_demand') {
+              return {
+                ...m,
+                medicineId: (m as any).medicineId ?? '',
+                verified: true,
+                scannedQRCode: '',
+                batchExpiryDate: undefined,
+                batchNumber: undefined,
+                batchAllocations: undefined,
+                discountPercentage: 0,
+                freeQuantity: 0,
+                originalQuantity: m.originalQuantity || m.quantity,
+                lineType: 'product_demand',
+                productDemandId: (m as any).productDemandId,
+                manufacturerName: (m as any).manufacturerName,
+                requestedUnit: (m as any).requestedUnit,
+                notes: (m as any).notes,
+              };
+            }
             // Preserve discountPercentage from batchAllocations or item itself
             let discountPct = m.discountPercentage;
             
@@ -367,7 +417,7 @@ export const OrderDetailsPage: React.FC = () => {
         setProcessedBy('');
       } else if (order.trayNumber || order.processedBy) {
         // If already set, populate the fields
-        setTrayNumber(order.trayNumber || '');
+        setTrayNumber(String(order.trayNumber || '').trim());
         setProcessedBy(order.processedBy || '');
       }
     }
@@ -382,6 +432,7 @@ export const OrderDetailsPage: React.FC = () => {
 
       let changed = false;
       const nextMedicines = prev.medicines.map((m) => {
+        if ((m as any).lineType === 'product_demand') return m;
         if (m.discountManuallySet) return m;
         if (!m.batchNumber && !(m.batchAllocations && m.batchAllocations.length > 0)) {
           return m;
@@ -591,7 +642,7 @@ export const OrderDetailsPage: React.FC = () => {
   const handleScan = (qrCode: string) => {
     if (scanningItemIndex !== null) {
       const item = fulfillmentData.medicines[scanningItemIndex];
-      if (!item || !item.medicineId) {
+      if (!item || (item as any).lineType === 'product_demand' || !item.medicineId) {
         alert('Invalid item selected');
         setScannerOpen(false);
         setScanningItemIndex(null);
@@ -698,7 +749,7 @@ export const OrderDetailsPage: React.FC = () => {
   const handleManualEntry = () => {
     if (manualEntryDialog.itemIndex >= 0) {
       const item = fulfillmentData.medicines[manualEntryDialog.itemIndex];
-      if (!item || !item.medicineId) {
+      if (!item || (item as any).lineType === 'product_demand' || !item.medicineId) {
         alert('Invalid item selected');
         return;
       }
@@ -859,7 +910,7 @@ export const OrderDetailsPage: React.FC = () => {
   // Function to open batch allocation dialog
   const handleAssignBatches = (itemIndex: number) => {
     const item = fulfillmentData.medicines[itemIndex];
-    if (!item || !item.medicineId) {
+    if (!item || (item as any).lineType === 'product_demand' || !item.medicineId) {
       alert('Invalid item selected');
       return;
     }
@@ -1258,7 +1309,10 @@ export const OrderDetailsPage: React.FC = () => {
 
   // Check if all items have batches assigned (either batchNumber or batchAllocations)
   const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
-    fulfillmentData.medicines.every(m => m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0));
+    fulfillmentData.medicines.every(m => 
+      (m as any).lineType === 'product_demand' ||
+      m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
+    );
   
   // Subtotal / discount / tax: match order tax invoice (`getOrderInvoiceHTML`)
   const itemsWithBatches = fulfillmentData.medicines.filter(m => m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0));
@@ -1312,7 +1366,10 @@ export const OrderDetailsPage: React.FC = () => {
           onClick={() => {
             // Check if all items have batches assigned (either batchNumber or batchAllocations)
             const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
-              fulfillmentData.medicines.every(m => m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0));
+              fulfillmentData.medicines.every(m => 
+                (m as any).lineType === 'product_demand' ||
+                m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
+              );
             
             if (!allBatchesAssigned && order.status === 'Pending') {
               alert('Please assign batches to all items before generating invoice');
@@ -1325,8 +1382,16 @@ export const OrderDetailsPage: React.FC = () => {
               ...order,
               medicines: fulfillmentData.medicines.length > 0 
                 ? fulfillmentData.medicines
-                    .filter(m => m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0))
-                    .map(m => {
+                    .filter(
+                      (m) =>
+                        (m as any).lineType === 'product_demand' ||
+                        Boolean(m.batchNumber) ||
+                        (m.batchAllocations && m.batchAllocations.length > 0)
+                    )
+                    .map((m) => {
+                      if ((m as any).lineType === 'product_demand') {
+                        return { ...m };
+                      }
                       // Handle batchAllocations - for invoice, use first batch or single batchNumber
                       let batchNumber = m.batchNumber;
                       let expiryDate = m.batchExpiryDate || m.expiryDate;
@@ -1503,7 +1568,7 @@ export const OrderDetailsPage: React.FC = () => {
                     variant="outlined"
                     startIcon={<Edit />}
                     onClick={() => {
-                      setTrayNumber(order.trayNumber || trayNumber || '');
+                      setTrayNumber(String(order.trayNumber || trayNumber || '').trim());
                       setProcessedBy(order.processedBy || processedBy || '');
                       setTrayNumberDialog({ open: true, orderId: order.id });
                     }}
@@ -1542,8 +1607,107 @@ export const OrderDetailsPage: React.FC = () => {
                 </TableHead>
                 <TableBody>
                   {fulfillmentData.medicines.map((item, index) => {
-                    if (!item || !item.medicineId) {
-                      return null; // Skip invalid items
+                    if (!item) {
+                      return null;
+                    }
+                    if ((item as any).lineType === 'product_demand') {
+                      const colSpan = order.status === 'Pending' ? 11 : 10;
+                      const pid = (item as OrderMedicine).productDemandId;
+                      const dDoc = pid ? demandById.get(pid) : undefined;
+                      const isRejected = dDoc?.status === 'rejected';
+                      const isFulfilled = dDoc?.status === 'fulfilled';
+                      const strikeSx = isRejected
+                        ? { textDecoration: 'line-through' as const }
+                        : undefined;
+                      const showFulfill =
+                        Boolean(pid) && !isRejected && (!dDoc || dDoc.status === 'pending');
+                      return (
+                        <TableRow
+                          key={`product-demand-${index}`}
+                          sx={{
+                            bgcolor: isRejected ? 'action.hover' : 'rgba(255, 152, 0, 0.08)',
+                            opacity: isRejected ? 0.88 : 1,
+                            color: isRejected ? 'text.secondary' : 'inherit',
+                          }}
+                        >
+                          <TableCell
+                            colSpan={colSpan}
+                            sx={isRejected ? { color: 'text.secondary' } : undefined}
+                          >
+                            <Box display="flex" alignItems="center" flexWrap="wrap" sx={{ gap: 1 }}>
+                              <Chip
+                                size="small"
+                                label={
+                                  isRejected ? 'Rejected' : isFulfilled ? 'Fulfilled' : 'Product request'
+                                }
+                                color={isRejected ? 'default' : isFulfilled ? 'success' : 'warning'}
+                                variant="outlined"
+                              />
+                              <Typography variant="body2" fontWeight="bold" sx={strikeSx}>
+                                {item.name}
+                              </Typography>
+                            </Box>
+                            <Typography
+                              variant="caption"
+                              color="textSecondary"
+                              display="block"
+                              sx={{ mt: 0.5, ...strikeSx }}
+                            >
+                              {(item as any).manufacturerName || ''}
+                              {' · '}
+                              Qty {item.quantity}
+                              {(item as any).requestedUnit ? ` ${(item as any).requestedUnit}` : ''}
+                            </Typography>
+                            {(item as any).notes ? (
+                              <Typography
+                                variant="caption"
+                                color="textSecondary"
+                                display="block"
+                                sx={strikeSx}
+                              >
+                                Notes: {(item as any).notes}
+                              </Typography>
+                            ) : null}
+                            {isRejected ? (
+                              <Typography variant="caption" color="textSecondary" display="block" sx={{ mt: 0.5 }}>
+                                This product request was not supplied.
+                                {dDoc?.rejectionReason
+                                  ? ` Reason: ${dDoc.rejectionReason}`
+                                  : ''}
+                              </Typography>
+                            ) : (
+                              <Typography
+                                variant="caption"
+                                color="textSecondary"
+                                sx={{ mt: 0.5 }}
+                                display="block"
+                              >
+                                No inventory batch on this line — map the product in Product requests when ready.
+                              </Typography>
+                            )}
+                            {showFulfill ? (
+                              <Button
+                                size="small"
+                                variant="contained"
+                                color="warning"
+                                sx={{ mt: 1 }}
+                                onClick={() =>
+                                  navigate(
+                                    `/product-demands?demandId=${encodeURIComponent(
+                                      (item as OrderMedicine).productDemandId!
+                                    )}`
+                                  )
+                                }
+                              >
+                                Fulfill request
+                              </Button>
+                            ) : null}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+                    if (!item.medicineId) {
+                      return null;
                     }
 
                     // If item has multiple batch allocations, show each batch separately
@@ -1968,7 +2132,7 @@ export const OrderDetailsPage: React.FC = () => {
                   size="large"
                   startIcon={<Receipt />}
                   onClick={() => handleAction('fulfill')}
-                  disabled={!fulfillmentData.medicines.every(m => m.verified)}
+                  disabled={!fulfillmentData.medicines.every(m => (m as any).lineType === 'product_demand' || m.verified)}
                 >
                   Generate Invoice & Fulfill
                 </Button>
@@ -2251,12 +2415,13 @@ export const OrderDetailsPage: React.FC = () => {
         }} 
         maxWidth="sm" 
         fullWidth
+        PaperProps={{ sx: { overflow: 'visible' } }}
       >
         <DialogTitle>
           {order?.status === 'Pending' ? 'Order Information' : 'Order Fulfilled Successfully'}
         </DialogTitle>
-        <DialogContent>
-          <Box sx={{ mt: 2 }}>
+        <DialogContent sx={{ overflow: 'visible' }}>
+          <Box sx={{ mt: 2, overflow: 'visible' }}>
             {order?.status === 'Pending' ? (
               <Alert severity="info" sx={{ mb: 2 }}>
                 Please enter the tray number and processor name for this pending order.
@@ -2266,30 +2431,46 @@ export const OrderDetailsPage: React.FC = () => {
                 Order has been fulfilled successfully. Please enter the tray number and processor name.
               </Alert>
             )}
-            <FormControl fullWidth margin="normal">
-              <InputLabel>Tray Number</InputLabel>
-              <Select
-                value={trayNumber}
-                label="Tray Number"
-                onChange={(e) => setTrayNumber(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSaveTrayNumber()}
-              >
-                <MenuItem value="">
-                  <em>Select tray (optional)</em>
-                </MenuItem>
-                {trayNumber && !availableTrays.some((t) => t.name === trayNumber) && (
-                  <MenuItem value={trayNumber}>{trayNumber}</MenuItem>
+            <TextField
+              select
+              fullWidth
+              margin="normal"
+              label="Tray Number"
+              value={String(trayNumber ?? '').trim()}
+              onChange={(e) => setTrayNumber(String(e.target.value))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSaveTrayNumber();
+              }}
+              SelectProps={{ native: true }}
+              InputLabelProps={{ shrink: true }}
+              helperText={
+                traysQueryError
+                  ? undefined
+                  : traysFetching
+                    ? 'Loading trays…'
+                    : !(trays?.length ?? 0)
+                      ? 'Add tray numbers under Operations → Tray Numbers.'
+                      : availableTrays.length === 0
+                        ? 'Every tray is on another Pending or Order Fulfillment order. Trays become available again after those orders are dispatched (In Transit or later).'
+                        : 'Only trays that are free or already on this order are listed. Trays on dispatched orders are available again.'
+              }
+            >
+              <option value="">Select tray (optional)</option>
+              {String(trayNumber ?? '').trim() &&
+                !availableTrays.some((t) => String(t.name ?? '').trim() === String(trayNumber ?? '').trim()) && (
+                  <option key="__orphan_tray" value={String(trayNumber).trim()}>
+                    {String(trayNumber).trim()} (current)
+                  </option>
                 )}
-                {availableTrays.map((tray) => (
-                  <MenuItem key={tray.id} value={tray.name}>
-                    {tray.name}
-                  </MenuItem>
-                ))}
-              </Select>
-              <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
-                Add more trays in Operations → Tray Numbers. Trays assigned to Pending or In-Fulfillment orders are hidden until dispatched.
-              </Typography>
-            </FormControl>
+              {availableTrays.map((tray) => {
+                const name = String(tray.name ?? '').trim();
+                return (
+                  <option key={tray.id} value={name}>
+                    {name}
+                  </option>
+                );
+              })}
+            </TextField>
             <FormControl fullWidth margin="normal">
               <InputLabel>Processed By</InputLabel>
               <Select
@@ -2297,6 +2478,10 @@ export const OrderDetailsPage: React.FC = () => {
                 label="Processed By"
                 onChange={(e) => setProcessedBy(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSaveTrayNumber()}
+                MenuProps={{
+                  disablePortal: true,
+                  PaperProps: { sx: { maxHeight: 280 } },
+                }}
               >
                 <MenuItem value="">
                   <em>Select operator (optional)</em>
@@ -2465,7 +2650,7 @@ export const OrderDetailsPage: React.FC = () => {
             
             {(() => {
               const item = fulfillmentData.medicines[manualEntryDialog.itemIndex];
-              if (!item || !item.medicineId) {
+              if (!item || (item as any).lineType === 'product_demand' || !item.medicineId) {
                 return (
                   <Alert severity="error" sx={{ mt: 2 }}>
                     Invalid item selected

@@ -106,6 +106,7 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
     try {
       // Restore stock for each medicine with batch assignments
       for (const item of orderData.medicines) {
+        if (item.lineType === 'product_demand') continue;
         if (!item.medicineId) continue;
         
         // Check if item has batchAllocations (multiple batches)
@@ -190,6 +191,7 @@ export const fulfillOrder = async (
   const stockUpdateErrors: string[] = [];
   
   for (const item of fulfillmentData.medicines) {
+    if (item.lineType === 'product_demand') continue;
     if (!item.medicineId || !item.quantity) continue;
 
     // Handle new multi-batch allocation structure
@@ -242,6 +244,21 @@ export const fulfillOrder = async (
   const expandedMedicines: any[] = [];
   
   for (const item of fulfillmentData.medicines) {
+    if (item.lineType === 'product_demand') {
+      expandedMedicines.push({
+        medicineId: item.medicineId || '',
+        name: item.name,
+        price: 0,
+        quantity: item.quantity || 0,
+        lineType: 'product_demand',
+        manufacturerName: item.manufacturerName,
+        requestedUnit: item.requestedUnit,
+        notes: item.notes,
+        productDemandId: item.productDemandId,
+        freeQuantity: 0,
+      });
+      continue;
+    }
     // If item has multiple batch allocations, create separate line item for each batch
     if (item.batchAllocations && item.batchAllocations.length > 1) {
       // Fetch medicine data to get batch discountPercentage if needed

@@ -19,7 +19,6 @@ service cloud.firestore {
       return get(userDocPath()).data.role;
     }
 
-    // Match client / legacy data (case variants)
     function isAdmin() {
       return hasUserDoc() && (
         userRole() == 'admin' ||
@@ -49,9 +48,11 @@ service cloud.firestore {
       return isAdmin() || isOperations();
     }
 
-    // Retailer doc must exist and list this Sales Officer
+    // Retailer doc exists, is retailer, and lists this user as their Sales Officer (mobile SO flows)
     function retailerAssignedToSO(retailerId) {
-      return exists(/databases/$(database)/documents/users/$(retailerId))
+      return retailerId is string
+        && exists(/databases/$(database)/documents/users/$(retailerId))
+        && get(/databases/$(database)/documents/users/$(retailerId)).data.role == 'retailer'
         && get(/databases/$(database)/documents/users/$(retailerId)).data.salesOfficerId == request.auth.uid;
     }
 
@@ -65,21 +66,48 @@ service cloud.firestore {
         || (isSalesOfficer() && retailerAssignedToSO(orderRetailerId(orderId)));
     }
 
-    // ----- Medicines -----
+    function orderReturnSoImmutableMatch() {
+      return request.resource.data.retailerId == resource.data.retailerId
+        && request.resource.data.salesOfficerId == resource.data.salesOfficerId
+        && request.resource.data.orderId == resource.data.orderId
+        && request.resource.data.items == resource.data.items
+        && request.resource.data.totalRefundAmount == resource.data.totalRefundAmount
+        && request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    function orderReturnSalesOfficerPendingSoUpdate() {
+      return resource.data.salesOfficerId == request.auth.uid
+        && resource.data.status == 'pending_so'
+        && orderReturnSoImmutableMatch()
+        && (
+          request.resource.data.status == 'pending_so'
+          || request.resource.data.status == 'pending_admin'
+          || (
+            request.resource.data.status == 'rejected'
+            && request.resource.data.rejectionReason is string
+            && request.resource.data.rejectedBy is string
+            && request.resource.data.rejectedAt is timestamp
+          )
+        );
+    }
+
     match /medicines/{medicineId} {
       allow read, write: if signedIn();
     }
 
-    // ----- Banners -----
     match /banners/{bannerId} {
       allow read, write: if signedIn();
     }
 
-    // ----- Orders (tightened update; admin can create) -----
     match /orders/{orderId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.retailerId
+        || resource.data.salesOfficerId == request.auth.uid
+        || isAdminOrOperations()
+        || isSalesOfficer()
+        || retailerAssignedToSO(resource.data.retailerId)
+      );
 
-      // Retailer (self), Sales Officer (assigned retailer), or Admin
       allow create: if signedIn() && (
         isAdminOrOperations()
         || request.auth.uid == request.resource.data.retailerId
@@ -89,7 +117,6 @@ service cloud.firestore {
         )
       );
 
-      // Admin any; retailer own order; SO only for assigned retailers; retailerId cannot change except by admin
       allow update: if signedIn() && (
         isAdminOrOperations()
         || (
@@ -103,10 +130,8 @@ service cloud.firestore {
         )
       );
 
-      // No client-side delete (use status Cancelled or Admin SDK if you need removal)
       allow delete: if false;
 
-      // Payments subcollection (accounting) — same actors as order update
       match /payments/{paymentId} {
         allow read: if signedIn();
         allow create, update: if signedIn() && canModifyOrder(orderId);
@@ -114,7 +139,17 @@ service cloud.firestore {
       }
     }
 
-    // ----- Users -----
+    // Tray / operator master lists (admin order processing dropdowns). Any signed-in user may read;
+    // writes restricted to admin/operations. Placed early so rules are easy to find when debugging.
+    match /trays/{trayId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdminOrOperations();
+    }
+    match /operators/{operatorId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdminOrOperations();
+    }
+
     match /users/{userId} {
       allow read: if signedIn() && (
         request.auth.uid == userId
@@ -131,12 +166,10 @@ service cloud.firestore {
       );
     }
 
-    // ----- Favorites -----
     match /favorites/{favoriteId} {
       allow read, write: if signedIn();
     }
 
-    // ----- Expiry return requests -----
     match /expiry_return_requests/{requestId} {
       allow read: if signedIn() && (
         resource.data.retailerId == request.auth.uid
@@ -157,50 +190,92 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // ----- Retailer registration requests -----
+    match /order_return_requests/{requestId} {
+      allow read: if signedIn() && (
+        resource.data.retailerId == request.auth.uid
+        || resource.data.salesOfficerId == request.auth.uid
+        || isAdminOrOperations()
+      );
+      allow create: if signedIn() && (
+        request.resource.data.retailerId == request.auth.uid
+        || (
+          isSalesOfficer()
+          && request.resource.data.salesOfficerId == request.auth.uid
+        )
+      )
+        && request.resource.data.status == 'pending_so'
+        && request.resource.data.orderId is string
+        && request.resource.data.orderId.size() > 0
+        && request.resource.data.salesOfficerId is string
+        && request.resource.data.salesOfficerId.size() > 0
+        && request.resource.data.items is list
+        && request.resource.data.items.size() > 0
+        && request.resource.data.totalRefundAmount is number;
+      allow update: if signedIn() && (
+        isAdminOrOperations()
+        || orderReturnSalesOfficerPendingSoUpdate()
+      );
+      allow delete: if false;
+    }
+
     match /retailer_registration_requests/{requestId} {
       allow read: if signedIn() && (
         request.auth.uid == resource.data.salesOfficerId
-        || isAdmin()
+        || isAdminOrOperations()
       );
       allow create: if signedIn() && (
         isSalesOfficer()
         && request.resource.data.salesOfficerId == request.auth.uid
       );
-      allow update: if signedIn() && isAdmin();
+      allow update: if signedIn() && (
+        isAdminOrOperations()
+        || (
+          isSalesOfficer()
+          && resource.data.salesOfficerId == request.auth.uid
+          && resource.data.status == 'rejected'
+          && request.resource.data.salesOfficerId == resource.data.salesOfficerId
+          && request.resource.data.status == 'pending'
+        )
+      );
       allow delete: if false;
     }
 
-    // ----- Vendors (admin web) -----
+    match /so_visit_logs/{logId} {
+      allow read: if signedIn() && (
+        resource.data.salesOfficerId == request.auth.uid
+        || isAdminOrOperations()
+      );
+      allow create: if signedIn() && (
+        request.resource.data.salesOfficerId == request.auth.uid
+        && request.resource.data.retailerId is string
+        && request.resource.data.note is string
+      );
+      allow update, delete: if signedIn() && (
+        resource.data.salesOfficerId == request.auth.uid
+        || isAdminOrOperations()
+      );
+    }
+
     match /vendors/{vendorId} {
       allow read: if signedIn();
       allow write: if isAdminOrOperations();
     }
 
-    // ----- Purchase invoices (admin web) -----
     match /purchaseInvoices/{invoiceId} {
       allow read: if signedIn() && (isAdminOrOperations() || isSalesOfficer());
       allow write: if isAdminOrOperations();
     }
 
-    // ----- Operations: trays & operators (admin manages; any signed-in client may read for order UI) -----
-    match /trays/{trayId} {
-      allow get, list: if signedIn();
-      allow create, update, delete: if isAdminOrOperations();
-    }
-    match /operators/{operatorId} {
-      allow get, list: if signedIn();
-      allow create, update, delete: if isAdminOrOperations();
-    }
-
-    // ----- Product demands (retailer requests; admin fulfills) -----
     match /product_demands/{demandId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
         || resource.data.retailerId == request.auth.uid
+        || (
+          isSalesOfficer()
+          && retailerAssignedToSO(resource.data.retailerId)
+        )
       );
       allow create: if signedIn()
-        && request.resource.data.retailerId == request.auth.uid
         && request.resource.data.status == 'pending'
         && request.resource.data.productName is string
         && request.resource.data.productName.size() > 0
@@ -209,11 +284,19 @@ service cloud.firestore {
         && request.resource.data.requestedQuantity is number
         && request.resource.data.requestedQuantity >= 1
         && request.resource.data.requestedUnit is string
-        && request.resource.data.requestedUnit.size() > 0;
+        && request.resource.data.requestedUnit.size() > 0
+        && (!('orderId' in request.resource.data)
+          || (request.resource.data.orderId is string && request.resource.data.orderId.size() > 0))
+        && (
+          request.resource.data.retailerId == request.auth.uid
+          || (
+            isSalesOfficer()
+            && retailerAssignedToSO(request.resource.data.retailerId)
+          )
+        );
       allow update, delete: if signedIn() && isAdminOrOperations();
     }
 
-    // ----- Bulk medicine import jobs (admin queues Excel; Cloud Function processes) -----
     match /bulk_medicine_jobs/{jobId} {
       allow read: if signedIn() && isAdminOrOperations();
       allow create: if signedIn() && isAdminOrOperations()
@@ -224,14 +307,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // ----- Queued cart items from fulfilled product demands -----
     match /users/{userId}/demandCartQueue/{queueId} {
       allow read, delete: if signedIn() && request.auth.uid == userId;
       allow create: if signedIn() && isAdminOrOperations();
       allow update: if false;
     }
 
-    // ----- Legacy / optional collections -----
     match /stores/{storeId} {
       allow read: if signedIn();
       allow write: if isAdmin();
@@ -241,7 +322,6 @@ service cloud.firestore {
       allow write: if isAdminOrOperations();
     }
 
-    // ----- Deny everything else -----
     match /{document=**} {
       allow read, write: if false;
     }
