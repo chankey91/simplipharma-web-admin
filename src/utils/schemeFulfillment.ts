@@ -5,7 +5,8 @@
  * - O >= P and O is a multiple of P: k = O/P → paid = k×P, free = k×F (raw sum may exceed O; see schemeLinePaidFreeConserved).
  * - O >= P with remainder r = O mod P: full slabs (k×P, k×F) plus the same half/quarter rules on r as for O < P.
  * - P/2 ≤ O < P: free = F/2, paid = O − free.
- * - O < P/2: free = F/4, paid = O − free.
+ * - P/4 ≤ O < P/2: free = F/4, paid = O − free.
+ * - O < P/4: no scheme (paid = O, free = 0).
  */
 export function computeSchemeFulfillmentSplit(
   orderedQty: number,
@@ -24,6 +25,7 @@ export function computeSchemeFulfillmentSplit(
 
   const splitBelowFull = (x: number): { paid: number; free: number } => {
     if (x <= 0) return { paid: 0, free: 0 };
+    if (x < P / 4) return { paid: x, free: 0 };
     if (x >= P) {
       return { paid: P, free: F };
     }
