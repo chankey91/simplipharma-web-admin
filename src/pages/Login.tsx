@@ -12,6 +12,7 @@ import {
 import { login, onAuthChange } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
 import { isUserAdmin } from '../services/firebase';
+import { BrandLogo } from '../components/BrandLogo';
 
 export const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -76,9 +77,9 @@ export const LoginPage: React.FC = () => {
         }}
       >
         <Paper sx={{ p: 4, width: '100%' }}>
-          <Typography variant="h4" align="center" gutterBottom>
-            SimpliPharma Admin
-          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+            <BrandLogo variant="horizontal" height={56} />
+          </Box>
           <Typography variant="body2" align="center" color="textSecondary" sx={{ mb: 3 }}>
             Login to access admin panel
           </Typography>

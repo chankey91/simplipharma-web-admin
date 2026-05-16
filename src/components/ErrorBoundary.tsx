@@ -1,6 +1,7 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { Box, Typography, Button, Paper } from '@mui/material';
 import { ErrorOutline } from '@mui/icons-material';
+import { BrandLogo } from './BrandLogo';
 
 interface Props {
   children: ReactNode;
@@ -36,6 +37,9 @@ export class ErrorBoundary extends Component<Props, State> {
           p={3}
         >
           <Paper sx={{ p: 4, maxWidth: 500, textAlign: 'center' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+              <BrandLogo variant="horizontal" height={40} />
+            </Box>
             <ErrorOutline color="error" sx={{ fontSize: 64, mb: 2 }} />
             <Typography variant="h5" gutterBottom>
               Something went wrong
