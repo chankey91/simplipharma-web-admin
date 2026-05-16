@@ -20,6 +20,7 @@ import {
   Archive,
   PostAdd,
   TrendingUp,
+  Undo,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -34,6 +35,7 @@ const ALL_MENU_ITEMS: { text: string; icon: React.ReactNode; path: string }[] = 
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
   { text: 'Pending Retailers', icon: <PersonAdd />, path: '/pending-retailers' },
   { text: 'Expiry Returns', icon: <Archive />, path: '/expiry-returns' },
+  { text: 'Order Returns', icon: <Undo />, path: '/order-returns' },
   { text: 'Vendors', icon: <Business />, path: '/vendors' },
   { text: 'Medical Stores', icon: <Store />, path: '/stores' },
   { text: 'Sales Officers', icon: <Group />, path: '/sales-officers' },

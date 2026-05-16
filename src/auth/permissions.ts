@@ -8,6 +8,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/',
     '/pending-retailers',
     '/expiry-returns',
+    '/order-returns',
     '/vendors',
     '/stores',
     '/sales-officers',
@@ -24,6 +25,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
   operations: [
     '/',
     '/expiry-returns',
+    '/order-returns',
     '/vendors',
     '/inventory',
     '/purchases',

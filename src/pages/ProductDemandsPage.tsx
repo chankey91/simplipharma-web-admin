@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -46,6 +46,7 @@ type Filter = 'pending' | 'all';
 
 export const ProductDemandsPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: demands, isLoading, error } = useProductDemands();
   const { data: medicines } = useMedicines();
   const fulfillMutation = useFulfillProductDemand();
@@ -177,7 +178,7 @@ export const ProductDemandsPage: React.FC = () => {
     return [];
   }, [fulfillMedicineSearchInput, fulfillMedicineSearchHits, medicines, selectedMedicine]);
 
-  const openFulfill = (d: ProductDemand) => {
+  const openFulfill = useCallback((d: ProductDemand) => {
     setSelectedDemand(d);
     setSelectedMedicine(null);
     setFulfillMedicineSearchInput('');
@@ -189,7 +190,35 @@ export const ProductDemandsPage: React.FC = () => {
     const n = typeof q === 'number' && !isNaN(q) && q >= 1 ? Math.floor(q) : 1;
     setCartQty(String(n));
     setFulfillOpen(true);
-  };
+  }, []);
+
+  const consumedDemandQueryIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const id = searchParams.get('demandId');
+    if (!id) {
+      consumedDemandQueryIdRef.current = null;
+      return;
+    }
+    if (isLoading || !demands) return;
+    if (consumedDemandQueryIdRef.current === id) return;
+    consumedDemandQueryIdRef.current = id;
+
+    const d = demands.find((x) => x.id === id);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('demandId');
+        return next;
+      },
+      { replace: true }
+    );
+
+    if (d?.status === 'pending') {
+      setFilter('pending');
+      openFulfill(d);
+    }
+  }, [isLoading, demands, searchParams, setSearchParams, openFulfill]);
 
   const openReject = (d: ProductDemand) => {
     setSelectedDemand(d);

@@ -13,6 +13,7 @@ export const useTrays = () => {
   return useQuery({
     queryKey: ['trays'],
     queryFn: getTrays,
+    retry: 2,
   });
 };
 
@@ -20,6 +21,7 @@ export const useOperators = () => {
   return useQuery({
     queryKey: ['operators'],
     queryFn: getOperators,
+    retry: 2,
   });
 };
 
@@ -27,6 +29,7 @@ export const useTraysInUse = (excludeOrderId?: string) => {
   return useQuery({
     queryKey: ['traysInUse', excludeOrderId],
     queryFn: () => getTraysInUse(excludeOrderId),
+    retry: 2,
   });
 };
 
