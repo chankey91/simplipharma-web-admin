@@ -379,7 +379,7 @@ export const MarginReportPage: React.FC = () => {
                 label="Date"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
-                onSort={requestSort}
+                onRequestSort={requestSort}
               />
               <TableCell>Order</TableCell>
               <SortableTableHeadCell
@@ -387,14 +387,14 @@ export const MarginReportPage: React.FC = () => {
                 label="Retailer"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
-                onSort={requestSort}
+                onRequestSort={requestSort}
               />
               <SortableTableHeadCell
                 columnId="status"
                 label="Status"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
-                onSort={requestSort}
+                onRequestSort={requestSort}
               />
               <SortableTableHeadCell
                 columnId="netSales"
@@ -402,7 +402,7 @@ export const MarginReportPage: React.FC = () => {
                 align="right"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
-                onSort={requestSort}
+                onRequestSort={requestSort}
               />
               <SortableTableHeadCell
                 columnId="cogs"
@@ -410,7 +410,7 @@ export const MarginReportPage: React.FC = () => {
                 align="right"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
-                onSort={requestSort}
+                onRequestSort={requestSort}
               />
               <SortableTableHeadCell
                 columnId="profit"
@@ -418,7 +418,7 @@ export const MarginReportPage: React.FC = () => {
                 align="right"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
-                onSort={requestSort}
+                onRequestSort={requestSort}
               />
               <SortableTableHeadCell
                 columnId="margin"
@@ -426,7 +426,7 @@ export const MarginReportPage: React.FC = () => {
                 align="right"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
-                onSort={requestSort}
+                onRequestSort={requestSort}
               />
               <TableCell align="center">Lines</TableCell>
               <TableCell align="center">Actions</TableCell>

@@ -29,7 +29,7 @@ export function batchPurchaseDiscountPricePerUnit(batch?: {
 }): number {
   if (!batch) return 0;
   return purchaseInvoiceItemDiscountPricePerUnit({
-    purchasePrice: batch.purchasePrice,
+    purchasePrice: toNum(batch.purchasePrice),
     discountPercentage: batch.discountPercentage,
   });
 }
