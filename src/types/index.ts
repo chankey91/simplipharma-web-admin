@@ -150,7 +150,7 @@ export interface User {
   id: string;
   uid: string;
   email: string;
-  role?: 'retailer' | 'admin' | 'salesOfficer';
+  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations';
   salesOfficerId?: string; // For retailers: which Sales Officer manages them
   displayName?: string;
   phoneNumber?: string;

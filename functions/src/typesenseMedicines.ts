@@ -17,9 +17,17 @@
  */
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import Typesense from 'typesense';
 
 export const TYPESENSE_COLLECTION = 'medicines';
+
+type TypesenseClient = import('typesense').Client;
+
+function loadTypesenseClientConstructor(): typeof import('typesense').default.Client {
+  // Lazy require — avoids slow cold load during Firebase deploy discovery
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Typesense = require('typesense');
+  return (Typesense.default ?? Typesense).Client;
+}
 
 function getTypesenseConfig(): { host: string; apiKey: string; protocol: string; port: number } | null {
   const cfg = functions.config().typesense as
@@ -39,17 +47,18 @@ function getTypesenseConfig(): { host: string; apiKey: string; protocol: string;
   };
 }
 
-export function getTypesenseClient(): InstanceType<typeof Typesense.Client> | null {
+export function getTypesenseClient(): TypesenseClient | null {
   const c = getTypesenseConfig();
   if (!c) return null;
-  return new Typesense.Client({
+  const Client = loadTypesenseClientConstructor();
+  return new Client({
     nodes: [{ host: c.host, port: c.port, protocol: c.protocol as 'http' | 'https' }],
     apiKey: c.apiKey,
     connectionTimeoutSeconds: 15,
   });
 }
 
-async function ensureCollection(client: InstanceType<typeof Typesense.Client>): Promise<void> {
+async function ensureCollection(client: TypesenseClient): Promise<void> {
   try {
     await client.collections(TYPESENSE_COLLECTION).retrieve();
   } catch {
@@ -134,9 +143,10 @@ export const onMedicineWriteTypesense = functions.firestore
     }
   });
 
-async function isAdmin(uid: string): Promise<boolean> {
+async function canReindexMedicines(uid: string): Promise<boolean> {
   const userDoc = await admin.firestore().collection('users').doc(uid).get();
-  return Boolean(userDoc.exists && userDoc.data()?.role === 'admin');
+  const role = userDoc.exists ? userDoc.data()?.role : undefined;
+  return role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations';
 }
 
 /** Parse minimal Medicine card fields (aligned with mobile parseMedicineDocLite). */
@@ -327,7 +337,7 @@ export const searchMedicinesTypesense = functions
       const medicines = medicinesFromTypesenseHitsOnly(hits);
       return { medicines, source: 'typesense_index' as const };
     }
-    const ids = hits.map((h) => String((h.document as { id?: string })?.id || '')).filter(Boolean);
+    const ids = hits.map((h: { document?: { id?: string } }) => String(h.document?.id || '')).filter(Boolean);
     const medicines = await fetchMedicinesOrderedByIds(ids);
     return { medicines, source: 'typesense' as const };
   } catch (err: any) {
@@ -346,8 +356,8 @@ export const adminReindexMedicinesTypesense = functions
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
-    if (!(await isAdmin(context.auth.uid))) {
-      throw new functions.https.HttpsError('permission-denied', 'Admin only');
+    if (!(await canReindexMedicines(context.auth.uid))) {
+      throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
     }
 
     const client = getTypesenseClient();

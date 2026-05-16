@@ -30,6 +30,9 @@ import {
   SettingsSuggest,
   PointOfSale,
   AccountBalanceWalletOutlined,
+  Receipt,
+  Archive,
+  PostAdd,
 } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useOrders } from '../hooks/useOrders';
@@ -43,6 +46,7 @@ import type { Order } from '../types';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { useAuth } from '../context/AuthContext';
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -130,12 +134,14 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, caption, icon, accent
 export const DashboardPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const { panelRole } = useAuth();
+  const isOperations = panelRole === 'operations';
   const { data: orders, isLoading: ordersLoading } = useOrders();
-  const { data: stores, isLoading: storesLoading } = useStores();
+  const { data: stores, isLoading: storesLoading } = useStores(!isOperations);
   const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const { data: expiringMedicines } = useExpiringMedicines(30);
   const { data: expiredMedicines } = useExpiredMedicines();
-  const { data: pendingRetailerRequests } = usePendingRetailerRequests();
+  const { data: pendingRetailerRequests } = usePendingRetailerRequests(!isOperations);
 
   const stats = useMemo(() => {
     const list = orders ?? [];
@@ -229,7 +235,7 @@ export const DashboardPage: React.FC = () => {
     return list;
   }, [stats.recent, sortKey, sortDirection]);
 
-  if (ordersLoading || storesLoading || medicinesLoading) {
+  if (ordersLoading || (!isOperations && storesLoading) || medicinesLoading) {
     return <Loading message="Loading dashboard..." />;
   }
 
@@ -245,10 +251,13 @@ export const DashboardPage: React.FC = () => {
     <Box sx={{ maxWidth: 1400, mx: 'auto' }}>
       <Box sx={{ mb: 3 }}>
         <Typography variant="h4" component="h1" fontWeight={700} gutterBottom>
-          Dashboard
+          {isOperations ? 'Operations dashboard' : 'Dashboard'}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          {format(new Date(), 'EEEE, MMMM d, yyyy')} — Orders, inventory, and quick actions at a glance.
+          {format(new Date(), 'EEEE, MMMM d, yyyy')} —{' '}
+          {isOperations
+            ? 'Fulfillment, inventory, and daily operations at a glance.'
+            : 'Orders, inventory, and quick actions at a glance.'}
         </Typography>
       </Box>
 
@@ -264,9 +273,20 @@ export const DashboardPage: React.FC = () => {
         <Button variant="outlined" startIcon={<Inventory2 />} onClick={() => navigate('/inventory')}>
           Inventory
         </Button>
-        <Button variant="outlined" startIcon={<PointOfSale />} onClick={() => navigate('/stores')}>
-          Stores
-        </Button>
+        {isOperations ? (
+          <>
+            <Button variant="outlined" startIcon={<Receipt />} onClick={() => navigate('/purchases')}>
+              Purchases
+            </Button>
+            <Button variant="outlined" startIcon={<Archive />} onClick={() => navigate('/expiry-returns')}>
+              Expiry returns
+            </Button>
+          </>
+        ) : (
+          <Button variant="outlined" startIcon={<PointOfSale />} onClick={() => navigate('/stores')}>
+            Stores
+          </Button>
+        )}
         <Button variant="outlined" startIcon={<SettingsSuggest />} onClick={() => navigate('/operations')}>
           Operations
         </Button>
@@ -315,37 +335,39 @@ export const DashboardPage: React.FC = () => {
         </Grid>
       </Grid>
 
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
-          <StatCard
-            title="Gross order value"
-            value={`₹${Math.round(stats.lifetimeGross).toLocaleString('en-IN')}`}
-            caption="All non-cancelled orders (lifetime)"
-            accent={accent.success}
-            icon={<TrendingUp sx={{ fontSize: 36 }} />}
-            onClick={() => navigate('/orders')}
-          />
+      {!isOperations && (
+        <Grid container spacing={2} sx={{ mb: 3 }}>
+          <Grid item xs={12} md={4}>
+            <StatCard
+              title="Gross order value"
+              value={`₹${Math.round(stats.lifetimeGross).toLocaleString('en-IN')}`}
+              caption="All non-cancelled orders (lifetime)"
+              accent={accent.success}
+              icon={<TrendingUp sx={{ fontSize: 36 }} />}
+              onClick={() => navigate('/orders')}
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <StatCard
+              title="This month"
+              value={`₹${Math.round(stats.thisMonthGross).toLocaleString('en-IN')}`}
+              caption="Non-cancelled orders placed this month"
+              accent={theme.palette.secondary.main}
+              icon={<TrendingUp sx={{ fontSize: 36 }} />}
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <StatCard
+              title="Attention"
+              value={stats.unpaid}
+              caption="Active orders marked unpaid"
+              accent={stats.unpaid > 0 ? accent.warning : theme.palette.grey[500]}
+              icon={<AccountBalanceWalletOutlined sx={{ fontSize: 36 }} />}
+              onClick={() => navigate('/orders')}
+            />
+          </Grid>
         </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <StatCard
-            title="This month"
-            value={`₹${Math.round(stats.thisMonthGross).toLocaleString('en-IN')}`}
-            caption="Non-cancelled orders placed this month"
-            accent={theme.palette.secondary.main}
-            icon={<TrendingUp sx={{ fontSize: 36 }} />}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <StatCard
-            title="Attention"
-            value={stats.unpaid}
-            caption="Active orders marked unpaid"
-            accent={stats.unpaid > 0 ? accent.warning : theme.palette.grey[500]}
-            icon={<AccountBalanceWalletOutlined sx={{ fontSize: 36 }} />}
-            onClick={() => navigate('/orders')}
-          />
-        </Grid>
-      </Grid>
+      )}
 
       <Grid container spacing={3}>
         <Grid item xs={12} lg={8}>
@@ -445,7 +467,7 @@ export const DashboardPage: React.FC = () => {
                 Alerts
               </Typography>
               <Stack spacing={1} sx={{ mt: 1 }}>
-                {stats.pendingRetailers > 0 && (
+                {!isOperations && stats.pendingRetailers > 0 && (
                   <Alert
                     severity="info"
                     onClick={() => navigate('/pending-retailers')}
@@ -483,7 +505,7 @@ export const DashboardPage: React.FC = () => {
                     {stats.lowStock} product{stats.lowStock !== 1 ? 's' : ''} under 10 units
                   </Alert>
                 )}
-                {stats.pendingRetailers === 0 &&
+                {(isOperations || stats.pendingRetailers === 0) &&
                   (!expiredMedicines || expiredMedicines.length === 0) &&
                   (!expiringMedicines || expiringMedicines.length === 0) &&
                   stats.lowStock === 0 && (
@@ -502,14 +524,16 @@ export const DashboardPage: React.FC = () => {
               </Typography>
               <Paper variant="outlined" sx={{ p: 2, mt: 1, borderRadius: 2, bgcolor: 'action.hover' }}>
                 <Grid container spacing={2}>
-                  <Grid item xs={6}>
-                    <Typography variant="caption" color="text.secondary" display="block">
-                      Active stores
-                    </Typography>
-                    <Typography variant="h5" fontWeight={700}>
-                      {stats.activeStores}
-                    </Typography>
-                  </Grid>
+                  {!isOperations && (
+                    <Grid item xs={6}>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        Active stores
+                      </Typography>
+                      <Typography variant="h5" fontWeight={700}>
+                        {stats.activeStores}
+                      </Typography>
+                    </Grid>
+                  )}
                   <Grid item xs={6}>
                     <Typography variant="caption" color="text.secondary" display="block">
                       Products
@@ -536,24 +560,37 @@ export const DashboardPage: React.FC = () => {
                   </Grid>
                 </Grid>
               </Paper>
+              {!isOperations && (
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  startIcon={<Store />}
+                  onClick={() => navigate('/stores')}
+                  sx={{ mt: 2 }}
+                >
+                  Manage stores
+                </Button>
+              )}
               <Button
                 fullWidth
-                variant="outlined"
-                startIcon={<Store />}
-                onClick={() => navigate('/stores')}
-                sx={{ mt: 2 }}
-              >
-                Manage stores
-              </Button>
-              <Button
-                fullWidth
-                variant="text"
+                variant={isOperations ? 'outlined' : 'text'}
                 startIcon={<CheckCircle />}
                 onClick={() => navigate('/expiry-returns')}
-                sx={{ mt: 0.5 }}
+                sx={{ mt: isOperations ? 2 : 0.5 }}
               >
                 Expiry returns
               </Button>
+              {isOperations && (
+                <Button
+                  fullWidth
+                  variant="text"
+                  startIcon={<PostAdd />}
+                  onClick={() => navigate('/product-demands')}
+                  sx={{ mt: 0.5 }}
+                >
+                  Product demands
+                </Button>
+              )}
             </CardContent>
           </Card>
         </Grid>

@@ -23,8 +23,14 @@ exports.deleteMedicineFromTypesense = deleteMedicineFromTypesense;
  */
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
-const typesense_1 = require("typesense");
 exports.TYPESENSE_COLLECTION = 'medicines';
+function loadTypesenseClientConstructor() {
+    var _a;
+    // Lazy require — avoids slow cold load during Firebase deploy discovery
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Typesense = require('typesense');
+    return ((_a = Typesense.default) !== null && _a !== void 0 ? _a : Typesense).Client;
+}
 function getTypesenseConfig() {
     const cfg = functions.config().typesense;
     if (!(cfg === null || cfg === void 0 ? void 0 : cfg.host) || !(cfg === null || cfg === void 0 ? void 0 : cfg.api_key)) {
@@ -44,7 +50,8 @@ function getTypesenseClient() {
     const c = getTypesenseConfig();
     if (!c)
         return null;
-    return new typesense_1.default.Client({
+    const Client = loadTypesenseClientConstructor();
+    return new Client({
         nodes: [{ host: c.host, port: c.port, protocol: c.protocol }],
         apiKey: c.apiKey,
         connectionTimeoutSeconds: 15,
@@ -130,10 +137,11 @@ exports.onMedicineWriteTypesense = functions.firestore
         console.error('onMedicineWriteTypesense failed', medicineId, err);
     }
 });
-async function isAdmin(uid) {
+async function canReindexMedicines(uid) {
     var _a;
     const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    return Boolean(userDoc.exists && ((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.role) === 'admin');
+    const role = userDoc.exists ? (_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.role : undefined;
+    return role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations';
 }
 /** Parse minimal Medicine card fields (aligned with mobile parseMedicineDocLite). */
 function parseMedicineLiteFromSnap(snap) {
@@ -331,8 +339,8 @@ exports.adminReindexMedicinesTypesense = functions
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
-    if (!(await isAdmin(context.auth.uid))) {
-        throw new functions.https.HttpsError('permission-denied', 'Admin only');
+    if (!(await canReindexMedicines(context.auth.uid))) {
+        throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
     }
     const client = getTypesenseClient();
     if (!client) {
