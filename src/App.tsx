@@ -28,6 +28,7 @@ import { PendingRetailersPage } from './pages/PendingRetailers';
 import { ExpiryReturnsPage } from './pages/ExpiryReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { MarginReportPage } from './pages/MarginReport';
+import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -41,10 +42,16 @@ const queryClient = new QueryClient({
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#2196F3',
+      main: brandColors.teal,
+      dark: '#008f85',
+      light: '#33b9af',
+      contrastText: '#ffffff',
     },
     secondary: {
-      main: '#4CAF50',
+      main: brandColors.navy,
+      dark: '#091336',
+      light: '#3d4a70',
+      contrastText: '#ffffff',
     },
   },
 });

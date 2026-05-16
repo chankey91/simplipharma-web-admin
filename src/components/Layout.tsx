@@ -20,6 +20,8 @@ import {
   TrendingUp,
 } from '@mui/icons-material';
 import { logout } from '../services/firebase';
+import { BrandLogo } from './BrandLogo';
+import { brandColors } from '../theme/brand';
 
 const drawerWidth = 240;
 
@@ -56,9 +58,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const drawer = (
     <Box>
-      <Toolbar>
-        <Typography variant="h6" noWrap component="div">
-          SimpliPharma Admin
+      <Toolbar sx={{ flexDirection: 'column', alignItems: 'flex-start', py: 2, gap: 0.5 }}>
+        <BrandLogo variant="horizontal" height={36} sx={{ maxWidth: '100%' }} />
+        <Typography variant="caption" sx={{ color: brandColors.navy, fontWeight: 600, letterSpacing: 0.5 }}>
+          Admin Panel
         </Typography>
       </Toolbar>
       <List>
@@ -101,7 +104,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             sx={{ mr: 2, display: { sm: 'none' } }}
             onClick={handleDrawerToggle}
           />
-          <Typography variant="h6" noWrap component="div">
+          <BrandLogo
+            variant="icon"
+            height={32}
+            sx={{ display: { xs: 'block', sm: 'none' }, mr: 1 }}
+          />
+          <Typography variant="h6" noWrap sx={{ display: { xs: 'none', sm: 'block' } }}>
             Admin Panel
           </Typography>
         </Toolbar>
