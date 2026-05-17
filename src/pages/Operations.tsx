@@ -140,7 +140,7 @@ export const OperationsPage: React.FC = () => {
     <Box>
       <Box display="flex" alignItems="center" mb={3}>
         <Settings sx={{ mr: 2, fontSize: 32 }} />
-        <Typography variant="h4">Operations</Typography>
+        <Typography variant="h4">Fulfillment setup</Typography>
       </Box>
 
       {(traysIsError || operatorsIsError) && (

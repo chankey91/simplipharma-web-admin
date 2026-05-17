@@ -288,7 +288,7 @@ export const DashboardPage: React.FC = () => {
           </Button>
         )}
         <Button variant="outlined" startIcon={<SettingsSuggest />} onClick={() => navigate('/operations')}>
-          Operations
+          Fulfillment setup
         </Button>
       </Stack>
 

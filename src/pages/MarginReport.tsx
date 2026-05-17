@@ -218,7 +218,7 @@ export const MarginReportPage: React.FC = () => {
     <Box sx={{ maxWidth: 1400, mx: 'auto' }}>
       <Box sx={{ mb: 3 }}>
         <Typography variant="h4" component="h1" fontWeight={700} gutterBottom>
-          Gross margin
+          Margin report
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Profit per order from batch purchase cost vs invoice selling price (ex-GST, after line
