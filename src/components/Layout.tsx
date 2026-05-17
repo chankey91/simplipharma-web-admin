@@ -34,6 +34,7 @@ import {
   PostAdd,
   TrendingUp,
   Undo,
+  AccountBalance,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -80,6 +81,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Network',
     items: [
       { text: 'Medical stores', icon: <Store />, path: '/stores' },
+      { text: 'Store receivables', icon: <AccountBalance />, path: '/store-receivables' },
       { text: 'Pending retailers', icon: <PersonAdd />, path: '/pending-retailers' },
       { text: 'Sales officers', icon: <Group />, path: '/sales-officers' },
     ],

@@ -32,6 +32,7 @@ import { ExpiryReturnsPage } from './pages/ExpiryReturns';
 import { OrderReturnsPage } from './pages/OrderReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { MarginReportPage } from './pages/MarginReport';
+import { StoreReceivablesPage } from './pages/StoreReceivables';
 import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
@@ -111,6 +112,7 @@ function AppRoutes() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={withLayout(<DashboardPage />)} />
       <Route path="/stores" element={withLayout(<StoresPage />)} />
+      <Route path="/store-receivables" element={withLayout(<StoreReceivablesPage />)} />
       <Route path="/vendors" element={withLayout(<VendorsPage />)} />
       <Route path="/orders" element={withLayout(<OrdersPage />)} />
       <Route path="/orders/:orderId" element={withLayout(<OrderDetailsPage />)} />
