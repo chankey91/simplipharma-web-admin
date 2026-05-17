@@ -127,6 +127,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [medicineSearchHits, setMedicineSearchHits] = useState<Medicine[]>([]);
   const [medicineSearchLoading, setMedicineSearchLoading] = useState(false);
   const medicineSearchSeq = useRef(0);
+  const medicineSearchInputElRef = useRef<HTMLInputElement | null>(null);
 
   const [addMedicineSearchHits, setAddMedicineSearchHits] = useState<Medicine[]>([]);
   const addMedicineSearchSeq = useRef(0);
@@ -154,6 +155,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       loadInvoiceNumber();
     }
   }, []); // Run once on mount
+
+  useEffect(() => {
+    const t = window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  const focusMedicineSearch = () => {
+    window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 100);
+  };
 
   useEffect(() => {
     const trimmed = medicineSearchInput.trim();
@@ -500,6 +510,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
     setItemDialog({ open: false, itemIndex: null });
     setSelectedMedicine(null);
+    setMedicineSearchInput('');
+    setMedicineSearchHits([]);
+    focusMedicineSearch();
     setExpiryDateError(''); // Clear error when dialog closes
     setCurrentItem({
       medicineId: '',
@@ -821,6 +834,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   renderInput={(params) => (
                     <TextField
                       {...params}
+                      inputRef={medicineSearchInputElRef}
                       label="Search Medicine"
                       placeholder="Search by medicine name or manufacturer..."
                       size="small"
@@ -942,7 +956,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       </Grid>
 
       {/* Add Item Dialog */}
-      <Dialog open={itemDialog.open} onClose={() => {
+      <Dialog
+        open={itemDialog.open}
+        disableRestoreFocus
+        onClose={() => {
         setItemDialog({ open: false, itemIndex: null });
         setExpiryDateError(''); // Clear error when dialog closes
       }} maxWidth="sm" fullWidth>
