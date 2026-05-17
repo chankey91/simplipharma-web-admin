@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -6,6 +6,7 @@ import {
   Card,
   CardContent,
   CardActions,
+  CardMedia,
   IconButton,
   Dialog,
   DialogTitle,
@@ -17,15 +18,20 @@ import {
   Grid,
   Chip,
   Alert,
+  CircularProgress,
+  Collapse,
+  Link,
 } from '@mui/material';
 import {
   Add,
   Edit,
   Delete,
   Campaign,
+  PhotoCamera,
 } from '@mui/icons-material';
 import { useBanners, useAddBanner, useUpdateBanner, useDeleteBanner } from '../hooks/useBanners';
 import { Banner } from '../services/banners';
+import { uploadBannerImage } from '../services/bannerImages';
 import { Loading } from '../components/Loading';
 
 const COLOR_OPTIONS = [
@@ -74,7 +80,26 @@ export const BannersPage: React.FC = () => {
     isActive: true,
     order: 1,
     linkTo: '',
+    imageUrl: '',
   });
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
+  const [showTextStyleFields, setShowTextStyleFields] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const imageUrlTrim = formData.imageUrl.trim();
+  const hasImageSource = Boolean(pendingImageFile || imageUrlTrim);
+
+  useEffect(() => {
+    if (!pendingImageFile) {
+      setFilePreviewUrl(null);
+      return;
+    }
+    const u = URL.createObjectURL(pendingImageFile);
+    setFilePreviewUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [pendingImageFile]);
 
   const handleOpenCreate = () => {
     setEditingBanner(null);
@@ -86,7 +111,10 @@ export const BannersPage: React.FC = () => {
       isActive: true,
       order: (banners?.length ?? 0) + 1,
       linkTo: '',
+      imageUrl: '',
     });
+    setPendingImageFile(null);
+    setShowTextStyleFields(true);
     setOpenDialog(true);
   };
 
@@ -100,24 +128,43 @@ export const BannersPage: React.FC = () => {
       isActive: banner.isActive,
       order: banner.order ?? 1,
       linkTo: banner.linkTo ?? '',
+      imageUrl: banner.imageUrl ?? '',
     });
+    setPendingImageFile(null);
+    const hasImg = Boolean(banner.imageUrl?.trim());
+    const hasText = Boolean(banner.title?.trim() || banner.subtitle?.trim());
+    setShowTextStyleFields(!hasImg || hasText);
     setOpenDialog(true);
   };
 
   const handleClose = () => {
     setOpenDialog(false);
     setEditingBanner(null);
+    setPendingImageFile(null);
+    setShowTextStyleFields(false);
   };
 
   const handleSave = async () => {
-    if (!formData.title.trim() || !formData.subtitle.trim()) {
-      alert('Please fill in title and subtitle');
+    const trimmedTitle = formData.title.trim();
+    const trimmedSubtitle = formData.subtitle.trim();
+    const trimmedUrl = formData.imageUrl.trim();
+    const willHaveImage =
+      Boolean(pendingImageFile || trimmedUrl) ||
+      Boolean(
+        editingBanner?.imageUrl &&
+          trimmedUrl.length > 0 &&
+          trimmedUrl === (editingBanner.imageUrl ?? '').trim()
+      );
+
+    if (!willHaveImage && (!trimmedTitle || !trimmedSubtitle)) {
+      alert('Add a banner image, or fill in both title and subtitle for a text-only banner.');
       return;
     }
 
-    const bannerData = {
-      title: formData.title.trim(),
-      subtitle: formData.subtitle.trim(),
+    let removeImageUrl = false;
+    const bannerData: Omit<Banner, 'id'> = {
+      title: trimmedTitle,
+      subtitle: trimmedSubtitle,
       color: formData.color,
       icon: formData.icon,
       isActive: formData.isActive,
@@ -126,10 +173,24 @@ export const BannersPage: React.FC = () => {
     };
 
     try {
+      if (pendingImageFile) {
+        setUploadingImage(true);
+        try {
+          bannerData.imageUrl = await uploadBannerImage(pendingImageFile);
+        } finally {
+          setUploadingImage(false);
+        }
+      } else if (trimmedUrl) {
+        bannerData.imageUrl = trimmedUrl;
+      } else if (editingBanner?.imageUrl) {
+        removeImageUrl = true;
+      }
+
       if (editingBanner) {
         await updateBannerMutation.mutateAsync({
           bannerId: editingBanner.id,
           bannerData,
+          removeImageUrl,
         });
         alert('Banner updated successfully');
       } else {
@@ -143,7 +204,8 @@ export const BannersPage: React.FC = () => {
   };
 
   const handleDelete = async (banner: Banner) => {
-    if (!confirm(`Are you sure you want to delete "${banner.title}"?`)) return;
+    const label = banner.title.trim() || (banner.imageUrl ? 'this image banner' : 'this banner');
+    if (!confirm(`Are you sure you want to delete "${label}"?`)) return;
     try {
       await deleteBannerMutation.mutateAsync(banner.id);
       alert('Banner deleted successfully');
@@ -208,19 +270,30 @@ export const BannersPage: React.FC = () => {
                   flexDirection: 'column',
                 }}
               >
+                {banner.imageUrl ? (
+                  <CardMedia
+                    component="img"
+                    height="140"
+                    image={banner.imageUrl}
+                    alt=""
+                    sx={{ objectFit: 'cover' }}
+                  />
+                ) : null}
                 <CardContent sx={{ flexGrow: 1 }}>
                   <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 1 }}>
                     <Typography variant="h6" component="div" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <span>{ICON_MAP[banner.icon] || '📢'}</span>
-                      {banner.title}
+                      {banner.title.trim() || (banner.imageUrl ? 'Image banner' : 'Untitled')}
                     </Typography>
                     {banner.isActive && (
                       <Chip label="Active" color="success" size="small" />
                     )}
                   </Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    {banner.subtitle}
-                  </Typography>
+                  {Boolean(banner.subtitle.trim() || !banner.imageUrl) && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                      {banner.subtitle.trim() || 'No subtitle'}
+                    </Typography>
+                  )}
                   <Typography variant="caption" color="text.secondary">
                     Order: {banner.order}
                   </Typography>
@@ -243,63 +316,86 @@ export const BannersPage: React.FC = () => {
         <DialogTitle>{editingBanner ? 'Edit Banner' : 'Add New Banner'}</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
-            <TextField
-              label="Title *"
-              value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-              placeholder="e.g., Flash Sale!"
-              fullWidth
-            />
-            <TextField
-              label="Subtitle *"
-              value={formData.subtitle}
-              onChange={(e) => setFormData({ ...formData, subtitle: e.target.value })}
-              placeholder="e.g., Up to 50% OFF on selected items"
-              fullWidth
-            />
-
-            <Typography variant="subtitle2" sx={{ mt: 2 }}>Background Color</Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {COLOR_OPTIONS.map((opt) => (
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Banner image
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                Upload a file (max 5&nbsp;MB) or paste an HTTPS URL. When an image is set, title, subtitle, color, and icon are optional—the app shows your artwork full width.
+              </Typography>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    setPendingImageFile(f);
+                    setShowTextStyleFields(false);
+                  }
+                  e.target.value = '';
+                }}
+              />
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<PhotoCamera />}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Upload image
+                </Button>
+                {pendingImageFile ? (
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      setPendingImageFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                      if (!formData.imageUrl.trim()) setShowTextStyleFields(true);
+                    }}
+                  >
+                    Clear file
+                  </Button>
+                ) : null}
+              </Box>
+              <TextField
+                label="Image URL (optional)"
+                value={formData.imageUrl}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setFormData({ ...formData, imageUrl: v });
+                  const t = v.trim();
+                  if (!t && !pendingImageFile) setShowTextStyleFields(true);
+                  else if (t) setShowTextStyleFields(false);
+                }}
+                placeholder="https://..."
+                fullWidth
+                size="small"
+                sx={{ mt: 1.5 }}
+                disabled={Boolean(pendingImageFile)}
+                helperText={pendingImageFile ? 'Remove the selected file to edit URL instead.' : undefined}
+              />
+              {(filePreviewUrl || formData.imageUrl.trim()) && (
                 <Box
-                  key={opt.value}
-                  onClick={() => setFormData({ ...formData, color: opt.value })}
                   sx={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: '50%',
-                    bgcolor: opt.value,
-                    border: formData.color === opt.value ? 3 : 1,
-                    borderColor: formData.color === opt.value ? 'primary.main' : 'grey.300',
-                    cursor: 'pointer',
-                  }}
-                />
-              ))}
-            </Box>
-
-            <Typography variant="subtitle2" sx={{ mt: 2 }}>Icon</Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {ICON_OPTIONS.map((icon) => (
-                <Box
-                  key={icon}
-                  onClick={() => setFormData({ ...formData, icon })}
-                  sx={{
-                    width: 44,
-                    height: 44,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    mt: 1.5,
                     borderRadius: 1,
-                    bgcolor: formData.icon === icon ? 'primary.light' : 'grey.100',
-                    border: formData.icon === icon ? 2 : 1,
-                    borderColor: formData.icon === icon ? 'primary.main' : 'grey.300',
-                    cursor: 'pointer',
-                    fontSize: 24,
+                    overflow: 'hidden',
+                    border: 1,
+                    borderColor: 'divider',
+                    maxHeight: 200,
+                    bgcolor: 'grey.100',
                   }}
                 >
-                  {ICON_MAP[icon] || '📢'}
+                  <Box
+                    component="img"
+                    src={filePreviewUrl || formData.imageUrl.trim()}
+                    alt="Banner preview"
+                    sx={{ width: '100%', maxHeight: 200, objectFit: 'contain', display: 'block' }}
+                  />
                 </Box>
-              ))}
+              )}
             </Box>
 
             <TextField
@@ -317,6 +413,141 @@ export const BannersPage: React.FC = () => {
               placeholder="e.g., MedicineList"
               fullWidth
             />
+
+            {hasImageSource ? (
+              <Box>
+                <Link
+                  component="button"
+                  type="button"
+                  variant="body2"
+                  onClick={() => setShowTextStyleFields((v) => !v)}
+                  sx={{ cursor: 'pointer', textAlign: 'left' }}
+                >
+                  {showTextStyleFields ? 'Hide optional title & styling' : 'Add optional title, subtitle, or colors'}
+                </Link>
+                <Collapse in={showTextStyleFields}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+                    <TextField
+                      label="Title (optional)"
+                      value={formData.title}
+                      onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                      placeholder="Shown on top of the image if set"
+                      fullWidth
+                    />
+                    <TextField
+                      label="Subtitle (optional)"
+                      value={formData.subtitle}
+                      onChange={(e) => setFormData({ ...formData, subtitle: e.target.value })}
+                      fullWidth
+                    />
+                    <Typography variant="subtitle2">Background Color (fallback / overlay)</Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                      {COLOR_OPTIONS.map((opt) => (
+                        <Box
+                          key={opt.value}
+                          onClick={() => setFormData({ ...formData, color: opt.value })}
+                          sx={{
+                            width: 40,
+                            height: 40,
+                            borderRadius: '50%',
+                            bgcolor: opt.value,
+                            border: formData.color === opt.value ? 3 : 1,
+                            borderColor: formData.color === opt.value ? 'primary.main' : 'grey.300',
+                            cursor: 'pointer',
+                          }}
+                        />
+                      ))}
+                    </Box>
+                    <Typography variant="subtitle2">Icon</Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                      {ICON_OPTIONS.map((icon) => (
+                        <Box
+                          key={icon}
+                          onClick={() => setFormData({ ...formData, icon })}
+                          sx={{
+                            width: 44,
+                            height: 44,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderRadius: 1,
+                            bgcolor: formData.icon === icon ? 'primary.light' : 'grey.100',
+                            border: formData.icon === icon ? 2 : 1,
+                            borderColor: formData.icon === icon ? 'primary.main' : 'grey.300',
+                            cursor: 'pointer',
+                            fontSize: 24,
+                          }}
+                        >
+                          {ICON_MAP[icon] || '📢'}
+                        </Box>
+                      ))}
+                    </Box>
+                  </Box>
+                </Collapse>
+              </Box>
+            ) : (
+              <>
+                <TextField
+                  label="Title"
+                  required
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  placeholder="e.g., Flash Sale!"
+                  fullWidth
+                />
+                <TextField
+                  label="Subtitle"
+                  required
+                  value={formData.subtitle}
+                  onChange={(e) => setFormData({ ...formData, subtitle: e.target.value })}
+                  placeholder="e.g., Up to 50% OFF on selected items"
+                  fullWidth
+                />
+                <Typography variant="subtitle2">Background Color</Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {COLOR_OPTIONS.map((opt) => (
+                    <Box
+                      key={opt.value}
+                      onClick={() => setFormData({ ...formData, color: opt.value })}
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: '50%',
+                        bgcolor: opt.value,
+                        border: formData.color === opt.value ? 3 : 1,
+                        borderColor: formData.color === opt.value ? 'primary.main' : 'grey.300',
+                        cursor: 'pointer',
+                      }}
+                    />
+                  ))}
+                </Box>
+                <Typography variant="subtitle2">Icon</Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {ICON_OPTIONS.map((icon) => (
+                    <Box
+                      key={icon}
+                      onClick={() => setFormData({ ...formData, icon })}
+                      sx={{
+                        width: 44,
+                        height: 44,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: 1,
+                        bgcolor: formData.icon === icon ? 'primary.light' : 'grey.100',
+                        border: formData.icon === icon ? 2 : 1,
+                        borderColor: formData.icon === icon ? 'primary.main' : 'grey.300',
+                        cursor: 'pointer',
+                        fontSize: 24,
+                      }}
+                    >
+                      {ICON_MAP[icon] || '📢'}
+                    </Box>
+                  ))}
+                </Box>
+              </>
+            )}
+
             <FormControlLabel
               control={
                 <Switch
@@ -337,9 +568,10 @@ export const BannersPage: React.FC = () => {
             disabled={
               addBannerMutation.isPending ||
               updateBannerMutation.isPending ||
-              !formData.title.trim() ||
-              !formData.subtitle.trim()
+              uploadingImage ||
+              (!hasImageSource && (!formData.title.trim() || !formData.subtitle.trim()))
             }
+            startIcon={uploadingImage ? <CircularProgress size={18} color="inherit" /> : undefined}
           >
             {editingBanner ? 'Update' : 'Create'}
           </Button>

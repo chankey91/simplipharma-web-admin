@@ -8,6 +8,7 @@ import {
   orderBy,
   Timestamp,
   db,
+  deleteField,
 } from './firebase';
 
 export interface Banner {
@@ -19,6 +20,8 @@ export interface Banner {
   isActive: boolean;
   order: number;
   linkTo?: string;
+  /** Optional full-width / card image URL (Firebase Storage or any HTTPS URL). */
+  imageUrl?: string;
   createdAt?: Date | any;
   updatedAt?: Date | any;
 }
@@ -56,10 +59,17 @@ export const addBanner = async (bannerData: Omit<Banner, 'id'>): Promise<string>
   return docRef.id;
 };
 
-export const updateBanner = async (bannerId: string, bannerData: Partial<Banner>): Promise<void> => {
+export const updateBanner = async (
+  bannerId: string,
+  bannerData: Partial<Banner>,
+  options?: { removeImageUrl?: boolean }
+): Promise<void> => {
   const cleanData = Object.fromEntries(
     Object.entries(bannerData).filter(([, v]) => v !== undefined)
-  );
+  ) as Record<string, unknown>;
+  if (options?.removeImageUrl) {
+    cleanData.imageUrl = deleteField();
+  }
   await updateDoc(doc(db, 'banners', bannerId), {
     ...cleanData,
     updatedAt: Timestamp.now(),

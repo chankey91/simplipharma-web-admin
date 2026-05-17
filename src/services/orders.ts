@@ -211,24 +211,33 @@ export const fulfillOrder = async (
   const stockUpdateErrors: string[] = [];
   
   for (const item of fulfillmentData.medicines) {
-    if (item.lineType === 'product_demand') continue;
-    if (!item.medicineId || !item.quantity) continue;
+    const isUnresolvedDemand =
+      item.lineType === 'product_demand' &&
+      item.productDemandId &&
+      (!item.medicineId || String(item.medicineId).trim() === '');
+    if (isUnresolvedDemand) continue;
+
+    const workItem =
+      item.lineType === 'product_demand' && item.medicineId
+        ? { ...item, lineType: 'medicine' as const }
+        : item;
+    if (!workItem.medicineId || !workItem.quantity) continue;
 
     // Handle new multi-batch allocation structure
-    if (item.batchAllocations && item.batchAllocations.length > 0) {
+    if (workItem.batchAllocations && workItem.batchAllocations.length > 0) {
       // Process each batch allocation
-      for (const allocation of item.batchAllocations) {
+      for (const allocation of workItem.batchAllocations) {
         if (allocation.batchNumber && physicalQtyFromAllocation(allocation) > 0) {
           try {
             const deductQty = physicalQtyFromAllocation(allocation);
             await reduceStockFromBatch(
-              item.medicineId,
+              workItem.medicineId,
               allocation.batchNumber,
               deductQty
             );
-            console.log(`✓ Stock reduced for medicine ${item.medicineId}, batch ${allocation.batchNumber}, quantity: ${deductQty}`);
+            console.log(`✓ Stock reduced for medicine ${workItem.medicineId}, batch ${allocation.batchNumber}, quantity: ${deductQty}`);
           } catch (error: any) {
-            const errorMsg = `Failed to reduce stock for ${item.name || item.medicineId} (batch ${allocation.batchNumber}): ${error.message || error}`;
+            const errorMsg = `Failed to reduce stock for ${workItem.name || workItem.medicineId} (batch ${allocation.batchNumber}): ${error.message || error}`;
             console.error(errorMsg, error);
             stockUpdateErrors.push(errorMsg);
             // Continue with other items even if one fails
@@ -237,16 +246,16 @@ export const fulfillOrder = async (
       }
     } 
     // Backward compatibility: Handle single batchNumber
-    else if (item.batchNumber) {
+    else if (workItem.batchNumber) {
       try {
         await reduceStockFromBatch(
-          item.medicineId,
-          item.batchNumber,
-          item.quantity
+          workItem.medicineId,
+          workItem.batchNumber,
+          workItem.quantity
         );
-        console.log(`✓ Stock reduced for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
+        console.log(`✓ Stock reduced for medicine ${workItem.medicineId}, batch ${workItem.batchNumber}, quantity: ${workItem.quantity}`);
       } catch (error: any) {
-        const errorMsg = `Failed to reduce stock for ${item.name || item.medicineId} (batch ${item.batchNumber}): ${error.message || error}`;
+        const errorMsg = `Failed to reduce stock for ${workItem.name || workItem.medicineId} (batch ${workItem.batchNumber}): ${error.message || error}`;
         console.error(errorMsg, error);
         stockUpdateErrors.push(errorMsg);
         // Continue with other items even if one fails
@@ -264,7 +273,11 @@ export const fulfillOrder = async (
   const expandedMedicines: any[] = [];
   
   for (const item of fulfillmentData.medicines) {
-    if (item.lineType === 'product_demand') {
+    const isUnresolvedDemand =
+      item.lineType === 'product_demand' &&
+      item.productDemandId &&
+      (!item.medicineId || String(item.medicineId).trim() === '');
+    if (isUnresolvedDemand) {
       expandedMedicines.push({
         medicineId: item.medicineId || '',
         name: item.name,
@@ -279,20 +292,26 @@ export const fulfillOrder = async (
       });
       continue;
     }
-    // If item has multiple batch allocations, create separate line item for each batch
-    if (item.batchAllocations && item.batchAllocations.length > 1) {
+
+    const workItem =
+      item.lineType === 'product_demand' && item.medicineId
+        ? { ...item, lineType: 'medicine' as const }
+        : item;
+    const line = workItem;
+    // If line has multiple batch allocations, create separate line item for each batch
+    if (line.batchAllocations && line.batchAllocations.length > 1) {
       // Fetch medicine data to get batch discountPercentage if needed
       let medicineData = null;
-      if (item.medicineId) {
+      if (line.medicineId) {
         try {
-          medicineData = await getMedicineById(item.medicineId);
+          medicineData = await getMedicineById(line.medicineId);
         } catch (error) {
-          console.warn(`Failed to fetch medicine ${item.medicineId} for discountPercentage:`, error);
+          console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
         }
       }
       
-      for (const allocation of item.batchAllocations) {
-        // Get discountPercentage - try allocation first, then item, then fetch from batch
+      for (const allocation of line.batchAllocations) {
+        // Get discountPercentage - try allocation first, then line, then fetch from batch
         let discountPct: number | undefined = undefined;
         
         // Priority 1: From allocation itself (should already have it from frontend)
@@ -306,11 +325,11 @@ export const fulfillOrder = async (
           }
         }
         
-        // Priority 2: From item itself
-        if ((discountPct === undefined || isNaN(discountPct)) && item.discountPercentage !== undefined && item.discountPercentage !== null) {
-          const parsed = typeof item.discountPercentage === 'number'
-            ? item.discountPercentage
-            : parseFloat(String(item.discountPercentage));
+        // Priority 2: From line itself
+        if ((discountPct === undefined || isNaN(discountPct)) && line.discountPercentage !== undefined && line.discountPercentage !== null) {
+          const parsed = typeof line.discountPercentage === 'number'
+            ? line.discountPercentage
+            : parseFloat(String(line.discountPercentage));
           if (!isNaN(parsed)) {
             discountPct = parsed;
             console.log(`[fulfillOrder] Using discountPercentage from item: ${discountPct}% for batch ${allocation.batchNumber}`);
@@ -341,13 +360,13 @@ export const fulfillOrder = async (
         // Create a clean medicine item for this batch (no undefined values)
         const { paid: allocPaid, free: allocFree } = paidFreeFromAllocation(allocation);
         const batchItem: any = {
-          medicineId: item.medicineId,
-          name: item.name,
+          medicineId: line.medicineId,
+          name: line.name,
           price: priceAfterDiscount, // Price after discount
           quantity: allocPaid,
           freeQuantity: allocFree,
           batchNumber: allocation.batchNumber,
-          gstRate: allocation.gstRate || item.gstRate || 5,
+          gstRate: allocation.gstRate || line.gstRate || 5,
         };
         
         // ALWAYS include discountPercentage if it exists (even if 0, but preserve actual value)
@@ -359,16 +378,20 @@ export const fulfillOrder = async (
         // Add optional fields only if they exist and are not undefined
         if (allocation.expiryDate) {
           batchItem.expiryDate = allocation.expiryDate;
-        } else if (item.batchExpiryDate) {
-          batchItem.expiryDate = item.batchExpiryDate;
-        } else if (item.expiryDate) {
-          batchItem.expiryDate = item.expiryDate;
+        } else if (line.batchExpiryDate) {
+          batchItem.expiryDate = line.batchExpiryDate;
+        } else if (line.expiryDate) {
+          batchItem.expiryDate = line.expiryDate;
         }
         
         if (allocation.mrp !== undefined && allocation.mrp !== null) {
           batchItem.mrp = allocation.mrp;
         }
-        
+        if (line.productDemandId) {
+          batchItem.productDemandId = line.productDemandId;
+          batchItem.lineType = 'medicine';
+        }
+
         // Final cleanup: Remove any undefined or null values
         Object.keys(batchItem).forEach(key => {
           if (batchItem[key] === undefined || batchItem[key] === null) {
@@ -385,40 +408,40 @@ export const fulfillOrder = async (
     // Single batch or no batch allocations - use as is but clean undefined values
     else {
       const cleanItem: any = {
-        medicineId: item.medicineId,
-        name: item.name,
-        price: item.price || 0,
-        quantity: item.quantity || 0,
-        freeQuantity: item.freeQuantity || 0,
+        medicineId: line.medicineId,
+        name: line.name,
+        price: line.price || 0,
+        quantity: line.quantity || 0,
+        freeQuantity: line.freeQuantity || 0,
       };
       
       // Add expiryDate only if it exists
-      if (item.batchExpiryDate) {
-        cleanItem.expiryDate = item.batchExpiryDate;
-      } else if (item.expiryDate) {
-        cleanItem.expiryDate = item.expiryDate;
+      if (line.batchExpiryDate) {
+        cleanItem.expiryDate = line.batchExpiryDate;
+      } else if (line.expiryDate) {
+        cleanItem.expiryDate = line.expiryDate;
       }
       
       // Add optional fields only if they exist and are not undefined
-      if (item.batchNumber) cleanItem.batchNumber = item.batchNumber;
-      if (item.batchAllocations && item.batchAllocations.length === 1) {
-        const allocation = item.batchAllocations[0];
+      if (line.batchNumber) cleanItem.batchNumber = line.batchNumber;
+      if (line.batchAllocations && line.batchAllocations.length === 1) {
+        const allocation = line.batchAllocations[0];
         
-        // Get discountPercentage - try allocation first, then item, then fetch from batch
+        // Get discountPercentage - try allocation first, then line, then fetch from batch
         let discountPct: number | undefined = undefined;
         
         if (allocation.discountPercentage !== undefined && allocation.discountPercentage !== null) {
           discountPct = typeof allocation.discountPercentage === 'number'
             ? allocation.discountPercentage
             : parseFloat(String(allocation.discountPercentage));
-        } else if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
-          discountPct = typeof item.discountPercentage === 'number'
-            ? item.discountPercentage
-            : parseFloat(String(item.discountPercentage));
-        } else if (item.medicineId) {
+        } else if (line.discountPercentage !== undefined && line.discountPercentage !== null) {
+          discountPct = typeof line.discountPercentage === 'number'
+            ? line.discountPercentage
+            : parseFloat(String(line.discountPercentage));
+        } else if (line.medicineId) {
           // Fetch from actual batch in inventory
           try {
-            const medicineData = await getMedicineById(item.medicineId);
+            const medicineData = await getMedicineById(line.medicineId);
             if (medicineData && medicineData.stockBatches) {
               const batch = medicineData.stockBatches.find(b => b.batchNumber === allocation.batchNumber);
               if (batch && batch.discountPercentage !== undefined && batch.discountPercentage !== null) {
@@ -428,14 +451,14 @@ export const fulfillOrder = async (
               }
             }
           } catch (error) {
-            console.warn(`Failed to fetch medicine ${item.medicineId} for discountPercentage:`, error);
+            console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
           }
         }
         
         // Default to 0 if still undefined
         const finalDiscountPct = discountPct !== undefined && !isNaN(discountPct) ? discountPct : 0;
         
-        const purchasePrice = allocation.purchasePrice || item.price || 0;
+        const purchasePrice = allocation.purchasePrice || line.price || 0;
         const priceAfterDiscount = finalDiscountPct > 0 
           ? purchasePrice * (1 - finalDiscountPct / 100)
           : purchasePrice;
@@ -444,8 +467,8 @@ export const fulfillOrder = async (
         cleanItem.batchNumber = allocation.batchNumber;
         if (allocation.expiryDate) {
           cleanItem.expiryDate = allocation.expiryDate;
-        } else if (item.expiryDate) {
-          cleanItem.expiryDate = item.expiryDate;
+        } else if (line.expiryDate) {
+          cleanItem.expiryDate = line.expiryDate;
         }
         if (allocation.mrp !== undefined && allocation.mrp !== null) cleanItem.mrp = allocation.mrp;
         if (allocation.gstRate !== undefined && allocation.gstRate !== null) cleanItem.gstRate = allocation.gstRate;
@@ -457,16 +480,21 @@ export const fulfillOrder = async (
         // ALWAYS include discountPercentage (even if 0) - it's important to preserve this value
         cleanItem.discountPercentage = finalDiscountPct;
       } else {
-        if (item.mrp !== undefined && item.mrp !== null) cleanItem.mrp = item.mrp;
-        if (item.gstRate !== undefined && item.gstRate !== null) cleanItem.gstRate = item.gstRate;
-        if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
-          const discountPct = typeof item.discountPercentage === 'number'
-            ? item.discountPercentage
-            : parseFloat(String(item.discountPercentage));
+        if (line.mrp !== undefined && line.mrp !== null) cleanItem.mrp = line.mrp;
+        if (line.gstRate !== undefined && line.gstRate !== null) cleanItem.gstRate = line.gstRate;
+        if (line.discountPercentage !== undefined && line.discountPercentage !== null) {
+          const discountPct = typeof line.discountPercentage === 'number'
+            ? line.discountPercentage
+            : parseFloat(String(line.discountPercentage));
           if (!isNaN(discountPct)) {
             cleanItem.discountPercentage = discountPct;
           }
         }
+      }
+
+      if (line.productDemandId) {
+        cleanItem.productDemandId = line.productDemandId;
+        cleanItem.lineType = 'medicine';
       }
       
       // Final cleanup: Remove any undefined or null values that might have been missed
