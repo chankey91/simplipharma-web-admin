@@ -71,6 +71,26 @@ export const getAllOrders = async (): Promise<Order[]> => {
   }
 };
 
+export const updateOrderMedicines = async (
+  orderId: string,
+  medicines: Order['medicines']
+): Promise<void> => {
+  const orderRef = doc(db, 'orders', orderId);
+  await updateDoc(orderRef, { medicines });
+};
+
+export const updateOrderTotalAmount = async (
+  orderId: string,
+  totalAmount: number,
+  paidAmount = 0
+): Promise<void> => {
+  const orderRef = doc(db, 'orders', orderId);
+  await updateDoc(orderRef, {
+    totalAmount,
+    dueAmount: Math.max(0, totalAmount - paidAmount),
+  });
+};
+
 export const updateOrderStatus = async (
   orderId: string, 
   status: OrderStatus, 
@@ -596,6 +616,7 @@ export const updatePaymentStatus = async (
   }
 
   if (totalAmount !== undefined) {
+    updateData.totalAmount = totalAmount;
     updateData.dueAmount = totalAmount - (paidAmount || 0);
   }
 

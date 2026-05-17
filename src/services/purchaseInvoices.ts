@@ -1,5 +1,5 @@
 import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
-import { PurchaseInvoice, PurchaseInvoiceItem } from '../types';
+import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem } from '../types';
 import { addStockBatch } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 
@@ -80,6 +80,58 @@ export const getPurchaseInvoiceById = async (invoiceId: string): Promise<Purchas
           qrCode: item.qrCode || undefined,
         })) || []
   } as PurchaseInvoice;
+};
+
+/** Resolve PI by Firestore id or human-readable invoice number (as stored on product demands). */
+export const getPurchaseInvoiceByReference = async (
+  reference: string
+): Promise<PurchaseInvoice | null> => {
+  const ref = reference.trim();
+  if (!ref) return null;
+
+  const byId = await getPurchaseInvoiceById(ref);
+  if (byId) return byId;
+
+  const invoicesCol = collection(db, 'purchaseInvoices');
+  const q = query(invoicesCol, where('invoiceNumber', '==', ref));
+  const snapshot = await getDocs(q);
+  if (snapshot.empty) return null;
+  return getPurchaseInvoiceById(snapshot.docs[0].id);
+};
+
+/** Load PI docs referenced on demands (by Firestore id or invoice number) for order-line repair. */
+export const collectPurchaseInvoicesForDemands = async (
+  base: PurchaseInvoice[] | undefined,
+  demands: ProductDemand[],
+  extraRefs: string[] = []
+): Promise<PurchaseInvoice[]> => {
+  const byId = new Map<string, PurchaseInvoice>();
+  for (const inv of base ?? []) {
+    byId.set(inv.id, inv);
+  }
+
+  const refs = new Set<string>();
+  for (const d of demands) {
+    const r = d.purchaseInvoiceId?.trim();
+    if (r) refs.add(r);
+  }
+  for (const r of extraRefs) {
+    const t = r.trim();
+    if (t) refs.add(t);
+  }
+
+  await Promise.all(
+    [...refs].map(async (ref) => {
+      const inv = await getPurchaseInvoiceByReference(ref);
+      if (inv) byId.set(inv.id, inv);
+    })
+  );
+
+  return [...byId.values()].sort((a, b) => {
+    const ta = a.invoiceDate instanceof Date ? a.invoiceDate.getTime() : new Date(a.invoiceDate).getTime();
+    const tb = b.invoiceDate instanceof Date ? b.invoiceDate.getTime() : new Date(b.invoiceDate).getTime();
+    return tb - ta;
+  });
 };
 
 export const checkInvoiceNumberUnique = async (invoiceNumber: string, excludeId?: string): Promise<boolean> => {

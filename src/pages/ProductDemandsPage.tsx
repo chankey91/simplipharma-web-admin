@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, type NavigateFunction } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -43,6 +43,18 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 
 type Filter = 'pending' | 'all';
+
+function isSafeOrderReturnPath(path: string | null): path is string {
+  return Boolean(path && path.startsWith('/orders/') && !path.includes('//'));
+}
+
+function navigateToReturnPath(navigate: NavigateFunction, returnToRef: React.MutableRefObject<string | null>) {
+  const path = returnToRef.current;
+  returnToRef.current = null;
+  if (isSafeOrderReturnPath(path)) {
+    navigate(path);
+  }
+}
 
 export const ProductDemandsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -193,6 +205,7 @@ export const ProductDemandsPage: React.FC = () => {
   }, []);
 
   const consumedDemandQueryIdRef = useRef<string | null>(null);
+  const returnToRef = useRef<string | null>(null);
 
   useEffect(() => {
     const id = searchParams.get('demandId');
@@ -204,11 +217,17 @@ export const ProductDemandsPage: React.FC = () => {
     if (consumedDemandQueryIdRef.current === id) return;
     consumedDemandQueryIdRef.current = id;
 
+    const returnTo = searchParams.get('returnTo');
+    if (isSafeOrderReturnPath(returnTo)) {
+      returnToRef.current = returnTo;
+    }
+
     const d = demands.find((x) => x.id === id);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete('demandId');
+        next.delete('returnTo');
         return next;
       },
       { replace: true }
@@ -217,14 +236,28 @@ export const ProductDemandsPage: React.FC = () => {
     if (d?.status === 'pending') {
       setFilter('pending');
       openFulfill(d);
+    } else if (returnToRef.current) {
+      navigateToReturnPath(navigate, returnToRef);
     }
-  }, [isLoading, demands, searchParams, setSearchParams, openFulfill]);
+  }, [isLoading, demands, searchParams, setSearchParams, openFulfill, navigate]);
 
   const openReject = (d: ProductDemand) => {
     setSelectedDemand(d);
     setRejectReason('');
     setRejectOpen(true);
   };
+
+  const closeFulfillDialog = useCallback(
+    (options?: { navigateBack?: boolean }) => {
+      setFulfillOpen(false);
+      setSelectedDemand(null);
+      setSelectedMedicine(null);
+      if (options?.navigateBack) {
+        navigateToReturnPath(navigate, returnToRef);
+      }
+    },
+    [navigate]
+  );
 
   const handleFulfill = async () => {
     if (!selectedDemand || !selectedMedicine) {
@@ -240,9 +273,7 @@ export const ProductDemandsPage: React.FC = () => {
         fulfillmentNote: fulfillNote,
         purchaseInvoiceId: purchaseInvoiceId,
       });
-      setFulfillOpen(false);
-      setSelectedDemand(null);
-      setSelectedMedicine(null);
+      closeFulfillDialog({ navigateBack: true });
     } catch (e: any) {
       alert(e?.message || 'Failed to fulfill');
     }
@@ -442,7 +473,12 @@ export const ProductDemandsPage: React.FC = () => {
         </Table>
       </TableContainer>
 
-      <Dialog open={fulfillOpen} onClose={() => setFulfillOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={fulfillOpen}
+        onClose={() => closeFulfillDialog({ navigateBack: true })}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Fulfill demand</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -526,15 +562,16 @@ export const ProductDemandsPage: React.FC = () => {
           />
           <TextField
             fullWidth
-            label="Purchase invoice # (reference)"
+            label="Purchase invoice reference"
             value={purchaseInvoiceId}
             onChange={(e) => setPurchaseInvoiceId(e.target.value)}
             sx={{ mt: 2 }}
-            placeholder="Optional — paste invoice number for your records"
+            helperText="Paste PI Firestore document id or invoice number (required for correct order pricing)"
+            placeholder="e.g. nqIHWIEr9kl9PyKQBK1Z"
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setFulfillOpen(false)}>Cancel</Button>
+          <Button onClick={() => closeFulfillDialog({ navigateBack: true })}>Cancel</Button>
           <Button variant="contained" onClick={handleFulfill} disabled={fulfillMutation.isPending}>
             Fulfill & notify retailer
           </Button>

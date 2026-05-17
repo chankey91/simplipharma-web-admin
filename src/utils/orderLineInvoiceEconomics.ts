@@ -1,6 +1,6 @@
 /**
  * Same economics as order tax invoice (`getOrderInvoiceHTML` in invoice.ts):
- * billable qty = scheme order-line display bill qty (same as invoice); unit price from first allocation MRP (or item).
+ * billable qty = scheme order-line display bill qty; unit price from PI purchase price when set, else item.price, else MRP formula.
  */
 import {
   billablePaidFromAllocationSums,
@@ -18,6 +18,40 @@ const schemePair = (source: any) => ({
   paid: source?.schemePaidQty ?? source?.purchaseSchemeDeal,
   free: source?.schemeFreeQty ?? source?.purchaseSchemeFree,
 });
+
+/** Unit price for invoice totals — matches order-details price column (PI purchase price first). */
+function resolveOrderLineUnitPrice(
+  item: any,
+  allocs: any[] | undefined,
+  gstRate: number
+): number {
+  if (allocs && allocs.length > 0) {
+    if (allocs.length === 1) {
+      const fromAlloc = toNum(allocs[0].purchasePrice);
+      if (fromAlloc > 0) return fromAlloc;
+    } else {
+      const sumPaid = allocs.reduce((s: number, a: any) => s + toNum(a.quantity), 0);
+      const sumAmount = allocs.reduce(
+        (s: number, a: any) => s + toNum(a.purchasePrice) * toNum(a.quantity),
+        0
+      );
+      if (sumPaid > 0 && sumAmount > 0) return sumAmount / sumPaid;
+    }
+  }
+
+  const fromItem = toNum(item.price);
+  if (fromItem > 0) return fromItem;
+
+  let mrp = toNum(item.mrp);
+  if (!mrp && allocs?.[0]?.mrp) {
+    mrp = toNum(allocs[0].mrp);
+  }
+  if (mrp > 0) {
+    return (mrp * 0.8) / (1 + gstRate / 100);
+  }
+
+  return 0;
+}
 
 export type OrderLineInvoiceEconomics = {
   totalO: number;
@@ -79,10 +113,6 @@ export function orderLineInvoiceEconomics(
     paidQty = toNum(item.quantity);
   }
 
-  let mrp = toNum(item.mrp);
-  if (!mrp && allocs?.[0]?.mrp) {
-    mrp = toNum(allocs[0].mrp);
-  }
   const taxFallback =
     orderTaxPercentage !== undefined && orderTaxPercentage !== null
       ? toNum(orderTaxPercentage) || 5
@@ -90,15 +120,7 @@ export function orderLineInvoiceEconomics(
   const gstRate =
     item.gstRate !== undefined ? toNum(item.gstRate) : taxFallback;
 
-  let unitPrice = 0;
-  if (mrp > 0) {
-    const afterDiscount = mrp * 0.8;
-    unitPrice = afterDiscount / (1 + gstRate / 100);
-  } else if (allocs?.[0]?.purchasePrice) {
-    unitPrice = toNum(allocs[0].purchasePrice);
-  } else {
-    unitPrice = toNum(item.price);
-  }
+  const unitPrice = resolveOrderLineUnitPrice(item, allocs, gstRate);
 
   const discountPct = toNum(item.discountPercentage);
 
@@ -119,6 +141,15 @@ export function orderLineTaxableBeforeDiscount(
   medicine: any | undefined,
   orderTaxPercentage?: number
 ): number {
+  const allocs = item.batchAllocations as any[] | undefined;
+  if (allocs && allocs.length > 1) {
+    const sumAmount = allocs.reduce(
+      (s: number, a: any) => s + toNum(a.purchasePrice) * toNum(a.quantity),
+      0
+    );
+    if (sumAmount > 0) return sumAmount;
+  }
+
   const e = orderLineInvoiceEconomics(item, medicine, orderTaxPercentage);
   return e.unitPrice * e.paidQty;
 }

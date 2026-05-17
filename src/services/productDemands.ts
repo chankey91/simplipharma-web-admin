@@ -9,7 +9,15 @@ import {
   Timestamp,
   writeBatch,
 } from './firebase';
-import { ProductDemand } from '../types';
+import { OrderMedicine, ProductDemand, PurchaseInvoice } from '../types';
+import { getMedicineById } from './inventory';
+import { getAllPurchaseInvoices, getPurchaseInvoiceByReference } from './purchaseInvoices';
+import {
+  buildFulfilledDemandOrderLine,
+  findPiItemForFulfilledDemand,
+  serializePromotedDemandLine,
+  withInferredPurchaseInvoiceId,
+} from '../utils/productDemandOrderLine';
 
 function parseDemandDoc(id: string, data: Record<string, unknown>): ProductDemand {
   const rqRaw = data.requestedQuantity;
@@ -76,25 +84,119 @@ export const fulfillProductDemand = async (
   const d = demandSnap.data() as Record<string, unknown>;
   if (d.status !== 'pending') throw new Error('Demand is not pending');
 
-  const medSnap = await getDoc(doc(db, 'medicines', medicineId));
-  if (!medSnap.exists()) throw new Error('Medicine not found');
-  const med = medSnap.data() as Record<string, unknown>;
+  const medicine = await getMedicineById(medicineId);
+  if (!medicine) throw new Error('Medicine not found');
 
   const uid = auth.currentUser?.uid || '';
   const batch = writeBatch(db);
+  const fulfilledName = medicine.name || String(d.productName || '');
+  const cartQty =
+    options?.quantity != null && options.quantity > 0 ? Math.floor(options.quantity) : undefined;
 
-  batch.update(demandRef, {
+  const demandUpdate: Record<string, unknown> = {
     status: 'fulfilled',
     fulfilledMedicineId: medicineId,
-    fulfilledMedicineName: (med.name as string) || d.productName,
+    fulfilledMedicineName: fulfilledName,
     fulfilledAt: Timestamp.now(),
     fulfilledBy: uid,
     fulfillmentNote: options?.fulfillmentNote?.trim() || '',
     purchaseInvoiceId: options?.purchaseInvoiceId?.trim() || '',
     updatedAt: Timestamp.now(),
-  });
+  };
+  if (cartQty != null) {
+    demandUpdate.fulfilledCartQuantity = cartQty;
+  }
+
+  batch.update(demandRef, demandUpdate);
+
+  const piRef = (options?.purchaseInvoiceId?.trim() || String(d.purchaseInvoiceId || '')).trim();
+  let purchaseInvoices: PurchaseInvoice[] | undefined;
+  try {
+    purchaseInvoices = await getAllPurchaseInvoices();
+  } catch {
+    purchaseInvoices = undefined;
+  }
+  if (piRef) {
+    const inv = await getPurchaseInvoiceByReference(piRef);
+    if (inv) {
+      purchaseInvoices = [inv, ...(purchaseInvoices ?? []).filter((p) => p.id !== inv.id)];
+    }
+  }
+
+  const orderId = typeof d.orderId === 'string' ? d.orderId.trim() : '';
+  if (orderId) {
+    const orderRef = doc(db, 'orders', orderId);
+    const orderSnap = await getDoc(orderRef);
+    if (orderSnap.exists()) {
+      const orderMedicines = (orderSnap.data().medicines || []) as OrderMedicine[];
+      let lineIndex = orderMedicines.findIndex((m) => m.productDemandId === demandId);
+      if (lineIndex < 0) {
+        lineIndex = orderMedicines.findIndex(
+          (m) =>
+            m.lineType === 'product_demand' &&
+            String(m.name || '')
+              .toLowerCase()
+              .includes(String(d.productName || '').toLowerCase().slice(0, 8))
+        );
+      }
+      if (lineIndex >= 0) {
+        const demandForLine = parseDemandDoc(demandId, {
+          ...d,
+          status: 'fulfilled',
+          fulfilledMedicineId: medicineId,
+          fulfilledMedicineName: fulfilledName,
+          purchaseInvoiceId: piRef || d.purchaseInvoiceId,
+          ...(cartQty != null ? { fulfilledCartQuantity: cartQty } : {}),
+        });
+        let medList = [medicine];
+        const piPreview = findPiItemForFulfilledDemand(
+          purchaseInvoices,
+          demandForLine,
+          orderMedicines[lineIndex].name
+        );
+        if (piPreview?.medicineId && piPreview.medicineId !== medicine.id) {
+          const linked = await getMedicineById(piPreview.medicineId);
+          if (linked) medList = [linked];
+        }
+        const promoted = buildFulfilledDemandOrderLine(
+          orderMedicines[lineIndex],
+          demandForLine,
+          purchaseInvoices,
+          medList,
+          cartQty
+        );
+        const nextMedicines = orderMedicines.map((m, i) =>
+          i === lineIndex ? (serializePromotedDemandLine(promoted) as unknown as OrderMedicine) : m
+        );
+        batch.update(orderRef, { medicines: nextMedicines });
+      }
+    }
+  }
 
   await batch.commit();
+};
+
+/** Attach PI doc id / invoice number to demands when it can be inferred from PI lines. */
+export const syncDemandPurchaseInvoiceRefs = async (
+  demands: ProductDemand[],
+  invoices: PurchaseInvoice[],
+  orderMedicines?: OrderMedicine[]
+): Promise<ProductDemand[]> => {
+  return Promise.all(
+    demands.map(async (d) => {
+      const line = orderMedicines?.find((m) => m.productDemandId === d.id);
+      const enriched = withInferredPurchaseInvoiceId(d, invoices, line?.name);
+      const nextRef = enriched.purchaseInvoiceId?.trim();
+      const prevRef = d.purchaseInvoiceId?.trim();
+      if (nextRef && nextRef !== prevRef) {
+        await updateDoc(doc(db, 'product_demands', d.id), {
+          purchaseInvoiceId: nextRef,
+          updatedAt: Timestamp.now(),
+        });
+      }
+      return enriched;
+    })
+  );
 };
 
 export const rejectProductDemand = async (demandId: string, reason: string): Promise<void> => {

@@ -230,15 +230,23 @@ const getOrderInvoiceHTML = async (order: Order) => {
     const discountPercentage = (item as any).discountPercentage !== undefined ? (item as any).discountPercentage : 0;
     const gstRate = (item as any).gstRate !== undefined ? (item as any).gstRate : (order.taxPercentage || 5);
     
-    // Calculate price from MRP: MRP - 20% - GST% (inclusive)
-    // Formula: Price = (MRP * 0.80) / (1 + GST/100)
     let price = 0;
-    if (mrp > 0) {
-      const afterDiscount = mrp * 0.80; // Apply 20% discount
-      price = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-    } else {
-      // Fallback to stored price if MRP not available
-      price = item.price || 0;
+    if (allocs && allocs.length === 1 && toNumber(allocs[0].purchasePrice) > 0) {
+      price = toNumber(allocs[0].purchasePrice);
+    } else if (allocs && allocs.length > 1) {
+      const sumPaid = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
+      const sumAmount = allocs.reduce(
+        (s: number, a: any) => s + toNumber(a.purchasePrice) * toNumber(a.quantity),
+        0
+      );
+      if (sumPaid > 0 && sumAmount > 0) price = sumAmount / sumPaid;
+    }
+    if (price <= 0 && toNumber(item.price) > 0) {
+      price = toNumber(item.price);
+    }
+    if (price <= 0 && mrp > 0) {
+      const afterDiscount = mrp * 0.80;
+      price = afterDiscount / (1 + gstRate / 100);
     }
     
     // Total Amount = Price × billable (paid) qty — free units are not charged

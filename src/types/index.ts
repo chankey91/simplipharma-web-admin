@@ -263,6 +263,8 @@ export interface ProductDemand {
   fulfilledBy?: string;
   fulfilledAt?: Date | any;
   fulfillmentNote?: string;
+  /** Quantity queued for retailer cart when ops fulfilled the demand. */
+  fulfilledCartQuantity?: number;
   purchaseInvoiceId?: string;
   rejectionReason?: string;
   rejectedAt?: Date | any;
