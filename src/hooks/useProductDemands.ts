@@ -35,6 +35,8 @@ export const useFulfillProductDemand = () => {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['order'] });
     },
   });
 };
@@ -46,6 +48,8 @@ export const useRejectProductDemand = () => {
       rejectProductDemand(demandId, reason),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['order'] });
     },
   });
 };

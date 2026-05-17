@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -49,7 +49,18 @@ import {
   AttachMoney,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
-import { useOrder, useUpdateOrderStatus, useFulfillOrder, useUpdateOrderDispatch, useMarkOrderDelivered, useCancelOrder, useUpdatePaymentStatus } from '../hooks/useOrders';
+import {
+  useOrder,
+  useUpdateOrderStatus,
+  useFulfillOrder,
+  useUpdateOrderDispatch,
+  useMarkOrderDelivered,
+  useCancelOrder,
+  useUpdatePaymentStatus,
+} from '../hooks/useOrders';
+import { updateOrderMedicines, updateOrderTotalAmount } from '../services/orders';
+import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
+import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
 import { useProductDemands } from '../hooks/useProductDemands';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
@@ -59,7 +70,7 @@ import { auth, doc, updateDoc, db } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import { OrderMedicine, OrderStatus, ProductDemand } from '../types';
+import { Medicine, OrderMedicine, OrderStatus, ProductDemand } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
 import { normalizeFirestoreDate } from '../services/inventory';
 import {
@@ -114,6 +125,111 @@ const getSchemeLabels = (item: any): string[] => {
   return Array.from(labels);
 };
 
+type PurchaseDiscountLookup = ReturnType<typeof buildPurchaseBatchDiscountLookup>;
+
+function mapRepairedLineToFulfillment(
+  line: OrderMedicine,
+  medicines: Medicine[],
+  purchaseDiscountLookup: PurchaseDiscountLookup
+) {
+  if ((line as { lineType?: string }).lineType === 'product_demand') {
+    return {
+      ...line,
+      medicineId: (line as { medicineId?: string }).medicineId ?? '',
+      verified: true,
+      scannedQRCode: '',
+      batchExpiryDate: undefined,
+      batchNumber: undefined,
+      batchAllocations: undefined,
+      discountPercentage: 0,
+      freeQuantity: 0,
+      originalQuantity: line.originalQuantity || line.quantity,
+      lineType: 'product_demand' as const,
+      productDemandId: line.productDemandId,
+      manufacturerName: (line as { manufacturerName?: string }).manufacturerName,
+      requestedUnit: (line as { requestedUnit?: string }).requestedUnit,
+      notes: (line as { notes?: string }).notes,
+    };
+  }
+
+  let discountPct = line.discountPercentage;
+  const medicine = medicines.find((med) => med.id === line.medicineId);
+
+  const lineSchemeFreeQty = (batchNumber: string | undefined, lineQty: number): number => {
+    if (!batchNumber || !medicine?.stockBatches) return 0;
+    const batch = medicine.stockBatches.find((b) => b.batchNumber === batchNumber);
+    if (!batch) return 0;
+    const sch = getSchemeFromAny(batch);
+    return computeSchemeFulfillmentFreeQty(lineQty, sch.schemePaidQty, sch.schemeFreeQty);
+  };
+
+  let batchAllocations = line.batchAllocations;
+
+  const computedFreeQuantity =
+    batchAllocations && batchAllocations.length > 0
+      ? (() => {
+          const hasPerAllocFree = batchAllocations.some(
+            (a) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
+          );
+          if (hasPerAllocFree) {
+            return batchAllocations.reduce(
+              (s, allocation) => s + toNumber(allocation.allocationFreeQty ?? 0),
+              0
+            );
+          }
+          let schemePaid: number | undefined;
+          let schemeFree: number | undefined;
+          for (const allocation of batchAllocations) {
+            const b = medicine?.stockBatches?.find((x) => x.batchNumber === allocation.batchNumber);
+            const allocSch = getSchemeFromAny(allocation);
+            const batchSch = getSchemeFromAny(b);
+            const p = allocSch.schemePaidQty || batchSch.schemePaidQty;
+            const f = allocSch.schemeFreeQty || batchSch.schemeFreeQty;
+            if (p > 0 && f > 0) {
+              schemePaid = p;
+              schemeFree = f;
+              break;
+            }
+          }
+          const totalO = orderLineSchemeDisplayPhysical(
+            { ...line, batchAllocations },
+            schemePaid,
+            schemeFree
+          );
+          return computeSchemeFulfillmentFreeQty(totalO, schemePaid, schemeFree);
+        })()
+      : lineSchemeFreeQty(line.batchNumber, toNumber(line.quantity));
+
+  const withDefaults = applyDefaultDiscountToFulfillmentLine(
+    {
+      ...line,
+      batchAllocations,
+      discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
+    },
+    purchaseDiscountLookup,
+    (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+  );
+  discountPct = withDefaults.discountPercentage;
+
+  return {
+    ...withDefaults,
+    medicineId: line.medicineId,
+    verified: !!line.batchNumber || !!(line.batchAllocations && line.batchAllocations.length > 0),
+    scannedQRCode: '',
+    batchExpiryDate:
+      line.batchAllocations && line.batchAllocations.length > 0
+        ? line.batchAllocations[0].expiryDate
+        : line.expiryDate,
+    discountPercentage: discountPct,
+    batchAllocations: withDefaults.batchAllocations ?? batchAllocations,
+    freeQuantity:
+      line.freeQuantity !== undefined && line.freeQuantity !== null
+        ? toNumber(line.freeQuantity)
+        : computedFreeQuantity,
+    originalQuantity: line.originalQuantity || line.quantity,
+  };
+}
+
 export const OrderDetailsPage: React.FC = () => {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
@@ -129,10 +245,18 @@ export const OrderDetailsPage: React.FC = () => {
     return m;
   }, [productDemands]);
   const { data: purchaseInvoices } = usePurchaseInvoices();
+  const purchaseInvoicesList = purchaseInvoices || [];
   const purchaseDiscountLookup = useMemo(
     () => buildPurchaseBatchDiscountLookup(purchaseInvoices || []),
     [purchaseInvoices]
   );
+  const orderDemandRepairAttempted = useRef<string | null>(null);
+  const [resyncingDemandLines, setResyncingDemandLines] = useState(false);
+
+  const hasFulfilledProductDemands = useMemo(() => {
+    if (!order?.id || !productDemands?.length) return false;
+    return productDemands.some((d) => d.orderId === order.id && d.status === 'fulfilled');
+  }, [order?.id, productDemands]);
 
   const resolveFulfillmentDiscountPct = useCallback(
     (
@@ -273,155 +397,78 @@ export const OrderDetailsPage: React.FC = () => {
   const [manualQRCodeInput, setManualQRCodeInput] = useState('');
 
   useEffect(() => {
-    if (order && medicines) {
-      const stepIndex = statusSteps.indexOf(order.status as OrderStatus);
-      setActiveStep(stepIndex >= 0 ? stepIndex : 0);
-      
-      if (order.medicines && Array.isArray(order.medicines) && order.medicines.length > 0) {
-        setFulfillmentData(prev => ({
-          ...prev,
-          medicines: order.medicines.map(m => {
-            if ((m as any).lineType === 'product_demand') {
-              return {
-                ...m,
-                medicineId: (m as any).medicineId ?? '',
-                verified: true,
-                scannedQRCode: '',
-                batchExpiryDate: undefined,
-                batchNumber: undefined,
-                batchAllocations: undefined,
-                discountPercentage: 0,
-                freeQuantity: 0,
-                originalQuantity: m.originalQuantity || m.quantity,
-                lineType: 'product_demand',
-                productDemandId: (m as any).productDemandId,
-                manufacturerName: (m as any).manufacturerName,
-                requestedUnit: (m as any).requestedUnit,
-                notes: (m as any).notes,
-              };
-            }
-            // Preserve discountPercentage from batchAllocations or item itself
-            let discountPct = m.discountPercentage;
-            
-            // Get medicine from inventory to fetch batch discountPercentage if needed
-            const medicine = medicines.find(med => med.id === m.medicineId);
+    if (!order || !medicines || purchaseInvoices === undefined) return;
 
-            const lineSchemeFreeQty = (
-              batchNumber: string | undefined,
-              lineQty: number
-            ): number => {
-              if (!batchNumber || !medicine?.stockBatches) return 0;
-              const batch = medicine.stockBatches.find(b => b.batchNumber === batchNumber);
-              if (!batch) return 0;
-              const sch = getSchemeFromAny(batch);
-              return computeSchemeFulfillmentFreeQty(
-                lineQty,
-                sch.schemePaidQty,
-                sch.schemeFreeQty
-              );
-            };
-            
-            let batchAllocations = m.batchAllocations;
+    const stepIndex = statusSteps.indexOf(order.status as OrderStatus);
+    setActiveStep(stepIndex >= 0 ? stepIndex : 0);
 
-            const computedFreeQuantity =
-              batchAllocations && batchAllocations.length > 0
-                ? (() => {
-                    const hasPerAllocFree = batchAllocations.some(
-                      (a: any) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
-                    );
-                    if (hasPerAllocFree) {
-                      return batchAllocations.reduce(
-                        (s, allocation) => s + toNumber((allocation as any).allocationFreeQty ?? 0),
-                        0
-                      );
-                    }
-                    let schemePaid: number | undefined;
-                    let schemeFree: number | undefined;
-                    for (const allocation of batchAllocations) {
-                      const b = medicine?.stockBatches?.find(
-                        (x) => x.batchNumber === allocation.batchNumber
-                      );
-                      const allocSch = getSchemeFromAny(allocation);
-                      const batchSch = getSchemeFromAny(b);
-                      const p = allocSch.schemePaidQty || batchSch.schemePaidQty;
-                      const f = allocSch.schemeFreeQty || batchSch.schemeFreeQty;
-                      if (p > 0 && f > 0) {
-                        schemePaid = p;
-                        schemeFree = f;
-                        break;
-                      }
-                    }
-                    const totalO = orderLineSchemeDisplayPhysical(
-                      { ...m, batchAllocations },
-                      schemePaid,
-                      schemeFree
-                    );
-                    return computeSchemeFulfillmentFreeQty(
-                      totalO,
-                      schemePaid,
-                      schemeFree
-                    );
-                  })()
-                : lineSchemeFreeQty(m.batchNumber, toNumber(m.quantity));
-
-            const withDefaults = applyDefaultDiscountToFulfillmentLine(
-              {
-                ...m,
-                batchAllocations,
-                discountManuallySet: (m as { discountManuallySet?: boolean }).discountManuallySet,
-              },
-              purchaseDiscountLookup,
-              (batchNumber) =>
-                medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
-            );
-            discountPct = withDefaults.discountPercentage;
-            
-            return {
-              ...withDefaults,
-              medicineId: m.medicineId, // Ensure medicineId exists
-              verified: !!m.batchNumber || !!(m.batchAllocations && m.batchAllocations.length > 0), // Auto-verify if batch already assigned
-              scannedQRCode: '',
-              batchExpiryDate: m.batchAllocations && m.batchAllocations.length > 0 
-                ? m.batchAllocations[0].expiryDate 
-                : m.expiryDate, // Use expiryDate from first batch allocation or OrderMedicine
-              discountPercentage: discountPct,
-              batchAllocations: withDefaults.batchAllocations ?? batchAllocations,
-              freeQuantity:
-                m.freeQuantity !== undefined && m.freeQuantity !== null
-                  ? toNumber(m.freeQuantity)
-                  : computedFreeQuantity,
-              // Preserve originalQuantity if it exists, otherwise set it to current quantity (for backward compatibility)
-              originalQuantity: m.originalQuantity || m.quantity,
-            };
-          })
-        }));
-      } else {
-        // Initialize with empty array if no medicines
-        setFulfillmentData(prev => ({
-          ...prev,
-          medicines: []
-        }));
-      }
-      
-      // Initialize partial payment amount if order has partial payment
-      if (order.paymentStatus === 'Partial' && order.paidAmount !== undefined) {
-        setPartialPaymentAmount(order.paidAmount.toFixed(2));
-      } else if (order.paymentStatus !== 'Partial') {
-        setPartialPaymentAmount('');
-      }
-      
-      // Show tray number dialog for pending orders if tray number and processedBy are not set
-      if (order.status === 'Pending' && !order.trayNumber && !order.processedBy) {
-        setTrayNumberDialog({ open: true, orderId: order.id });
-        setTrayNumber('');
-        setProcessedBy('');
-      } else if (order.trayNumber || order.processedBy) {
-        // If already set, populate the fields
-        setTrayNumber(String(order.trayNumber || '').trim());
-        setProcessedBy(order.processedBy || '');
-      }
+    if (order.paymentStatus === 'Partial' && order.paidAmount !== undefined) {
+      setPartialPaymentAmount(order.paidAmount.toFixed(2));
+    } else if (order.paymentStatus !== 'Partial') {
+      setPartialPaymentAmount('');
     }
-  }, [order, medicines, purchaseDiscountLookup]);
+
+    if (order.status === 'Pending' && !order.trayNumber && !order.processedBy) {
+      setTrayNumberDialog({ open: true, orderId: order.id });
+      setTrayNumber('');
+      setProcessedBy('');
+    } else if (order.trayNumber || order.processedBy) {
+      setTrayNumber(String(order.trayNumber || '').trim());
+      setProcessedBy(order.processedBy || '');
+    }
+
+    const rawMedicines =
+      order.medicines && Array.isArray(order.medicines) ? order.medicines : [];
+
+    let cancelled = false;
+
+    void (async () => {
+      const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
+        rawMedicines,
+        order.id,
+        productDemands || [],
+        medicines,
+        purchaseInvoicesList
+      );
+
+      if (changed && orderDemandRepairAttempted.current !== order.id) {
+        orderDemandRepairAttempted.current = order.id;
+        try {
+          await updateOrderMedicines(order.id, repaired);
+          queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+          queryClient.invalidateQueries({ queryKey: ['orders'] });
+          queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+        } catch (err) {
+          console.error('Failed to repair fulfilled demand order lines:', err);
+          orderDemandRepairAttempted.current = null;
+        }
+      }
+
+      if (cancelled) return;
+
+      setFulfillmentData((prev) => ({
+        ...prev,
+        medicines:
+          repaired.length > 0
+            ? repaired.map((line) =>
+                mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+              )
+            : [],
+      }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    order,
+    medicines,
+    productDemands,
+    purchaseInvoices,
+    purchaseInvoicesList,
+    purchaseDiscountLookup,
+    queryClient,
+  ]);
 
   // Re-apply PI-based defaults when purchase invoices finish loading (lookup was empty on first pass).
   useEffect(() => {
@@ -459,6 +506,121 @@ export const OrderDetailsPage: React.FC = () => {
       return changed ? { ...prev, medicines: nextMedicines } : prev;
     });
   }, [purchaseDiscountLookup, order?.status, medicines]);
+
+  const allBatchesAssignedForTotals = useMemo(
+    () =>
+      fulfillmentData.medicines.length > 0 &&
+      fulfillmentData.medicines.every(
+        (m) =>
+          (m as { lineType?: string }).lineType === 'product_demand' ||
+          m.batchNumber ||
+          (m.batchAllocations && m.batchAllocations.length > 0)
+      ),
+    [fulfillmentData.medicines]
+  );
+
+  const taxPctForTotals = order?.taxPercentage || fulfillmentData.taxPercentage || 5;
+  const orderTotals = useMemo(
+    () =>
+      order
+        ? calculateOrderTotalsFromLines(fulfillmentData.medicines, medicines, taxPctForTotals)
+        : {
+            billableLines: [],
+            subTotal: 0,
+            totalDiscount: 0,
+            taxAmount: 0,
+            calculatedTotal: 0,
+            roundoff: 0,
+            grandTotal: 0,
+          },
+    [order, fulfillmentData.medicines, medicines, taxPctForTotals]
+  );
+  const orderTotalSyncRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!order?.id) return;
+    if (
+      order.status === 'Delivered' ||
+      order.status === 'In Transit' ||
+      order.status === 'Cancelled'
+    ) {
+      return;
+    }
+    if (!allBatchesAssignedForTotals) return;
+    const liveTotal = orderTotals.grandTotal;
+    if (liveTotal <= 0) return;
+    if (order.totalAmount === liveTotal) return;
+    if (orderTotalSyncRef.current === liveTotal) return;
+
+    orderTotalSyncRef.current = liveTotal;
+    void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0)
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+      })
+      .catch((err) => {
+        console.error('Failed to sync order total:', err);
+        orderTotalSyncRef.current = null;
+      });
+  }, [
+    order?.id,
+    order?.status,
+    order?.totalAmount,
+    order?.paidAmount,
+    orderTotals.grandTotal,
+    allBatchesAssignedForTotals,
+    queryClient,
+  ]);
+
+  const handleResyncDemandLinesFromPi = useCallback(async () => {
+    if (!order?.id || !medicines || purchaseInvoices === undefined) return;
+
+    setResyncingDemandLines(true);
+    orderDemandRepairAttempted.current = null;
+
+    try {
+      const rawMedicines = order.medicines ?? [];
+      const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
+        rawMedicines,
+        order.id,
+        productDemands || [],
+        medicines,
+        purchaseInvoicesList
+      );
+
+      await updateOrderMedicines(order.id, repaired);
+      orderDemandRepairAttempted.current = order.id;
+
+      queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+
+      setFulfillmentData((prev) => ({
+        ...prev,
+        medicines: repaired.map((line) =>
+          mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+        ),
+      }));
+
+      if (changed) {
+        alert('Order lines updated from purchase invoice.');
+      } else {
+        alert('Lines checked — no changes were needed (confirm demand has purchase invoice ref).');
+      }
+    } catch (err) {
+      console.error('Resync demand lines from PI failed:', err);
+      alert('Could not sync lines from purchase invoice. See console for details.');
+    } finally {
+      setResyncingDemandLines(false);
+    }
+  }, [
+    order,
+    medicines,
+    productDemands,
+    purchaseInvoices,
+    purchaseInvoicesList,
+    purchaseDiscountLookup,
+    queryClient,
+  ]);
 
   if (isLoading) return <Loading message="Loading order details..." />;
   if (!order) return <Alert severity="error">Order not found</Alert>;
@@ -514,31 +676,13 @@ export const OrderDetailsPage: React.FC = () => {
         // Total Amount = Price * Quantity
         // Discount = Total Amount * discountPercentage / 100
         // Subtotal = Sum of (Total Amount - Discount)
-        const itemsWithBatches = fulfillmentData.medicines.filter(
-          m => m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
-        );
-        
-        // Subtotal / discount: same as order invoice (economic paid qty × invoice unit price)
         const taxPctForLines = order.taxPercentage || fulfillmentData.taxPercentage || 5;
-        const subTotal = itemsWithBatches.reduce((sum: number, item: any) => {
-          const med = medicines?.find((m) => m.id === item.medicineId);
-          return sum + orderLineTaxableBeforeDiscount(item, med, taxPctForLines);
-        }, 0);
-
-        const totalDiscount = itemsWithBatches.reduce((sum: number, item: any) => {
-          const med = medicines?.find((m) => m.id === item.medicineId);
-          const e = orderLineInvoiceEconomics(item, med, taxPctForLines);
-          const lineAmt = e.unitPrice * e.paidQty;
-          const discount = (lineAmt * e.discountPct) / 100;
-          return sum + discount;
-        }, 0);
-        
-        const amountAfterDiscount = subTotal - totalDiscount;
-        const taxAmount = (amountAfterDiscount * taxPctForLines) / 100;
-        
-        const calculatedTotal = subTotal - totalDiscount + taxAmount;
-        const roundoff = Math.round(calculatedTotal) - calculatedTotal;
-        const totalAmount = Math.round(calculatedTotal);
+        const fulfillTotals = calculateOrderTotalsFromLines(
+          fulfillmentData.medicines,
+          medicines,
+          taxPctForLines
+        );
+        const { subTotal, totalDiscount, taxAmount, grandTotal: totalAmount } = fulfillTotals;
         
         // Debug: Log medicines before sending to ensure discountPercentage is present
         console.log('[OrderDetails] Fulfilling order with medicines:', fulfillmentData.medicines.map(m => ({
@@ -1314,28 +1458,17 @@ export const OrderDetailsPage: React.FC = () => {
       m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
     );
   
-  // Subtotal / discount / tax: match order tax invoice (`getOrderInvoiceHTML`)
-  const itemsWithBatches = fulfillmentData.medicines.filter(m => m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0));
-  const taxPercentage = order.taxPercentage || fulfillmentData.taxPercentage || 5;
+  const taxPercentage = taxPctForTotals;
+  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal } = orderTotals;
 
-  const subTotal = itemsWithBatches.reduce((sum: number, item: any) => {
-    const med = medicines?.find((m) => m.id === item.medicineId);
-    return sum + orderLineTaxableBeforeDiscount(item, med, taxPercentage);
-  }, 0);
-
-  const totalDiscount = itemsWithBatches.reduce((sum: number, item: any) => {
-    const med = medicines?.find((m) => m.id === item.medicineId);
-    const e = orderLineInvoiceEconomics(item, med, taxPercentage);
-    const lineAmt = e.unitPrice * e.paidQty;
-    return sum + (lineAmt * e.discountPct) / 100;
-  }, 0);
-  const amountAfterDiscount = subTotal - totalDiscount;
-  const taxAmount = (amountAfterDiscount * taxPercentage) / 100;
-  const calculatedTotal = amountAfterDiscount + taxAmount;
-  
-  // Calculate round off
-  const roundoff = calculatedTotal > 0 ? (Math.round(calculatedTotal) - calculatedTotal) : 0;
-  const grandTotal = calculatedTotal > 0 ? Math.round(calculatedTotal) : 0;
+  /** Use retailer order total until all batches assigned; then use calculated invoice total. */
+  const effectiveOrderTotal =
+    order.status === 'Delivered' || order.status === 'In Transit'
+      ? order.totalAmount ?? grandTotal
+      : allBatchesAssigned && grandTotal > 0
+        ? grandTotal
+        : Math.max(grandTotal, order.totalAmount ?? 0);
+  const effectiveDueAmount = Math.max(0, effectiveOrderTotal - (order.paidAmount ?? 0));
 
   return (
     <Box>
@@ -1348,7 +1481,21 @@ export const OrderDetailsPage: React.FC = () => {
           <ArrowBack />
         </IconButton>
         <Typography variant="h4">Order #{order.id.substring(0, 8)}</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ ml: 1, alignSelf: 'flex-end', pb: 0.5 }}>
+          {order.id}
+        </Typography>
         <Box sx={{ flexGrow: 1 }} />
+        {hasFulfilledProductDemands && (
+          <Button
+            variant="outlined"
+            color="primary"
+            disabled={resyncingDemandLines || purchaseInvoices === undefined}
+            onClick={() => void handleResyncDemandLinesFromPi()}
+            sx={{ mr: 2 }}
+          >
+            {resyncingDemandLines ? 'Syncing PI…' : 'Sync from purchase invoice'}
+          </Button>
+        )}
         {order.status !== 'Cancelled' && order.status !== 'In Transit' && order.status !== 'Delivered' && (
           <Button
             variant="outlined"
@@ -1675,7 +1822,7 @@ export const OrderDetailsPage: React.FC = () => {
                                   ? ` Reason: ${dDoc.rejectionReason}`
                                   : ''}
                               </Typography>
-                            ) : (
+                            ) : !isFulfilled ? (
                               <Typography
                                 variant="caption"
                                 color="textSecondary"
@@ -1684,7 +1831,7 @@ export const OrderDetailsPage: React.FC = () => {
                               >
                                 No inventory batch on this line — map the product in Product requests when ready.
                               </Typography>
-                            )}
+                            ) : null}
                             {showFulfill ? (
                               <Button
                                 size="small"
@@ -1695,7 +1842,7 @@ export const OrderDetailsPage: React.FC = () => {
                                   navigate(
                                     `/product-demands?demandId=${encodeURIComponent(
                                       (item as OrderMedicine).productDemandId!
-                                    )}`
+                                    )}&returnTo=${encodeURIComponent(`/orders/${order.id}`)}`
                                   )
                                 }
                               >
@@ -1839,12 +1986,10 @@ export const OrderDetailsPage: React.FC = () => {
                             const batchMRP = allocation.mrp || 0;
                             const gstRate = allocation.gstRate || item.gstRate || 5;
                             // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
-                            let batchPurchasePrice = 0;
-                            if (batchMRP > 0) {
-                              const afterDiscount = batchMRP * 0.80; // Apply 20% discount
-                              batchPurchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-                            } else {
-                              batchPurchasePrice = allocation.purchasePrice || 0;
+                            let batchPurchasePrice = toNumber(allocation.purchasePrice);
+                            if (batchPurchasePrice <= 0 && batchMRP > 0) {
+                              const afterDiscount = batchMRP * 0.80;
+                              batchPurchasePrice = afterDiscount / (1 + gstRate / 100);
                             }
 
                             const batchTotal =
@@ -1945,6 +2090,13 @@ export const OrderDetailsPage: React.FC = () => {
                     );
                     const paidForDisplay = singleLineDisplay.billQty;
                     const physicalForDisplay = singleLineDisplay.totalQty;
+                    const lineEcon = orderLineInvoiceEconomics(item, medSingle, taxPercentage);
+                    const displayMrp =
+                      toNumber(item.mrp) ||
+                      toNumber(singleAlloc?.mrp) ||
+                      toNumber(medSingle?.mrp);
+                    const displayUnitPrice = lineEcon.unitPrice;
+                    const hasLinePricing = displayUnitPrice > 0 || displayMrp > 0;
                     return (
                       <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                         <TableCell>
@@ -1969,21 +2121,15 @@ export const OrderDetailsPage: React.FC = () => {
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          {item.batchAllocations && item.batchAllocations.length === 1 ? (
-                            <>
-                              {item.batchAllocations[0].batchNumber}
-                              {item.batchAllocations[0].expiryDate && ` - Exp: ${format(
-                                item.batchAllocations[0].expiryDate instanceof Date 
-                                  ? item.batchAllocations[0].expiryDate 
-                                  : item.batchAllocations[0].expiryDate.toDate(),
-                                'MM/yyyy'
-                              )}`}
-                            </>
-                          ) : item.batchNumber ? (
-                            item.batchNumber
-                          ) : (
-                            <Typography variant="caption" color="textSecondary">Not assigned</Typography>
-                          )}
+                          {item.batchAllocations && item.batchAllocations.length === 1
+                            ? item.batchAllocations[0].batchNumber
+                            : item.batchNumber
+                              ? item.batchNumber
+                              : (
+                                  <Typography variant="caption" color="textSecondary">
+                                    Not assigned
+                                  </Typography>
+                                )}
                         </TableCell>
                         <TableCell align="right">
                           {item.originalQuantity && item.originalQuantity !== item.quantity ? (
@@ -2025,41 +2171,37 @@ export const OrderDetailsPage: React.FC = () => {
                         <TableCell align="right">
                           {item.batchAllocations && item.batchAllocations.length === 1
                             ? (item.batchAllocations[0].mrp ? `₹${item.batchAllocations[0].mrp.toFixed(2)}` : '-')
-                            : item.mrp 
-                              ? `₹${(item.mrp || 0).toFixed(2)}`
+                            : displayMrp > 0
+                              ? `₹${displayMrp.toFixed(2)}`
                               : <Typography variant="caption" color="textSecondary">-</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">
                           {item.batchAllocations && item.batchAllocations.length === 1 
                             ? (() => {
-                                // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
                                 const mrp = item.batchAllocations[0].mrp || 0;
                                 const gstRate = item.batchAllocations[0].gstRate || item.gstRate || 5;
-                                let purchasePrice = 0;
-                                if (mrp > 0) {
-                                  const afterDiscount = mrp * 0.80; // Apply 20% discount
-                                  purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-                                } else {
-                                  purchasePrice = item.batchAllocations[0].purchasePrice || 0;
+                                let purchasePrice = toNumber(item.batchAllocations[0].purchasePrice);
+                                if (purchasePrice <= 0 && mrp > 0) {
+                                  const afterDiscount = mrp * 0.80;
+                                  purchasePrice = afterDiscount / (1 + gstRate / 100);
                                 }
                                 return `₹${purchasePrice.toFixed(2)}`;
                               })()
                             : item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) 
                               ? (() => {
-                                  // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
                                   const mrp = item.mrp || 0;
                                   const gstRate = item.gstRate || 5;
-                                  let purchasePrice = 0;
-                                  if (mrp > 0) {
-                                    const afterDiscount = mrp * 0.80; // Apply 20% discount
-                                    purchasePrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-                                  } else {
-                                    purchasePrice = item.price || 0;
+                                  let purchasePrice = toNumber(item.price);
+                                  if (purchasePrice <= 0 && mrp > 0) {
+                                    const afterDiscount = mrp * 0.80;
+                                    purchasePrice = afterDiscount / (1 + gstRate / 100);
                                   }
                                   return `₹${purchasePrice.toFixed(2)}`;
                                 })()
-                              : <Typography variant="caption" color="textSecondary">Enter batch</Typography>
+                              : hasLinePricing
+                                ? `₹${displayUnitPrice.toFixed(2)}`
+                                : <Typography variant="caption" color="textSecondary">Enter batch</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">
@@ -2073,11 +2215,15 @@ export const OrderDetailsPage: React.FC = () => {
                             ? renderDiscPctCell(item, index, item.batchAllocations[0], 0)
                             : item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0)
                               ? renderDiscPctCell(item, index)
-                              : <Typography variant="caption" color="textSecondary">-</Typography>
+                              : item.discountPercentage != null && item.discountPercentage > 0
+                                ? `${item.discountPercentage}%`
+                                : lineEcon.discountPct > 0
+                                  ? `${lineEcon.discountPct}%`
+                                  : <Typography variant="caption" color="textSecondary">-</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">
-                          {item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0)
+                          {item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) || hasLinePricing
                             ? `₹${orderLineTaxableBeforeDiscount(item, medSingle, taxPercentage).toFixed(2)}`
                             : <Typography variant="caption" color="textSecondary">-</Typography>}
                         </TableCell>
@@ -2203,7 +2349,7 @@ export const OrderDetailsPage: React.FC = () => {
                 <Box sx={{ bgcolor: 'action.hover', borderRadius: 1, p: 1.5, mb: 2 }}>
                   <Box display="flex" justifyContent="space-between" mb={0.5}>
                     <Typography variant="body2" color="textSecondary">Order Total</Typography>
-                    <Typography variant="body2" fontWeight="bold">₹{order.totalAmount?.toFixed(2) || grandTotal.toFixed(2)}</Typography>
+                    <Typography variant="body2" fontWeight="bold">₹{effectiveOrderTotal.toFixed(2)}</Typography>
                   </Box>
                   <Box display="flex" justifyContent="space-between" mb={0.5}>
                     <Typography variant="body2" color="textSecondary">Paid</Typography>
@@ -2211,8 +2357,8 @@ export const OrderDetailsPage: React.FC = () => {
                   </Box>
                   <Box display="flex" justifyContent="space-between">
                     <Typography variant="body2" color="textSecondary">Due</Typography>
-                    <Typography variant="body2" fontWeight="bold" color={(order.dueAmount ?? (order.totalAmount || 0) - (order.paidAmount ?? 0)) > 0 ? 'error.main' : 'success.main'}>
-                      ₹{((order.dueAmount ?? (order.totalAmount || 0) - (order.paidAmount ?? 0)) || 0).toFixed(2)}
+                    <Typography variant="body2" fontWeight="bold" color={effectiveDueAmount > 0 ? 'error.main' : 'success.main'}>
+                      ₹{effectiveDueAmount.toFixed(2)}
                     </Typography>
                   </Box>
                   {order.paymentMethod && (
@@ -2237,7 +2383,7 @@ export const OrderDetailsPage: React.FC = () => {
                         color="primary"
                         startIcon={<Payment />}
                         onClick={() => {
-                          const total = order.totalAmount || 0;
+                          const total = effectiveOrderTotal;
                           const paid = order.paidAmount ?? 0;
                           const due = total - paid;
                           setPaymentDialog({
@@ -2262,7 +2408,7 @@ export const OrderDetailsPage: React.FC = () => {
                           orderId: order.id,
                           paymentStatus: 'Unpaid',
                           paidAmount: 0,
-                          totalAmount: order.totalAmount,
+                          totalAmount: effectiveOrderTotal,
                         })}
                         disabled={updatePaymentStatusMutation.isPending}
                       >
@@ -2538,9 +2684,9 @@ export const OrderDetailsPage: React.FC = () => {
               onChange={(e) => setPaymentDialog({ ...paymentDialog, amount: e.target.value })}
               InputProps={{
                 startAdornment: <InputAdornment position="start">₹</InputAdornment>,
-                inputProps: { min: 0, max: order?.totalAmount || 0, step: 0.01 }
+                inputProps: { min: 0, max: effectiveOrderTotal, step: 0.01 }
               }}
-              helperText={`Order total: ₹${(order?.totalAmount || 0).toFixed(2)}`}
+              helperText={`Order total: ₹${effectiveOrderTotal.toFixed(2)}`}
               sx={{ mb: 2 }}
             />
             <Typography variant="subtitle2" color="textSecondary" gutterBottom sx={{ mb: 1 }}>
@@ -2576,7 +2722,7 @@ export const OrderDetailsPage: React.FC = () => {
                 fullWidth
                 variant="outlined"
                 size="small"
-                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String(order?.totalAmount || 0), isFull: true })}
+                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String(effectiveOrderTotal), isFull: true })}
               >
                 Full amount
               </Button>
@@ -2584,7 +2730,7 @@ export const OrderDetailsPage: React.FC = () => {
                 fullWidth
                 variant="outlined"
                 size="small"
-                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String((order?.totalAmount || 0) * 0.5), isFull: false })}
+                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String(effectiveOrderTotal * 0.5), isFull: false })}
               >
                 50%
               </Button>
@@ -2599,12 +2745,12 @@ export const OrderDetailsPage: React.FC = () => {
             disabled={
               !paymentDialog.amount ||
               parseFloat(paymentDialog.amount) <= 0 ||
-              parseFloat(paymentDialog.amount) > (order?.totalAmount || 0) ||
+              parseFloat(paymentDialog.amount) > effectiveOrderTotal ||
               updatePaymentStatusMutation.isPending
             }
             onClick={() => {
               const amount = parseFloat(paymentDialog.amount) || 0;
-              const total = order?.totalAmount || 0;
+              const total = effectiveOrderTotal;
               const isPaid = Math.abs(amount - total) < 0.01;
               updatePaymentStatusMutation.mutate({
                 orderId: order!.id,
