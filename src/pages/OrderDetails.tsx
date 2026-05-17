@@ -2595,7 +2595,7 @@ export const OrderDetailsPage: React.FC = () => {
                   : traysFetching
                     ? 'Loading trays…'
                     : !(trays?.length ?? 0)
-                      ? 'Add tray numbers under Operations → Tray Numbers.'
+                      ? 'Add tray numbers under Fulfillment setup → Tray Numbers.'
                       : availableTrays.length === 0
                         ? 'Every tray is on another Pending or Order Fulfillment order. Trays become available again after those orders are dispatched (In Transit or later).'
                         : 'Only trays that are free or already on this order are listed. Trays on dispatched orders are available again.'
@@ -2642,7 +2642,7 @@ export const OrderDetailsPage: React.FC = () => {
                 ))}
               </Select>
               <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5 }}>
-                Add more operators in Operations → Operators
+                Add more operators in Fulfillment setup → Operators
               </Typography>
             </FormControl>
           </Box>

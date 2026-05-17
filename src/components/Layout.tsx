@@ -1,5 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Drawer, AppBar, Toolbar, Typography, List, ListItem, ListItemButton, ListItemIcon, ListItemText, CssBaseline } from '@mui/material';
+import {
+  Box,
+  Drawer,
+  AppBar,
+  Toolbar,
+  Typography,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  ListSubheader,
+  CssBaseline,
+} from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Dashboard,
@@ -29,30 +42,72 @@ import { brandColors } from '../theme/brand';
 import { useAuth } from '../context/AuthContext';
 import { ROLE_MENU_PATHS, getPanelTitle, type PanelRole } from '../auth/permissions';
 
-const drawerWidth = 240;
+const drawerWidth = 260;
 
-const ALL_MENU_ITEMS: { text: string; icon: React.ReactNode; path: string }[] = [
-  { text: 'Dashboard', icon: <Dashboard />, path: '/' },
-  { text: 'Pending Retailers', icon: <PersonAdd />, path: '/pending-retailers' },
-  { text: 'Expiry Returns', icon: <Archive />, path: '/expiry-returns' },
-  { text: 'Order Returns', icon: <Undo />, path: '/order-returns' },
-  { text: 'Vendors', icon: <Business />, path: '/vendors' },
-  { text: 'Medical Stores', icon: <Store />, path: '/stores' },
-  { text: 'Sales Officers', icon: <Group />, path: '/sales-officers' },
-  { text: 'Operations users', icon: <Engineering />, path: '/operations-users' },
-  { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
-  { text: 'Purchases', icon: <Receipt />, path: '/purchases' },
-  { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
-  { text: 'Gross margin', icon: <TrendingUp />, path: '/margin' },
-  { text: 'Product demands', icon: <PostAdd />, path: '/product-demands' },
-  { text: 'Operations', icon: <Settings />, path: '/operations' },
-  { text: 'Invoices', icon: <Description />, path: '/invoices' },
-  { text: 'Banners', icon: <Campaign />, path: '/banners' },
+type MenuItem = { text: string; icon: React.ReactNode; path: string };
+
+type MenuSection = { title: string; items: MenuItem[] };
+
+const MENU_SECTIONS: MenuSection[] = [
+  {
+    title: 'Overview',
+    items: [{ text: 'Dashboard', icon: <Dashboard />, path: '/' }],
+  },
+  {
+    title: 'Fulfillment',
+    items: [
+      { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
+      { text: 'Product demands', icon: <PostAdd />, path: '/product-demands' },
+      { text: 'Sales invoices', icon: <Description />, path: '/invoices' },
+    ],
+  },
+  {
+    title: 'Inventory & buying',
+    items: [
+      { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
+      { text: 'Purchase invoices', icon: <Receipt />, path: '/purchases' },
+      { text: 'Vendors', icon: <Business />, path: '/vendors' },
+    ],
+  },
+  {
+    title: 'Returns',
+    items: [
+      { text: 'Order returns', icon: <Undo />, path: '/order-returns' },
+      { text: 'Expiry returns', icon: <Archive />, path: '/expiry-returns' },
+    ],
+  },
+  {
+    title: 'Network',
+    items: [
+      { text: 'Medical stores', icon: <Store />, path: '/stores' },
+      { text: 'Pending retailers', icon: <PersonAdd />, path: '/pending-retailers' },
+      { text: 'Sales officers', icon: <Group />, path: '/sales-officers' },
+    ],
+  },
+  {
+    title: 'Insights',
+    items: [{ text: 'Margin report', icon: <TrendingUp />, path: '/margin' }],
+  },
+  {
+    title: 'Marketing',
+    items: [{ text: 'Banners', icon: <Campaign />, path: '/banners' }],
+  },
+  {
+    title: 'Setup',
+    items: [{ text: 'Fulfillment setup', icon: <Settings />, path: '/operations' }],
+  },
+  {
+    title: 'Administration',
+    items: [{ text: 'Panel users', icon: <Engineering />, path: '/operations-users' }],
+  },
 ];
 
-function menuItemsForRole(role: PanelRole) {
+function menuSectionsForRole(role: PanelRole): MenuSection[] {
   const allowed = new Set(ROLE_MENU_PATHS[role]);
-  return ALL_MENU_ITEMS.filter((item) => allowed.has(item.path));
+  return MENU_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => allowed.has(item.path)),
+  })).filter((section) => section.items.length > 0);
 }
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -75,8 +130,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     });
   }, [panelRole]);
 
-  const menuItems = useMemo(
-    () => (panelRole ? menuItemsForRole(panelRole) : []),
+  const menuSections = useMemo(
+    () => (panelRole ? menuSectionsForRole(panelRole) : []),
     [panelRole]
   );
 
@@ -104,20 +159,42 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           {panelTitle}
         </Typography>
       </Toolbar>
-      <List>
-        {menuItems.map((item) => (
-          <ListItem key={item.text} disablePadding>
-            <ListItemButton
-              selected={isSelected(item.path)}
-              onClick={() => {
-                navigate(item.path);
-                setMobileOpen(false);
+      <List sx={{ pb: 1 }}>
+        {menuSections.map((section) => (
+          <React.Fragment key={section.title}>
+            <ListSubheader
+              sx={{
+                lineHeight: 2,
+                fontSize: '0.7rem',
+                fontWeight: 700,
+                letterSpacing: 0.6,
+                textTransform: 'uppercase',
+                color: brandColors.navy,
+                bgcolor: 'transparent',
+                mt: section.title === 'Overview' ? 0 : 1,
               }}
             >
-              <ListItemIcon>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.text} />
-            </ListItemButton>
-          </ListItem>
+              {section.title}
+            </ListSubheader>
+            {section.items.map((item) => (
+              <ListItem key={item.path} disablePadding>
+                <ListItemButton
+                  selected={isSelected(item.path)}
+                  onClick={() => {
+                    navigate(item.path);
+                    setMobileOpen(false);
+                  }}
+                  sx={{ py: 0.75 }}
+                >
+                  <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
+                  <ListItemText
+                    primary={item.text}
+                    primaryTypographyProps={{ variant: 'body2', fontWeight: 500 }}
+                  />
+                </ListItemButton>
+              </ListItem>
+            ))}
+          </React.Fragment>
         ))}
         <ListItem disablePadding>
           <ListItemButton

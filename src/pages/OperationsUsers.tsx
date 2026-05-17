@@ -165,7 +165,7 @@ export const OperationsUsersPage: React.FC = () => {
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Box>
-          <Typography variant="h4">Operations users</Typography>
+          <Typography variant="h4">Panel users</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             Staff who process orders, inventory, purchases, and daily warehouse work.
           </Typography>
