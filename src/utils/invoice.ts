@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { Order, PurchaseInvoice } from '../types';
+import { Order, PurchaseInvoice, ProductDemand, Medicine } from '../types';
 import {
   billablePaidFromAllocationSums,
   orderedUnitsFromAllocation,
@@ -11,8 +11,10 @@ import {
 import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
-import { getMedicineById } from '../services/inventory';
+import { getMedicineById, getAllMedicines } from '../services/inventory';
 import { getProductDemandsByIds } from '../services/productDemands';
+import { getAllPurchaseInvoices, collectPurchaseInvoicesForDemands } from '../services/purchaseInvoices';
+import { tryPromoteFulfilledDemandLine } from './productDemandOrderLine';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -81,11 +83,45 @@ const getOrderInvoiceHTML = async (order: Order) => {
     };
   };
   
+  const productDemandIds = [
+    ...new Set(
+      order.medicines.map((m) => m.productDemandId).filter((id): id is string => Boolean(id))
+    ),
+  ];
+  const demandById = await getProductDemandsByIds(productDemandIds);
+
+  const relevantDemands: ProductDemand[] = productDemandIds
+    .map((id) => demandById.get(id))
+    .filter((d): d is ProductDemand => d != null);
+
+  let mergedInvoices: PurchaseInvoice[] = [];
+  let medicineList: Medicine[] = [];
+
+  if (relevantDemands.some((d) => d.status === 'fulfilled')) {
+    const [baseInvoices, meds] = await Promise.all([
+      getAllPurchaseInvoices(),
+      getAllMedicines(),
+    ]);
+    mergedInvoices = await collectPurchaseInvoicesForDemands(baseInvoices, relevantDemands);
+    medicineList = meds;
+  }
+
+  /**
+   * Legacy rows still marked product_demand: rebuild with the same PI + inventory rules as
+   * fulfillProductDemand / prepareFulfilledDemandOrderMedicines (no separate "pick any batch" path).
+   */
+  const invoiceMedicines: Order['medicines'] = order.medicines.map((item) => {
+    if (item.lineType !== 'product_demand') return item;
+    const demand = item.productDemandId ? demandById.get(item.productDemandId) : undefined;
+    if (!demand || demand.status !== 'fulfilled' || medicineList.length === 0) return item;
+    return tryPromoteFulfilledDemandLine(item, relevantDemands, medicineList, mergedInvoices, order.id);
+  });
+
   // Fetch all medicines to get packaging info
   const medicineMap = new Map<string, string>();
   const medicineDetailsMap = new Map<string, any>();
   await Promise.all(
-    order.medicines.map(async (item) => {
+    invoiceMedicines.map(async (item) => {
       if (item.medicineId) {
         try {
           const medicine = await getMedicineById(item.medicineId);
@@ -119,17 +155,12 @@ const getOrderInvoiceHTML = async (order: Order) => {
       }
     })
   );
-
-  const productDemandIds = order.medicines
-    .filter((m) => m.lineType === 'product_demand' && m.productDemandId)
-    .map((m) => m.productDemandId as string);
-  const demandById = await getProductDemandsByIds(productDemandIds);
   
   // Calculate totals
   let totalSubTotal = 0;
   let totalProductDiscount = 0;
   
-  const items = order.medicines.map((item, index) => {
+  const items = invoiceMedicines.map((item, index) => {
     if (item.lineType === 'product_demand') {
       const gstRate =
         (item as any).gstRate !== undefined ? (item as any).gstRate : order.taxPercentage || 5;

@@ -1532,8 +1532,7 @@ export const OrderDetailsPage: React.FC = () => {
                     .filter(
                       (m) =>
                         (m as any).lineType === 'product_demand' ||
-                        Boolean(m.batchNumber) ||
-                        (m.batchAllocations && m.batchAllocations.length > 0)
+                        Boolean(m.medicineId)
                     )
                     .map((m) => {
                       if ((m as any).lineType === 'product_demand') {

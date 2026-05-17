@@ -49,6 +49,21 @@ service firebase.storage {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // Banner images: writes scoped to auth uid — no firestore.get(), so this works on Spark.
+    // Mobile app only needs read; URLs may live under banners/images/{uid}/...
+    match /banners/images/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Other banner paths (legacy flat files, etc.): public read only.
+    match /banners/{allPaths=**} {
+      allow read: if true;
+    }
+
     // Paths not matched above are denied by default.
   }
 }
