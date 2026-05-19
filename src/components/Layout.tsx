@@ -35,6 +35,7 @@ import {
   TrendingUp,
   Undo,
   AccountBalance,
+  HeadsetMic,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -52,7 +53,10 @@ type MenuSection = { title: string; items: MenuItem[] };
 const MENU_SECTIONS: MenuSection[] = [
   {
     title: 'Overview',
-    items: [{ text: 'Dashboard', icon: <Dashboard />, path: '/' }],
+    items: [
+      { text: 'Dashboard', icon: <Dashboard />, path: '/' },
+      { text: 'Support', icon: <HeadsetMic />, path: '/support' },
+    ],
   },
   {
     title: 'Fulfillment',

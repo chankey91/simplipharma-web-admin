@@ -29,11 +29,13 @@ import {
   Store,
   Edit,
   PersonAddAlt,
+  LockReset,
 } from '@mui/icons-material';
 import {
   useSalesOfficers,
   useCreateSalesOfficer,
   useUpdateSalesOfficerProfile,
+  useSendSalesOfficerPasswordResetEmail,
 } from '../hooks/useSalesOfficers';
 import { useStores, useAssignRetailerToSalesOfficer } from '../hooks/useStores';
 import { Loading } from '../components/Loading';
@@ -66,6 +68,8 @@ export const SalesOfficersPage: React.FC = () => {
     phoneNumber: '',
     password: '',
   });
+
+  const resetPasswordMutation = useSendSalesOfficerPasswordResetEmail();
 
   const [editOpen, setEditOpen] = useState(false);
   const [editOfficer, setEditOfficer] = useState<User | null>(null);
@@ -152,6 +156,23 @@ export const SalesOfficersPage: React.FC = () => {
       setEditOfficer(null);
     } catch (err: any) {
       alert(err.message || 'Failed to update');
+    }
+  };
+
+  const handleSendPasswordReset = async () => {
+    if (!editOfficer?.email) return;
+    if (
+      !window.confirm(
+        `Send a password reset link to ${editOfficer.email}? The Sales Officer will use it to set a new password for the mobile app.`
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await resetPasswordMutation.mutateAsync(editOfficer.email);
+      alert(res.message);
+    } catch (err: any) {
+      alert(err.message || 'Failed to send reset email');
     }
   };
 
@@ -349,7 +370,13 @@ export const SalesOfficersPage: React.FC = () => {
           {editOfficer && (
             <Grid container spacing={2} sx={{ mt: 1 }}>
               <Grid item xs={12}>
-                <TextField fullWidth label="Email" value={editOfficer.email} disabled helperText="Email is tied to login; change it in Firebase Auth if needed." />
+                <TextField
+                  fullWidth
+                  label="Email"
+                  value={editOfficer.email}
+                  disabled
+                  helperText="Login email for the SimpliPharma mobile app. Use “Send password reset email” to help if they forgot their password."
+                />
               </Grid>
               <Grid item xs={12}>
                 <TextField
@@ -370,8 +397,17 @@ export const SalesOfficersPage: React.FC = () => {
             </Grid>
           )}
         </DialogContent>
-        <DialogActions sx={{ p: 2 }}>
+        <DialogActions sx={{ p: 2, flexWrap: 'wrap', gap: 1 }}>
           <Button onClick={() => setEditOpen(false)}>Cancel</Button>
+          <Button
+            variant="outlined"
+            startIcon={<LockReset />}
+            onClick={handleSendPasswordReset}
+            disabled={resetPasswordMutation.isPending || !editOfficer?.email}
+          >
+            {resetPasswordMutation.isPending ? 'Sending…' : 'Send password reset email'}
+          </Button>
+          <Box sx={{ flexGrow: 1 }} />
           <Button variant="contained" onClick={handleSaveEdit} disabled={updateProfileMutation.isPending}>
             {updateProfileMutation.isPending ? 'Saving...' : 'Save'}
           </Button>

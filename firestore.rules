@@ -322,6 +322,56 @@ service cloud.firestore {
       allow write: if isAdminOrOperations();
     }
 
+    // ----- In-app support (Phase 1): one thread per auth uid, ticket queue for admins -----
+    match /support_threads/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdminOrOperations());
+      allow create: if signedIn() && request.auth.uid == userId;
+      allow update: if signedIn() && (request.auth.uid == userId || isAdminOrOperations());
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if signedIn() && (request.auth.uid == userId || isAdminOrOperations());
+        allow create: if signedIn()
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() < 12000
+          && (
+            (request.auth.uid == userId && request.resource.data.from == 'user')
+            || (request.auth.uid == userId && request.resource.data.from == 'bot')
+            || (isAdminOrOperations() && request.resource.data.from == 'admin')
+            || (isAdminOrOperations() && request.resource.data.from == 'system')
+          );
+        allow update, delete: if false;
+      }
+    }
+
+    match /support_tickets/{ticketId} {
+      allow read: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || isAdminOrOperations()
+      );
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.userEmail is string
+        && request.resource.data.status == 'open'
+        && request.resource.data.subject is string
+        && request.resource.data.subject.size() > 0
+        && request.resource.data.subject.size() < 500;
+      allow update: if signedIn() && (
+        isAdminOrOperations()
+        || (
+          resource.data.userId == request.auth.uid
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.userEmail == resource.data.userEmail
+          && request.resource.data.subject == resource.data.subject
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.status in ['open', 'pending_user']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt', 'lastMessagePreview', 'status'])
+        )
+      );
+      allow delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

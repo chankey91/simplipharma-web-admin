@@ -33,6 +33,7 @@ import { OrderReturnsPage } from './pages/OrderReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { MarginReportPage } from './pages/MarginReport';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
+import { SupportTicketsPage } from './pages/SupportTickets';
 import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
@@ -111,6 +112,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={withLayout(<DashboardPage />)} />
+      <Route path="/support" element={withLayout(<SupportTicketsPage />)} />
       <Route path="/stores" element={withLayout(<StoresPage />)} />
       <Route path="/store-receivables" element={withLayout(<StoreReceivablesPage />)} />
       <Route path="/vendors" element={withLayout(<VendorsPage />)} />
