@@ -22,6 +22,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/operations',
     '/invoices',
     '/banners',
+    '/support',
   ],
   operations: [
     '/',
@@ -33,6 +34,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/orders',
     '/product-demands',
     '/operations',
+    '/support',
   ],
 };
 

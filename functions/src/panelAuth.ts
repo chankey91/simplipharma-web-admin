@@ -23,6 +23,10 @@ export function isPanelRole(role: string | undefined): boolean {
   return isAdminOrOperationsRole(role);
 }
 
+export function isSalesOfficerRole(role: string | undefined): boolean {
+  return role === 'salesOfficer' || role === 'SalesOfficer';
+}
+
 export async function assertAdminOrOperations(uid: string): Promise<void> {
   const role = await getUserRole(uid);
   if (!isAdminOrOperationsRole(role)) {
