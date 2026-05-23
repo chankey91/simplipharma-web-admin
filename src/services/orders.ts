@@ -387,6 +387,12 @@ export const fulfillOrder = async (
         if (allocation.mrp !== undefined && allocation.mrp !== null) {
           batchItem.mrp = allocation.mrp;
         }
+        const invBatchForNr = medicineData?.stockBatches?.find(
+          (b) => b.batchNumber === allocation.batchNumber
+        );
+        if (allocation.nonReturnable === true || invBatchForNr?.nonReturnable === true) {
+          batchItem.nonReturnable = true;
+        }
         if (line.productDemandId) {
           batchItem.productDemandId = line.productDemandId;
           batchItem.lineType = 'medicine';
@@ -449,6 +455,9 @@ export const fulfillOrder = async (
                   ? batch.discountPercentage
                   : parseFloat(String(batch.discountPercentage));
               }
+              if (batch?.nonReturnable === true) {
+                cleanItem.nonReturnable = true;
+              }
             }
           } catch (error) {
             console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
@@ -477,6 +486,9 @@ export const fulfillOrder = async (
           cleanItem.quantity = ap;
           cleanItem.freeQuantity = af;
         }
+        if (allocation.nonReturnable === true) {
+          cleanItem.nonReturnable = true;
+        }
         // ALWAYS include discountPercentage (even if 0) - it's important to preserve this value
         cleanItem.discountPercentage = finalDiscountPct;
       } else {
@@ -488,6 +500,22 @@ export const fulfillOrder = async (
             : parseFloat(String(line.discountPercentage));
           if (!isNaN(discountPct)) {
             cleanItem.discountPercentage = discountPct;
+          }
+        }
+        if (line.batchNumber && line.medicineId) {
+          try {
+            const medicineData = await getMedicineById(line.medicineId);
+            const invBatch = medicineData?.stockBatches?.find(
+              (b) => b.batchNumber === line.batchNumber
+            );
+            if (invBatch?.nonReturnable === true) {
+              cleanItem.nonReturnable = true;
+            }
+          } catch (error) {
+            console.warn(
+              `Failed to fetch medicine ${line.medicineId} for nonReturnable flag:`,
+              error
+            );
           }
         }
       }

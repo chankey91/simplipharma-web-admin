@@ -3,6 +3,7 @@ import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
 import {
   assertAdmin,
+  assertAdminOrOperations,
   getUserRole,
   isAdminOrOperationsRole,
   isPanelRole,
@@ -73,8 +74,13 @@ function escapeHtmlText(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Single path for transactional mail (logs failures, does not throw). */
-async function sendSmtpMail(options: { to: string; subject: string; html: string }): Promise<{ ok: boolean; error?: string }> {
+/** Single path for transactional mail (logs failures; optional PDF attachment). */
+async function sendSmtpMail(options: {
+  to: string;
+  subject: string;
+  html: string;
+  attachments?: { filename: string; content: Buffer; contentType?: string }[];
+}): Promise<{ ok: boolean; error?: string }> {
   try {
     const smtpConfig = functions.config().smtp;
     if (!smtpConfig?.user || !smtpConfig?.password) {
@@ -87,6 +93,9 @@ async function sendSmtpMail(options: { to: string; subject: string; html: string
       to: options.to,
       subject: options.subject,
       html: options.html,
+      ...(options.attachments?.length
+        ? { attachments: options.attachments.map((a) => ({ ...a })) }
+        : {}),
     });
     return { ok: true };
   } catch (err: any) {
@@ -1061,6 +1070,191 @@ export const onSupportThreadAdminMessageCreated = functions.firestore
   });
 
 export { onBulkMedicineJobCreated } from './bulkMedicineJob';
+
+const MAX_ORDER_INVOICE_PDF_BYTES = 12 * 1024 * 1024;
+const MAX_ORDER_INVOICE_CSV_BYTES = 8 * 1024 * 1024;
+
+function decodeDataUriBase64(payload: string): string {
+  let s = typeof payload === 'string' ? payload.trim() : '';
+  if (!s) return '';
+  if (s.includes(',')) {
+    s = s.split(',').pop() || '';
+  }
+  return s;
+}
+
+/**
+ * Callable: admin/operations uploads a freshly generated order-invoice PDF; we email it to order.retailerEmail.
+ * SMTP must be configured (smtp.user / smtp.password) like other transactional mail.
+ */
+export const sendOrderInvoicePdfEmail = functions
+  .runWith({ memory: '512MB', timeoutSeconds: 120 })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+    }
+
+    try {
+      await assertAdminOrOperations(context.auth.uid);
+    } catch {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Admin or operations access required'
+      );
+    }
+
+    const orderId = typeof data?.orderId === 'string' ? data.orderId.trim() : '';
+    let pdfBase64 = decodeDataUriBase64(
+      typeof data?.pdfBase64 === 'string' ? data.pdfBase64 : ''
+    );
+    const csvBase64Payload =
+      typeof data?.csvBase64 === 'string' ? String(data.csvBase64) : '';
+    let csvBase64Decoded = csvBase64Payload.trim()
+      ? decodeDataUriBase64(csvBase64Payload)
+      : '';
+    const requestedFileName =
+      typeof data?.fileName === 'string' ? data.fileName.trim() : '';
+    const requestedCsvFileName =
+      typeof data?.csvFileName === 'string' ? data.csvFileName.trim() : '';
+
+    if (!orderId || !pdfBase64) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'orderId and pdfBase64 are required'
+      );
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(pdfBase64, 'base64');
+    } catch {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid pdfBase64 encoding');
+    }
+
+    const header = buffer.slice(0, 5).toString('ascii');
+    if (buffer.length < 128 || header.indexOf('%PDF') !== 0) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Uploaded payload is not a valid PDF'
+      );
+    }
+
+    if (buffer.length > MAX_ORDER_INVOICE_PDF_BYTES) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        `PDF exceeds ${MAX_ORDER_INVOICE_PDF_BYTES / (1024 * 1024)}MB limit`
+      );
+    }
+
+    let csvBuffer: Buffer | undefined;
+    let safeCsvFile: string | undefined;
+    if (csvBase64Decoded) {
+      try {
+        csvBuffer = Buffer.from(csvBase64Decoded, 'base64');
+      } catch {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'Invalid csvBase64 encoding'
+        );
+      }
+
+      if (csvBuffer.length < 16 || csvBuffer.length > MAX_ORDER_INVOICE_CSV_BYTES) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'CSV attachment is invalid or exceeds size limit'
+        );
+      }
+
+      const csvText = csvBuffer.toString('utf8');
+      const looksCsv =
+        csvText.includes('PRODUCT NAME') ||
+        csvText.includes('Company Name');
+      const hasNull = csvBuffer.includes(0);
+      if (!looksCsv || hasNull) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'Uploaded CSV attachment does not look like a UTF-8 invoice export'
+        );
+      }
+
+      safeCsvFile =
+        requestedCsvFileName &&
+        /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.csv$/i.test(requestedCsvFileName)
+          ? requestedCsvFileName
+          : `order-invoice-${orderId.slice(0, 32)}.csv`;
+    }
+
+    const snap = await admin.firestore().collection('orders').doc(orderId).get();
+    if (!snap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+
+    const od = snap.data() || {};
+    const toRaw = od.retailerEmail as unknown;
+    const toEmail =
+      typeof toRaw === 'string'
+        ? toRaw.trim().toLowerCase()
+        : '';
+    const retailerName =
+      od.retailerName != null ? String(od.retailerName).trim() : '';
+    const shopLabel = retailerName ? escapeHtmlText(retailerName) : 'there';
+
+    if (!toEmail || !toEmail.includes('@')) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This order has no retailer email — update retailerEmail before emailing the invoice.'
+      );
+    }
+
+    const invNo =
+      typeof od.invoiceNumber === 'string' && od.invoiceNumber.trim()
+        ? od.invoiceNumber.trim()
+        : orderId;
+    const subject = `SimpliPharma — Tax invoice ${invNo}`;
+    const safeFile =
+      requestedFileName && /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.pdf$/i.test(requestedFileName)
+        ? requestedFileName
+        : `order-invoice-${orderId.slice(0, 32)}.pdf`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <p>Hello ${shopLabel},</p>
+        <p>Your tax invoice <strong>${escapeHtmlText(invNo)}</strong> is attached${csvBuffer ? ' as a PDF and a CSV spreadsheet' : ' as a PDF'}.</p>
+        <p style="color:#666;font-size:12px;">If you did not expect this email, please contact your sales representative.</p>
+      </div>`;
+
+    const mail = await sendSmtpMail({
+      to: toEmail,
+      subject,
+      html,
+      attachments: [
+        {
+          filename: safeFile,
+          content: buffer,
+          contentType: 'application/pdf',
+        },
+        ...(csvBuffer && safeCsvFile
+          ? [
+              {
+                filename: safeCsvFile,
+                content: csvBuffer,
+                contentType: 'text/csv; charset=utf-8',
+              },
+            ]
+          : []),
+      ],
+    });
+
+    if (!mail.ok) {
+      console.error('sendOrderInvoicePdfEmail: SMTP failed', mail.error);
+      throw new functions.https.HttpsError(
+        'internal',
+        mail.error || 'Could not send email (check SMTP in Functions config)'
+      );
+    }
+
+    return { ok: true, emailedTo: toEmail };
+  });
 
 export {
   onMedicineWriteTypesense,

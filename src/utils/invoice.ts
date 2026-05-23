@@ -15,6 +15,8 @@ import { getMedicineById, getAllMedicines } from '../services/inventory';
 import { getProductDemandsByIds } from '../services/productDemands';
 import { getAllPurchaseInvoices, collectPurchaseInvoicesForDemands } from '../services/purchaseInvoices';
 import { tryPromoteFulfilledDemandLine } from './productDemandOrderLine';
+import { formatOrderInvoiceLabel } from './orderDisplay';
+import { sendOrderInvoicePdfToRetailer } from '../services/orderInvoiceEmail';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -67,7 +69,67 @@ const numberToWords = (num: number): string => {
 };
 
 // HTML Template for Order Invoice
-const getOrderInvoiceHTML = async (order: Order) => {
+
+type OrderInvoiceLineItem = {
+  sn: number;
+  name: string;
+  pack: string;
+  hsn: string;
+  batch: string;
+  exp: string;
+  qty: string;
+  free: string;
+  totalQty: string;
+  mrp: string;
+  rate: string;
+  disc: string;
+  sgst: string;
+  cgst: string;
+  amount: string;
+  rowClass?: string;
+};
+
+/** Shared line items + totals for PDF invoice and CSV export */
+export type OrderInvoicePrepared = {
+  items: OrderInvoiceLineItem[];
+  summary: {
+    subTotal: string;
+    discount: string;
+    sgst: string;
+    cgst: string;
+    roundOff: string;
+    grandTotal: string;
+  };
+  tax: { taxable: string; cgst: string; sgst: string; rate: string };
+  invoiceData: {
+    no: string;
+    date: string;
+    dueDate: string;
+    user: string;
+    tray: string;
+    processedBy: string;
+  };
+  company: {
+    name: string;
+    address: string;
+    phone: string;
+    email: string;
+    dl: string;
+    gstin: string;
+  };
+  party: {
+    name: string;
+    address: string;
+    state: string;
+    phone: string;
+    dl: string;
+    gstin: string;
+  };
+  /** Order GST % used on tax summary (same as invoice template) */
+  gstRatePercent: number;
+};
+
+async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepared> {
   const invoiceDate = order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate);
 
   const toNumber = (value: unknown): number => {
@@ -345,10 +407,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
   const calculatedTotal = amountAfterDiscount + totalGST;
   const roundoff = Math.round(calculatedTotal) - calculatedTotal;
   const grandTotal = Math.round(calculatedTotal);
-  
-  const gstRate = order.taxPercentage || 5;
-  const taxableAmount = totalSubTotal - totalProductDiscount;
-  
+
   // Company details
   const company = {
     name: 'SimpliPharma Solution Pvt. Ltd.',
@@ -391,7 +450,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
   
   // Invoice details
   const invoiceData = {
-    no: order.invoiceNumber || order.id.substring(0, 12),
+    no: formatOrderInvoiceLabel(order),
     date: format(invoiceDate, 'yyyy-MM-dd'),
     dueDate: format(invoiceDate, 'yyyy-MM-dd'),
     user: 'Admin',
@@ -401,12 +460,12 @@ const getOrderInvoiceHTML = async (order: Order) => {
   
   // Tax summary
   const tax = {
-    taxable: taxableAmount.toFixed(2),
+    taxable: amountAfterDiscount.toFixed(2),
     cgst: totalCGST.toFixed(2),
     sgst: totalSGST.toFixed(2),
-    rate: gstRate.toFixed(0)
+    rate: taxPercentage.toFixed(0),
   };
-  
+
   // Summary
   const summary = {
     subTotal: totalSubTotal.toFixed(2),
@@ -414,9 +473,31 @@ const getOrderInvoiceHTML = async (order: Order) => {
     sgst: totalSGST.toFixed(2),
     cgst: totalCGST.toFixed(2),
     roundOff: roundoff.toFixed(2),
-    grandTotal: grandTotal.toFixed(2)
+    grandTotal: grandTotal.toFixed(2),
   };
-  
+
+  return {
+    items,
+    summary,
+    tax,
+    invoiceData,
+    company,
+    party,
+    gstRatePercent: taxPercentage,
+  };
+};
+
+const getOrderInvoiceHTML = async (order: Order) => {
+  const {
+    items,
+    summary,
+    tax,
+    invoiceData,
+    company,
+    party,
+    gstRatePercent,
+  } = await prepareOrderInvoiceData(order);
+
   // Generate items HTML
   const itemsHTML = items.map(item => `
     <tr class="center ${item.rowClass || ''}">
@@ -566,8 +647,8 @@ const getOrderInvoiceHTML = async (order: Order) => {
     <td width="70%">
       <b>Tax Summary</b><br>
       Amt ${tax.rate}%: ${tax.taxable} |
-      CGST ${(gstRate / 2).toFixed(1)}%: ${tax.cgst} |
-      SGST ${(gstRate / 2).toFixed(1)}%: ${tax.sgst}
+      CGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.cgst} |
+      SGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.sgst}
     </td>
     <td width="30%">
       <table class="no-border">
@@ -605,7 +686,123 @@ const getOrderInvoiceHTML = async (order: Order) => {
   `;
 };
 
-export const generateOrderInvoice = async (order: Order) => {
+function escapeCsvField(value: string | number): string {
+  const s = String(value ?? '');
+  if (/[",\r\n\u2028\u2029]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+/** Excel-friendly comma-separated invoice (matches PDF line-item columns plus header metadata). UTF-8 BOM. */
+export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
+  const { items, summary, tax, invoiceData, company, party, gstRatePercent } = data;
+
+  const rows: string[][] = [
+    ['Company Name', company.name],
+    ['Company Address', company.address],
+    ['Company GSTIN', company.gstin],
+    ['Party Name', party.name],
+    ['Party Address', party.address],
+    ['Party GSTIN', party.gstin],
+    ['Invoice No', invoiceData.no],
+    ['Invoice Date', invoiceData.date],
+    [],
+    [
+      'SN',
+      'PRODUCT NAME',
+      'PACK',
+      'HSN',
+      'BATCH',
+      'EXP',
+      'QTY',
+      'FREE',
+      'TQT',
+      'MRP',
+      'RATE',
+      'DISC',
+      'SGST',
+      'CGST',
+      'AMOUNT',
+    ],
+    ...items.map((it) => [
+      String(it.sn),
+      it.name,
+      it.pack,
+      it.hsn,
+      it.batch,
+      it.exp,
+      it.qty,
+      it.free,
+      it.totalQty,
+      it.mrp,
+      it.rate,
+      it.disc,
+      it.sgst,
+      it.cgst,
+      it.amount,
+    ]),
+    [],
+    [
+      'Tax summary',
+      `Amt ${tax.rate}%: ${tax.taxable}; CGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.cgst}; SGST ${(
+        gstRatePercent / 2
+      ).toFixed(1)}%: ${tax.sgst}`,
+    ],
+    ['SUB TOTAL', summary.subTotal],
+    ['PRODUCT DISCOUNT', summary.discount],
+    ['SGST', summary.sgst],
+    ['CGST', summary.cgst],
+    ['ROUND OFF', summary.roundOff],
+    ['GRAND TOTAL', summary.grandTotal],
+  ];
+
+  const body = rows.map((r) => r.map((c) => escapeCsvField(c)).join(',')).join('\r\n');
+  return `\uFEFF${body}`;
+}
+
+export async function buildOrderInvoiceCsv(order: Order): Promise<string> {
+  const data = await prepareOrderInvoiceData(order);
+  return formatOrderInvoiceAsCsv(data);
+}
+
+export function csvUtf8ToDataUriBase64(csv: string): string {
+  const utf8Bytes = new TextEncoder().encode(csv);
+  let binary = '';
+  utf8Bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+  return `data:text/csv;charset=utf-8;base64,${btoa(binary)}`;
+}
+
+function sanitizedOrderInvoicePdfFileName(order: Order): string {
+  const raw = formatOrderInvoiceLabel(order)
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const base = raw.length > 0 ? raw.slice(0, 80) : `order_${String(order.id).slice(0, 16)}`;
+  return `${base}.pdf`;
+}
+
+function sanitizedOrderInvoiceCsvFileName(order: Order): string {
+  const raw = formatOrderInvoiceLabel(order)
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const base = raw.length > 0 ? raw.slice(0, 80) : `order_${String(order.id).slice(0, 16)}`;
+  return `${base}.csv`;
+}
+
+export type GenerateOrderInvoiceOptions = {
+  /**
+   * Email PDF + CSV to `order.retailerEmail` via Cloud Function SMTP.
+   * Runs after the file download; send happens in the background (promise resolves once PDF saves).
+   */
+  emailPdfToRetailer?: boolean;
+};
+
+export const generateOrderInvoice = async (
+  order: Order,
+  options?: GenerateOrderInvoiceOptions
+) => {
   const html = await getOrderInvoiceHTML(order);
   
   // Create a temporary element to render HTML
@@ -656,6 +853,41 @@ export const generateOrderInvoice = async (order: Order) => {
     
     // Save PDF
     pdf.save(`order-invoice-${order.id}.pdf`);
+
+    if (options?.emailPdfToRetailer) {
+      const em = order.retailerEmail?.trim();
+      if (!em || !em.includes('@')) {
+        alert(
+          'Invoice downloaded, but this order has no retailer email — the PDF could not be emailed.'
+        );
+      } else {
+        // Snapshot PDF payload before teardown; SMTP + CSV can run slow — do not block download UX.
+        const dataUri = pdf.output('datauristring');
+        const fileName = sanitizedOrderInvoicePdfFileName(order);
+        const csvFileName = sanitizedOrderInvoiceCsvFileName(order);
+        void (async () => {
+          try {
+            const csvText = await buildOrderInvoiceCsv(order);
+            const csvDataUri = csvUtf8ToDataUriBase64(csvText);
+            const res = await sendOrderInvoicePdfToRetailer(order.id, dataUri, fileName, {
+              csvBase64Uri: csvDataUri,
+              csvFileName,
+            });
+            if (res.ok && res.emailedTo) {
+              alert(`Invoice emailed to ${res.emailedTo} (PDF and CSV).`);
+            } else {
+              alert(
+                'Invoice was downloaded but email delivery could not be confirmed — check Firebase logs.'
+              );
+            }
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('Email invoice failed:', err);
+            alert(`Invoice downloaded, but emailing the retailer failed: ${message}`);
+          }
+        })();
+      }
+    }
   } catch (error) {
     console.error('Error generating PDF:', error);
     alert('Failed to generate invoice. Please try again.');

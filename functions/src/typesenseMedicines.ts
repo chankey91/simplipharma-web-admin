@@ -58,21 +58,42 @@ export function getTypesenseClient(): TypesenseClient | null {
   });
 }
 
+const COLLECTION_FIELDS_BASE = [
+  { name: 'name', type: 'string' as const },
+  { name: 'code', type: 'string' as const, optional: true },
+  { name: 'manufacturer', type: 'string' as const, optional: true },
+  { name: 'category', type: 'string' as const, optional: true, facet: true },
+  { name: 'price', type: 'float' as const, optional: true },
+  /** Lowercase concat of name/code/mfr/category for middle-token & multi-word recall */
+  { name: 'search_blob', type: 'string' as const, optional: true },
+];
+
 async function ensureCollection(client: TypesenseClient): Promise<void> {
   try {
-    await client.collections(TYPESENSE_COLLECTION).retrieve();
-  } catch {
+    const existing = await client.collections(TYPESENSE_COLLECTION).retrieve();
+    const names = new Set((existing.fields || []).map((f: { name: string }) => f.name));
+    if (!names.has('search_blob')) {
+      await client.collections(TYPESENSE_COLLECTION).update({
+        fields: [{ name: 'search_blob', type: 'string' as const, optional: true }],
+      });
+    }
+  } catch (e: unknown) {
+    const http = (e as { httpStatus?: number })?.httpStatus;
+    if (http !== 404) throw e;
     await client.collections().create({
       name: TYPESENSE_COLLECTION,
-      fields: [
-        { name: 'name', type: 'string' },
-        { name: 'code', type: 'string', optional: true },
-        { name: 'manufacturer', type: 'string', optional: true },
-        { name: 'category', type: 'string', optional: true, facet: true },
-        { name: 'price', type: 'float', optional: true },
-      ],
+      fields: COLLECTION_FIELDS_BASE,
     });
   }
+}
+
+/** Mirrors mobile/Firestore search helpers: joint text blob for Typesense recall. */
+function buildMedicineSearchBlob(data: FirebaseFirestore.DocumentData | undefined): string {
+  if (!data) return '';
+  const parts = [data.name, data.manufacturer, data.company, data.code, data.category]
+    .filter((x) => x != null && String(x).trim() !== '')
+    .map((x) => String(x).trim());
+  return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function firestoreDataToTypesenseDoc(
@@ -83,7 +104,8 @@ function firestoreDataToTypesenseDoc(
   const basePrice = data.price ?? data.mrp ?? 0;
   const price =
     typeof basePrice === 'number' ? basePrice : parseFloat(String(basePrice)) || 0;
-  return {
+  const searchBlob = buildMedicineSearchBlob(data);
+  const doc: Record<string, unknown> = {
     id: medicineId,
     name: String(data.name || ''),
     code: data.code != null ? String(data.code) : '',
@@ -91,6 +113,8 @@ function firestoreDataToTypesenseDoc(
     category: String(data.category || ''),
     price,
   };
+  if (searchBlob) doc.search_blob = searchBlob;
+  return doc;
 }
 
 export async function upsertMedicineInTypesense(
@@ -267,126 +291,161 @@ function medicinesFromTypesenseHitsOnly(hits: { document?: unknown }[]): Record<
 }
 
 /**
- * `code` in the index is often GST HSN — shared by many SKUs. Searching it in Typesense with
- * name/manufacturer pollutes ranking for text queries (e.g. product names). For strict admin search,
- * only search `code` when the query looks like an HSN / numeric lookup.
+ * `code` alone is shared HSN for many SKUs — keep index field for lookups but prefer `search_blob`
+ * (+ name/mfr) for fuzzy text when strict; digit-only lookups still prioritize `code` via query_by shape.
  */
 function typesenseQueryBy(query: string, strict: boolean): string {
-  if (!strict) return 'name,code,manufacturer';
+  if (!strict) return 'search_blob,name,code,manufacturer';
   const t = query.trim();
   const digitsOnly = t.replace(/\D/g, '');
   const hasLetter = /[a-zA-Z]/.test(t);
   const looksNumericLookup = digitsOnly.length >= 2 && !hasLetter;
-  if (looksNumericLookup) return 'name,code,manufacturer';
-  return 'name,manufacturer';
+  if (looksNumericLookup) return 'search_blob,name,code,manufacturer';
+  return 'search_blob,name,manufacturer';
 }
 
-/** Comma-separated weights 1:1 with `query_by` field order (name strongest; code between name and mfr when present). */
+/** Align weights with {@link typesenseQueryBy} field order: search_blob boosts middle-token recall. */
 function typesenseQueryByWeights(queryBy: string): string {
-  const n = queryBy.split(',').map((s) => s.trim()).filter(Boolean).length;
-  if (n === 3) return '4,2,1';
-  if (n === 2) return '4,1';
-  return '1';
+  const weights: Record<string, number> = {
+    search_blob: 4,
+    name: 6,
+    code: 5,
+    manufacturer: 2,
+  };
+  const parts = queryBy
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts.map((field) => String(weights[field] ?? 3)).join(',');
+}
+
+/** Natural / retailer-style broad search when `strict` is not true OR `queryMode === 'natural'`. */
+function isBroadRetailSearch(strict: boolean, queryModeRaw: unknown): boolean {
+  if (!strict) return true;
+  return String(queryModeRaw || '').toLowerCase() === 'natural';
 }
 
 /**
  * Authenticated catalog search (Typesense + optional Firestore hydrate).
  * minInstances keeps one instance warm to reduce cold-start latency (requires Blaze; billed while idle).
+ *
+ * Request (optional backwards-compatible fields consumed by retailer app):
+ * - `matchTokenCount` — informational / future tuning
+ * - `queryMode`: `'natural' | 'strict'` — `'natural'` widens Typesense behaviour even if `strict` is true (escape hatch).
  */
 export const searchMedicinesTypesense = functions
   .runWith({ minInstances: 1 })
   .https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
-  }
-  const query = String(data.query || '').trim();
-  const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
-  /** Admin UIs: stricter matching so unrelated products (e.g. fuzzy noise) don’t rank in. */
-  const strict = data.strict === true;
-  /** Default true: full lite docs from Firestore. Set false for autocomplete speed (Typesense fields only). */
-  const hydrate = data.hydrate !== false;
-  if (query.length < 2) {
-    return { medicines: [], source: 'typesense' as const };
-  }
-
-  const client = getTypesenseClient();
-  if (!client) {
-    throw new functions.https.HttpsError(
-      'failed-precondition',
-      'Typesense is not configured on the server'
-    );
-  }
-
-  try {
-    await ensureCollection(client);
-    const queryBy = typesenseQueryBy(query, strict);
-    const res = await client.collections(TYPESENSE_COLLECTION).documents().search({
-      q: query,
-      query_by: queryBy,
-      query_by_weights: typesenseQueryByWeights(queryBy),
-      per_page: limit,
-      // strict (admin): no prefix fan-out + 1 typo — cuts unrelated fuzzy matches vs loose retailer search
-      prefix: !strict,
-      num_typos: strict ? 1 : 2,
-      sort_by: '_text_match:desc',
-      prioritize_exact_match: true,
-    });
-
-    const hits = res.hits || [];
-    if (!hydrate) {
-      const medicines = medicinesFromTypesenseHitsOnly(hits);
-      return { medicines, source: 'typesense_index' as const };
-    }
-    const ids = hits.map((h: { document?: { id?: string } }) => String(h.document?.id || '')).filter(Boolean);
-    const medicines = await fetchMedicinesOrderedByIds(ids);
-    return { medicines, source: 'typesense' as const };
-  } catch (err: any) {
-    console.error('searchMedicinesTypesense error', err?.message || err);
-    throw new functions.https.HttpsError(
-      'internal',
-      err?.message || 'Search failed'
-    );
-  }
-});
-
-/** One-time / maintenance: full reindex from Firestore (admin only). */
-export const adminReindexMedicinesTypesense = functions
-  .runWith({ timeoutSeconds: 540, memory: '512MB' })
-  .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
-    if (!(await canReindexMedicines(context.auth.uid))) {
-      throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
+    const query = String(data.query || '').trim();
+    const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
+    /** `strict !== true` (default unless explicitly `true`): prefix + extra typos + split_join_tokens — aligns with retailer mobile fallback. Admin panels pass `{ strict: true }`. */
+    const strict = data.strict === true;
+    const broad = isBroadRetailSearch(strict, data.queryMode);
+    /** Default true: full lite docs from Firestore. Set false for autocomplete speed (Typesense fields only). */
+    const hydrate = data.hydrate !== false;
+    if (query.length < 2) {
+      return { medicines: [], source: 'typesense' as const };
     }
 
     const client = getTypesenseClient();
     if (!client) {
       throw new functions.https.HttpsError(
         'failed-precondition',
-        'Typesense is not configured. Set functions config typesense.host and typesense.api_key.'
+        'Typesense is not configured on the server'
       );
     }
 
-    await ensureCollection(client);
-    let batch: Record<string, unknown>[] = [];
-    const flush = async () => {
-      if (batch.length === 0) return;
-      await client.collections(TYPESENSE_COLLECTION).documents().import(batch, { action: 'upsert' });
-      batch = [];
-    };
+    try {
+      await ensureCollection(client);
+      const queryBy = typesenseQueryBy(query, strict);
+      const res = await client.collections(TYPESENSE_COLLECTION).documents().search({
+        q: query,
+        query_by: queryBy,
+        query_by_weights: typesenseQueryByWeights(queryBy),
+        per_page: limit,
+        prefix: broad,
+        num_typos: broad ? 2 : 1,
+        split_join_tokens: broad ? 'always' : 'fallback',
+        sort_by: '_text_match:desc',
+        prioritize_exact_match: true,
+      });
 
-    const snap = await admin.firestore().collection('medicines').get();
-    let count = 0;
-    for (const doc of snap.docs) {
-      const d = firestoreDataToTypesenseDoc(doc.id, doc.data());
-      if (d) {
-        batch.push(d);
-        count++;
+      const hits = res.hits || [];
+      if (!hydrate) {
+        const medicines = medicinesFromTypesenseHitsOnly(hits);
+        return { medicines, source: 'typesense_index' as const };
       }
-      if (batch.length >= 100) await flush();
+      const ids = hits.map((h: { document?: { id?: string } }) => String(h.document?.id || '')).filter(Boolean);
+      const medicines = await fetchMedicinesOrderedByIds(ids);
+      return { medicines, source: 'typesense' as const };
+    } catch (err: any) {
+      console.error('searchMedicinesTypesense error', err?.message || err);
+      throw new functions.https.HttpsError(
+        'internal',
+        err?.message || 'Search failed'
+      );
     }
-    await flush();
+  });
 
-    return { ok: true, indexed: count, totalDocs: snap.size };
+/** One-time / maintenance: full reindex from Firestore (admin only). */
+export const adminReindexMedicinesTypesense = functions
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .https.onCall(async (_data, context) => {
+    try {
+      if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+      }
+      if (!(await canReindexMedicines(context.auth.uid))) {
+        throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
+      }
+
+      const client = getTypesenseClient();
+      if (!client) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          'Typesense is not configured. Set firebase functions:config:set typesense.host, typesense.api_key, typesense.protocol, typesense.port (http defaults to port 8108 if port omitted!), then firebase deploy --only functions. See functions/TYPESENSE_CONFIG.md.'
+        );
+      }
+
+      await ensureCollection(client);
+      let batch: Record<string, unknown>[] = [];
+      const flush = async () => {
+        if (batch.length === 0) return;
+        await client.collections(TYPESENSE_COLLECTION).documents().import(batch, { action: 'upsert' });
+        batch = [];
+      };
+
+      const snap = await admin.firestore().collection('medicines').get();
+      let count = 0;
+      for (const doc of snap.docs) {
+        const d = firestoreDataToTypesenseDoc(doc.id, doc.data());
+        if (d) {
+          batch.push(d);
+          count++;
+        }
+        if (batch.length >= 100) await flush();
+      }
+      await flush();
+
+      return { ok: true, indexed: count, totalDocs: snap.size };
+    } catch (err: unknown) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('adminReindexMedicinesTypesense failed', err);
+      const message =
+        err &&
+        typeof err === 'object' &&
+        typeof (err as { message?: string }).message === 'string'
+          ? (err as { message: string }).message.trim()
+          : String(err || 'unknown error').trim();
+
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        `Typesense unreachable or rejected the request (${message}). ` +
+          'Verify firebase functions:config typesense.host, protocol, port (must match your server — e.g. 8088 is NOT the default when protocol is http; default is 8108), and api_key. ' +
+          'Ensure the Typesense server allows inbound TCP from the internet / Google Cloud egress. Run: firebase deploy --only functions after config changes.'
+      );
+    }
   });

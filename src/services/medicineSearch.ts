@@ -44,36 +44,83 @@ export type SearchMedicinesOptions = {
   /** Max results (1–120). Smaller = slightly faster payloads. Default 40 for admin search helper. */
   limit?: number;
   /**
-   * Tighter Typesense ranking (no prefix fan-out, fewer typos). Use for admin pickers so unrelated
-   * products don’t appear when typing an exact name/code.
-   * Server-side: for text queries, HSN (`code`) is omitted from Typesense `query_by` (shared HSN
-   * skews relevance); digit-only queries still search `code` for HSN lookup.
+   * Tighter Typesense field set + ranking (fewer fuzzies). Retail app passes **false** for multi-word.
    */
   strict?: boolean;
+  /** Mirrors retailer callable — inferred from whitespace split when omitted */
+  matchTokenCount?: number;
+  /** `'natural'` asks Cloud Function for broader token bridging (split_join_tokens). */
+  queryMode?: 'strict' | 'natural';
 };
 
-/** Case-insensitive match on name, code (often shared HSN), or manufacturer (code may be number in Firestore). */
-export function medicineMatchesSearchInput(m: Medicine, inputValue: string): boolean {
-  const t = inputValue.trim().toLowerCase();
-  if (t.length === 0) return true;
-  const n = (m.name || '').toLowerCase();
-  const c = String(m.code ?? '').toLowerCase();
-  const f = (m.manufacturer || '').toLowerCase();
-  return n.includes(t) || c.includes(t) || f.includes(t);
+/**
+ * Tokenize query aligned with retailer app + Functions `matchTokenCount` / refinement.
+ */
+export function deriveSearchMatchTokens(trimmedRawQuery: string): string[] {
+  const r = trimmedRawQuery.trim().toLowerCase();
+  if (r.length === 0) return [];
+  const parts = r.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return parts.length ? [parts[0]] : [];
+  const substantive = parts.filter((p) => p.length >= 2);
+  if (substantive.length > 0) return substantive;
+  return [parts.join(' ')];
 }
 
-/**
- * Autocomplete-friendly order: name prefix, then name substring, then code/manufacturer;
- * tie-break by display name.
- */
+function fieldHaystackLower(m: Medicine): { n: string; c: string; f: string } {
+  return {
+    n: (m.name || '').toLowerCase(),
+    c: String(m.code ?? '').toLowerCase(),
+    f: (m.manufacturer || '').toLowerCase(),
+  };
+}
+
+/** AND across substantive tokens (multi-word); single-token substring semantics. */
+export function medicineMatchesSearchInput(m: Medicine, inputValue: string): boolean {
+  const tokens = deriveSearchMatchTokens(inputValue);
+  if (tokens.length === 0) return true;
+  const { n, c, f } = fieldHaystackLower(m);
+  const hitsToken = (tok: string) => n.includes(tok) || c.includes(tok) || f.includes(tok);
+  return tokens.every(hitsToken);
+}
+
+export function medicineMatchesSearchInputRelaxed(m: Medicine, inputValue: string): boolean {
+  const tokens = deriveSearchMatchTokens(inputValue);
+  if (tokens.length <= 1) return medicineMatchesSearchInput(m, inputValue);
+  const { n, c, f } = fieldHaystackLower(m);
+  const hitsToken = (tok: string) => n.includes(tok) || c.includes(tok) || f.includes(tok);
+  return tokens.some(hitsToken);
+}
+
 export function rankMedicinesForAutocompleteQuery(medicines: Medicine[], query: string): Medicine[] {
   const ql = query.trim().toLowerCase();
   if (ql.length === 0) return [...medicines];
+  const stems = deriveSearchMatchTokens(query);
 
   const tier = (m: Medicine): number => {
     const n = (m.name || '').toLowerCase();
     const c = String(m.code ?? '').toLowerCase();
     const f = (m.manufacturer || '').toLowerCase();
+
+    if (stems.length > 1) {
+      const allInName = stems.every((s) => n.includes(s));
+      const first = stems[0];
+      if (allInName && first) {
+        if (n.startsWith(first)) return 0;
+        return 1;
+      }
+      if (stems.some((s) => n.includes(s))) return 2;
+      if (stems.some((s) => c.includes(s) || f.includes(s))) return 3;
+      return 4;
+    }
+
+    if (stems.length === 1) {
+      const needle = stems[0];
+      if (n.startsWith(needle)) return 0;
+      if (n.includes(needle)) return 1;
+      if (c.includes(needle) || f.includes(needle)) return 2;
+      return 3;
+    }
+
     if (n.startsWith(ql)) return 0;
     if (n.includes(ql)) return 1;
     if (c.includes(ql) || f.includes(ql)) return 2;
@@ -89,8 +136,7 @@ export function rankMedicinesForAutocompleteQuery(medicines: Medicine[], query: 
 }
 
 /**
- * Prefer rows whose name, code, or manufacturer contain the query (case-insensitive).
- * Falls back to the loaded Firestore catalog when Typesense returns noisy fuzzy matches.
+ * Prefer rows matching query tokens after Typesense fuzzy hits; retries relaxed OR-match when Ts returns rows but refine would erase them all.
  */
 export function refineMedicineSearchResults(
   typesenseHits: Medicine[],
@@ -100,7 +146,10 @@ export function refineMedicineSearchResults(
   const t = query.trim();
   if (t.length < 2) return [];
 
-  const fromTs = typesenseHits.filter((m) => medicineMatchesSearchInput(m, t));
+  let fromTs = typesenseHits.filter((m) => medicineMatchesSearchInput(m, t));
+  if (fromTs.length === 0 && typesenseHits.length > 0) {
+    fromTs = typesenseHits.filter((m) => medicineMatchesSearchInputRelaxed(m, t));
+  }
   if (fromTs.length > 0) return rankMedicinesForAutocompleteQuery(fromTs, t);
 
   return rankMedicinesForAutocompleteQuery(
@@ -109,7 +158,7 @@ export function refineMedicineSearchResults(
   );
 }
 
-/** Typesense search; use `hydrate: false` for fast purchase/autocomplete pickers. */
+/** Typesense search — forwards `{ matchTokenCount, queryMode }` for parity with retailer mobile callable. */
 export async function searchMedicinesTypesenseAdmin(
   query: string,
   opts?: SearchMedicinesOptions
@@ -119,8 +168,18 @@ export async function searchMedicinesTypesenseAdmin(
   const hydrate = opts?.hydrate ?? true;
   const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 120);
   const strict = opts?.strict === true;
+  const tc = deriveSearchMatchTokens(q);
+  const matchTokenCount = opts?.matchTokenCount ?? tc.length;
+  const queryMode = opts?.queryMode ?? (strict ? 'strict' : 'natural');
   try {
-    const res = await searchMedicinesCallable({ query: q, limit, hydrate, strict });
+    const res = await searchMedicinesCallable({
+      query: q,
+      limit,
+      hydrate,
+      strict,
+      matchTokenCount,
+      queryMode,
+    });
     const data = res.data as { medicines?: unknown[] };
     const rows = data.medicines;
     if (!Array.isArray(rows)) return [];

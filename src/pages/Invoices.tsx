@@ -40,6 +40,7 @@ import { generatePurchaseInvoice, generateOrderInvoice } from '../utils/invoice'
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
 
 interface InvoiceItem {
   id: string;
@@ -91,7 +92,7 @@ export const InvoicesPage: React.FC = () => {
           items.push({
             id: order.id,
             type: 'order',
-            invoiceNumber: `ORD-${order.id.slice(0, 8)}`,
+            invoiceNumber: order.invoiceNumber || orderReferenceWithoutInvoice(order.id),
             date: order.orderDate,
             vendorOrStore: order.retailerEmail || 'N/A',
             amount: order.totalAmount || 0,
@@ -172,7 +173,7 @@ export const InvoicesPage: React.FC = () => {
       if (invoice.type === 'purchase' && invoice.purchaseInvoice) {
         await generatePurchaseInvoice(invoice.purchaseInvoice);
       } else if (invoice.type === 'order' && invoice.order) {
-        await generateOrderInvoice(invoice.order);
+        await generateOrderInvoice(invoice.order, { emailPdfToRetailer: true });
       }
     } catch (error: any) {
       alert(`Failed to download invoice: ${error.message || 'Unknown error'}`);
@@ -358,7 +359,11 @@ export const InvoicesPage: React.FC = () => {
                       size="small"
                       color="primary"
                       onClick={() => handleDownload(invoice)}
-                      title="Download Invoice"
+                      title={
+                        invoice.type === 'order'
+                          ? 'Download PDF; email to retailer (PDF + CSV) sends in the background.'
+                          : 'Download invoice'
+                      }
                     >
                       <Download />
                     </IconButton>

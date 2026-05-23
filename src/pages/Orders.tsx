@@ -44,6 +44,7 @@ import { exportPendingOrdersByStore } from '../utils/export';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 
 export const OrdersPage: React.FC = () => {
   const { data: orders, isLoading } = useOrders();
@@ -273,7 +274,7 @@ export const OrdersPage: React.FC = () => {
             ) : (
               paginatedOrders.map((order) => (
                 <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
-                  <TableCell>#{order.id.substring(0, 8)}</TableCell>
+                  <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
                   <TableCell>
                     {order.orderDate instanceof Date
                       ? format(order.orderDate, 'MMM dd, yyyy')
@@ -348,7 +349,7 @@ export const OrdersPage: React.FC = () => {
       <Dialog open={cancelDialog.open} onClose={() => setCancelDialog({ ...cancelDialog, open: false })}>
         <DialogTitle>Cancel Order</DialogTitle>
         <DialogContent>
-          <Typography gutterBottom>Are you sure you want to cancel order #{cancelDialog.orderId.substring(0, 8)}?</Typography>
+          <Typography gutterBottom>Are you sure you want to cancel order #{formatOrderNumberForDisplay(cancelDialog.orderId)}?</Typography>
           <TextField
             fullWidth
             label="Reason for cancellation"

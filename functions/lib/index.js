@@ -11,7 +11,7 @@ var __rest = (this && this.__rest) || function (s, e) {
     return t;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.onBulkMedicineJobCreated = exports.onSupportThreadAdminMessageCreated = exports.onSupportTicketCreated = exports.sendSalesOfficerPasswordResetEmail = exports.sendPanelPasswordResetEmail = exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
+exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.sendOrderInvoicePdfEmail = exports.onBulkMedicineJobCreated = exports.onSupportThreadAdminMessageCreated = exports.onSupportTicketCreated = exports.sendSalesOfficerPasswordResetEmail = exports.sendPanelPasswordResetEmail = exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
@@ -73,8 +73,9 @@ function escapeHtmlText(s) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 }
-/** Single path for transactional mail (logs failures, does not throw). */
+/** Single path for transactional mail (logs failures; optional PDF attachment). */
 async function sendSmtpMail(options) {
+    var _a;
     try {
         const smtpConfig = functions.config().smtp;
         if (!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) || !(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
@@ -82,12 +83,9 @@ async function sendSmtpMail(options) {
             return { ok: false, error: 'SMTP not configured' };
         }
         const transporter = getTransporter();
-        await transporter.sendMail({
-            from: smtpConfig.user,
-            to: options.to,
-            subject: options.subject,
-            html: options.html,
-        });
+        await transporter.sendMail(Object.assign({ from: smtpConfig.user, to: options.to, subject: options.subject, html: options.html }, (((_a = options.attachments) === null || _a === void 0 ? void 0 : _a.length)
+            ? { attachments: options.attachments.map((a) => (Object.assign({}, a))) }
+            : {})));
         return { ok: true };
     }
     catch (err) {
@@ -994,6 +992,137 @@ exports.onSupportThreadAdminMessageCreated = functions.firestore
 });
 var bulkMedicineJob_1 = require("./bulkMedicineJob");
 Object.defineProperty(exports, "onBulkMedicineJobCreated", { enumerable: true, get: function () { return bulkMedicineJob_1.onBulkMedicineJobCreated; } });
+const MAX_ORDER_INVOICE_PDF_BYTES = 12 * 1024 * 1024;
+const MAX_ORDER_INVOICE_CSV_BYTES = 8 * 1024 * 1024;
+function decodeDataUriBase64(payload) {
+    let s = typeof payload === 'string' ? payload.trim() : '';
+    if (!s)
+        return '';
+    if (s.includes(',')) {
+        s = s.split(',').pop() || '';
+    }
+    return s;
+}
+/**
+ * Callable: admin/operations uploads a freshly generated order-invoice PDF; we email it to order.retailerEmail.
+ * SMTP must be configured (smtp.user / smtp.password) like other transactional mail.
+ */
+exports.sendOrderInvoicePdfEmail = functions
+    .runWith({ memory: '512MB', timeoutSeconds: 120 })
+    .https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+    }
+    try {
+        await (0, panelAuth_1.assertAdminOrOperations)(context.auth.uid);
+    }
+    catch (_a) {
+        throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
+    }
+    const orderId = typeof (data === null || data === void 0 ? void 0 : data.orderId) === 'string' ? data.orderId.trim() : '';
+    let pdfBase64 = decodeDataUriBase64(typeof (data === null || data === void 0 ? void 0 : data.pdfBase64) === 'string' ? data.pdfBase64 : '');
+    const csvBase64Payload = typeof (data === null || data === void 0 ? void 0 : data.csvBase64) === 'string' ? String(data.csvBase64) : '';
+    let csvBase64Decoded = csvBase64Payload.trim()
+        ? decodeDataUriBase64(csvBase64Payload)
+        : '';
+    const requestedFileName = typeof (data === null || data === void 0 ? void 0 : data.fileName) === 'string' ? data.fileName.trim() : '';
+    const requestedCsvFileName = typeof (data === null || data === void 0 ? void 0 : data.csvFileName) === 'string' ? data.csvFileName.trim() : '';
+    if (!orderId || !pdfBase64) {
+        throw new functions.https.HttpsError('invalid-argument', 'orderId and pdfBase64 are required');
+    }
+    let buffer;
+    try {
+        buffer = Buffer.from(pdfBase64, 'base64');
+    }
+    catch (_b) {
+        throw new functions.https.HttpsError('invalid-argument', 'Invalid pdfBase64 encoding');
+    }
+    const header = buffer.slice(0, 5).toString('ascii');
+    if (buffer.length < 128 || header.indexOf('%PDF') !== 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'Uploaded payload is not a valid PDF');
+    }
+    if (buffer.length > MAX_ORDER_INVOICE_PDF_BYTES) {
+        throw new functions.https.HttpsError('invalid-argument', `PDF exceeds ${MAX_ORDER_INVOICE_PDF_BYTES / (1024 * 1024)}MB limit`);
+    }
+    let csvBuffer;
+    let safeCsvFile;
+    if (csvBase64Decoded) {
+        try {
+            csvBuffer = Buffer.from(csvBase64Decoded, 'base64');
+        }
+        catch (_c) {
+            throw new functions.https.HttpsError('invalid-argument', 'Invalid csvBase64 encoding');
+        }
+        if (csvBuffer.length < 16 || csvBuffer.length > MAX_ORDER_INVOICE_CSV_BYTES) {
+            throw new functions.https.HttpsError('invalid-argument', 'CSV attachment is invalid or exceeds size limit');
+        }
+        const csvText = csvBuffer.toString('utf8');
+        const looksCsv = csvText.includes('PRODUCT NAME') ||
+            csvText.includes('Company Name');
+        const hasNull = csvBuffer.includes(0);
+        if (!looksCsv || hasNull) {
+            throw new functions.https.HttpsError('invalid-argument', 'Uploaded CSV attachment does not look like a UTF-8 invoice export');
+        }
+        safeCsvFile =
+            requestedCsvFileName &&
+                /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.csv$/i.test(requestedCsvFileName)
+                ? requestedCsvFileName
+                : `order-invoice-${orderId.slice(0, 32)}.csv`;
+    }
+    const snap = await admin.firestore().collection('orders').doc(orderId).get();
+    if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+    const od = snap.data() || {};
+    const toRaw = od.retailerEmail;
+    const toEmail = typeof toRaw === 'string'
+        ? toRaw.trim().toLowerCase()
+        : '';
+    const retailerName = od.retailerName != null ? String(od.retailerName).trim() : '';
+    const shopLabel = retailerName ? escapeHtmlText(retailerName) : 'there';
+    if (!toEmail || !toEmail.includes('@')) {
+        throw new functions.https.HttpsError('failed-precondition', 'This order has no retailer email — update retailerEmail before emailing the invoice.');
+    }
+    const invNo = typeof od.invoiceNumber === 'string' && od.invoiceNumber.trim()
+        ? od.invoiceNumber.trim()
+        : orderId;
+    const subject = `SimpliPharma — Tax invoice ${invNo}`;
+    const safeFile = requestedFileName && /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.pdf$/i.test(requestedFileName)
+        ? requestedFileName
+        : `order-invoice-${orderId.slice(0, 32)}.pdf`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <p>Hello ${shopLabel},</p>
+        <p>Your tax invoice <strong>${escapeHtmlText(invNo)}</strong> is attached${csvBuffer ? ' as a PDF and a CSV spreadsheet' : ' as a PDF'}.</p>
+        <p style="color:#666;font-size:12px;">If you did not expect this email, please contact your sales representative.</p>
+      </div>`;
+    const mail = await sendSmtpMail({
+        to: toEmail,
+        subject,
+        html,
+        attachments: [
+            {
+                filename: safeFile,
+                content: buffer,
+                contentType: 'application/pdf',
+            },
+            ...(csvBuffer && safeCsvFile
+                ? [
+                    {
+                        filename: safeCsvFile,
+                        content: csvBuffer,
+                        contentType: 'text/csv; charset=utf-8',
+                    },
+                ]
+                : []),
+        ],
+    });
+    if (!mail.ok) {
+        console.error('sendOrderInvoicePdfEmail: SMTP failed', mail.error);
+        throw new functions.https.HttpsError('internal', mail.error || 'Could not send email (check SMTP in Functions config)');
+    }
+    return { ok: true, emailedTo: toEmail };
+});
 var typesenseMedicines_1 = require("./typesenseMedicines");
 Object.defineProperty(exports, "onMedicineWriteTypesense", { enumerable: true, get: function () { return typesenseMedicines_1.onMedicineWriteTypesense; } });
 Object.defineProperty(exports, "searchMedicinesTypesense", { enumerable: true, get: function () { return typesenseMedicines_1.searchMedicinesTypesense; } });

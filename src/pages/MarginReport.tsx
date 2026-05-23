@@ -41,6 +41,7 @@ import { computeOrderMarginSummary } from '../utils/orderLineMargin';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 
 type PeriodFilter = 'this_month' | 'last_month' | 'all';
 
@@ -450,7 +451,7 @@ export const MarginReportPage: React.FC = () => {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" fontWeight={500}>
-                      #{row.order.id.substring(0, 8)}
+                      #{formatOrderNumberForDisplay(row.order.id)}
                     </Typography>
                     {row.order.invoiceNumber && (
                       <Typography variant="caption" color="text.secondary" display="block">
@@ -525,7 +526,7 @@ export const MarginReportPage: React.FC = () => {
         fullWidth
       >
         <DialogTitle>
-          Margin breakdown — Order #{detailOrder?.order.id.substring(0, 8)}
+          Margin breakdown — Order #{detailOrder?.order?.id ? formatOrderNumberForDisplay(detailOrder.order.id) : '—'}
         </DialogTitle>
         <DialogContent dividers>
           {detailOrder && (

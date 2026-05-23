@@ -72,6 +72,7 @@ import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Medicine, OrderMedicine, OrderStatus, ProductDemand } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
+import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { normalizeFirestoreDate } from '../services/inventory';
 import {
   computeSchemeFulfillmentFreeQty,
@@ -878,6 +879,7 @@ export const OrderDetailsPage: React.FC = () => {
             discountPercentage: discountPct,
             schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
             schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
+            ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
           }];
           newMedicines[scanningItemIndex].freeQuantity = lineSplit.freeQty;
         }
@@ -975,6 +977,7 @@ export const OrderDetailsPage: React.FC = () => {
               discountPercentage: discountPct,
               schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
               schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
+              ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
             }];
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
@@ -1034,6 +1037,7 @@ export const OrderDetailsPage: React.FC = () => {
               discountPercentage: discountPct,
               schemePaidQty: toNumber(batch.schemePaidQty) || undefined,
               schemeFreeQty: toNumber(batch.schemeFreeQty) || undefined,
+              ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
             }];
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
@@ -1305,6 +1309,7 @@ export const OrderDetailsPage: React.FC = () => {
           getSchemeFromAny(actualBatch).schemeFreeQty ||
           getSchemeFromAny(a).schemeFreeQty ||
           undefined,
+        ...(actualBatch?.nonReturnable === true ? { nonReturnable: true as const } : {}),
       };
     });
 
@@ -1474,13 +1479,13 @@ export const OrderDetailsPage: React.FC = () => {
     <Box>
       <Breadcrumbs items={[
         { label: 'Orders', path: '/orders' },
-        { label: `Order #${order.id.substring(0, 8)}` }
+        { label: `Order #${formatOrderNumberForDisplay(order.id)}` }
       ]} />
       <Box display="flex" alignItems="center" mb={3}>
         <IconButton onClick={() => navigate('/orders')} sx={{ mr: 2 }}>
           <ArrowBack />
         </IconButton>
-        <Typography variant="h4">Order #{order.id.substring(0, 8)}</Typography>
+        <Typography variant="h4">Order #{formatOrderNumberForDisplay(order.id)}</Typography>
         <Typography variant="caption" color="text.secondary" sx={{ ml: 1, alignSelf: 'flex-end', pb: 0.5 }}>
           {order.id}
         </Typography>
@@ -1510,6 +1515,7 @@ export const OrderDetailsPage: React.FC = () => {
         <Button 
           variant="outlined" 
           startIcon={<Print />}
+          title="Downloads the PDF immediately, then sends PDF + CSV to the retailer email in the background (requires SMTP on Cloud Functions)."
           onClick={() => {
             // Check if all items have batches assigned (either batchNumber or batchAllocations)
             const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
@@ -1618,7 +1624,7 @@ export const OrderDetailsPage: React.FC = () => {
             };
             
             try {
-              generateOrderInvoice(invoiceOrder).catch(err => {
+              generateOrderInvoice(invoiceOrder, { emailPdfToRetailer: true }).catch((err) => {
                 console.error('Error generating invoice:', err);
                 alert('Failed to generate invoice. Please try again.');
               });
@@ -2292,7 +2298,7 @@ export const OrderDetailsPage: React.FC = () => {
             <Typography variant="h6" gutterBottom>Invoice Details</Typography>
             <Box display="flex" justifyContent="space-between" mb={1}>
               <Typography color="textSecondary">Order ID:</Typography>
-              <Typography fontWeight="medium">#{order.id.substring(0, 8)}</Typography>
+              <Typography fontWeight="medium">#{formatOrderNumberForDisplay(order.id)}</Typography>
             </Box>
             <Box display="flex" justifyContent="space-between" mb={1}>
               <Typography color="textSecondary">Date:</Typography>
