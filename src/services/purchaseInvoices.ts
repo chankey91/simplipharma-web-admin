@@ -226,7 +226,10 @@ export const createPurchaseInvoice = async (
     if (item.qrCode) {
       cleanedItem.qrCode = item.qrCode;
     }
-    
+    if (item.nonReturnable === true) {
+      cleanedItem.nonReturnable = true;
+    }
+
     return cleanedItem;
   });
   
@@ -338,7 +341,10 @@ export const createPurchaseInvoice = async (
               batchData.schemeFreeQty = Math.floor(sf);
             }
           }
-          
+          if (item.nonReturnable === true) {
+            batchData.nonReturnable = true;
+          }
+
           console.log(`Updating stock for medicine ${medicineId} with batch data:`, batchData);
           await addStockBatch(medicineId, batchData);
           console.log(`✓ Stock updated successfully for medicine ${medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
@@ -466,7 +472,10 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
             batchData.schemeFreeQty = Math.floor(sf);
           }
         }
-        
+        if (item.nonReturnable === true) {
+          batchData.nonReturnable = true;
+        }
+
         console.log(`Updating stock for existing invoice - medicine ${medicineId} with batch data:`, batchData);
         await addStockBatch(medicineId, batchData);
         console.log(`✓ Stock updated successfully for medicine ${medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);

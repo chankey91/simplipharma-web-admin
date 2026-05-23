@@ -46,6 +46,7 @@ import type { Order } from '../types';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { useAuth } from '../context/AuthContext';
 
 const getStatusColor = (status: string) => {
@@ -419,7 +420,7 @@ export const DashboardPage: React.FC = () => {
                             onClick={() => navigate(`/orders/${order.id}`)}
                             sx={{ cursor: 'pointer' }}
                           >
-                            <TableCell sx={{ fontWeight: 600 }}>#{order.id.substring(0, 8)}</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>#{formatOrderNumberForDisplay(order.id)}</TableCell>
                             <TableCell>{!isNaN(od.getTime()) ? format(od, 'MMM d, yyyy') : '—'}</TableCell>
                             <TableCell>
                               <Typography variant="body2" noWrap sx={{ maxWidth: 220 }}>

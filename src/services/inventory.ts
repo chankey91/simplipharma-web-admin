@@ -142,6 +142,7 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
         discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
           ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
           : undefined,
+        ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
         ...mapBatchLandedCost(batch),
         ...normalizeSchemeFromBatch(batch),
       };
@@ -235,6 +236,7 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
       discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
         ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
         : undefined,
+      ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
       ...mapBatchLandedCost(batch),
       ...normalizeSchemeFromBatch(batch),
     };
@@ -345,7 +347,11 @@ export const addStockBatch = async (
     newBatch.schemePaidQty = schemeFields.schemePaidQty;
     newBatch.schemeFreeQty = schemeFields.schemeFreeQty;
   }
-  
+
+  if (batch.nonReturnable === true) {
+    newBatch.nonReturnable = true;
+  }
+
   // Check if batch with same batch number already exists
   const existingBatchIndex = batches.findIndex(b => b.batchNumber === batch.batchNumber);
   
@@ -378,6 +384,9 @@ export const addStockBatch = async (
     if (schemeFields.schemePaidQty != null && schemeFields.schemeFreeQty != null) {
       batches[existingBatchIndex].schemePaidQty = schemeFields.schemePaidQty;
       batches[existingBatchIndex].schemeFreeQty = schemeFields.schemeFreeQty;
+    }
+    if (newBatch.nonReturnable === true || (batches[existingBatchIndex] as any).nonReturnable === true) {
+      batches[existingBatchIndex].nonReturnable = true;
     }
   } else {
     // Add new batch
@@ -445,7 +454,10 @@ export const addStockBatch = async (
 
     appendLandedCostToFirestoreBatch(firestoreBatch, b);
     appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
-    
+    if ((b as any).nonReturnable === true) {
+      firestoreBatch.nonReturnable = true;
+    }
+
     return firestoreBatch;
   });
   
@@ -548,7 +560,10 @@ export const reduceStockFromBatch = async (
 
     appendLandedCostToFirestoreBatch(firestoreBatch, b);
     appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
-    
+    if ((b as any).nonReturnable === true) {
+      firestoreBatch.nonReturnable = true;
+    }
+
     return firestoreBatch;
   });
   
@@ -642,7 +657,10 @@ export const restoreStockToBatch = async (
 
     appendLandedCostToFirestoreBatch(firestoreBatch, b);
     appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
-    
+    if ((b as any).nonReturnable === true) {
+      firestoreBatch.nonReturnable = true;
+    }
+
     return firestoreBatch;
   });
   

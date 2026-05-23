@@ -80,7 +80,4 @@ export function buildStoreReceivableSummaries(
   return summaries.sort((a, b) => b.totalOutstanding - a.totalOutstanding);
 }
 
-export function formatOrderInvoiceLabel(order: Order): string {
-  if (order.invoiceNumber) return order.invoiceNumber;
-  return `ORD-${order.id.slice(0, 8).toUpperCase()}`;
-}
+export { formatOrderInvoiceLabel } from './orderDisplay';
