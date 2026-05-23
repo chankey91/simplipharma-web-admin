@@ -79,7 +79,13 @@ async function sendSmtpMail(options: {
   to: string;
   subject: string;
   html: string;
-  attachments?: { filename: string; content: Buffer; contentType?: string }[];
+  attachments?: {
+    filename: string;
+    content: Buffer | string;
+    contentType?: string;
+    contentDisposition?: 'attachment' | 'inline';
+    encoding?: string;
+  }[];
 }): Promise<{ ok: boolean; error?: string }> {
   try {
     const smtpConfig = functions.config().smtp;
@@ -1108,14 +1114,28 @@ export const sendOrderInvoicePdfEmail = functions
       typeof data?.pdfBase64 === 'string' ? data.pdfBase64 : ''
     );
     const csvBase64Payload =
-      typeof data?.csvBase64 === 'string' ? String(data.csvBase64) : '';
+      typeof data?.invoiceCsvBase64 === 'string'
+        ? String(data.invoiceCsvBase64)
+        : typeof data?.csvBase64 === 'string'
+          ? String(data.csvBase64)
+          : '';
     let csvBase64Decoded = csvBase64Payload.trim()
       ? decodeDataUriBase64(csvBase64Payload)
       : '';
-    const requestedFileName =
-      typeof data?.fileName === 'string' ? data.fileName.trim() : '';
+
+    /** PDF attachment name (callable clients should send pdfFileName; fileName retained for compat). */
+    const requestedPdfFileName =
+      typeof data?.pdfFileName === 'string'
+        ? data.pdfFileName.trim()
+        : typeof data?.fileName === 'string'
+          ? data.fileName.trim()
+          : '';
     const requestedCsvFileName =
-      typeof data?.csvFileName === 'string' ? data.csvFileName.trim() : '';
+      typeof data?.invoiceCsvFileName === 'string'
+        ? data.invoiceCsvFileName.trim()
+        : typeof data?.csvFileName === 'string'
+          ? data.csvFileName.trim()
+          : '';
 
     if (!orderId || !pdfBase64) {
       throw new functions.https.HttpsError(
@@ -1146,30 +1166,47 @@ export const sendOrderInvoicePdfEmail = functions
       );
     }
 
-    let csvBuffer: Buffer | undefined;
-    let safeCsvFile: string | undefined;
+    /** Validated CSV body for the second attachment (UTF-8). */
+    let invoiceCsvUtf8Text: string | undefined;
+    let invoiceCsvAttachmentName: string | undefined;
     if (csvBase64Decoded) {
+      let csvDecodedBuffer: Buffer;
       try {
-        csvBuffer = Buffer.from(csvBase64Decoded, 'base64');
+        csvDecodedBuffer = Buffer.from(csvBase64Decoded, 'base64');
       } catch {
         throw new functions.https.HttpsError(
           'invalid-argument',
-          'Invalid csvBase64 encoding'
+          'Invalid invoice CSV base64 encoding'
         );
       }
 
-      if (csvBuffer.length < 16 || csvBuffer.length > MAX_ORDER_INVOICE_CSV_BYTES) {
+      const looksPdf =
+        csvDecodedBuffer.length >= 4 &&
+        csvDecodedBuffer[0] === 0x25 &&
+        csvDecodedBuffer[1] === 0x50 &&
+        csvDecodedBuffer[2] === 0x44 &&
+        csvDecodedBuffer[3] === 0x46;
+      if (looksPdf) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'Invoice CSV attachment is not CSV (payload looks like a PDF). Ensure the CSV data URI/body is sent separately from the PDF.'
+        );
+      }
+
+      if (
+        csvDecodedBuffer.length < 16 ||
+        csvDecodedBuffer.length > MAX_ORDER_INVOICE_CSV_BYTES
+      ) {
         throw new functions.https.HttpsError(
           'invalid-argument',
           'CSV attachment is invalid or exceeds size limit'
         );
       }
 
-      const csvText = csvBuffer.toString('utf8');
+      const csvText = csvDecodedBuffer.toString('utf8');
       const looksCsv =
-        csvText.includes('PRODUCT NAME') ||
-        csvText.includes('Company Name');
-      const hasNull = csvBuffer.includes(0);
+        csvText.includes('PRODUCT NAME') || csvText.includes('Company Name');
+      const hasNull = csvDecodedBuffer.includes(0);
       if (!looksCsv || hasNull) {
         throw new functions.https.HttpsError(
           'invalid-argument',
@@ -1177,7 +1214,8 @@ export const sendOrderInvoicePdfEmail = functions
         );
       }
 
-      safeCsvFile =
+      invoiceCsvUtf8Text = csvText;
+      invoiceCsvAttachmentName =
         requestedCsvFileName &&
         /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.csv$/i.test(requestedCsvFileName)
           ? requestedCsvFileName
@@ -1211,15 +1249,16 @@ export const sendOrderInvoicePdfEmail = functions
         ? od.invoiceNumber.trim()
         : orderId;
     const subject = `SimpliPharma — Tax invoice ${invNo}`;
-    const safeFile =
-      requestedFileName && /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.pdf$/i.test(requestedFileName)
-        ? requestedFileName
+    const safePdfFile =
+      requestedPdfFileName &&
+      /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.pdf$/i.test(requestedPdfFileName)
+        ? requestedPdfFileName
         : `order-invoice-${orderId.slice(0, 32)}.pdf`;
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <p>Hello ${shopLabel},</p>
-        <p>Your tax invoice <strong>${escapeHtmlText(invNo)}</strong> is attached${csvBuffer ? ' as a PDF and a CSV spreadsheet' : ' as a PDF'}.</p>
+        <p>Your tax invoice <strong>${escapeHtmlText(invNo)}</strong> is attached${invoiceCsvUtf8Text ? ' as a PDF and a CSV spreadsheet' : ' as a PDF'}.</p>
         <p style="color:#666;font-size:12px;">If you did not expect this email, please contact your sales representative.</p>
       </div>`;
 
@@ -1229,16 +1268,19 @@ export const sendOrderInvoicePdfEmail = functions
       html,
       attachments: [
         {
-          filename: safeFile,
+          filename: safePdfFile,
           content: buffer,
           contentType: 'application/pdf',
+          contentDisposition: 'attachment' as const,
         },
-        ...(csvBuffer && safeCsvFile
+        ...(invoiceCsvUtf8Text && invoiceCsvAttachmentName
           ? [
               {
-                filename: safeCsvFile,
-                content: csvBuffer,
-                contentType: 'text/csv; charset=utf-8',
+                filename: invoiceCsvAttachmentName,
+                content: invoiceCsvUtf8Text,
+                contentType: 'text/csv; charset=UTF-8',
+                encoding: 'utf8',
+                contentDisposition: 'attachment' as const,
               },
             ]
           : []),
