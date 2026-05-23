@@ -22,9 +22,9 @@ export async function sendOrderInvoicePdfToRetailer(
   const res = await fn({
     orderId,
     pdfBase64: pdfBase64Uri,
-    ...(fileName ? { fileName } : {}),
-    ...(attachments?.csvBase64Uri ? { csvBase64: attachments.csvBase64Uri } : {}),
-    ...(attachments?.csvFileName ? { csvFileName: attachments.csvFileName } : {}),
+    ...(fileName ? { pdfFileName: fileName } : {}),
+    ...(attachments?.csvBase64Uri ? { invoiceCsvBase64: attachments.csvBase64Uri } : {}),
+    ...(attachments?.csvFileName ? { invoiceCsvFileName: attachments.csvFileName } : {}),
   });
   return res.data as SendOrderInvoicePdfEmailResult;
 }
