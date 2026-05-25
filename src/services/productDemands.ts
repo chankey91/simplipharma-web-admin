@@ -32,11 +32,16 @@ function parseDemandDoc(id: string, data: Record<string, unknown>): ProductDeman
   const requestedUnit =
     typeof ruRaw === 'string' && ruRaw.trim().length > 0 ? ruRaw.trim() : '—';
 
+  const imageRaw = data.imageUrl;
+  const imageUrl =
+    typeof imageRaw === 'string' && imageRaw.trim() ? imageRaw.trim() : undefined;
+
   return {
     id,
     ...(data as object),
     requestedQuantity,
     requestedUnit,
+    imageUrl,
     createdAt: (data.createdAt as any)?.toDate?.() || data.createdAt,
     updatedAt: (data.updatedAt as any)?.toDate?.() || data.updatedAt,
     fulfilledAt: (data.fulfilledAt as any)?.toDate?.() || data.fulfilledAt,

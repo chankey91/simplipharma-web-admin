@@ -30,6 +30,7 @@ import { useProductDemands, useFulfillProductDemand, useRejectProductDemand } fr
 import { useMedicines } from '../hooks/useInventory';
 import { ProductDemand, Medicine } from '../types';
 import { Loading } from '../components/Loading';
+import { ProductDemandImage } from '../components/ProductDemandImage';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import {
   searchMedicinesTypesenseAdmin,
@@ -375,6 +376,7 @@ export const ProductDemandsPage: React.FC = () => {
         <Table size="small">
           <TableHead>
             <TableRow>
+              <TableCell>Photo</TableCell>
               <SortableTableHeadCell columnId="productName" label="Requested product" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
               <SortableTableHeadCell columnId="manufacturerName" label="Manufacturer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
               <SortableTableHeadCell columnId="requestedQuantity" label="Qty" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} align="right" />
@@ -387,7 +389,7 @@ export const ProductDemandsPage: React.FC = () => {
           <TableBody>
             {sortedDemands.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
                     No demands in this view.
                   </Typography>
@@ -396,6 +398,13 @@ export const ProductDemandsPage: React.FC = () => {
             ) : (
               sortedDemands.map((row) => (
                 <TableRow key={row.id}>
+                  <TableCell>
+                    <ProductDemandImage
+                      imageUrl={row.imageUrl}
+                      alt={row.productName}
+                      showPlaceholder
+                    />
+                  </TableCell>
                   <TableCell>
                     <Typography fontWeight={600}>{row.productName}</Typography>
                     {row.notes ? (
@@ -481,6 +490,18 @@ export const ProductDemandsPage: React.FC = () => {
       >
         <DialogTitle>Fulfill demand</DialogTitle>
         <DialogContent>
+          {selectedDemand?.imageUrl?.trim() ? (
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                Product photo from retailer
+              </Typography>
+              <ProductDemandImage
+                imageUrl={selectedDemand.imageUrl}
+                alt={selectedDemand.productName}
+                size={140}
+              />
+            </Box>
+          ) : null}
           <Typography variant="body2" color="text.secondary" gutterBottom>
             Requested: <strong>{selectedDemand?.productName}</strong> — {selectedDemand?.manufacturerName}
           </Typography>
@@ -581,6 +602,11 @@ export const ProductDemandsPage: React.FC = () => {
       <Dialog open={rejectOpen} onClose={() => setRejectOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle>Reject demand</DialogTitle>
         <DialogContent>
+          {selectedDemand?.imageUrl ? (
+            <Box sx={{ mt: 1, mb: 1 }}>
+              <ProductDemandImage imageUrl={selectedDemand.imageUrl} alt={selectedDemand.productName} size={80} />
+            </Box>
+          ) : null}
           <TextField
             fullWidth
             multiline
