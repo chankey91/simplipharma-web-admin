@@ -99,6 +99,14 @@
       ]
     },
     {
+      "collectionGroup": "so_visit_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "retailerId", "order": "ASCENDING" },
+        { "fieldPath": "visitedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "medicines",
       "queryScope": "COLLECTION",
       "fields": [

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -35,7 +35,9 @@ import {
   VpnKey,
   MyLocation,
   PhotoCamera,
+  History,
 } from '@mui/icons-material';
+import { RetailerVisitLogDialog } from '../components/RetailerVisitLogDialog';
 import {
   FormControl,
   InputLabel,
@@ -73,7 +75,16 @@ export const StoresPage: React.FC = () => {
   const [generatedPassword, setGeneratedPassword] = useState('');
   
   const [salesOfficers, setSalesOfficers] = useState<User[]>([]);
+  const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
+
+  const salesOfficerNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    salesOfficers.forEach((so) => {
+      m[so.id] = so.displayName || so.email || so.id;
+    });
+    return m;
+  }, [salesOfficers]);
   const [formData, setFormData] = useState({
     displayName: '',
     shopName: '',
@@ -143,6 +154,16 @@ export const StoresPage: React.FC = () => {
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
+  };
+
+  useEffect(() => {
+    getSalesOfficers()
+      .then(setSalesOfficers)
+      .catch(() => setSalesOfficers([]));
+  }, []);
+
+  const handleOpenVisitLog = (store: User) => {
+    setVisitLogStore(store);
   };
 
   const handleOpenCreate = async () => {
@@ -401,6 +422,14 @@ export const StoresPage: React.FC = () => {
                   />
                 </TableCell>
                 <TableCell align="right">
+                  <IconButton
+                    size="small"
+                    onClick={() => handleOpenVisitLog(store)}
+                    color="secondary"
+                    title="Visit log"
+                  >
+                    <History />
+                  </IconButton>
                   <IconButton size="small" onClick={() => handleOpenEdit(store)} color="primary">
                     <Edit />
                   </IconButton>
@@ -635,6 +664,13 @@ export const StoresPage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <RetailerVisitLogDialog
+        open={Boolean(visitLogStore)}
+        store={visitLogStore}
+        salesOfficerNameById={salesOfficerNameById}
+        onClose={() => setVisitLogStore(null)}
+      />
     </Box>
   );
 };

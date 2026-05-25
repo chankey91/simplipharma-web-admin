@@ -68,6 +68,7 @@ import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
 import { format } from 'date-fns';
 import { auth, doc, updateDoc, db } from '../services/firebase';
 import { Loading } from '../components/Loading';
+import { ProductDemandImage } from '../components/ProductDemandImage';
 import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Medicine, OrderMedicine, OrderStatus, ProductDemand } from '../types';
@@ -1781,19 +1782,29 @@ export const OrderDetailsPage: React.FC = () => {
                             colSpan={colSpan}
                             sx={isRejected ? { color: 'text.secondary' } : undefined}
                           >
-                            <Box display="flex" alignItems="center" flexWrap="wrap" sx={{ gap: 1 }}>
-                              <Chip
-                                size="small"
-                                label={
-                                  isRejected ? 'Rejected' : isFulfilled ? 'Fulfilled' : 'Product request'
+                            <Box display="flex" alignItems="flex-start" flexWrap="wrap" sx={{ gap: 1 }}>
+                              <ProductDemandImage
+                                imageUrl={
+                                  dDoc?.imageUrl ||
+                                  (item as OrderMedicine).imageUrl
                                 }
-                                color={isRejected ? 'default' : isFulfilled ? 'success' : 'warning'}
-                                variant="outlined"
+                                alt={item.name}
+                                size={64}
                               />
-                              <Typography variant="body2" fontWeight="bold" sx={strikeSx}>
-                                {item.name}
-                              </Typography>
-                            </Box>
+                              <Box flex={1} minWidth={0}>
+                                <Box display="flex" alignItems="center" flexWrap="wrap" sx={{ gap: 1 }}>
+                                  <Chip
+                                    size="small"
+                                    label={
+                                      isRejected ? 'Rejected' : isFulfilled ? 'Fulfilled' : 'Product request'
+                                    }
+                                    color={isRejected ? 'default' : isFulfilled ? 'success' : 'warning'}
+                                    variant="outlined"
+                                  />
+                                  <Typography variant="body2" fontWeight="bold" sx={strikeSx}>
+                                    {item.name}
+                                  </Typography>
+                                </Box>
                             <Typography
                               variant="caption"
                               color="textSecondary"
@@ -1849,6 +1860,8 @@ export const OrderDetailsPage: React.FC = () => {
                                 Fulfill request
                               </Button>
                             ) : null}
+                              </Box>
+                            </Box>
                           </TableCell>
                         </TableRow>
                       );

@@ -63,6 +63,8 @@ export interface OrderMedicine {
   manufacturerName?: string;
   requestedUnit?: string;
   notes?: string;
+  /** Product-request photo copied on order line when present. */
+  imageUrl?: string;
   freeQuantity?: number;
   originalQuantity?: number; // Original ordered quantity (for partial fulfillment tracking)
   batchNumber?: string; // Keep for backward compatibility
@@ -253,6 +255,8 @@ export interface ProductDemand {
   /** Unit of measure (e.g. strips, bottles, pcs). */
   requestedUnit: string;
   notes?: string;
+  /** Optional photo from retailer app (JPEG data URL on Firestore). */
+  imageUrl?: string;
   status: ProductDemandStatus;
   /** Set when the retailer checked out with this request on an order */
   orderId?: string;
