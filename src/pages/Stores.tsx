@@ -45,12 +45,33 @@ import {
   MenuItem,
 } from '@mui/material';
 import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore } from '../hooks/useStores';
+import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
 import { getSalesOfficers } from '../services/salesOfficers';
 import { User } from '../types';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
+
+const formatCurrency = (n: number) =>
+  `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+function NoteTotalCell({ stats }: { stats?: { total: number; count: number } }) {
+  const total = stats?.total ?? 0;
+  const count = stats?.count ?? 0;
+  return (
+    <Box>
+      <Typography variant="body2" fontWeight={600}>
+        {formatCurrency(total)}
+      </Typography>
+      {count > 0 ? (
+        <Typography variant="caption" color="text.secondary">
+          {count} note{count !== 1 ? 's' : ''}
+        </Typography>
+      ) : null}
+    </Box>
+  );
+}
 
 const generatePassword = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -63,6 +84,8 @@ const generatePassword = () => {
 
 export const StoresPage: React.FC = () => {
   const { data: stores, isLoading, error } = useStores();
+  const { data: creditNotes } = useCreditNotes();
+  const { data: debitNotes } = useDebitNotes();
   const updateStoreMutation = useUpdateStore();
   const createStoreMutation = useCreateStore();
   const toggleStatusMutation = useToggleStoreStatus();
@@ -85,6 +108,30 @@ export const StoresPage: React.FC = () => {
     });
     return m;
   }, [salesOfficers]);
+
+  const creditNoteStatsByRetailerId = useMemo(() => {
+    const map = new Map<string, { total: number; count: number }>();
+    for (const note of creditNotes ?? []) {
+      const prev = map.get(note.retailerId) ?? { total: 0, count: 0 };
+      map.set(note.retailerId, {
+        total: prev.total + (note.totalAmount ?? 0),
+        count: prev.count + 1,
+      });
+    }
+    return map;
+  }, [creditNotes]);
+
+  const debitNoteStatsByRetailerId = useMemo(() => {
+    const map = new Map<string, { total: number; count: number }>();
+    for (const note of debitNotes ?? []) {
+      const prev = map.get(note.retailerId) ?? { total: 0, count: 0 };
+      map.set(note.retailerId, {
+        total: prev.total + (note.totalAmount ?? 0),
+        count: prev.count + 1,
+      });
+    }
+    return map;
+  }, [debitNotes]);
   const [formData, setFormData] = useState({
     displayName: '',
     shopName: '',
@@ -134,6 +181,22 @@ export const StoresPage: React.FC = () => {
           return applyDirection(compareAsc(a.phoneNumber || '', b.phoneNumber || ''), sortDirection);
         case 'location':
           return applyDirection(compareAsc(a.location ? 1 : 0, b.location ? 1 : 0), sortDirection);
+        case 'creditNoteTotal':
+          return applyDirection(
+            compareAsc(
+              creditNoteStatsByRetailerId.get(a.id)?.total ?? 0,
+              creditNoteStatsByRetailerId.get(b.id)?.total ?? 0
+            ),
+            sortDirection
+          );
+        case 'debitNoteTotal':
+          return applyDirection(
+            compareAsc(
+              debitNoteStatsByRetailerId.get(a.id)?.total ?? 0,
+              debitNoteStatsByRetailerId.get(b.id)?.total ?? 0
+            ),
+            sortDirection
+          );
         case 'isActive':
           return applyDirection(compareAsc(a.isActive !== false ? 1 : 0, b.isActive !== false ? 1 : 0), sortDirection);
         default:
@@ -141,7 +204,7 @@ export const StoresPage: React.FC = () => {
       }
     });
     return list;
-  }, [filteredStores, sortKey, sortDirection]);
+  }, [filteredStores, sortKey, sortDirection, creditNoteStatsByRetailerId, debitNoteStatsByRetailerId]);
 
   const requestSortResetPage = (key: string) => {
     requestSort(key);
@@ -377,6 +440,8 @@ export const StoresPage: React.FC = () => {
               <SortableTableHeadCell columnId="licenceNumber" label="Licence No." sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="phoneNumber" label="Contact" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="location" label="Location" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="creditNoteTotal" label="Credit notes" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="debitNoteTotal" label="Debit notes" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <SortableTableHeadCell columnId="isActive" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -384,7 +449,7 @@ export const StoresPage: React.FC = () => {
           <TableBody>
             {paginatedStores.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} align="center">
+                <TableCell colSpan={11} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No stores found</Typography>
                 </TableCell>
               </TableRow>
@@ -405,6 +470,11 @@ export const StoresPage: React.FC = () => {
                   <Typography variant="caption" color="textSecondary">{store.email}</Typography>
                 </TableCell>
                 <TableCell>{store.ownerName || store.displayName || 'N/A'}</TableCell>
+                <TableCell>
+                  {store.salesOfficerId
+                    ? salesOfficerNameById[store.salesOfficerId] || store.salesOfficerId
+                    : '—'}
+                </TableCell>
                 <TableCell>{store.licenceNumber || 'N/A'}</TableCell>
                 <TableCell>{store.phoneNumber || 'N/A'}</TableCell>
                 <TableCell>
@@ -413,6 +483,12 @@ export const StoresPage: React.FC = () => {
                   ) : (
                     <Chip label="No Location" size="small" variant="outlined" />
                   )}
+                </TableCell>
+                <TableCell align="right">
+                  <NoteTotalCell stats={creditNoteStatsByRetailerId.get(store.id)} />
+                </TableCell>
+                <TableCell align="right">
+                  <NoteTotalCell stats={debitNoteStatsByRetailerId.get(store.id)} />
                 </TableCell>
                 <TableCell>
                   <Chip

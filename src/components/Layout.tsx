@@ -39,6 +39,7 @@ import {
   TrendingUp,
   Undo,
   AccountBalance,
+  Article,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -66,6 +67,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
       { text: 'Product demands', icon: <PostAdd />, path: '/product-demands' },
       { text: 'Sales invoices', icon: <Description />, path: '/invoices' },
+      { text: 'Credit & debit notes', icon: <Article />, path: '/credit-notes' },
     ],
   },
   {

@@ -31,6 +31,7 @@ import { PendingRetailersPage } from './pages/PendingRetailers';
 import { ExpiryReturnsPage } from './pages/ExpiryReturns';
 import { OrderReturnsPage } from './pages/OrderReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
+import { CreditNotesPage } from './pages/CreditNotes';
 import { MarginReportPage } from './pages/MarginReport';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
 import { brandColors } from './theme/brand';
@@ -125,6 +126,7 @@ function AppRoutes() {
       <Route path="/inventory/:medicineId" element={withLayout(<MedicineDetailsPage />)} />
       <Route path="/inventory/stock-update" element={withLayout(<StockUpdatePage />)} />
       <Route path="/invoices" element={withLayout(<InvoicesPage />)} />
+      <Route path="/credit-notes" element={withLayout(<CreditNotesPage />)} />
       <Route path="/banners" element={withLayout(<BannersPage />)} />
       <Route path="/sales-officers" element={withLayout(<SalesOfficersPage />)} />
       <Route path="/operations-users" element={withLayout(<OperationsUsersPage />)} />
