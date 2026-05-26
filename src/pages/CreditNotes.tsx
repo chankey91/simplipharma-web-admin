@@ -25,6 +25,7 @@ import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generateCreditNotePdf } from '../utils/creditNote';
+import { generateDebitNotePdf } from '../utils/debitNote';
 import { CreditNote, DebitNote } from '../types';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -151,6 +152,15 @@ export const CreditNotesPage: React.FC = () => {
     setDownloadingId(note.id);
     try {
       await generateCreditNotePdf(note);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const handleDownloadDebit = async (note: DebitNote) => {
+    setDownloadingId(note.id);
+    try {
+      await generateDebitNotePdf(note);
     } finally {
       setDownloadingId(null);
     }
@@ -360,7 +370,12 @@ export const CreditNotesPage: React.FC = () => {
                       <TableCell>{dn.reason || dn.sourceType || '—'}</TableCell>
                       <TableCell align="right">{formatAmount(dn.totalAmount)}</TableCell>
                       <TableCell align="right">
-                        <IconButton size="small" title="Debit note PDF coming soon" disabled>
+                        <IconButton
+                          size="small"
+                          title="Download debit note PDF"
+                          onClick={() => handleDownloadDebit(dn)}
+                          disabled={downloadingId === dn.id}
+                        >
                           <Download />
                         </IconButton>
                       </TableCell>

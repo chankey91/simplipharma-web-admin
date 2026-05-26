@@ -13,6 +13,7 @@ import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById, getAllMedicines } from '../services/inventory';
 import { getProductDemandsByIds } from '../services/productDemands';
+import { invoiceStateHtml, resolveInvoiceState } from './invoicePartyDefaults';
 import { getAllPurchaseInvoices, collectPurchaseInvoicesForDemands } from '../services/purchaseInvoices';
 import { tryPromoteFulfilledDemandLine } from './productDemandOrderLine';
 import { formatOrderInvoiceLabel } from './orderDisplay';
@@ -121,6 +122,7 @@ export type OrderInvoicePrepared = {
     name: string;
     address: string;
     state: string;
+    stateCode: string;
     phone: string;
     dl: string;
     gstin: string;
@@ -422,24 +424,25 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
   let party = {
     name: order.retailerName || order.retailerEmail || 'N/A',
     address: order.deliveryAddress || '',
-    state: '',
+    ...resolveInvoiceState(),
     phone: '',
     dl: '',
-    gstin: ''
+    gstin: '',
   };
-  
+
   // Try to fetch retailer details if retailerId is available
   if (order.retailerId) {
     try {
       const retailer = await getUserProfile(order.retailerId);
       if (retailer) {
+        const resolvedState = resolveInvoiceState();
         party = {
           name: retailer.shopName || retailer.displayName || retailer.email || party.name,
           address: retailer.address || retailer.location?.address || order.deliveryAddress || party.address,
-          state: '', // User doesn't have state field, keep empty
+          ...resolvedState,
           phone: retailer.phoneNumber || party.phone,
           dl: retailer.licenceNumber || retailer.licenceHolderName || party.dl,
-          gstin: retailer.gst || party.gstin
+          gstin: retailer.gst || party.gstin,
         };
       }
     } catch (error) {
@@ -447,7 +450,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       // Continue with order data
     }
   }
-  
+
   // Invoice details
   const invoiceData = {
     no: formatOrderInvoiceLabel(order),
@@ -497,6 +500,8 @@ const getOrderInvoiceHTML = async (order: Order) => {
     party,
     gstRatePercent,
   } = await prepareOrderInvoiceData(order);
+
+  const companyState = resolveInvoiceState();
 
   // Generate items HTML
   const itemsHTML = items.map(item => `
@@ -585,6 +590,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
     <td width="50%">
       <b>${company.name}</b><br>
       ${company.address}<br>
+      ${invoiceStateHtml(companyState.state, companyState.stateCode)}
       Phone: ${company.phone}<br>
       Email: ${company.email}<br><br>
       <b>D.L. No:</b> ${company.dl}<br>
@@ -593,7 +599,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
     <td width="50%">
       <b>${party.name}</b><br>
       Party Address: ${party.address}<br>
-      State: ${party.state}<br>
+      ${invoiceStateHtml(party.state, party.stateCode)}
       Ph.No: ${party.phone}<br>
       Party D.L No: ${party.dl}<br>
       GST No: ${party.gstin}
@@ -1063,12 +1069,12 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     name: 'SimpliPharma Solution Pvt. Ltd.',
     address: 'AG 50, Scheme No. 74, Indore, Madhya Pradesh. 452010',
     phone: '',
-    state: 'Madhya Pradesh',
     email: 'simplipharma.2025@gmail.com',
     dl: '20B/2876/12/2021,20B/2876/12/2021',
-    gstin: '23AALCP3728L1Z4'
+    gstin: '23AALCP3728L1Z4',
+    ...resolveInvoiceState(),
   };
-  
+
   // Company/Vendor details - fetch from vendor if vendorId is available (on top left)
   let company = {
     name: invoice.vendorName || 'N/A',
@@ -1076,7 +1082,8 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     phone: (invoice as any).vendorPhone || (invoice as any).phoneNumber || '',
     email: (invoice as any).vendorEmail || '',
     dl: (invoice as any).vendorDL || (invoice as any).drugLicenseNumber || '',
-    gstin: (invoice as any).vendorGST || (invoice as any).gstNumber || ''
+    gstin: (invoice as any).vendorGST || (invoice as any).gstNumber || '',
+    ...resolveInvoiceState(),
   };
   
   // Try to fetch vendor details if vendorId is available
@@ -1090,7 +1097,8 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
           phone: vendor.phoneNumber || company.phone,
           email: vendor.email || company.email,
           dl: vendor.drugLicenseNumber || company.dl,
-          gstin: vendor.gstNumber || company.gstin
+          gstin: vendor.gstNumber || company.gstin,
+          ...resolveInvoiceState(),
         };
       }
     } catch (error) {
@@ -1191,6 +1199,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     <td width="50%">
       <b>${company.name}</b><br>
       ${company.address}<br>
+      ${invoiceStateHtml(company.state, company.stateCode)}
       Phone: ${company.phone}<br>
       Email: ${company.email}<br><br>
       <b>D.L. No:</b> ${company.dl}<br>
@@ -1199,7 +1208,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     <td width="50%">
       <b>${party.name}</b><br>
       Party Address: ${party.address}<br>
-      State: ${party.state}<br>
+      ${invoiceStateHtml(party.state, party.stateCode)}
       Ph.No: ${party.phone}<br>
       Party D.L No: ${party.dl}<br>
       GST No: ${party.gstin}
