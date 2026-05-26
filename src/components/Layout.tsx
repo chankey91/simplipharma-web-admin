@@ -12,6 +12,10 @@ import {
   ListItemText,
   ListSubheader,
   CssBaseline,
+  IconButton,
+  Menu,
+  MenuItem,
+  Tooltip,
 } from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -42,6 +46,8 @@ import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { brandColors } from '../theme/brand';
 import { useAuth } from '../context/AuthContext';
 import { ROLE_MENU_PATHS, getPanelTitle, type PanelRole } from '../auth/permissions';
+import { AdminNotificationBell } from './AdminNotificationBell';
+import { useAdminNotifications } from '../hooks/useAdminNotifications';
 
 const drawerWidth = 260;
 
@@ -117,9 +123,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   /** True only when opened automatically because mustResetPassword is set (not voluntary menu). */
   const [isMustResetPrompt, setIsMustResetPrompt] = useState(false);
+  const [settingsAnchor, setSettingsAnchor] = useState<null | HTMLElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const { panelRole } = useAuth();
+  const { notifications, unreadCount, loading: notificationsLoading, markAllSeen } =
+    useAdminNotifications(panelRole);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -198,23 +207,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             ))}
           </React.Fragment>
         ))}
-        <ListItem disablePadding>
-          <ListItemButton
-            onClick={() => {
-              setIsMustResetPrompt(false);
-              setChangePasswordOpen(true);
-            }}
-          >
-            <ListItemIcon><Lock /></ListItemIcon>
-            <ListItemText primary="Change password" />
-          </ListItemButton>
-        </ListItem>
-        <ListItem disablePadding>
-          <ListItemButton onClick={handleLogout}>
-            <ListItemIcon><Logout /></ListItemIcon>
-            <ListItemText primary="Logout" />
-          </ListItemButton>
-        </ListItem>
       </List>
     </Box>
   );
@@ -242,6 +234,55 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           <Typography variant="h6" noWrap sx={{ display: { xs: 'none', sm: 'block' } }}>
             {panelTitle}
           </Typography>
+          <Box sx={{ flexGrow: 1 }} />
+          {panelRole ? (
+            <AdminNotificationBell
+              notifications={notifications}
+              unreadCount={unreadCount}
+              loading={notificationsLoading}
+              onMarkAllSeen={markAllSeen}
+            />
+          ) : null}
+          <Tooltip title="Settings">
+            <IconButton
+              color="inherit"
+              aria-label="Settings"
+              onClick={(e) => setSettingsAnchor(e.currentTarget)}
+            >
+              <Settings />
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={settingsAnchor}
+            open={Boolean(settingsAnchor)}
+            onClose={() => setSettingsAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          >
+            <MenuItem
+              onClick={() => {
+                setSettingsAnchor(null);
+                setIsMustResetPrompt(false);
+                setChangePasswordOpen(true);
+              }}
+            >
+              <ListItemIcon>
+                <Lock fontSize="small" />
+              </ListItemIcon>
+              Change password
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setSettingsAnchor(null);
+                handleLogout();
+              }}
+            >
+              <ListItemIcon>
+                <Logout fontSize="small" />
+              </ListItemIcon>
+              Logout
+            </MenuItem>
+          </Menu>
         </Toolbar>
       </AppBar>
       <Box
