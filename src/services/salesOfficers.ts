@@ -63,6 +63,25 @@ export const updateSalesOfficerProfile = async (
   const payload: Record<string, string> = {};
   if (data.displayName !== undefined) payload.displayName = data.displayName.trim();
   if (data.phoneNumber !== undefined) payload.phoneNumber = data.phoneNumber.trim();
-  if (Object.keys(payload).length === 0) return;
+  if (Object.keys(payload).length === 0) return;  
   await updateDoc(ref, payload);
+};
+
+export const sendSalesOfficerPasswordResetEmail = async (
+  email: string
+): Promise<{ message: string }> => {
+  const fn = httpsCallable<
+    { email: string },
+    { success?: boolean; message?: string; emailSent?: boolean }
+  >(functions, 'sendSalesOfficerPasswordResetEmail');
+  const result = await fn({ email: email.trim() });
+  const data = result.data;
+  if (!data?.success) {
+    throw new Error(data?.message || 'Failed to send password reset email');
+  }
+  return {
+    message:
+      data.message ||
+      'Password reset link has been sent if SMTP is configured.',
+  };
 };

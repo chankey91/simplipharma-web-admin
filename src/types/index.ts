@@ -42,6 +42,8 @@ export interface StockBatch {
   mfgDate?: Date | any;
   purchaseDate?: Date | any;
   purchasePrice?: number;
+  /** Set from purchase invoice; stock bought as non-returnable cannot be expiry/order returned. */
+  nonReturnable?: boolean;
   /** Ex-GST landed cost per strip from PI: (paid cost − line disc) ÷ physical qty */
   landedUnitCostExGst?: number;
   mrp?: number;
@@ -72,6 +74,8 @@ export interface OrderMedicine {
   discountPercentage?: number; // Discount percentage for the item
   gstRate?: number; // GST rate for the item
   mrp?: number; // MRP for the item
+  /** When true, this line was fulfilled from non-returnable stock and must not be returned. */
+  nonReturnable?: boolean;
   // NEW: Support multiple batch allocations
   batchAllocations?: Array<{
     batchNumber: string;
@@ -85,6 +89,8 @@ export interface OrderMedicine {
     schemeFreeQty?: number;
     /** Scheme free units for this allocation; stock deduct = quantity + allocationFreeQty */
     allocationFreeQty?: number;
+    /** Copied from stock batch at fulfilment — drives mobile return eligibility. */
+    nonReturnable?: boolean;
   }>;
 }
 
@@ -220,6 +226,8 @@ export interface PurchaseInvoiceItem {
   discountPercentage?: number;
   totalAmount: number;
   qrCode?: string; // Base64 encoded QR code image
+  /** When true, receipts for this PI line carry non-returnable stock (see StockBatch.nonReturnable). */
+  nonReturnable?: boolean;
 }
 
 export interface PurchaseInvoice {

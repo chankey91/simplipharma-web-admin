@@ -27,16 +27,18 @@ export const useFulfillProductDemand = () => {
       quantity?: number;
       fulfillmentNote?: string;
       purchaseInvoiceId?: string;
-    }) =>
-      fulfillProductDemand(demandId, medicineId, {
+    }) => fulfillProductDemand(demandId, medicineId, {
         quantity,
         fulfillmentNote,
         purchaseInvoiceId,
       }),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['productDemands'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['order'] });
+      if (data?.orderId) {
+        queryClient.invalidateQueries({ queryKey: ['order', data.orderId] });
+      }
     },
   });
 };

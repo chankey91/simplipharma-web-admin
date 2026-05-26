@@ -27,8 +27,15 @@ export const useAddBanner = () => {
 export const useUpdateBanner = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ bannerId, bannerData }: { bannerId: string; bannerData: Partial<Banner> }) =>
-      updateBanner(bannerId, bannerData),
+    mutationFn: ({
+      bannerId,
+      bannerData,
+      removeImageUrl,
+    }: {
+      bannerId: string;
+      bannerData: Partial<Banner>;
+      removeImageUrl?: boolean;
+    }) => updateBanner(bannerId, bannerData, { removeImageUrl }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['banners'] });
     },

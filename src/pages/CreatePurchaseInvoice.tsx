@@ -28,6 +28,8 @@ import {
   Divider,
   Card,
   CardContent,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -105,6 +107,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     gstRate?: string | number;
     standardDiscount?: string | number;
     discountPercentage?: string | number;
+    nonReturnable?: boolean;
   }>({
     medicineId: '',
     medicineName: '',
@@ -120,6 +123,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     gstRate: '',
     standardDiscount: '20',
     discountPercentage: '',
+    nonReturnable: false,
   });
   const [expiryDateError, setExpiryDateError] = useState<string>('');
 
@@ -359,6 +363,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       gstRate: selectedMedicine.gstRate || 5, // Get GST rate from medicine master data
       standardDiscount: '20',
       discountPercentage: '',
+      nonReturnable: false,
     });
     setItemDialog({ open: true, itemIndex: null });
   };
@@ -498,6 +503,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       discountPercentage: discountPercentage > 0 ? discountPercentage : undefined,
       totalAmount,
       qrCode: qrCode || undefined,
+      ...(currentItem.nonReturnable === true ? { nonReturnable: true } : {}),
     };
 
     if (itemDialog.itemIndex !== null) {
@@ -529,6 +535,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       gstRate: selectedMedicine?.gstRate || 5, // Reset to medicine's GST rate
       standardDiscount: '20',
       discountPercentage: '',
+      nonReturnable: false,
     });
   };
 
@@ -558,6 +565,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               item.gstRate || selectedMedicine?.gstRate || 5
             ).toFixed(2),
       discountPercentage: item.discountPercentage?.toString() || '',
+      nonReturnable: item.nonReturnable === true,
     });
     setItemDialog({ open: true, itemIndex: index });
   };
@@ -873,6 +881,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Free Qty</TableCell>
                     <TableCell align="center">Scheme</TableCell>
+                    <TableCell align="center">NR</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">Price</TableCell>
                     <TableCell align="right">GST %</TableCell>
@@ -885,7 +894,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 <TableBody>
                   {items.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} align="center">
+                      <TableCell colSpan={13} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>
                           No items added. Search and add medicines to create invoice.
                         </Typography>
@@ -909,6 +918,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                           <Typography variant="caption">
                             {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
                           </Typography>
+                        </TableCell>
+                        <TableCell align="center">
+                          {item.nonReturnable === true ? (
+                            <Chip size="small" label="NR" color="warning" variant="outlined" title="Non-returnable" />
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">—</Typography>
+                          )}
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">
@@ -1025,6 +1041,17 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 inputProps={{ min: 1 }}
                 value={currentItem.schemeFreeQty}
                 onChange={(e) => setCurrentItem({ ...currentItem, schemeFreeQty: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={currentItem.nonReturnable === true}
+                    onChange={(e) => setCurrentItem({ ...currentItem, nonReturnable: e.target.checked })}
+                  />
+                }
+                label="Non-returnable (retailer cannot return this batch)"
               />
             </Grid>
             <Grid item xs={12} sm={6}>

@@ -34,6 +34,8 @@ import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { CreditNotesPage } from './pages/CreditNotes';
 import { MarginReportPage } from './pages/MarginReport';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
+import { SupportTicketsPage } from './pages/SupportTickets';
+import { HomeFeedPage } from './pages/HomeFeed';
 import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
@@ -112,6 +114,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={withLayout(<DashboardPage />)} />
+      <Route path="/support" element={withLayout(<SupportTicketsPage />)} />
       <Route path="/stores" element={withLayout(<StoresPage />)} />
       <Route path="/store-receivables" element={withLayout(<StoreReceivablesPage />)} />
       <Route path="/vendors" element={withLayout(<VendorsPage />)} />
@@ -128,6 +131,7 @@ function AppRoutes() {
       <Route path="/invoices" element={withLayout(<InvoicesPage />)} />
       <Route path="/credit-notes" element={withLayout(<CreditNotesPage />)} />
       <Route path="/banners" element={withLayout(<BannersPage />)} />
+      <Route path="/home-feed" element={withLayout(<HomeFeedPage />)} />
       <Route path="/sales-officers" element={withLayout(<SalesOfficersPage />)} />
       <Route path="/operations-users" element={withLayout(<OperationsUsersPage />)} />
       <Route path="/pending-retailers" element={withLayout(<PendingRetailersPage />)} />

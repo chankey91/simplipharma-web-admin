@@ -3,9 +3,11 @@ import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
 import {
   assertAdmin,
+  assertAdminOrOperations,
   getUserRole,
   isAdminOrOperationsRole,
   isPanelRole,
+  isSalesOfficerRole,
 } from './panelAuth';
 
 admin.initializeApp();
@@ -72,8 +74,19 @@ function escapeHtmlText(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Single path for transactional mail (logs failures, does not throw). */
-async function sendSmtpMail(options: { to: string; subject: string; html: string }): Promise<{ ok: boolean; error?: string }> {
+/** Single path for transactional mail (logs failures; optional PDF attachment). */
+async function sendSmtpMail(options: {
+  to: string;
+  subject: string;
+  html: string;
+  attachments?: {
+    filename: string;
+    content: Buffer | string;
+    contentType?: string;
+    contentDisposition?: 'attachment' | 'inline';
+    encoding?: string;
+  }[];
+}): Promise<{ ok: boolean; error?: string }> {
   try {
     const smtpConfig = functions.config().smtp;
     if (!smtpConfig?.user || !smtpConfig?.password) {
@@ -86,6 +99,9 @@ async function sendSmtpMail(options: { to: string; subject: string; html: string
       to: options.to,
       subject: options.subject,
       html: options.html,
+      ...(options.attachments?.length
+        ? { attachments: options.attachments.map((a) => ({ ...a })) }
+        : {}),
     });
     return { ok: true };
   } catch (err: any) {
@@ -749,6 +765,47 @@ function getPanelLoginUrl(): string {
   return base.endsWith('/login') ? base : `${base}/login`;
 }
 
+/** Continue URL after Firebase password reset for Sales Officer (mobile); configurable via `app.so_password_reset_continue_url`. */
+function getSalesOfficerPasswordResetContinueUrl(): string {
+  const cfg = functions.config().app as { so_password_reset_continue_url?: string } | undefined;
+  const custom = cfg?.so_password_reset_continue_url?.trim();
+  if (custom) return custom.replace(/\/$/, '');
+  return getPanelLoginUrl();
+}
+
+function getPanelSupportInboxUrl(): string {
+  const cfg = functions.config().app as { panel_url?: string } | undefined;
+  let base = (cfg?.panel_url || 'http://localhost:3001').replace(/\/$/, '');
+  base = base.replace(/\/login$/i, '');
+  return `${base}/support`;
+}
+
+/** Optional override: `firebase functions:config:set support.notify_emails="a@x.com,b@x.com"` */
+async function collectSupportNotifyEmails(): Promise<string[]> {
+  const cfg = functions.config().support as { notify_emails?: string } | undefined;
+  const fromConfig = String(cfg?.notify_emails || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.includes('@'));
+  if (fromConfig.length) return [...new Set(fromConfig)];
+
+  const out = new Set<string>();
+  try {
+    const snap = await admin
+      .firestore()
+      .collection('users')
+      .where('role', 'in', ['admin', 'Admin'])
+      .get();
+    snap.docs.forEach((d) => {
+      const e = d.data()?.email;
+      if (typeof e === 'string' && e.includes('@')) out.add(e.trim().toLowerCase());
+    });
+  } catch (e) {
+    console.warn('collectSupportNotifyEmails: query failed', e);
+  }
+  return Array.from(out);
+}
+
 async function isActivePanelUserByEmail(email: string): Promise<boolean> {
   try {
     const userRecord = await admin.auth().getUserByEmail(email.trim());
@@ -846,7 +903,400 @@ export const sendPanelPasswordResetEmail = functions.https.onCall(async (data, c
   };
 });
 
+/**
+ * Admin only: send a password reset link to a Sales Officer’s email (mobile app account).
+ * Requires SMTP (same as other transactional emails).
+ */
+export const sendSalesOfficerPasswordResetEmail = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  try {
+    await assertAdmin(context.auth.uid);
+  } catch {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+  }
+
+  const rawEmail = String(data?.email || '').trim();
+  if (!rawEmail) {
+    throw new functions.https.HttpsError('invalid-argument', 'Email is required');
+  }
+
+  let userRecord: admin.auth.UserRecord;
+  try {
+    userRecord = await admin.auth().getUserByEmail(rawEmail);
+  } catch {
+    throw new functions.https.HttpsError('not-found', 'No user found with this email');
+  }
+
+  const role = await getUserRole(userRecord.uid);
+  if (!isSalesOfficerRole(role)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'This email is not a Sales Officer account'
+    );
+  }
+
+  const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
+  if (!userDoc.exists || userDoc.data()?.isActive === false) {
+    throw new functions.https.HttpsError('failed-precondition', 'This Sales Officer account is inactive');
+  }
+
+  const email = String(userRecord.email || rawEmail).trim();
+
+  let resetLink: string;
+  try {
+    resetLink = await admin.auth().generatePasswordResetLink(email, {
+      url: getSalesOfficerPasswordResetContinueUrl(),
+      handleCodeInApp: false,
+    });
+  } catch (err: any) {
+    console.error('sendSalesOfficerPasswordResetEmail: generatePasswordResetLink failed:', err?.message);
+    throw new functions.https.HttpsError('internal', 'Could not generate password reset link');
+  }
+
+  const mail = await sendSmtpMail({
+    to: email,
+    subject: 'SimpliPharma — Reset your Sales Officer password',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2196F3;">Password reset</h2>
+        <p>An administrator requested a password reset for your SimpliPharma Sales Officer (mobile) account.</p>
+        <p style="margin: 24px 0;">
+          <a href="${resetLink}"
+             style="background: #00a99d; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Choose a new password
+          </a>
+        </p>
+        <p style="color: #666; font-size: 14px;">Or copy this link into your browser:</p>
+        <p style="word-break: break-all; font-size: 13px; color: #333;">${escapeHtmlText(resetLink)}</p>
+        <p style="color: #666; font-size: 12px; margin-top: 24px;">If you did not expect this, contact your administrator. The link expires after a short time.</p>
+      </div>
+    `,
+  });
+
+  if (!mail.ok) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      mail.error || 'SMTP is not configured. Set smtp.user and smtp.password in Firebase Functions config.'
+    );
+  }
+
+  return {
+    success: true,
+    message: 'Password reset link sent to the Sales Officer email.',
+    emailSent: true,
+  };
+});
+
+/** Notify admins / ops by email when a retailer creates an in-app support ticket (Phase 1). */
+export const onSupportTicketCreated = functions.firestore
+  .document('support_tickets/{ticketId}')
+  .onCreate(async (snap, context) => {
+    const data = snap.data();
+    const ticketId = context.params.ticketId as string;
+    const recipients = await collectSupportNotifyEmails();
+    if (!recipients.length) {
+      console.warn('onSupportTicketCreated: no notify emails (set support.notify_emails or add admin users with email)');
+      return null;
+    }
+
+    const subject = `SimpliPharma — New support ticket ${ticketId.slice(0, 8)}`;
+    const preview = escapeHtmlText(String(data.lastMessagePreview || data.subject || '').slice(0, 280));
+    const who = escapeHtmlText(String(data.userDisplayLabel || data.userEmail || data.userId || 'User'));
+    const inboxUrl = escapeHtmlText(getPanelSupportInboxUrl());
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2196F3;">New support ticket</h2>
+        <p><strong>From:</strong> ${who}</p>
+        <p><strong>Email:</strong> ${escapeHtmlText(String(data.userEmail || ''))}</p>
+        <p><strong>Preview:</strong></p>
+        <p style="background:#f5f5f5;padding:12px;border-radius:6px;">${preview || '—'}</p>
+        <p style="margin:24px 0;">
+          <a href="${inboxUrl}" style="background:#00a99d;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:600;">Open support inbox</a>
+        </p>
+        <p style="color:#666;font-size:12px;">Ticket id: ${escapeHtmlText(ticketId)}</p>
+      </div>`;
+
+    for (const to of recipients) {
+      const mail = await sendSmtpMail({ to, subject, html });
+      if (!mail.ok) console.error('onSupportTicketCreated: failed for', to, mail.error);
+    }
+    return null;
+  });
+
+/** Email the app user when an admin posts a reply in the support thread. */
+export const onSupportThreadAdminMessageCreated = functions.firestore
+  .document('support_threads/{userId}/messages/{messageId}')
+  .onCreate(async (snap, context) => {
+    const msg = snap.data();
+    if (!msg || msg.from !== 'admin') return null;
+
+    const userId = context.params.userId as string;
+    const text = String(msg.text || '').trim();
+    if (!text) return null;
+
+    let email: string | null = null;
+    try {
+      const doc = await admin.firestore().collection('users').doc(userId).get();
+      const e = doc.data()?.email;
+      if (typeof e === 'string' && e.includes('@')) email = e.trim();
+    } catch (e) {
+      console.warn('onSupportThreadAdminMessageCreated: user doc', e);
+    }
+    if (!email) {
+      try {
+        const rec = await admin.auth().getUser(userId);
+        if (rec.email) email = rec.email;
+      } catch (e) {
+        console.warn('onSupportThreadAdminMessageCreated: auth user', e);
+      }
+    }
+    if (!email) {
+      console.warn('onSupportThreadAdminMessageCreated: no email for user', userId);
+      return null;
+    }
+
+    const excerpt = escapeHtmlText(text.length > 400 ? `${text.slice(0, 400)}…` : text);
+    const subject = 'SimpliPharma — Support replied to your message';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2196F3;">You have a reply from support</h2>
+        <p>Open the SimpliPharma app and tap <strong>Help & support</strong> to view the full conversation.</p>
+        <div style="background:#f5f5f5;padding:12px;border-radius:6px;margin:16px 0;border-left:4px solid #00a99d;">
+          ${excerpt}
+        </div>
+        <p style="color:#666;font-size:12px;">This is an automated message. Please do not reply directly to this email unless instructed.</p>
+      </div>`;
+
+    const mail = await sendSmtpMail({ to: email, subject, html });
+    if (!mail.ok) console.error('onSupportThreadAdminMessageCreated: SMTP failed', mail.error);
+    return null;
+  });
+
 export { onBulkMedicineJobCreated } from './bulkMedicineJob';
+
+const MAX_ORDER_INVOICE_PDF_BYTES = 12 * 1024 * 1024;
+const MAX_ORDER_INVOICE_CSV_BYTES = 8 * 1024 * 1024;
+
+function decodeDataUriBase64(payload: string): string {
+  let s = typeof payload === 'string' ? payload.trim() : '';
+  if (!s) return '';
+  if (s.includes(',')) {
+    s = s.split(',').pop() || '';
+  }
+  return s;
+}
+
+/**
+ * Callable: admin/operations uploads a freshly generated order-invoice PDF; we email it to order.retailerEmail.
+ * SMTP must be configured (smtp.user / smtp.password) like other transactional mail.
+ */
+export const sendOrderInvoicePdfEmail = functions
+  .runWith({ memory: '512MB', timeoutSeconds: 120 })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+    }
+
+    try {
+      await assertAdminOrOperations(context.auth.uid);
+    } catch {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Admin or operations access required'
+      );
+    }
+
+    const orderId = typeof data?.orderId === 'string' ? data.orderId.trim() : '';
+    let pdfBase64 = decodeDataUriBase64(
+      typeof data?.pdfBase64 === 'string' ? data.pdfBase64 : ''
+    );
+    const csvBase64Payload =
+      typeof data?.invoiceCsvBase64 === 'string'
+        ? String(data.invoiceCsvBase64)
+        : typeof data?.csvBase64 === 'string'
+          ? String(data.csvBase64)
+          : '';
+    let csvBase64Decoded = csvBase64Payload.trim()
+      ? decodeDataUriBase64(csvBase64Payload)
+      : '';
+
+    /** PDF attachment name (callable clients should send pdfFileName; fileName retained for compat). */
+    const requestedPdfFileName =
+      typeof data?.pdfFileName === 'string'
+        ? data.pdfFileName.trim()
+        : typeof data?.fileName === 'string'
+          ? data.fileName.trim()
+          : '';
+    const requestedCsvFileName =
+      typeof data?.invoiceCsvFileName === 'string'
+        ? data.invoiceCsvFileName.trim()
+        : typeof data?.csvFileName === 'string'
+          ? data.csvFileName.trim()
+          : '';
+
+    if (!orderId || !pdfBase64) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'orderId and pdfBase64 are required'
+      );
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(pdfBase64, 'base64');
+    } catch {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid pdfBase64 encoding');
+    }
+
+    const header = buffer.slice(0, 5).toString('ascii');
+    if (buffer.length < 128 || header.indexOf('%PDF') !== 0) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Uploaded payload is not a valid PDF'
+      );
+    }
+
+    if (buffer.length > MAX_ORDER_INVOICE_PDF_BYTES) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        `PDF exceeds ${MAX_ORDER_INVOICE_PDF_BYTES / (1024 * 1024)}MB limit`
+      );
+    }
+
+    /** Validated CSV body for the second attachment (UTF-8). */
+    let invoiceCsvUtf8Text: string | undefined;
+    let invoiceCsvAttachmentName: string | undefined;
+    if (csvBase64Decoded) {
+      let csvDecodedBuffer: Buffer;
+      try {
+        csvDecodedBuffer = Buffer.from(csvBase64Decoded, 'base64');
+      } catch {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'Invalid invoice CSV base64 encoding'
+        );
+      }
+
+      const looksPdf =
+        csvDecodedBuffer.length >= 4 &&
+        csvDecodedBuffer[0] === 0x25 &&
+        csvDecodedBuffer[1] === 0x50 &&
+        csvDecodedBuffer[2] === 0x44 &&
+        csvDecodedBuffer[3] === 0x46;
+      if (looksPdf) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'Invoice CSV attachment is not CSV (payload looks like a PDF). Ensure the CSV data URI/body is sent separately from the PDF.'
+        );
+      }
+
+      if (
+        csvDecodedBuffer.length < 16 ||
+        csvDecodedBuffer.length > MAX_ORDER_INVOICE_CSV_BYTES
+      ) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'CSV attachment is invalid or exceeds size limit'
+        );
+      }
+
+      const csvText = csvDecodedBuffer.toString('utf8');
+      const looksCsv =
+        csvText.includes('PRODUCT NAME') || csvText.includes('Company Name');
+      const hasNull = csvDecodedBuffer.includes(0);
+      if (!looksCsv || hasNull) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'Uploaded CSV attachment does not look like a UTF-8 invoice export'
+        );
+      }
+
+      invoiceCsvUtf8Text = csvText;
+      invoiceCsvAttachmentName =
+        requestedCsvFileName &&
+        /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.csv$/i.test(requestedCsvFileName)
+          ? requestedCsvFileName
+          : `order-invoice-${orderId.slice(0, 32)}.csv`;
+    }
+
+    const snap = await admin.firestore().collection('orders').doc(orderId).get();
+    if (!snap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+
+    const od = snap.data() || {};
+    const toRaw = od.retailerEmail as unknown;
+    const toEmail =
+      typeof toRaw === 'string'
+        ? toRaw.trim().toLowerCase()
+        : '';
+    const retailerName =
+      od.retailerName != null ? String(od.retailerName).trim() : '';
+    const shopLabel = retailerName ? escapeHtmlText(retailerName) : 'there';
+
+    if (!toEmail || !toEmail.includes('@')) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This order has no retailer email — update retailerEmail before emailing the invoice.'
+      );
+    }
+
+    const invNo =
+      typeof od.invoiceNumber === 'string' && od.invoiceNumber.trim()
+        ? od.invoiceNumber.trim()
+        : orderId;
+    const subject = `SimpliPharma — Tax invoice ${invNo}`;
+    const safePdfFile =
+      requestedPdfFileName &&
+      /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.pdf$/i.test(requestedPdfFileName)
+        ? requestedPdfFileName
+        : `order-invoice-${orderId.slice(0, 32)}.pdf`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <p>Hello ${shopLabel},</p>
+        <p>Your tax invoice <strong>${escapeHtmlText(invNo)}</strong> is attached${invoiceCsvUtf8Text ? ' as a PDF and a CSV spreadsheet' : ' as a PDF'}.</p>
+        <p style="color:#666;font-size:12px;">If you did not expect this email, please contact your sales representative.</p>
+      </div>`;
+
+    const mail = await sendSmtpMail({
+      to: toEmail,
+      subject,
+      html,
+      attachments: [
+        {
+          filename: safePdfFile,
+          content: buffer,
+          contentType: 'application/pdf',
+          contentDisposition: 'attachment' as const,
+        },
+        ...(invoiceCsvUtf8Text && invoiceCsvAttachmentName
+          ? [
+              {
+                filename: invoiceCsvAttachmentName,
+                content: invoiceCsvUtf8Text,
+                contentType: 'text/csv; charset=UTF-8',
+                encoding: 'utf8',
+                contentDisposition: 'attachment' as const,
+              },
+            ]
+          : []),
+      ],
+    });
+
+    if (!mail.ok) {
+      console.error('sendOrderInvoicePdfEmail: SMTP failed', mail.error);
+      throw new functions.https.HttpsError(
+        'internal',
+        mail.error || 'Could not send email (check SMTP in Functions config)'
+      );
+    }
+
+    return { ok: true, emailedTo: toEmail };
+  });
 
 export {
   onMedicineWriteTypesense,

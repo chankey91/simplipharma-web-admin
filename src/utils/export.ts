@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { orderReferenceWithoutInvoice } from './orderDisplay';
 import { Order, User } from '../types';
 import { getMedicineById } from '../services/inventory';
 
@@ -83,7 +84,7 @@ export const exportPendingOrdersByStore = async (
     const storeId = order.retailerId || 'unknown';
     
     // Get order number (invoice number or order ID)
-    const orderNumber = order.invoiceNumber || `ORD-${order.id.substring(0, 8).toUpperCase()}`;
+    const orderNumber = order.invoiceNumber || orderReferenceWithoutInvoice(order.id);
     
     for (const medicine of order.medicines) {
       const manufacturer = medicineMap.get(medicine.medicineId) || 'N/A';

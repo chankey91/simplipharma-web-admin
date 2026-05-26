@@ -296,6 +296,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Free Qty</TableCell>
                     <TableCell align="center">Scheme</TableCell>
+                    <TableCell align="center">NR</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">MRP</TableCell>
                     <TableCell align="right">Price</TableCell>
@@ -332,6 +333,13 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                         </TableCell>
                         <TableCell align="center">
                           {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
+                        </TableCell>
+                        <TableCell align="center">
+                          {item.nonReturnable === true ? (
+                            <Chip size="small" label="NR" color="warning" variant="outlined" title="Non-returnable" />
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">—</Typography>
+                          )}
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">

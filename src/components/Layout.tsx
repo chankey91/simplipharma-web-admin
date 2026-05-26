@@ -40,6 +40,8 @@ import {
   Undo,
   AccountBalance,
   Article,
+  HeadsetMic,
+  Stars,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -59,7 +61,10 @@ type MenuSection = { title: string; items: MenuItem[] };
 const MENU_SECTIONS: MenuSection[] = [
   {
     title: 'Overview',
-    items: [{ text: 'Dashboard', icon: <Dashboard />, path: '/' }],
+    items: [
+      { text: 'Dashboard', icon: <Dashboard />, path: '/' },
+      { text: 'Support', icon: <HeadsetMic />, path: '/support' },
+    ],
   },
   {
     title: 'Fulfillment',
@@ -100,7 +105,10 @@ const MENU_SECTIONS: MenuSection[] = [
   },
   {
     title: 'Marketing',
-    items: [{ text: 'Banners', icon: <Campaign />, path: '/banners' }],
+    items: [
+      { text: 'Banners', icon: <Campaign />, path: '/banners' },
+      { text: 'Home feed', icon: <Stars />, path: '/home-feed' },
+    ],
   },
   {
     title: 'Setup',
@@ -166,25 +174,25 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const drawer = (
     <Box>
-      <Toolbar sx={{ flexDirection: 'column', alignItems: 'flex-start', py: 2, gap: 0.5 }}>
+      <Toolbar sx={{ flexDirection: 'column', alignItems: 'flex-start', py: 2 }}>
         <BrandLogo variant="horizontal" height={36} sx={{ maxWidth: '100%' }} />
-        <Typography variant="caption" sx={{ color: brandColors.navy, fontWeight: 600, letterSpacing: 0.5 }}>
-          {panelTitle}
-        </Typography>
       </Toolbar>
       <List sx={{ pb: 1 }}>
         {menuSections.map((section) => (
           <React.Fragment key={section.title}>
             <ListSubheader
+              disableSticky
               sx={{
-                lineHeight: 2,
+                lineHeight: '22px',
                 fontSize: '0.7rem',
                 fontWeight: 700,
                 letterSpacing: 0.6,
                 textTransform: 'uppercase',
                 color: brandColors.navy,
-                bgcolor: 'transparent',
-                mt: section.title === 'Overview' ? 0 : 1,
+                bgcolor: 'background.paper',
+                px: 2,
+                py: 0.75,
+                mt: section.title === 'Overview' ? 0 : 0.5,
               }}
             >
               {section.title}
@@ -300,7 +308,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           }}
           sx={{
             display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: drawerWidth,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            },
           }}
         >
           {drawer}
@@ -309,7 +322,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           variant="permanent"
           sx={{
             display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: drawerWidth,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            },
           }}
           open
         >

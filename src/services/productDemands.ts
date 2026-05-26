@@ -82,7 +82,7 @@ export const fulfillProductDemand = async (
   demandId: string,
   medicineId: string,
   options?: { quantity?: number; fulfillmentNote?: string; purchaseInvoiceId?: string }
-): Promise<void> => {
+): Promise<{ orderId?: string }> => {
   const demandRef = doc(db, 'product_demands', demandId);
   const demandSnap = await getDoc(demandRef);
   if (!demandSnap.exists()) throw new Error('Demand not found');
@@ -91,6 +91,22 @@ export const fulfillProductDemand = async (
 
   const medicine = await getMedicineById(medicineId);
   if (!medicine) throw new Error('Medicine not found');
+
+  const rqRaw = d.requestedQuantity;
+  let lineQty = 1;
+  if (typeof rqRaw === 'number' && Number.isFinite(rqRaw) && rqRaw >= 1) {
+    lineQty = Math.floor(rqRaw);
+  } else if (rqRaw != null && rqRaw !== '') {
+    const p = parseInt(String(rqRaw), 10);
+    if (!isNaN(p) && p >= 1) lineQty = p;
+  }
+  if (
+    typeof options?.quantity === 'number' &&
+    !isNaN(options.quantity) &&
+    options.quantity >= 1
+  ) {
+    lineQty = Math.floor(options.quantity);
+  }
 
   const uid = auth.currentUser?.uid || '';
   const batch = writeBatch(db);
@@ -179,6 +195,8 @@ export const fulfillProductDemand = async (
   }
 
   await batch.commit();
+
+  return { orderId: orderId || undefined };
 };
 
 /** Attach PI doc id / invoice number to demands when it can be inferred from PI lines. */
