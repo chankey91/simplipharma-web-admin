@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
-import { CreditNote } from '../types';
+import { DebitNote } from '../types';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState } from './invoicePartyDefaults';
@@ -49,7 +49,7 @@ const numberToWords = (num: number): string => {
   return words.trim() + ' Rupees Only';
 };
 
-type CreditNoteItemRow = {
+type DebitNoteItemRow = {
   sn: number;
   name: string;
   pack: string;
@@ -67,7 +67,7 @@ type CreditNoteItemRow = {
   amount: string;
 };
 
-async function prepareCreditNoteItemRows(note: CreditNote): Promise<CreditNoteItemRow[]> {
+async function prepareDebitNoteItemRows(note: DebitNote): Promise<DebitNoteItemRow[]> {
   return Promise.all(
     note.items.map(async (item, index) => {
       const gstRate = item.gstRate ?? note.taxPercentage ?? 5;
@@ -113,9 +113,9 @@ async function prepareCreditNoteItemRows(note: CreditNote): Promise<CreditNoteIt
   );
 }
 
-const getCreditNoteHTML = async (note: CreditNote) => {
-  const creditDate =
-    note.creditNoteDate instanceof Date ? note.creditNoteDate : new Date(note.creditNoteDate);
+const getDebitNoteHTML = async (note: DebitNote) => {
+  const debitDate =
+    note.debitNoteDate instanceof Date ? note.debitNoteDate : new Date(note.debitNoteDate);
 
   const company = {
     name: 'SimpliPharma Solution Pvt. Ltd.',
@@ -155,7 +155,7 @@ const getCreditNoteHTML = async (note: CreditNote) => {
 
   const companyState = resolveInvoiceState();
 
-  const items = await prepareCreditNoteItemRows(note);
+  const items = await prepareDebitNoteItemRows(note);
   const gstRatePercent = note.taxPercentage ?? 5;
   const totalCGST = note.taxAmount / 2;
   const totalSGST = note.taxAmount / 2;
@@ -164,11 +164,11 @@ const getCreditNoteHTML = async (note: CreditNote) => {
   const roundoff = grandTotal - calculatedTotal;
 
   const documentData = {
-    no: note.creditNoteNumber,
-    date: format(creditDate, 'yyyy-MM-dd'),
+    no: note.debitNoteNumber,
+    date: format(debitDate, 'yyyy-MM-dd'),
     originalInvoice: note.originalInvoiceNumber || '—',
     orderRef: note.orderId || '—',
-    returnRef: note.orderReturnRequestId || '—',
+    reason: note.reason || note.sourceType || '—',
     user: 'Admin',
   };
 
@@ -217,7 +217,7 @@ const getCreditNoteHTML = async (note: CreditNote) => {
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Credit Note</title>
+<title>Debit Note</title>
 <style>
   body {
     font-family: Arial, Helvetica, sans-serif;
@@ -288,19 +288,19 @@ const getCreditNoteHTML = async (note: CreditNote) => {
     </td>
   </tr>
 </table>
-<!-- CREDIT NOTE INFO -->
+<!-- DEBIT NOTE INFO -->
 <table>
   <tr>
-    <td colspan="2" class="title">CREDIT NOTE</td>
+    <td colspan="2" class="title">DEBIT NOTE</td>
     <td>
-      Credit Note No: ${documentData.no}<br>
+      Debit Note No: ${documentData.no}<br>
       Original Invoice: ${documentData.originalInvoice}<br>
       Order Ref: ${documentData.orderRef}<br>
       User: ${documentData.user}
     </td>
     <td>
       Date: ${documentData.date}<br>
-      Return Ref: ${documentData.returnRef}<br>
+      Reason: ${documentData.reason}<br>
       Amount in words: ${summary.amountInWords}
     </td>
   </tr>
@@ -347,7 +347,7 @@ const getCreditNoteHTML = async (note: CreditNote) => {
         <tr><td>CGST</td><td class="right">${summary.cgst}</td></tr>
         <tr><td>Round Off</td><td class="right">${parseFloat(summary.roundOff) >= 0 ? '+' : ''}${summary.roundOff}</td></tr>
         <tr class="bold">
-          <td>CREDIT TOTAL</td>
+          <td>DEBIT TOTAL</td>
           <td class="right">${summary.grandTotal}</td>
         </tr>
       </table>
@@ -359,7 +359,7 @@ const getCreditNoteHTML = async (note: CreditNote) => {
   <tr>
     <td width="60%">
       <b>Terms & Conditions</b><br>
-      Credit note issued against returned goods from the original tax invoice referenced above.<br>
+      Debit note issued for additional charges or billing corrections against the original tax invoice referenced above.<br>
       Subject to Indore jurisdiction only.<br>
       Cold storage items will not be returned.
     </td>
@@ -374,8 +374,8 @@ const getCreditNoteHTML = async (note: CreditNote) => {
 </html>`;
 };
 
-export const generateCreditNotePdf = async (note: CreditNote) => {
-  const html = await getCreditNoteHTML(note);
+export const generateDebitNotePdf = async (note: DebitNote) => {
+  const html = await getDebitNoteHTML(note);
   const element = document.createElement('div');
   element.innerHTML = html;
   element.style.width = '210mm';
@@ -413,10 +413,10 @@ export const generateCreditNotePdf = async (note: CreditNote) => {
       heightLeft -= pageHeight;
     }
 
-    pdf.save(`credit-note-${note.creditNoteNumber}.pdf`);
+    pdf.save(`debit-note-${note.debitNoteNumber}.pdf`);
   } catch (error) {
-    console.error('Error generating credit note PDF:', error);
-    alert('Failed to generate credit note. Please try again.');
+    console.error('Error generating debit note PDF:', error);
+    alert('Failed to generate debit note. Please try again.');
   } finally {
     document.body.removeChild(element);
   }
