@@ -27,6 +27,8 @@ import {
   Visibility,
   Refresh,
   Payment,
+  Download,
+  PostAdd,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -37,6 +39,9 @@ import {
   OrderReturnRequest,
   OrderReturnStatus,
 } from '../services/orderReturns';
+import { getCreditNoteById } from '../services/creditNotes';
+import { generateCreditNotePdf } from '../utils/creditNote';
+import { useIssueCreditNoteForReturn } from '../hooks/useCreditNotes';
 import { Loading } from '../components/Loading';
 import { format } from 'date-fns';
 import { useTableSort } from '../hooks/useTableSort';
@@ -62,6 +67,8 @@ export const OrderReturnsPage: React.FC = () => {
   const [paymentRef, setPaymentRef] = useState('');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [paymentMethod, setPaymentMethod] = useState('Bank Transfer');
+  const [downloadingCreditNote, setDownloadingCreditNote] = useState(false);
+  const issueCreditNoteMutation = useIssueCreditNoteForReturn();
 
   const { data: requests, isLoading, error, refetch } = useQuery({
     queryKey: ['orderReturns', statusFilter],
@@ -73,6 +80,7 @@ export const OrderReturnsPage: React.FC = () => {
     mutationFn: approveOrderReturnRequest,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orderReturns'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
       setSelectedRequest(null);
     },
   });
@@ -145,14 +153,60 @@ export const OrderReturnsPage: React.FC = () => {
   });
 
   const handleApprove = async (req: OrderReturnRequest) => {
-    if (!confirm('Approve this order return? The retailer can then receive payment.')) return;
+    if (!confirm('Approve this order return? A credit note will be generated for the retailer.')) return;
     try {
-      await approveMutation.mutateAsync(req.id);
-      alert('Request approved. Record payment when the refund is made offline.');
+      const result = await approveMutation.mutateAsync(req.id);
+      alert(
+        `Return approved. Credit note ${result.creditNoteNumber} has been generated. Record payment when the refund is made offline.`
+      );
     } catch (err: any) {
       alert(err.message || 'Failed to approve');
     }
   };
+
+  const handleDownloadCreditNote = async (req: OrderReturnRequest) => {
+    if (!req.creditNoteId && !req.creditNoteNumber) {
+      alert('No credit note found for this return.');
+      return;
+    }
+    setDownloadingCreditNote(true);
+    try {
+      const note = req.creditNoteId ? await getCreditNoteById(req.creditNoteId) : null;
+      if (!note) {
+        alert('Credit note not found.');
+        return;
+      }
+      await generateCreditNotePdf(note);
+    } catch (err: any) {
+      alert(err.message || 'Failed to download credit note');
+    } finally {
+      setDownloadingCreditNote(false);
+    }
+  };
+
+  const handleGenerateCreditNote = async (req: OrderReturnRequest) => {
+    if (!confirm('Generate credit note for this return?')) return;
+    try {
+      const result = await issueCreditNoteMutation.mutateAsync(req.id);
+      alert(
+        result.created
+          ? `Credit note ${result.creditNoteNumber} created.`
+          : `Credit note ${result.creditNoteNumber} is already linked.`
+      );
+      setSelectedRequest((prev) =>
+        prev?.id === req.id
+          ? { ...prev, creditNoteId: result.creditNoteId, creditNoteNumber: result.creditNoteNumber }
+          : prev
+      );
+    } catch (err: any) {
+      alert(err.message || 'Failed to generate credit note');
+    }
+  };
+
+  const needsCreditNote = (req: OrderReturnRequest) =>
+    (req.status === 'approved' || req.status === 'paid') &&
+    !req.creditNoteId &&
+    !req.creditNoteNumber;
 
   const handleReject = async (req: OrderReturnRequest) => {
     const reason = prompt('Optional: Enter reason for rejection');
@@ -288,6 +342,7 @@ export const OrderReturnsPage: React.FC = () => {
                 sortDirection={sortDirection}
                 onRequestSort={requestSort}
               />
+              <TableCell>Credit note</TableCell>
               <SortableTableHeadCell
                 columnId="createdAt"
                 label="Submitted"
@@ -324,6 +379,15 @@ export const OrderReturnsPage: React.FC = () => {
                 <TableCell>
                   <Chip label={req.status} color={getStatusColor(req.status) as any} size="small" />
                 </TableCell>
+                <TableCell>
+                  {req.creditNoteNumber ? (
+                    <Typography variant="body2">{req.creditNoteNumber}</Typography>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      —
+                    </Typography>
+                  )}
+                </TableCell>
                 <TableCell>{formatDate(req.createdAt)}</TableCell>
                 <TableCell align="right">
                   <IconButton size="small" color="primary" onClick={() => setSelectedRequest(req)} title="View Details">
@@ -354,6 +418,17 @@ export const OrderReturnsPage: React.FC = () => {
                   {req.status === 'approved' && (
                     <IconButton size="small" color="primary" onClick={() => openPaymentDialog(req)} title="Record Payment">
                       <Payment />
+                    </IconButton>
+                  )}
+                  {needsCreditNote(req) && (
+                    <IconButton
+                      size="small"
+                      color="secondary"
+                      onClick={() => handleGenerateCreditNote(req)}
+                      disabled={issueCreditNoteMutation.isPending}
+                      title="Generate credit note"
+                    >
+                      <PostAdd />
                     </IconButton>
                   )}
                 </TableCell>
@@ -426,6 +501,30 @@ export const OrderReturnsPage: React.FC = () => {
                     </TableBody>
                   </Table>
                 </TableContainer>
+                {needsCreditNote(selectedRequest) && (
+                  <Alert severity="warning" sx={{ mt: 2 }}>
+                    No credit note yet for this approved return.
+                  </Alert>
+                )}
+                {(selectedRequest.creditNoteNumber || selectedRequest.creditNoteId) && (
+                  <>
+                    <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 2 }}>
+                      Credit note
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                      <Typography>{selectedRequest.creditNoteNumber || 'Issued'}</Typography>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<Download />}
+                        disabled={downloadingCreditNote}
+                        onClick={() => handleDownloadCreditNote(selectedRequest)}
+                      >
+                        Download PDF
+                      </Button>
+                    </Box>
+                  </>
+                )}
                 {selectedRequest.status === 'paid' && selectedRequest.paymentReferenceNumber && (
                   <>
                     <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 2 }}>
@@ -441,6 +540,25 @@ export const OrderReturnsPage: React.FC = () => {
             </DialogContent>
             <DialogActions>
               <Button onClick={() => setSelectedRequest(null)}>Close</Button>
+              {needsCreditNote(selectedRequest) && (
+                <Button
+                  startIcon={<PostAdd />}
+                  variant="contained"
+                  disabled={issueCreditNoteMutation.isPending}
+                  onClick={() => handleGenerateCreditNote(selectedRequest)}
+                >
+                  Generate credit note
+                </Button>
+              )}
+              {(selectedRequest.creditNoteNumber || selectedRequest.creditNoteId) && (
+                <Button
+                  startIcon={<Download />}
+                  disabled={downloadingCreditNote}
+                  onClick={() => handleDownloadCreditNote(selectedRequest)}
+                >
+                  Credit note PDF
+                </Button>
+              )}
               {selectedRequest.status === 'pending_admin' && (
                 <>
                   <Button color="error" variant="outlined" onClick={() => handleReject(selectedRequest)} disabled={rejectMutation.isPending}>

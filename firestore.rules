@@ -222,6 +222,24 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /credit_notes/{noteId} {
+      allow read: if signedIn() && (
+        isAdminOrOperations()
+        || resource.data.retailerId == request.auth.uid
+      );
+      allow create, update: if isAdminOrOperations();
+      allow delete: if false;
+    }
+
+    match /debit_notes/{noteId} {
+      allow read: if signedIn() && (
+        isAdminOrOperations()
+        || resource.data.retailerId == request.auth.uid
+      );
+      allow create, update: if isAdminOrOperations();
+      allow delete: if false;
+    }
+
     match /retailer_registration_requests/{requestId} {
       allow read: if signedIn() && (
         request.auth.uid == resource.data.salesOfficerId

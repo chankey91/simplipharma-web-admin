@@ -282,3 +282,72 @@ export interface ProductDemand {
   rejectedAt?: Date | any;
   rejectedBy?: string;
 }
+
+export interface CreditNoteLine {
+  medicineId: string;
+  medicineName: string;
+  batchNumber: string;
+  quantity: number;
+  expiryDate?: Date | any;
+  hsn?: string;
+  gstRate: number;
+  unitRefundPrice: number;
+  refundAmount: number;
+}
+
+/** Shared line shape for credit/debit tax notes. */
+export type TaxNoteLine = CreditNoteLine;
+
+export type CreditNoteType = 'order_return';
+
+export type DebitNoteSourceType = 'manual' | 'order_adjustment' | 'billing_correction' | 'other';
+
+export interface CreditNote {
+  id: string;
+  creditNoteNumber: string;
+  creditNoteDate: Date | any;
+  type: CreditNoteType;
+  orderReturnRequestId: string;
+  orderId: string;
+  originalInvoiceNumber?: string;
+  retailerId: string;
+  retailerName?: string;
+  retailerEmail?: string;
+  retailerGstin?: string;
+  retailerAddress?: string;
+  retailerPhone?: string;
+  retailerDl?: string;
+  items: CreditNoteLine[];
+  subTotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  taxPercentage: number;
+  status: 'issued';
+  createdBy?: string;
+  createdAt: Date | any;
+}
+
+export interface DebitNote {
+  id: string;
+  debitNoteNumber: string;
+  debitNoteDate: Date | any;
+  sourceType?: DebitNoteSourceType;
+  retailerId: string;
+  retailerName?: string;
+  retailerEmail?: string;
+  retailerGstin?: string;
+  retailerAddress?: string;
+  retailerPhone?: string;
+  retailerDl?: string;
+  originalInvoiceNumber?: string;
+  orderId?: string;
+  reason?: string;
+  items: TaxNoteLine[];
+  subTotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  taxPercentage: number;
+  status: 'issued';
+  createdBy?: string;
+  createdAt: Date | any;
+}

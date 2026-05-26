@@ -52,6 +52,8 @@ export interface OrderReturnRequest {
   paymentMethod?: string;
   paidBy?: string;
   paidAt?: Date | any;
+  creditNoteId?: string;
+  creditNoteNumber?: string;
 }
 
 const parseDoc = (d: any): OrderReturnRequest => {
@@ -90,15 +92,7 @@ export const getOrderReturnRequests = async (
   return snapshot.docs.map((d) => parseDoc(d));
 };
 
-export const approveOrderReturnRequest = async (requestId: string): Promise<void> => {
-  const reqRef = doc(db, 'order_return_requests', requestId);
-  await updateDoc(reqRef, {
-    status: 'approved',
-    approvedBy: auth.currentUser?.uid,
-    approvedAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
-  });
-};
+export { approveOrderReturnRequest } from './creditNotes';
 
 export const rejectOrderReturnRequest = async (requestId: string, reason?: string): Promise<void> => {
   const reqRef = doc(db, 'order_return_requests', requestId);
