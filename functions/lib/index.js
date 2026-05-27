@@ -11,7 +11,7 @@ var __rest = (this && this.__rest) || function (s, e) {
     return t;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.sendOrderInvoicePdfEmail = exports.onBulkMedicineJobCreated = exports.onSupportThreadAdminMessageCreated = exports.onSupportTicketCreated = exports.sendSalesOfficerPasswordResetEmail = exports.sendPanelPasswordResetEmail = exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
+exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.sendCreditNotePdfEmail = exports.sendOrderInvoicePdfEmail = exports.onBulkMedicineJobCreated = exports.onSupportThreadAdminMessageCreated = exports.onSupportTicketCreated = exports.sendSalesOfficerPasswordResetEmail = exports.sendPanelPasswordResetEmail = exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
@@ -994,6 +994,7 @@ var bulkMedicineJob_1 = require("./bulkMedicineJob");
 Object.defineProperty(exports, "onBulkMedicineJobCreated", { enumerable: true, get: function () { return bulkMedicineJob_1.onBulkMedicineJobCreated; } });
 const MAX_ORDER_INVOICE_PDF_BYTES = 12 * 1024 * 1024;
 const MAX_ORDER_INVOICE_CSV_BYTES = 8 * 1024 * 1024;
+const MAX_CREDIT_NOTE_PDF_BYTES = 12 * 1024 * 1024;
 function decodeDataUriBase64(payload) {
     let s = typeof payload === 'string' ? payload.trim() : '';
     if (!s)
@@ -1147,6 +1148,88 @@ exports.sendOrderInvoicePdfEmail = functions
     });
     if (!mail.ok) {
         console.error('sendOrderInvoicePdfEmail: SMTP failed', mail.error);
+        throw new functions.https.HttpsError('internal', mail.error || 'Could not send email (check SMTP in Functions config)');
+    }
+    return { ok: true, emailedTo: toEmail };
+});
+/**
+ * Callable: admin/operations uploads a freshly generated credit-note PDF; we email it to credit_note.retailerEmail.
+ */
+exports.sendCreditNotePdfEmail = functions
+    .runWith({ memory: '512MB', timeoutSeconds: 120 })
+    .https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+    }
+    try {
+        await (0, panelAuth_1.assertAdminOrOperations)(context.auth.uid);
+    }
+    catch (_a) {
+        throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
+    }
+    const creditNoteId = typeof (data === null || data === void 0 ? void 0 : data.creditNoteId) === 'string' ? data.creditNoteId.trim() : '';
+    const pdfBase64 = decodeDataUriBase64(typeof (data === null || data === void 0 ? void 0 : data.pdfBase64) === 'string' ? data.pdfBase64 : '');
+    const requestedPdfFileName = typeof (data === null || data === void 0 ? void 0 : data.pdfFileName) === 'string' ? data.pdfFileName.trim() : '';
+    if (!creditNoteId || !pdfBase64) {
+        throw new functions.https.HttpsError('invalid-argument', 'creditNoteId and pdfBase64 are required');
+    }
+    let buffer;
+    try {
+        buffer = Buffer.from(pdfBase64, 'base64');
+    }
+    catch (_b) {
+        throw new functions.https.HttpsError('invalid-argument', 'Invalid pdfBase64 encoding');
+    }
+    const header = buffer.slice(0, 5).toString('ascii');
+    if (buffer.length < 128 || header.indexOf('%PDF') !== 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'Uploaded payload is not a valid PDF');
+    }
+    if (buffer.length > MAX_CREDIT_NOTE_PDF_BYTES) {
+        throw new functions.https.HttpsError('invalid-argument', `PDF exceeds ${MAX_CREDIT_NOTE_PDF_BYTES / (1024 * 1024)}MB limit`);
+    }
+    const snap = await admin.firestore().collection('credit_notes').doc(creditNoteId).get();
+    if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Credit note not found');
+    }
+    const note = snap.data() || {};
+    const toRaw = note.retailerEmail;
+    const toEmail = typeof toRaw === 'string'
+        ? toRaw.trim().toLowerCase()
+        : '';
+    const retailerName = note.retailerName != null ? String(note.retailerName).trim() : '';
+    const shopLabel = retailerName ? escapeHtmlText(retailerName) : 'there';
+    if (!toEmail || !toEmail.includes('@')) {
+        throw new functions.https.HttpsError('failed-precondition', 'This credit note has no retailer email — update retailerEmail before emailing.');
+    }
+    const creditNoteNumber = typeof note.creditNoteNumber === 'string' && note.creditNoteNumber.trim()
+        ? note.creditNoteNumber.trim()
+        : creditNoteId;
+    const subject = `SimpliPharma — Credit note ${creditNoteNumber}`;
+    const safePdfFile = requestedPdfFileName &&
+        /^[a-zA-Z0-9][a-zA-Z0-9._()-]*\.pdf$/i.test(requestedPdfFileName)
+        ? requestedPdfFileName
+        : `credit-note-${creditNoteNumber.replace(/[^a-zA-Z0-9._()-]/g, '-')}.pdf`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <p>Hello ${shopLabel},</p>
+        <p>Your credit note <strong>${escapeHtmlText(creditNoteNumber)}</strong> is attached as a PDF.</p>
+        <p style="color:#666;font-size:12px;">If you did not expect this email, please contact your sales representative.</p>
+      </div>`;
+    const mail = await sendSmtpMail({
+        to: toEmail,
+        subject,
+        html,
+        attachments: [
+            {
+                filename: safePdfFile,
+                content: buffer,
+                contentType: 'application/pdf',
+                contentDisposition: 'attachment',
+            },
+        ],
+    });
+    if (!mail.ok) {
+        console.error('sendCreditNotePdfEmail: SMTP failed', mail.error);
         throw new functions.https.HttpsError('internal', mail.error || 'Could not send email (check SMTP in Functions config)');
     }
     return { ok: true, emailedTo: toEmail };

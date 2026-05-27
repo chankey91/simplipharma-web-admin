@@ -40,7 +40,8 @@ import {
   OrderReturnStatus,
 } from '../services/orderReturns';
 import { getCreditNoteById } from '../services/creditNotes';
-import { generateCreditNotePdf } from '../utils/creditNote';
+import { sendCreditNotePdfToRetailer } from '../services/creditNoteEmail';
+import { generateCreditNotePdf, generateCreditNotePdfDataUri } from '../utils/creditNote';
 import { useIssueCreditNoteForReturn } from '../hooks/useCreditNotes';
 import { Loading } from '../components/Loading';
 import { format } from 'date-fns';
@@ -156,8 +157,27 @@ export const OrderReturnsPage: React.FC = () => {
     if (!confirm('Approve this order return? A credit note will be generated for the retailer.')) return;
     try {
       const result = await approveMutation.mutateAsync(req.id);
+      let emailMessage = 'Credit note email could not be sent automatically.';
+      try {
+        const note = await getCreditNoteById(result.creditNoteId);
+        if (!note) {
+          emailMessage = 'Credit note generated, but email skipped because credit note was not found.';
+        } else if (!note.retailerEmail) {
+          emailMessage = 'Credit note generated, but retailer email is missing so email was skipped.';
+        } else {
+          const pdfDataUri = await generateCreditNotePdfDataUri(note);
+          const fileName = `credit-note-${result.creditNoteNumber}.pdf`;
+          const emailRes = await sendCreditNotePdfToRetailer(result.creditNoteId, pdfDataUri, fileName);
+          emailMessage = emailRes?.ok
+            ? `Email sent to ${emailRes.emailedTo || note.retailerEmail}.`
+            : 'Credit note generated, but email sending failed.';
+        }
+      } catch (emailErr: any) {
+        emailMessage = emailErr?.message || emailMessage;
+      }
+
       alert(
-        `Return approved. Credit note ${result.creditNoteNumber} has been generated. Record payment when the refund is made offline.`
+        `Return approved. Credit note ${result.creditNoteNumber} has been generated. ${emailMessage} Record payment when the refund is made offline.`
       );
     } catch (err: any) {
       alert(err.message || 'Failed to approve');
