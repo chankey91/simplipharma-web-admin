@@ -36,6 +36,15 @@ service firebase.storage {
       allow write: if request.auth != null && isSalesOfficer();
     }
 
+    // Retailer UPI payment screenshots (retailer_docs/payment_receipts/*)
+    // must be uploadable by authenticated retailers and readable by admin for review.
+    match /retailer_docs/payment_receipts/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 6 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
     match /retailer_docs/{allPaths=**} {
       allow read: if request.auth != null && (isAdmin() || isSalesOfficer());
       allow write: if request.auth != null && isSalesOfficer();

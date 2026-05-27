@@ -138,6 +138,7 @@ export const PaymentRequestsPage: React.FC = () => {
               <TableCell align="right">Requested</TableCell>
               <TableCell align="right">Due snapshot</TableCell>
               <TableCell>Transaction / Ref</TableCell>
+              <TableCell>Screenshot</TableCell>
               <TableCell>Created</TableCell>
               <TableCell>Request</TableCell>
               <TableCell>Order payment</TableCell>
@@ -172,12 +173,21 @@ export const PaymentRequestsPage: React.FC = () => {
                   <TableCell align="right">{formatCurrency(r.dueBeforeRequestSnapshot || 0)}</TableCell>
                   <TableCell>{r.transactionId || r.cashReference || '—'}</TableCell>
                   <TableCell>
+                    {r.screenshotUrl ? (
+                      <Link href={r.screenshotUrl} target="_blank" rel="noreferrer">
+                        View
+                      </Link>
+                    ) : (
+                      '—'
+                    )}
+                  </TableCell>
+                  <TableCell>
                     {r.createdAt ? format(r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt), 'dd MMM yyyy, HH:mm') : '—'}
                   </TableCell>
                   <TableCell>
                     <Chip
                       size="small"
-                      label={r.status.replaceAll('_', ' ')}
+                      label={r.status.replace(/_/g, ' ')}
                       color={
                         r.status === 'approved'
                           ? 'success'
