@@ -33,12 +33,14 @@ import {
   Receipt,
   Archive,
   PostAdd,
+  Article,
 } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useOrders } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
 import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
 import { usePendingRetailerRequests } from '../hooks/usePendingRetailers';
+import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
 import { format, startOfMonth, isBefore } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
@@ -48,6 +50,14 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { useAuth } from '../context/AuthContext';
+
+const formatInr = (amount: number) => `₹${Math.round(amount).toLocaleString('en-IN')}`;
+
+const isOnOrAfterMonthStart = (date: unknown, monthStart: Date): boolean => {
+  const d = date instanceof Date ? date : new Date(date as string);
+  if (isNaN(d.getTime())) return false;
+  return !isBefore(d, monthStart);
+};
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -143,6 +153,8 @@ export const DashboardPage: React.FC = () => {
   const { data: expiringMedicines } = useExpiringMedicines(30);
   const { data: expiredMedicines } = useExpiredMedicines();
   const { data: pendingRetailerRequests } = usePendingRetailerRequests(!isOperations);
+  const { data: creditNotes, isLoading: creditLoading } = useCreditNotes();
+  const { data: debitNotes, isLoading: debitLoading } = useDebitNotes();
 
   const stats = useMemo(() => {
     const list = orders ?? [];
@@ -186,6 +198,20 @@ export const DashboardPage: React.FC = () => {
 
     const pendingRetailers = pendingRetailerRequests?.length ?? 0;
 
+    const credits = creditNotes ?? [];
+    const debits = debitNotes ?? [];
+    const lifetimeCredits = credits.reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
+    const lifetimeDebits = debits.reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
+    const thisMonthCredits = credits
+      .filter((n) => isOnOrAfterMonthStart(n.creditNoteDate, monthStart))
+      .reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
+    const thisMonthDebits = debits
+      .filter((n) => isOnOrAfterMonthStart(n.debitNoteDate, monthStart))
+      .reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
+    const thisMonthCreditCount = credits.filter((n) =>
+      isOnOrAfterMonthStart(n.creditNoteDate, monthStart)
+    ).length;
+
     return {
       pending,
       inFulfillment,
@@ -194,6 +220,15 @@ export const DashboardPage: React.FC = () => {
       cancelled,
       lifetimeGross,
       thisMonthGross,
+      lifetimeCredits,
+      lifetimeDebits,
+      thisMonthCredits,
+      thisMonthDebits,
+      netLifetime: lifetimeGross - lifetimeCredits + lifetimeDebits,
+      netThisMonth: thisMonthGross - thisMonthCredits + thisMonthDebits,
+      creditNoteCount: credits.length,
+      debitNoteCount: debits.length,
+      thisMonthCreditCount,
       unpaid,
       lowStock,
       activeStores,
@@ -201,7 +236,7 @@ export const DashboardPage: React.FC = () => {
       recent,
       pendingRetailers,
     };
-  }, [orders, medicines, stores, pendingRetailerRequests]);
+  }, [orders, medicines, stores, pendingRetailerRequests, creditNotes, debitNotes]);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
   const sortedRecentOrders = useMemo(() => {
@@ -236,7 +271,7 @@ export const DashboardPage: React.FC = () => {
     return list;
   }, [stats.recent, sortKey, sortDirection]);
 
-  if (ordersLoading || (!isOperations && storesLoading) || medicinesLoading) {
+  if (ordersLoading || creditLoading || debitLoading || (!isOperations && storesLoading) || medicinesLoading) {
     return <Loading message="Loading dashboard..." />;
   }
 
@@ -288,6 +323,9 @@ export const DashboardPage: React.FC = () => {
             Stores
           </Button>
         )}
+        <Button variant="outlined" startIcon={<Article />} onClick={() => navigate('/credit-notes')}>
+          Credit & debit notes
+        </Button>
         <Button variant="outlined" startIcon={<SettingsSuggest />} onClick={() => navigate('/operations')}>
           Fulfillment setup
         </Button>
@@ -340,21 +378,22 @@ export const DashboardPage: React.FC = () => {
         <Grid container spacing={2} sx={{ mb: 3 }}>
           <Grid item xs={12} md={4}>
             <StatCard
-              title="Gross order value"
-              value={`₹${Math.round(stats.lifetimeGross).toLocaleString('en-IN')}`}
-              caption="All non-cancelled orders (lifetime)"
+              title="Net sales value"
+              value={formatInr(stats.netLifetime)}
+              caption={`Orders ${formatInr(stats.lifetimeGross)} − credits ${formatInr(stats.lifetimeCredits)} + debits ${formatInr(stats.lifetimeDebits)}`}
               accent={accent.success}
               icon={<TrendingUp sx={{ fontSize: 36 }} />}
-              onClick={() => navigate('/orders')}
+              onClick={() => navigate('/credit-notes')}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={4}>
             <StatCard
-              title="This month"
-              value={`₹${Math.round(stats.thisMonthGross).toLocaleString('en-IN')}`}
-              caption="Non-cancelled orders placed this month"
+              title="This month (net)"
+              value={formatInr(stats.netThisMonth)}
+              caption={`Orders ${formatInr(stats.thisMonthGross)} − credits ${formatInr(stats.thisMonthCredits)} + debits ${formatInr(stats.thisMonthDebits)}`}
               accent={theme.palette.secondary.main}
               icon={<TrendingUp sx={{ fontSize: 36 }} />}
+              onClick={() => navigate('/credit-notes')}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={4}>
@@ -506,10 +545,21 @@ export const DashboardPage: React.FC = () => {
                     {stats.lowStock} product{stats.lowStock !== 1 ? 's' : ''} under 10 units
                   </Alert>
                 )}
+                {stats.thisMonthCreditCount > 0 && (
+                  <Alert
+                    severity="info"
+                    onClick={() => navigate('/credit-notes')}
+                    sx={{ cursor: 'pointer' }}
+                  >
+                    {stats.thisMonthCreditCount} credit note{stats.thisMonthCreditCount !== 1 ? 's' : ''} this month (
+                    {formatInr(stats.thisMonthCredits)})
+                  </Alert>
+                )}
                 {(isOperations || stats.pendingRetailers === 0) &&
                   (!expiredMedicines || expiredMedicines.length === 0) &&
                   (!expiringMedicines || expiringMedicines.length === 0) &&
-                  stats.lowStock === 0 && (
+                  stats.lowStock === 0 &&
+                  stats.thisMonthCreditCount === 0 && (
                     <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
                       No active alerts. Inventory and registrations look clear.
                     </Typography>
@@ -559,6 +609,38 @@ export const DashboardPage: React.FC = () => {
                       {stats.cancelled}
                     </Typography>
                   </Grid>
+                  <Grid
+                    item
+                    xs={6}
+                    onClick={() => navigate('/credit-notes')}
+                    sx={{ cursor: 'pointer' }}
+                  >
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Credit notes
+                    </Typography>
+                    <Typography variant="h5" fontWeight={700}>
+                      {stats.creditNoteCount}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {formatInr(stats.lifetimeCredits)} total
+                    </Typography>
+                  </Grid>
+                  <Grid
+                    item
+                    xs={6}
+                    onClick={() => navigate('/credit-notes')}
+                    sx={{ cursor: 'pointer' }}
+                  >
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Debit notes
+                    </Typography>
+                    <Typography variant="h5" fontWeight={700}>
+                      {stats.debitNoteCount}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {formatInr(stats.lifetimeDebits)} total
+                    </Typography>
+                  </Grid>
                 </Grid>
               </Paper>
               {!isOperations && (
@@ -574,10 +656,19 @@ export const DashboardPage: React.FC = () => {
               )}
               <Button
                 fullWidth
+                variant="outlined"
+                startIcon={<Article />}
+                onClick={() => navigate('/credit-notes')}
+                sx={{ mt: 2 }}
+              >
+                Credit & debit notes
+              </Button>
+              <Button
+                fullWidth
                 variant={isOperations ? 'outlined' : 'text'}
                 startIcon={<CheckCircle />}
                 onClick={() => navigate('/expiry-returns')}
-                sx={{ mt: isOperations ? 2 : 0.5 }}
+                sx={{ mt: 0.5 }}
               >
                 Expiry returns
               </Button>
