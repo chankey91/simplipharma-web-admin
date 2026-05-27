@@ -1681,6 +1681,22 @@ export const OrderDetailsPage: React.FC = () => {
                     }
                     sx={{ height: 20, fontSize: '0.7rem' }}
                   />
+                  {order.paymentReviewStatus === 'pending_admin_review' ? (
+                    <Chip
+                      size="small"
+                      label="Payment review pending"
+                      color="warning"
+                      sx={{ height: 20, fontSize: '0.7rem', ml: 0.5 }}
+                    />
+                  ) : null}
+                  {order.paymentReviewStatus === 'rejected' ? (
+                    <Chip
+                      size="small"
+                      label="Payment rejected"
+                      color="error"
+                      sx={{ height: 20, fontSize: '0.7rem', ml: 0.5 }}
+                    />
+                  ) : null}
                 </Typography>
               </Box>
             </CardContent>

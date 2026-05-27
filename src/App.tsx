@@ -34,6 +34,7 @@ import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { CreditNotesPage } from './pages/CreditNotes';
 import { MarginReportPage } from './pages/MarginReport';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
+import { PaymentRequestsPage } from './pages/PaymentRequests';
 import { SupportTicketsPage } from './pages/SupportTickets';
 import { HomeFeedPage } from './pages/HomeFeed';
 import { brandColors } from './theme/brand';
@@ -117,6 +118,7 @@ function AppRoutes() {
       <Route path="/support" element={withLayout(<SupportTicketsPage />)} />
       <Route path="/stores" element={withLayout(<StoresPage />)} />
       <Route path="/store-receivables" element={withLayout(<StoreReceivablesPage />)} />
+      <Route path="/payment-requests" element={withLayout(<PaymentRequestsPage />)} />
       <Route path="/vendors" element={withLayout(<VendorsPage />)} />
       <Route path="/orders" element={withLayout(<OrdersPage />)} />
       <Route path="/orders/:orderId" element={withLayout(<OrderDetailsPage />)} />

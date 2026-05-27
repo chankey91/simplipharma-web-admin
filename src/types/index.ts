@@ -125,8 +125,12 @@ export interface Order {
   cancelReason?: string;
   cancelledAt?: Date | any;
   paymentStatus?: PaymentStatus;
+  paymentReviewStatus?: PaymentReviewStatus;
   paidAmount?: number;
   dueAmount?: number;
+  lastPaymentRequestId?: string;
+  lastPaymentRequestedAt?: Date | any;
+  paymentRejectedReason?: string;
   paymentMethod?: PaymentMethod; // Cash or Online when payment collected
   transactionId?: string; // For online/bank payments
   payments?: Payment[];
@@ -147,6 +151,7 @@ export interface Order {
 
 export type PaymentStatus = 'Paid' | 'Unpaid' | 'Partial';
 export type PaymentMethod = 'Cash' | 'Online' | 'Card' | 'UPI' | 'Bank Transfer' | 'Cheque';
+export type PaymentReviewStatus = 'none' | 'pending_admin_review' | 'approved' | 'rejected';
 
 export interface Payment {
   id: string;
@@ -157,6 +162,52 @@ export interface Payment {
   notes?: string;
   collectedBy?: string;
   transactionId?: string; // For online payments
+}
+
+export type PaymentRequestStatus =
+  | 'pending_admin_review'
+  | 'approved'
+  | 'rejected'
+  | 'cancelled';
+
+export type PaymentRequestMethod = 'cash' | 'online';
+
+export interface PaymentRequestCreditApplication {
+  creditNoteId: string;
+  creditNoteNumber?: string;
+  source?: 'order_return' | 'expiry_return' | 'credit_note';
+  requestedApplyAmount: number;
+}
+
+export interface PaymentRequest {
+  id: string;
+  orderId: string;
+  invoiceNumber?: string;
+  retailerId: string;
+  retailerName?: string;
+  retailerEmail?: string;
+  requestedAmount: number;
+  currency: 'INR';
+  method: PaymentRequestMethod;
+  provider?: 'upi_intent' | 'razorpay' | 'phonepe' | 'payu' | 'other';
+  transactionId?: string;
+  gatewayOrderId?: string;
+  gatewayPaymentId?: string;
+  screenshotUrl?: string;
+  cashReference?: string;
+  notes?: string;
+  creditApplications?: PaymentRequestCreditApplication[];
+  status: PaymentRequestStatus;
+  reviewedBy?: string;
+  reviewedAt?: Date | any;
+  reviewNote?: string;
+  rejectionReason?: string;
+  orderTotalSnapshot: number;
+  dueBeforeRequestSnapshot: number;
+  creditAvailableSnapshot?: number;
+  netPayableSnapshot?: number;
+  createdAt: Date | any;
+  updatedAt: Date | any;
 }
 
 export interface User {

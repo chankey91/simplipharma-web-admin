@@ -240,6 +240,28 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /payment_requests/{requestId} {
+      allow read: if signedIn() && (
+        isAdminOrOperations()
+        || resource.data.retailerId == request.auth.uid
+      );
+      allow create: if signedIn()
+        && request.resource.data.retailerId == request.auth.uid
+        && request.resource.data.orderId is string
+        && request.resource.data.requestedAmount is number
+        && request.resource.data.requestedAmount >= 0
+        && request.resource.data.status == 'pending_admin_review';
+      allow update: if signedIn() && (
+        isAdminOrOperations()
+        || (
+          resource.data.retailerId == request.auth.uid
+          && resource.data.status == 'pending_admin_review'
+          && request.resource.data.status == resource.data.status
+        )
+      );
+      allow delete: if false;
+    }
+
     match /retailer_registration_requests/{requestId} {
       allow read: if signedIn() && (
         request.auth.uid == resource.data.salesOfficerId
