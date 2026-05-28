@@ -318,12 +318,46 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     const freeQuantity = freeQty;
     const totalQty = physicalQty;
 
-    let mrp = (item as any).mrp || 0;
-    if (!mrp && allocs?.[0]?.mrp) {
-      mrp = allocs[0].mrp;
+    const primaryBatchNumber =
+      item.batchNumber || (allocs && allocs.length > 0 ? allocs[0].batchNumber : undefined);
+    const primaryBatch = primaryBatchNumber
+      ? medicineDetails?.stockBatches?.find((b: any) => b.batchNumber === primaryBatchNumber)
+      : undefined;
+
+    const firstPositiveFromAllocs = (key: 'mrp' | 'discountPercentage' | 'gstRate' | 'purchasePrice') => {
+      if (!allocs || allocs.length === 0) return 0;
+      for (const allocation of allocs) {
+        const n = toNumber(allocation?.[key]);
+        if (n > 0) return n;
+      }
+      return 0;
+    };
+
+    let mrp = toNumber((item as any).mrp);
+    if (mrp <= 0) mrp = firstPositiveFromAllocs('mrp');
+    if (mrp <= 0) mrp = toNumber(primaryBatch?.mrp);
+    if (mrp <= 0) mrp = toNumber(medicineDetails?.mrp);
+
+    let discountPercentage =
+      (item as any).discountPercentage !== undefined
+        ? toNumber((item as any).discountPercentage)
+        : 0;
+    if (discountPercentage <= 0) discountPercentage = firstPositiveFromAllocs('discountPercentage');
+    if (discountPercentage <= 0) {
+      discountPercentage = toNumber(primaryBatch?.discountPercentage);
     }
-    const discountPercentage = (item as any).discountPercentage !== undefined ? (item as any).discountPercentage : 0;
-    const gstRate = (item as any).gstRate !== undefined ? (item as any).gstRate : (order.taxPercentage || 5);
+
+    let gstRate =
+      (item as any).gstRate !== undefined
+        ? toNumber((item as any).gstRate)
+        : 0;
+    if (gstRate <= 0) gstRate = firstPositiveFromAllocs('gstRate');
+    if (gstRate <= 0) {
+      gstRate = toNumber(medicineDetails?.gstRate);
+    }
+    if (gstRate <= 0) {
+      gstRate = order.taxPercentage || 5;
+    }
     
     let price = 0;
     if (allocs && allocs.length === 1 && toNumber(allocs[0].purchasePrice) > 0) {
@@ -335,6 +369,12 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
         0
       );
       if (sumPaid > 0 && sumAmount > 0) price = sumAmount / sumPaid;
+    }
+    if (price <= 0 && allocs && allocs.length === 1 && toNumber(primaryBatch?.purchasePrice) > 0) {
+      price = toNumber(primaryBatch?.purchasePrice);
+    }
+    if (price <= 0) {
+      price = firstPositiveFromAllocs('purchasePrice');
     }
     if (price <= 0 && toNumber(item.price) > 0) {
       price = toNumber(item.price);
@@ -360,15 +400,19 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     totalProductDiscount += discountAmount;
     
     // Format expiry date
+    const resolvedExpiry =
+      item.expiryDate ||
+      allocs?.[0]?.expiryDate ||
+      primaryBatch?.expiryDate;
     let expDate = '-';
-    if (item.expiryDate) {
+    if (resolvedExpiry) {
       let exp: Date;
-      if (item.expiryDate instanceof Date) {
-        exp = item.expiryDate;
-      } else if (item.expiryDate && typeof item.expiryDate.toDate === 'function') {
-        exp = item.expiryDate.toDate();
-      } else if (typeof item.expiryDate === 'string' || typeof item.expiryDate === 'number') {
-        exp = new Date(item.expiryDate);
+      if (resolvedExpiry instanceof Date) {
+        exp = resolvedExpiry;
+      } else if (resolvedExpiry && typeof resolvedExpiry.toDate === 'function') {
+        exp = resolvedExpiry.toDate();
+      } else if (typeof resolvedExpiry === 'string' || typeof resolvedExpiry === 'number') {
+        exp = new Date(resolvedExpiry);
       } else {
         exp = new Date();
       }
@@ -378,12 +422,24 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     // Get packaging from medicine master data
     const packaging = item.medicineId ? (medicineMap.get(item.medicineId) || '-') : '-';
     
+    const schemeLabel =
+      schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0
+        ? ` [Sch ${schemeP}+${schemeF}]`
+        : '';
+
     return {
       sn: index + 1,
-      name: item.name || 'Unknown',
+      name: `${item.name || 'Unknown'}${schemeLabel}`,
       pack: packaging,
       hsn: (item as any).hsn || '300490',
-      batch: item.batchNumber || '-',
+      batch:
+        item.batchNumber ||
+        (allocs && allocs.length > 0
+          ? allocs
+              .map((a: any) => a.batchNumber)
+              .filter((b: unknown): b is string => Boolean(b))
+              .join(', ') || '-'
+          : '-'),
       exp: expDate,
       qty: quantity.toFixed(2),
       free: freeQuantity > 0 ? freeQuantity.toFixed(2) : '0.00',

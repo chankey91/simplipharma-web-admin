@@ -253,6 +253,10 @@ export const OrderDetailsPage: React.FC = () => {
     [purchaseInvoices]
   );
   const orderDemandRepairAttempted = useRef<string | null>(null);
+  const localPendingEditsRef = useRef<{ orderId: string | null; dirty: boolean }>({
+    orderId: null,
+    dirty: false,
+  });
   const [resyncingDemandLines, setResyncingDemandLines] = useState(false);
 
   const hasFulfilledProductDemands = useMemo(() => {
@@ -401,6 +405,10 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!order || !medicines || purchaseInvoices === undefined) return;
 
+    if (localPendingEditsRef.current.orderId !== order.id) {
+      localPendingEditsRef.current = { orderId: order.id, dirty: false };
+    }
+
     const stepIndex = statusSteps.indexOf(order.status as OrderStatus);
     setActiveStep(stepIndex >= 0 ? stepIndex : 0);
 
@@ -448,15 +456,24 @@ export const OrderDetailsPage: React.FC = () => {
 
       if (cancelled) return;
 
-      setFulfillmentData((prev) => ({
-        ...prev,
-        medicines:
-          repaired.length > 0
-            ? repaired.map((line) =>
-                mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
-              )
-            : [],
-      }));
+      setFulfillmentData((prev) => {
+        if (
+          order.status === 'Pending' &&
+          localPendingEditsRef.current.orderId === order.id &&
+          localPendingEditsRef.current.dirty
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          medicines:
+            repaired.length > 0
+              ? repaired.map((line) =>
+                  mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+                )
+              : [],
+        };
+      });
     })();
 
     return () => {
@@ -1274,7 +1291,6 @@ export const OrderDetailsPage: React.FC = () => {
     const lineSplit = schemeLinePaidFreeConserved(O, schemePaid, schemeFree);
 
     // Update fulfillment data - store individual batch allocations (quantity = billable paid, allocationFreeQty = scheme free)
-    const newMedicines = [...fulfillmentData.medicines];
     const processedAllocations = validAllocations.map((a) => {
       const gstRate = a.gstRate || defaultGstRate;
       const calculatedPrice = calculatePriceFromMRP(a.mrp, gstRate);
@@ -1335,9 +1351,12 @@ export const OrderDetailsPage: React.FC = () => {
       (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
     );
 
-    newMedicines[itemIndex] = lineAfterBatches;
-
-    setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
+    localPendingEditsRef.current = { orderId: order?.id || null, dirty: true };
+    setFulfillmentData((prev) => {
+      const newMedicines = [...prev.medicines];
+      newMedicines[itemIndex] = lineAfterBatches;
+      return { ...prev, medicines: newMedicines };
+    });
     setBatchAllocationDialog({ ...batchAllocationDialog, open: false });
     setBatchAllocations([]);
   };
@@ -2010,6 +2029,9 @@ export const OrderDetailsPage: React.FC = () => {
                           
                           {/* Individual Batch Rows */}
                           {item.batchAllocations.map((allocation: any, batchIdx: number) => {
+                            const stockBatch = medForLine?.stockBatches?.find(
+                              (b: any) => b.batchNumber === allocation.batchNumber
+                            );
                             const batchPhysical = orderedUnitsFromAllocation(allocation);
                             const w =
                               fromAllocsSumForWeights > 0
@@ -2017,10 +2039,20 @@ export const OrderDetailsPage: React.FC = () => {
                                 : 0;
                             const batchQty = lineDisplay.billQty * w;
                             const batchFree = lineDisplay.freeQty * w;
-                            const batchMRP = allocation.mrp || 0;
-                            const gstRate = allocation.gstRate || item.gstRate || 5;
+                            const batchMRP =
+                              toNumber(allocation.mrp) ||
+                              toNumber(stockBatch?.mrp);
+                            const gstRate =
+                              toNumber(allocation.gstRate) ||
+                              toNumber(item.gstRate) ||
+                              toNumber((stockBatch as any)?.gstRate) ||
+                              taxPercentage ||
+                              5;
                             // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
                             let batchPurchasePrice = toNumber(allocation.purchasePrice);
+                            if (batchPurchasePrice <= 0) {
+                              batchPurchasePrice = toNumber((stockBatch as any)?.purchasePrice);
+                            }
                             if (batchPurchasePrice <= 0 && batchMRP > 0) {
                               const afterDiscount = batchMRP * 0.80;
                               batchPurchasePrice = afterDiscount / (1 + gstRate / 100);
@@ -2065,7 +2097,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 </TableCell>
                                 <TableCell align="right">
                                   <Typography variant="caption">
-                                    {allocation.mrp ? `₹${allocation.mrp.toFixed(2)}` : '-'}
+                                    {batchMRP > 0 ? `₹${batchMRP.toFixed(2)}` : '-'}
                                   </Typography>
                                 </TableCell>
                                 <TableCell align="right">
@@ -2125,12 +2157,30 @@ export const OrderDetailsPage: React.FC = () => {
                     const paidForDisplay = singleLineDisplay.billQty;
                     const physicalForDisplay = singleLineDisplay.totalQty;
                     const lineEcon = orderLineInvoiceEconomics(item, medSingle, taxPercentage);
+                    const fallbackBatchMrp = toNumber(
+                      medSingle?.stockBatches?.find((b: any) => toNumber(b?.mrp) > 0)?.mrp
+                    );
                     const displayMrp =
                       toNumber(item.mrp) ||
                       toNumber(singleAlloc?.mrp) ||
-                      toNumber(medSingle?.mrp);
+                      toNumber(medSingle?.mrp) ||
+                      fallbackBatchMrp;
                     const displayUnitPrice = lineEcon.unitPrice;
                     const hasLinePricing = displayUnitPrice > 0 || displayMrp > 0;
+                    const hasAssignedBatch =
+                      Boolean(item.batchNumber) ||
+                      Boolean(item.batchAllocations && item.batchAllocations.length > 0);
+                    const canShowPricingColumns = order.status !== 'Pending' || hasAssignedBatch;
+                    const displayGstRate =
+                      (item.batchAllocations && item.batchAllocations.length === 1
+                        ? toNumber(item.batchAllocations[0].gstRate)
+                        : 0) ||
+                      toNumber(item.gstRate) ||
+                      toNumber(lineEcon.gstRate) ||
+                      toNumber(taxPercentage) ||
+                      5;
+                    const displayDiscountPct =
+                      toNumber(item.discountPercentage) || toNumber(lineEcon.discountPct);
                     return (
                       <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                         <TableCell>
@@ -2203,15 +2253,15 @@ export const OrderDetailsPage: React.FC = () => {
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
-                          {item.batchAllocations && item.batchAllocations.length === 1
+                          {canShowPricingColumns && item.batchAllocations && item.batchAllocations.length === 1
                             ? (item.batchAllocations[0].mrp ? `₹${item.batchAllocations[0].mrp.toFixed(2)}` : '-')
-                            : displayMrp > 0
+                            : canShowPricingColumns && displayMrp > 0
                               ? `₹${displayMrp.toFixed(2)}`
                               : <Typography variant="caption" color="textSecondary">-</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">
-                          {item.batchAllocations && item.batchAllocations.length === 1 
+                          {canShowPricingColumns && item.batchAllocations && item.batchAllocations.length === 1
                             ? (() => {
                                 const mrp = item.batchAllocations[0].mrp || 0;
                                 const gstRate = item.batchAllocations[0].gstRate || item.gstRate || 5;
@@ -2222,7 +2272,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 }
                                 return `₹${purchasePrice.toFixed(2)}`;
                               })()
-                            : item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) 
+                            : canShowPricingColumns && (item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0))
                               ? (() => {
                                   const mrp = item.mrp || 0;
                                   const gstRate = item.gstRate || 5;
@@ -2233,31 +2283,28 @@ export const OrderDetailsPage: React.FC = () => {
                                   }
                                   return `₹${purchasePrice.toFixed(2)}`;
                                 })()
-                              : hasLinePricing
+                              : canShowPricingColumns && hasLinePricing
                                 ? `₹${displayUnitPrice.toFixed(2)}`
-                                : <Typography variant="caption" color="textSecondary">Enter batch</Typography>
+                                : <Typography variant="caption" color="textSecondary">-</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">
-                          {item.batchAllocations && item.batchAllocations.length === 1
-                            ? `${item.batchAllocations[0].gstRate || item.gstRate || 5}%`
-                            : item.gstRate !== undefined ? `${item.gstRate}%` : '-'
-                          }
+                          {canShowPricingColumns
+                            ? `${displayGstRate}%`
+                            : <Typography variant="caption" color="textSecondary">-</Typography>}
                         </TableCell>
                         <TableCell align="right">
-                          {item.batchAllocations && item.batchAllocations.length === 1
+                          {canShowPricingColumns && item.batchAllocations && item.batchAllocations.length === 1
                             ? renderDiscPctCell(item, index, item.batchAllocations[0], 0)
-                            : item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0)
+                            : canShowPricingColumns && (item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0))
                               ? renderDiscPctCell(item, index)
-                              : item.discountPercentage != null && item.discountPercentage > 0
-                                ? `${item.discountPercentage}%`
-                                : lineEcon.discountPct > 0
-                                  ? `${lineEcon.discountPct}%`
-                                  : <Typography variant="caption" color="textSecondary">-</Typography>
+                              : displayDiscountPct > 0
+                                ? `${displayDiscountPct}%`
+                                : <Typography variant="caption" color="textSecondary">-</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">
-                          {item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) || hasLinePricing
+                          {canShowPricingColumns && (item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) || hasLinePricing)
                             ? `₹${orderLineTaxableBeforeDiscount(item, medSingle, taxPercentage).toFixed(2)}`
                             : <Typography variant="caption" color="textSecondary">-</Typography>}
                         </TableCell>
