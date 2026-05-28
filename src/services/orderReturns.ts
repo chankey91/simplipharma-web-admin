@@ -39,6 +39,9 @@ export interface OrderReturnRequest {
   updatedAt?: Date | any;
   submittedBy?: string;
   soNotes?: string;
+  soEvidenceUrls?: string[];
+  soEvidenceUploadedAt?: Date | any;
+  soEvidenceUploadedBy?: string;
   receivedBySO?: string;
   receivedAt?: Date | any;
   soForwardedAt?: Date | any;
@@ -71,6 +74,7 @@ const parseDoc = (d: any): OrderReturnRequest => {
     updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
     receivedAt: data.receivedAt?.toDate?.() || data.receivedAt,
     soForwardedAt: data.soForwardedAt?.toDate?.() || data.soForwardedAt,
+    soEvidenceUploadedAt: data.soEvidenceUploadedAt?.toDate?.() || data.soEvidenceUploadedAt,
     approvedAt: data.approvedAt?.toDate?.() || data.approvedAt,
     rejectedAt: data.rejectedAt?.toDate?.() || data.rejectedAt,
     paymentDate: data.paymentDate?.toDate?.() || data.paymentDate,
