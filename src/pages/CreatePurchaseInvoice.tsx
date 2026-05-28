@@ -42,7 +42,7 @@ import {
 import { useVendors } from '../hooks/useVendors';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
 import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
-import { PurchaseInvoiceItem, Medicine, Vendor } from '../types';
+import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
@@ -57,6 +57,7 @@ import {
 import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { normalizeFirestoreDate } from '../services/inventory';
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -340,6 +341,87 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     if (mrp <= 0 || purchasePrice <= 0) return 20;
     const priceWithGST = purchasePrice * (1 + gstRate / 100);
     return (1 - (priceWithGST / mrp)) * 100;
+  };
+
+  const formatBatchExpiryMmYyyy = (expiryDate: Date | unknown): string => {
+    const d = normalizeFirestoreDate(expiryDate as Parameters<typeof normalizeFirestoreDate>[0]);
+    if (!d) return '';
+    return format(d, 'MM/yyyy');
+  };
+
+  const findExistingStockBatch = (
+    medicineId: string | undefined,
+    batchNumber: string
+  ): StockBatch | undefined => {
+    const key = batchNumber.trim().toLowerCase();
+    if (!medicineId || !key) return undefined;
+    const medicine = medicines?.find((m) => m.id === medicineId);
+    return medicine?.stockBatches?.find(
+      (b) => String(b.batchNumber || '').trim().toLowerCase() === key
+    );
+  };
+
+  const existingBatchForCurrentItem = useMemo(
+    () => findExistingStockBatch(currentItem.medicineId, String(currentItem.batchNumber || '')),
+    [medicines, currentItem.medicineId, currentItem.batchNumber]
+  );
+
+  /** Fill item fields from inventory when batch already exists for this medicine (quantity unchanged). */
+  const applyExistingBatchDetails = () => {
+    const batchNumber = String(currentItem.batchNumber || '').trim();
+    if (!currentItem.medicineId || !batchNumber) return;
+
+    const batch = findExistingStockBatch(currentItem.medicineId, batchNumber);
+    if (!batch) return;
+
+    const medicine = medicines?.find((m) => m.id === currentItem.medicineId);
+    const gstRate = medicine?.gstRate || 5;
+    const mrp = batch.mrp && batch.mrp > 0 ? batch.mrp : 0;
+    let purchasePrice =
+      batch.purchasePrice && batch.purchasePrice > 0 ? batch.purchasePrice : 0;
+    const standardDiscountSeed =
+      currentItem.standardDiscount !== '' && currentItem.standardDiscount !== undefined
+        ? parseNumber(currentItem.standardDiscount)
+        : 20;
+
+    if (purchasePrice <= 0 && mrp > 0) {
+      purchasePrice = calculatePurchasePriceFromMrpAndDiscount(mrp, gstRate, standardDiscountSeed);
+    }
+
+    const standardDiscount =
+      mrp > 0 && purchasePrice > 0
+        ? calculateStandardDiscountFromMrpAndPurchasePrice(mrp, purchasePrice, gstRate)
+        : standardDiscountSeed;
+
+    const batchLegacy = batch as StockBatch & { purchaseSchemeDeal?: number; purchaseSchemeFree?: number };
+    const batchSchemePaid = batch.schemePaidQty ?? batchLegacy.purchaseSchemeDeal;
+    const batchSchemeFree = batch.schemeFreeQty ?? batchLegacy.purchaseSchemeFree;
+
+    const expiryStr = formatBatchExpiryMmYyyy(batch.expiryDate);
+
+    setCurrentItem((prev) => ({
+      ...prev,
+      expiryDate: expiryStr || prev.expiryDate,
+      mrp: mrp > 0 ? String(mrp) : prev.mrp,
+      purchasePrice: purchasePrice > 0 ? purchasePrice.toFixed(2) : prev.purchasePrice,
+      unitPrice: purchasePrice > 0 ? purchasePrice.toFixed(2) : prev.unitPrice,
+      standardDiscount: Number.isFinite(standardDiscount) ? standardDiscount.toFixed(2) : prev.standardDiscount,
+      discountPercentage:
+        batch.discountPercentage != null && batch.discountPercentage > 0
+          ? String(batch.discountPercentage)
+          : prev.discountPercentage,
+      schemePaidQty:
+        batchSchemePaid != null && Number(batchSchemePaid) > 0
+          ? String(Math.floor(Number(batchSchemePaid)))
+          : prev.schemePaidQty,
+      schemeFreeQty:
+        batchSchemeFree != null && Number(batchSchemeFree) > 0
+          ? String(Math.floor(Number(batchSchemeFree)))
+          : prev.schemeFreeQty,
+      nonReturnable: batch.nonReturnable === true,
+      gstRate,
+    }));
+    setExpiryDateError('');
   };
 
   const handleAddItem = () => {
@@ -991,6 +1073,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 required
                 value={currentItem.batchNumber}
                 onChange={(e) => setCurrentItem({ ...currentItem, batchNumber: e.target.value })}
+                onBlur={applyExistingBatchDetails}
+                helperText={
+                  existingBatchForCurrentItem
+                    ? 'Existing batch — other fields filled from inventory (enter quantity for this bill)'
+                    : 'Enter batch number; if it exists in stock, details auto-fill on blur'
+                }
               />
             </Grid>
             <Grid item xs={12} sm={6}>

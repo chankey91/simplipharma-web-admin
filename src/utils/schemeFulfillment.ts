@@ -161,9 +161,9 @@ export function orderLineSchemeDisplayPhysical(
     allocs && allocs.length > 0
       ? allocs.reduce((s, a) => s + orderedUnitsFromAllocation(a), 0)
       : Number(lineItem.quantity) || 0;
-  const base = Math.max(orderLinePhysicalO(lineItem), sumPhys);
   const P = Number(schemeP) || 0;
   const F = Number(schemeF) || 0;
+  const base = Math.max(orderLinePhysicalO(lineItem, P, F), sumPhys);
   if (P > 0 && F > 0) {
     return schemeBumpedPhysicalForOrderDisplay(base, P, F);
   }
@@ -186,16 +186,38 @@ export function orderedUnitsFromAllocation(allocation: {
  * Physical strips on an order medicine line. Prefer max(line `quantity`, sum of allocation physical)
  * so scheme split uses the fulfilled line total when per-allocation paid+free sums drift below it.
  */
-export function orderLinePhysicalO(lineItem: {
-  quantity?: number;
-  freeQuantity?: number | null;
-  originalQuantity?: number | null;
-  batchAllocations?: Array<{ quantity?: number; allocationFreeQty?: number | null }>;
-}): number {
+export function orderLinePhysicalO(
+  lineItem: {
+    quantity?: number;
+    freeQuantity?: number | null;
+    originalQuantity?: number | null;
+    batchAllocations?: Array<{ quantity?: number; allocationFreeQty?: number | null }>;
+  },
+  schemeP?: number | null,
+  schemeF?: number | null
+): number {
   const lineQ = Number(lineItem.quantity) || 0;
   const allocs = lineItem.batchAllocations;
   if (!allocs || allocs.length === 0) {
+    const freeQ = Number(lineItem.freeQuantity) || 0;
     const orig = Number(lineItem.originalQuantity) || 0;
+    const P = Number(schemeP) || 0;
+    const F = Number(schemeF) || 0;
+
+    if (freeQ > 0 && P > 0 && F > 0) {
+      const sumPhysical = lineQ + freeQ;
+      const fromSum = schemeOrderLineDisplayTotals(sumPhysical, P, F);
+      if (Math.abs(fromSum.billQty - lineQ) < 0.02) {
+        return sumPhysical;
+      }
+      const fromLineQ = schemeOrderLineDisplayTotals(lineQ, P, F);
+      if (Math.abs(fromLineQ.totalQty - lineQ) < 1e-6 && Math.abs(fromLineQ.freeQty - freeQ) < 0.02) {
+        return lineQ;
+      }
+    } else if (freeQ > 0 && lineQ + freeQ > lineQ + 1e-6) {
+      return lineQ + freeQ;
+    }
+
     if (orig > lineQ && orig - lineQ <= 0.51) {
       return orig;
     }
