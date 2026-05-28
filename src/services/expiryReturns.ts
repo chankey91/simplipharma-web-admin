@@ -1,6 +1,7 @@
 import {
   collection,
   getDocs,
+  getDoc,
   doc,
   updateDoc,
   query,
@@ -10,6 +11,7 @@ import {
   db,
   auth,
 } from './firebase';
+import { addStockBatch, restoreStockToBatch } from './inventory';
 
 export interface ExpiryReturnItem {
   medicineId: string;
@@ -72,6 +74,16 @@ const parseDoc = (d: any): ExpiryReturnRequest => {
   } as ExpiryReturnRequest;
 };
 
+const toDate = (value: unknown): Date | undefined => {
+  if (!value) return undefined;
+  if (value instanceof Date) return value;
+  if (typeof value === 'object' && value && 'toDate' in value && typeof (value as any).toDate === 'function') {
+    return (value as any).toDate();
+  }
+  const parsed = new Date(value as string | number);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
 export const getExpiryReturnRequests = async (
   status?: ExpiryReturnStatus
 ): Promise<ExpiryReturnRequest[]> => {
@@ -88,6 +100,55 @@ export const getExpiryReturnRequests = async (
 
 export const approveExpiryReturnRequest = async (requestId: string): Promise<void> => {
   const reqRef = doc(db, 'expiry_return_requests', requestId);
+
+  const reqSnap = await getDoc(reqRef);
+  if (!reqSnap.exists()) {
+    throw new Error('Expiry return request not found');
+  }
+
+  const reqData = parseDoc(reqSnap);
+  if (reqData.status !== 'pending') {
+    throw new Error('Expiry return request is not awaiting approval');
+  }
+
+  // Restore inventory on approval by medicine+batch.
+  const restoreMap = new Map<string, { medicineId: string; batchNumber: string; quantity: number; expiryDate?: unknown }>();
+  for (const item of reqData.items || []) {
+    const medicineId = String(item.medicineId || '').trim();
+    const batchNumber = String(item.batchNumber || '').trim();
+    const qty = Number(item.quantity) || 0;
+    if (!medicineId || !batchNumber || qty <= 0) continue;
+    const key = `${medicineId}|${batchNumber}`;
+    const prev = restoreMap.get(key);
+    if (prev) {
+      prev.quantity += qty;
+    } else {
+      restoreMap.set(key, {
+        medicineId,
+        batchNumber,
+        quantity: qty,
+        expiryDate: item.expiryDate,
+      });
+    }
+  }
+
+  for (const restore of restoreMap.values()) {
+    try {
+      await restoreStockToBatch(restore.medicineId, restore.batchNumber, restore.quantity);
+    } catch (error: any) {
+      const msg = String(error?.message || error || '').toLowerCase();
+      if (msg.includes('batch') && msg.includes('not found')) {
+        await addStockBatch(restore.medicineId, {
+          batchNumber: restore.batchNumber,
+          quantity: restore.quantity,
+          expiryDate: toDate(restore.expiryDate),
+        } as any);
+      } else {
+        throw error;
+      }
+    }
+  }
+
   await updateDoc(reqRef, {
     status: 'approved',
     approvedBy: auth.currentUser?.uid,
