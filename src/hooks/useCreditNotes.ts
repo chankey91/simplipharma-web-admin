@@ -3,6 +3,8 @@ import {
   getAllCreditNotes,
   getCreditNoteById,
   issueCreditNoteForReturnRequestId,
+  backfillAllCreditNotes,
+  backfillCreditNoteById,
 } from '../services/creditNotes';
 
 import { getAllDebitNotes } from '../services/debitNotes';
@@ -36,6 +38,26 @@ export const useIssueCreditNoteForReturn = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
       queryClient.invalidateQueries({ queryKey: ['orderReturns'] });
+    },
+  });
+};
+
+export const useBackfillCreditNotes = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: backfillAllCreditNotes,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
+    },
+  });
+};
+
+export const useBackfillCreditNote = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: backfillCreditNoteById,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
     },
   });
 };

@@ -19,9 +19,9 @@ import {
   Tab,
   Chip,
 } from '@mui/material';
-import { Search, Download, Refresh } from '@mui/icons-material';
+import { Search, Download, Refresh, Build } from '@mui/icons-material';
 import { format } from 'date-fns';
-import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
+import { useCreditNotes, useDebitNotes, useBackfillCreditNotes } from '../hooks/useCreditNotes';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generateCreditNotePdf } from '../utils/creditNote';
@@ -45,6 +45,7 @@ export const CreditNotesPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const backfillMutation = useBackfillCreditNotes();
 
   const { sortKey, sortDirection, requestSort } = useTableSort('documentDate', 'desc');
 
@@ -173,6 +174,25 @@ export const CreditNotesPage: React.FC = () => {
     requestSort('documentDate');
   };
 
+  const handleBackfillOldCreditNotes = async () => {
+    if (
+      !confirm(
+        'Repair batch and MRP on older credit notes from linked order/return data? This updates stored credit note documents in Firestore.'
+      )
+    ) {
+      return;
+    }
+    try {
+      const summary = await backfillMutation.mutateAsync();
+      alert(
+        `Backfill complete.\nScanned: ${summary.scanned}\nUpdated: ${summary.updated}\nUnchanged: ${summary.unchanged}\nFailed: ${summary.failed}`
+      );
+      refetchCredit();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Backfill failed');
+    }
+  };
+
   if (creditLoading && debitLoading) {
     return <Loading message="Loading credit & debit notes..." />;
   }
@@ -198,13 +218,25 @@ export const CreditNotesPage: React.FC = () => {
             Credit notes from order returns; debit notes for future billing adjustments
           </Typography>
         </Box>
-        <Button
-          startIcon={<Refresh />}
-          variant="outlined"
-          onClick={() => (tab === 'credit' ? refetchCredit() : refetchDebit())}
-        >
-          Refresh
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {tab === 'credit' && (
+            <Button
+              startIcon={<Build />}
+              variant="outlined"
+              onClick={handleBackfillOldCreditNotes}
+              disabled={backfillMutation.isPending}
+            >
+              {backfillMutation.isPending ? 'Repairing…' : 'Repair batch/MRP'}
+            </Button>
+          )}
+          <Button
+            startIcon={<Refresh />}
+            variant="outlined"
+            onClick={() => (tab === 'credit' ? refetchCredit() : refetchDebit())}
+          >
+            Refresh
+          </Button>
+        </Box>
       </Box>
 
       <Tabs value={tab} onChange={handleTabChange} sx={{ mb: 2 }}>
@@ -230,7 +262,8 @@ export const CreditNotesPage: React.FC = () => {
 
       {tab === 'credit' ? (
         <Alert severity="info" sx={{ mb: 2 }}>
-          Credit notes are created automatically when order returns are approved.
+          Credit notes are created automatically when order returns are approved. Use &quot;Repair batch/MRP&quot; once
+          to fix older notes that were saved before batch and MRP were stored on line items.
         </Alert>
       ) : (
         <Alert severity="info" sx={{ mb: 2 }}>

@@ -110,6 +110,15 @@ export const approveExpiryReturnRequest = async (requestId: string): Promise<voi
   if (reqData.status !== 'pending') {
     throw new Error('Expiry return request is not awaiting approval');
   }
+  const missingBatchItems = (reqData.items || []).filter(
+    (item) => String(item.batchNumber || '').trim().length === 0
+  );
+  if (missingBatchItems.length > 0) {
+    const names = missingBatchItems
+      .map((i) => i.medicineName || i.medicineId || 'Unknown item')
+      .join(', ');
+    throw new Error(`Batch number missing for expiry return item(s): ${names}. Please capture batch in return request.`);
+  }
 
   // Restore inventory on approval by medicine+batch.
   const restoreMap = new Map<string, { medicineId: string; batchNumber: string; quantity: number; expiryDate?: unknown }>();

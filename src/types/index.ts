@@ -338,6 +338,7 @@ export interface CreditNoteLine {
   medicineId: string;
   medicineName: string;
   batchNumber: string;
+  mrp?: number;
   quantity: number;
   expiryDate?: Date | any;
   hsn?: string;
