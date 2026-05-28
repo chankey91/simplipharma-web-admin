@@ -79,6 +79,7 @@ async function prepareCreditNoteItemRows(note: CreditNote): Promise<CreditNoteIt
             : '—';
 
       let pack = '—';
+      let mrp = '-';
       try {
         const medicine = await getMedicineById(item.medicineId);
         if (medicine?.unit) {
@@ -87,22 +88,42 @@ async function prepareCreditNoteItemRows(note: CreditNote): Promise<CreditNoteIt
           const packagingMatch = medicine.description.match(/Packaging:\s*(.+)/i);
           if (packagingMatch?.[1]) pack = packagingMatch[1].trim();
         }
+
+        const itemMrp = (item as any).mrp;
+        const fromItem = typeof itemMrp === 'number' ? itemMrp : parseFloat(String(itemMrp ?? ''));
+        if (Number.isFinite(fromItem) && fromItem > 0) {
+          mrp = fromItem.toFixed(2);
+        } else {
+          const batchNo = String(item.batchNumber || '').trim();
+          const batch = batchNo
+            ? medicine?.stockBatches?.find((b: any) => String(b.batchNumber || '').trim() === batchNo)
+            : undefined;
+          const fromBatch = batch?.mrp;
+          const parsedBatchMrp =
+            typeof fromBatch === 'number' ? fromBatch : parseFloat(String(fromBatch ?? ''));
+          if (Number.isFinite(parsedBatchMrp) && parsedBatchMrp > 0) {
+            mrp = parsedBatchMrp.toFixed(2);
+          } else if (medicine?.mrp && Number.isFinite(medicine.mrp) && medicine.mrp > 0) {
+            mrp = medicine.mrp.toFixed(2);
+          }
+        }
       } catch {
         /* ignore */
       }
 
       const qty = item.quantity;
+      const batchDisplay = String(item.batchNumber || '').trim() || '—';
       return {
         sn: index + 1,
         name: item.medicineName,
         pack,
         hsn: item.hsn || '—',
-        batch: item.batchNumber || '—',
+        batch: batchDisplay,
         exp,
         qty: qty.toFixed(2),
         free: '0.00',
         totalQty: qty.toFixed(2),
-        mrp: '-',
+        mrp,
         rate: item.unitRefundPrice.toFixed(2),
         disc: '0.00',
         sgst: `${(gstRate / 2).toFixed(1)}%`,

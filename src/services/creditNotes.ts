@@ -8,6 +8,7 @@ import {
   where,
   limit,
   writeBatch,
+  updateDoc,
   Timestamp,
   db,
   auth,
@@ -27,6 +28,28 @@ type ReturnItemInput = {
   unitRefundPrice: number;
   refundAmount: number;
 };
+
+const normalizeBatchNumber = (value: unknown): string => String(value || '').trim();
+
+function resolveItemBatchFromOrder(item: ReturnItemInput, order: Awaited<ReturnType<typeof getOrderById>>): string {
+  const explicit = normalizeBatchNumber(item.batchNumber);
+  if (explicit) return explicit;
+  if (!order?.medicines?.length) return '';
+
+  const candidates = new Set<string>();
+  for (const line of order.medicines) {
+    if (!line || line.medicineId !== item.medicineId) continue;
+    const lineBatch = normalizeBatchNumber((line as any).batchNumber);
+    if (lineBatch) candidates.add(lineBatch);
+    if (Array.isArray((line as any).batchAllocations)) {
+      for (const alloc of (line as any).batchAllocations) {
+        const allocBatch = normalizeBatchNumber((alloc as any)?.batchNumber);
+        if (allocBatch) candidates.add(allocBatch);
+      }
+    }
+  }
+  return candidates.size === 1 ? [...candidates][0] : '';
+}
 
 export type ReturnRequestInput = {
   id: string;
@@ -93,6 +116,21 @@ function parseCreditNoteDoc(id: string, data: Record<string, unknown>): CreditNo
   } as CreditNote;
 }
 
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((v) => stripUndefinedDeep(v)) as T;
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue;
+      out[k] = stripUndefinedDeep(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 async function buildCreditNoteLines(
   items: ReturnItemInput[],
   defaultTaxPercentage: number
@@ -105,10 +143,23 @@ async function buildCreditNoteLines(
     items.map(async (item) => {
       let hsn = '—';
       let gstRate = defaultTaxPercentage;
+      let lineMrp: number | undefined = undefined;
       try {
         const medicine = await getMedicineById(item.medicineId);
         if (medicine?.code) hsn = medicine.code;
         if (medicine?.gstRate != null) gstRate = medicine.gstRate;
+        const batchNo = normalizeBatchNumber(item.batchNumber);
+        const batch = batchNo
+          ? medicine?.stockBatches?.find((b: any) => normalizeBatchNumber((b as any)?.batchNumber) === batchNo)
+          : undefined;
+        const batchMrp = typeof batch?.mrp === 'number' ? batch.mrp : parseFloat(String(batch?.mrp ?? ''));
+        const medMrp =
+          typeof medicine?.mrp === 'number' ? medicine.mrp : parseFloat(String((medicine as any)?.mrp ?? ''));
+        if (Number.isFinite(batchMrp) && batchMrp > 0) {
+          lineMrp = batchMrp;
+        } else if (Number.isFinite(medMrp) && medMrp > 0) {
+          lineMrp = medMrp;
+        }
       } catch {
         /* ignore lookup failures */
       }
@@ -123,9 +174,10 @@ async function buildCreditNoteLines(
       return {
         medicineId: item.medicineId,
         medicineName: item.medicineName,
-        batchNumber: item.batchNumber,
+        batchNumber: normalizeBatchNumber(item.batchNumber),
+        ...(lineMrp !== undefined ? { mrp: lineMrp } : {}),
         quantity: item.quantity,
-        expiryDate: item.expiryDate ? toDate(item.expiryDate) : undefined,
+        ...(item.expiryDate ? { expiryDate: toDate(item.expiryDate) } : {}),
         hsn,
         gstRate,
         unitRefundPrice: item.unitRefundPrice,
@@ -208,9 +260,21 @@ export async function issueCreditNoteForOrderReturn(
   }
 
   const order = returnRequest.orderId ? await getOrderById(returnRequest.orderId) : null;
+  const resolvedItems = (returnRequest.items || []).map((item) => ({
+    ...item,
+    batchNumber: resolveItemBatchFromOrder(item, order),
+  }));
+  const missingBatchItems = resolvedItems.filter((item) => !normalizeBatchNumber(item.batchNumber));
+  if (missingBatchItems.length > 0) {
+    const names = missingBatchItems
+      .map((i) => i.medicineName || i.medicineId || 'Unknown item')
+      .join(', ');
+    throw new Error(`Batch number missing for return item(s): ${names}. Please capture batch in return request.`);
+  }
+
   const defaultTaxPercentage = order?.taxPercentage ?? 5;
   const { lines, subTotal, taxAmount, taxPercentage } = await buildCreditNoteLines(
-    returnRequest.items,
+    resolvedItems,
     defaultTaxPercentage
   );
 
@@ -242,9 +306,10 @@ export async function issueCreditNoteForOrderReturn(
     createdBy: returnRequest.approvedBy || auth.currentUser?.uid,
     createdAt: now,
   };
+  const noteSafe = stripUndefinedDeep(note);
 
   const batch = writeBatch(db);
-  batch.set(creditNoteRef, note);
+  batch.set(creditNoteRef, noteSafe);
   batch.update(reqRef, {
     creditNoteId: creditNoteRef.id,
     creditNoteNumber,
@@ -270,10 +335,23 @@ export const approveOrderReturnRequest = async (
     throw new Error('Return request is not awaiting admin approval');
   }
 
+  const order = returnRequest.orderId ? await getOrderById(returnRequest.orderId) : null;
+  const resolvedItems = (returnRequest.items || []).map((item) => ({
+    ...item,
+    batchNumber: resolveItemBatchFromOrder(item, order),
+  }));
+  const missingBatchItems = resolvedItems.filter((item) => !normalizeBatchNumber(item.batchNumber));
+  if (missingBatchItems.length > 0) {
+    const names = missingBatchItems
+      .map((i) => i.medicineName || i.medicineId || 'Unknown item')
+      .join(', ');
+    throw new Error(`Batch number missing for return item(s): ${names}. Please capture batch in return request.`);
+  }
+
   // Restore inventory back to the original medicine batch on approval.
   // Group by medicine+batch to avoid multiple writes for split rows.
   const restoreMap = new Map<string, { medicineId: string; batchNumber: string; quantity: number; expiryDate?: unknown }>();
-  for (const item of returnRequest.items || []) {
+  for (const item of resolvedItems) {
     const medicineId = String(item.medicineId || '').trim();
     const batchNumber = String(item.batchNumber || '').trim();
     const qty = Number(item.quantity) || 0;
@@ -321,7 +399,13 @@ export const approveOrderReturnRequest = async (
   await approveBatch.commit();
 
   const issued = await issueCreditNoteForOrderReturn(
-    { ...returnRequest, status: 'approved', approvedAt: now, approvedBy: auth.currentUser?.uid },
+    {
+      ...returnRequest,
+      items: resolvedItems,
+      status: 'approved',
+      approvedAt: now,
+      approvedBy: auth.currentUser?.uid,
+    },
     { creditNoteDate: new Date() }
   );
 
@@ -347,3 +431,225 @@ export const issueCreditNoteForReturnRequestId = async (
     created: issued.created,
   };
 };
+
+async function loadReturnRequestForCreditNote(
+  note: CreditNote
+): Promise<ReturnRequestInput | null> {
+  if (!note.orderReturnRequestId) return null;
+  const snap = await getDoc(doc(db, 'order_return_requests', note.orderReturnRequestId));
+  if (!snap.exists()) return null;
+  return parseReturnRequestDoc(snap.id, snap.data() as Record<string, unknown>);
+}
+
+async function resolveLineMrp(
+  medicineId: string,
+  batchNumber: string,
+  existingMrp?: number
+): Promise<number | undefined> {
+  if (existingMrp != null && Number.isFinite(existingMrp) && existingMrp > 0) {
+    return existingMrp;
+  }
+  try {
+    const medicine = await getMedicineById(medicineId);
+    const batch = batchNumber
+      ? medicine?.stockBatches?.find(
+          (b) => normalizeBatchNumber((b as { batchNumber?: string }).batchNumber) === batchNumber
+        )
+      : undefined;
+    const batchMrp =
+      typeof batch?.mrp === 'number' ? batch.mrp : parseFloat(String(batch?.mrp ?? ''));
+    const medMrp =
+      typeof medicine?.mrp === 'number'
+        ? medicine.mrp
+        : parseFloat(String((medicine as { mrp?: number })?.mrp ?? ''));
+    if (Number.isFinite(batchMrp) && batchMrp > 0) return batchMrp;
+    if (Number.isFinite(medMrp) && medMrp > 0) return medMrp;
+  } catch {
+    /* ignore */
+  }
+  return undefined;
+}
+
+async function enrichCreditNoteLine(
+  line: CreditNoteLine,
+  order: Awaited<ReturnType<typeof getOrderById>>,
+  returnRequest: ReturnRequestInput | null
+): Promise<CreditNoteLine> {
+  const returnItem = returnRequest?.items?.find((i) => i.medicineId === line.medicineId);
+  const pseudoItem: ReturnItemInput = {
+    medicineId: line.medicineId,
+    medicineName: line.medicineName,
+    batchNumber:
+      normalizeBatchNumber(line.batchNumber) ||
+      normalizeBatchNumber(returnItem?.batchNumber) ||
+      '',
+    quantity: line.quantity,
+    expiryDate: line.expiryDate ?? returnItem?.expiryDate,
+    unitRefundPrice: line.unitRefundPrice,
+    refundAmount: line.refundAmount,
+  };
+
+  const batchNumber =
+    normalizeBatchNumber(line.batchNumber) ||
+    normalizeBatchNumber(returnItem?.batchNumber) ||
+    resolveItemBatchFromOrder(pseudoItem, order);
+
+  const mrp = await resolveLineMrp(line.medicineId, batchNumber, line.mrp);
+
+  return {
+    ...line,
+    batchNumber,
+    ...(mrp !== undefined ? { mrp } : {}),
+    ...(line.expiryDate || returnItem?.expiryDate
+      ? { expiryDate: line.expiryDate ?? (returnItem?.expiryDate ? toDate(returnItem.expiryDate) : undefined) }
+      : {}),
+  };
+}
+
+function creditNoteLineToFirestore(line: CreditNoteLine): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    medicineId: line.medicineId,
+    medicineName: line.medicineName,
+    batchNumber: normalizeBatchNumber(line.batchNumber),
+    quantity: line.quantity,
+    gstRate: line.gstRate,
+    unitRefundPrice: line.unitRefundPrice,
+    refundAmount: line.refundAmount,
+  };
+  if (line.hsn) row.hsn = line.hsn;
+  if (line.mrp != null && Number.isFinite(line.mrp) && line.mrp > 0) row.mrp = line.mrp;
+  if (line.expiryDate) {
+    row.expiryDate =
+      line.expiryDate instanceof Date ? Timestamp.fromDate(line.expiryDate) : line.expiryDate;
+  }
+  return row;
+}
+
+function creditNoteNeedsBackfill(note: CreditNote): boolean {
+  if (!note.originalInvoiceNumber?.trim()) return true;
+  return (note.items || []).some((line) => {
+    const batchMissing = !normalizeBatchNumber(line.batchNumber);
+    const mrpMissing = line.mrp == null || !Number.isFinite(line.mrp) || line.mrp <= 0;
+    return batchMissing || mrpMissing;
+  });
+}
+
+function linesChanged(before: CreditNoteLine[], after: CreditNoteLine[]): boolean {
+  if (before.length !== after.length) return true;
+  return before.some((line, idx) => {
+    const next = after[idx];
+    return (
+      normalizeBatchNumber(line.batchNumber) !== normalizeBatchNumber(next.batchNumber) ||
+      (line.mrp ?? 0) !== (next.mrp ?? 0)
+    );
+  });
+}
+
+export type CreditNoteBackfillResult = {
+  creditNoteId: string;
+  creditNoteNumber: string;
+  updated: boolean;
+  message?: string;
+};
+
+export type CreditNoteBackfillSummary = {
+  scanned: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  results: CreditNoteBackfillResult[];
+};
+
+/** Repair stored batch/MRP (and missing original invoice ref) on an existing credit note. */
+export async function backfillCreditNoteById(creditNoteId: string): Promise<CreditNoteBackfillResult> {
+  const note = await getCreditNoteById(creditNoteId);
+  if (!note) {
+    return {
+      creditNoteId,
+      creditNoteNumber: '—',
+      updated: false,
+      message: 'Credit note not found',
+    };
+  }
+
+  if (!creditNoteNeedsBackfill(note)) {
+    return {
+      creditNoteId: note.id,
+      creditNoteNumber: note.creditNoteNumber,
+      updated: false,
+      message: 'Already complete',
+    };
+  }
+
+  const order = note.orderId ? await getOrderById(note.orderId) : null;
+  const returnRequest = await loadReturnRequestForCreditNote(note);
+
+  const enrichedItems = await Promise.all(
+    (note.items || []).map((line) => enrichCreditNoteLine(line, order, returnRequest))
+  );
+
+  const originalInvoiceNumber =
+    note.originalInvoiceNumber?.trim() ||
+    returnRequest?.invoiceNumber?.trim() ||
+    order?.invoiceNumber?.trim() ||
+    '';
+
+  const headerChanged = Boolean(originalInvoiceNumber && !note.originalInvoiceNumber?.trim());
+  const itemsChanged = linesChanged(note.items || [], enrichedItems);
+
+  if (!headerChanged && !itemsChanged) {
+    return {
+      creditNoteId: note.id,
+      creditNoteNumber: note.creditNoteNumber,
+      updated: false,
+      message: 'Could not resolve missing batch/MRP from order or return data',
+    };
+  }
+
+  const updatePayload = stripUndefinedDeep({
+    items: enrichedItems.map(creditNoteLineToFirestore),
+    ...(originalInvoiceNumber ? { originalInvoiceNumber } : {}),
+  });
+
+  await updateDoc(doc(db, 'credit_notes', note.id), updatePayload);
+
+  return {
+    creditNoteId: note.id,
+    creditNoteNumber: note.creditNoteNumber,
+    updated: true,
+    message: 'Batch/MRP repaired',
+  };
+}
+
+/** Backfill all order-return credit notes that are missing batch or MRP on line items. */
+export async function backfillAllCreditNotes(): Promise<CreditNoteBackfillSummary> {
+  const notes = await getAllCreditNotes();
+  const targets = notes.filter((n) => n.type === 'order_return' && creditNoteNeedsBackfill(n));
+
+  const summary: CreditNoteBackfillSummary = {
+    scanned: targets.length,
+    updated: 0,
+    unchanged: 0,
+    failed: 0,
+    results: [],
+  };
+
+  for (const note of targets) {
+    try {
+      const result = await backfillCreditNoteById(note.id);
+      summary.results.push(result);
+      if (result.updated) summary.updated += 1;
+      else summary.unchanged += 1;
+    } catch (err: unknown) {
+      summary.failed += 1;
+      summary.results.push({
+        creditNoteId: note.id,
+        creditNoteNumber: note.creditNoteNumber,
+        updated: false,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return summary;
+}

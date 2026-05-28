@@ -524,6 +524,11 @@ export const OrderReturnsPage: React.FC = () => {
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 2 }}>
                   Items
                 </Typography>
+                {selectedRequest.items?.some((it) => !String(it.batchNumber || '').trim()) && (
+                  <Alert severity="warning" sx={{ mt: 1 }}>
+                    One or more return lines have missing batch number. Approval will be blocked until batch is captured.
+                  </Alert>
+                )}
                 <TableContainer component={Paper} variant="outlined" sx={{ mt: 1 }}>
                   <Table size="small">
                     <TableHead>
@@ -537,9 +542,22 @@ export const OrderReturnsPage: React.FC = () => {
                     </TableHead>
                     <TableBody>
                       {selectedRequest.items?.map((it, idx) => (
-                        <TableRow key={idx}>
+                        <TableRow
+                          key={idx}
+                          sx={{
+                            bgcolor: !String(it.batchNumber || '').trim()
+                              ? 'rgba(255, 152, 0, 0.10)'
+                              : 'inherit',
+                          }}
+                        >
                           <TableCell>{it.medicineName}</TableCell>
-                          <TableCell>{it.batchNumber}</TableCell>
+                          <TableCell>
+                            {String(it.batchNumber || '').trim() || (
+                              <Typography variant="caption" color="error">
+                                Missing
+                              </Typography>
+                            )}
+                          </TableCell>
                           <TableCell align="right">{it.quantity}</TableCell>
                           <TableCell align="right">₹{it.unitRefundPrice}</TableCell>
                           <TableCell align="right">{formatAmount(it.refundAmount)}</TableCell>
