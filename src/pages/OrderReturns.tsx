@@ -482,6 +482,11 @@ export const OrderReturnsPage: React.FC = () => {
                     Forwarded by SO: {formatDate(selectedRequest.soForwardedAt)}
                   </Typography>
                 )}
+                {selectedRequest.soEvidenceUploadedAt && (
+                  <Typography variant="body2" color="text.secondary">
+                    Evidence uploaded: {formatDate(selectedRequest.soEvidenceUploadedAt)}
+                  </Typography>
+                )}
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 2 }}>
                   Total Amount
                 </Typography>
@@ -493,6 +498,28 @@ export const OrderReturnsPage: React.FC = () => {
                     </Typography>
                     <Typography>{selectedRequest.soNotes}</Typography>
                   </>
+                )}
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 2 }}>
+                  SO Verification Evidence
+                </Typography>
+                {selectedRequest.soEvidenceUrls && selectedRequest.soEvidenceUrls.length > 0 ? (
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 1.5, mt: 1 }}>
+                    {selectedRequest.soEvidenceUrls.map((url, idx) => (
+                      <Box key={`${url}-${idx}`} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 0.5 }}>
+                        <a href={url} target="_blank" rel="noopener noreferrer">
+                          <img
+                            src={url}
+                            alt={`SO evidence ${idx + 1}`}
+                            style={{ width: '100%', maxHeight: 140, objectFit: 'cover', borderRadius: 6 }}
+                          />
+                        </a>
+                      </Box>
+                    ))}
+                  </Box>
+                ) : (
+                  <Alert severity="warning" sx={{ mt: 1 }}>
+                    No SO evidence uploaded.
+                  </Alert>
                 )}
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 2 }}>
                   Items

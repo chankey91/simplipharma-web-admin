@@ -14,6 +14,7 @@ import {
 } from './firebase';
 import { getOrderById } from './orders';
 import { getMedicineById } from './inventory';
+import { addStockBatch, restoreStockToBatch } from './inventory';
 import { generateCreditNoteNumber } from '../utils/invoiceNumber';
 import { CreditNote, CreditNoteLine } from '../types';
 
@@ -267,6 +268,46 @@ export const approveOrderReturnRequest = async (
 
   if (returnRequest.status !== 'pending_admin') {
     throw new Error('Return request is not awaiting admin approval');
+  }
+
+  // Restore inventory back to the original medicine batch on approval.
+  // Group by medicine+batch to avoid multiple writes for split rows.
+  const restoreMap = new Map<string, { medicineId: string; batchNumber: string; quantity: number; expiryDate?: unknown }>();
+  for (const item of returnRequest.items || []) {
+    const medicineId = String(item.medicineId || '').trim();
+    const batchNumber = String(item.batchNumber || '').trim();
+    const qty = Number(item.quantity) || 0;
+    if (!medicineId || !batchNumber || qty <= 0) continue;
+    const key = `${medicineId}|${batchNumber}`;
+    const prev = restoreMap.get(key);
+    if (prev) {
+      prev.quantity += qty;
+    } else {
+      restoreMap.set(key, {
+        medicineId,
+        batchNumber,
+        quantity: qty,
+        expiryDate: item.expiryDate,
+      });
+    }
+  }
+
+  for (const restore of restoreMap.values()) {
+    try {
+      await restoreStockToBatch(restore.medicineId, restore.batchNumber, restore.quantity);
+    } catch (error: any) {
+      const msg = String(error?.message || error || '').toLowerCase();
+      // If original batch was deleted/missing, recreate a batch bucket and add returned quantity.
+      if (msg.includes('batch') && msg.includes('not found')) {
+        await addStockBatch(restore.medicineId, {
+          batchNumber: restore.batchNumber,
+          quantity: restore.quantity,
+          expiryDate: restore.expiryDate ? toDate(restore.expiryDate) : undefined,
+        } as any);
+      } else {
+        throw error;
+      }
+    }
   }
 
   const now = Timestamp.now();
