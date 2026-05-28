@@ -367,6 +367,26 @@ export const fulfillOrder = async (
           freeQuantity: allocFree,
           batchNumber: allocation.batchNumber,
           gstRate: allocation.gstRate || line.gstRate || 5,
+          batchAllocations: [
+            {
+              batchNumber: allocation.batchNumber,
+              quantity: allocPaid,
+              allocationFreeQty: allocFree,
+              ...(allocation.expiryDate ? { expiryDate: allocation.expiryDate } : {}),
+              ...(allocation.mrp !== undefined && allocation.mrp !== null
+                ? { mrp: allocation.mrp }
+                : {}),
+              ...(allocation.purchasePrice !== undefined && allocation.purchasePrice !== null
+                ? { purchasePrice: allocation.purchasePrice }
+                : {}),
+              ...(allocation.gstRate !== undefined && allocation.gstRate !== null
+                ? { gstRate: allocation.gstRate }
+                : {}),
+              ...(allocation.schemePaidQty ? { schemePaidQty: allocation.schemePaidQty } : {}),
+              ...(allocation.schemeFreeQty ? { schemeFreeQty: allocation.schemeFreeQty } : {}),
+              discountPercentage: finalDiscountPct,
+            },
+          ],
         };
         
         // ALWAYS include discountPercentage if it exists (even if 0, but preserve actual value)
@@ -481,11 +501,29 @@ export const fulfillOrder = async (
         }
         if (allocation.mrp !== undefined && allocation.mrp !== null) cleanItem.mrp = allocation.mrp;
         if (allocation.gstRate !== undefined && allocation.gstRate !== null) cleanItem.gstRate = allocation.gstRate;
+        const { paid: ap, free: af } = paidFreeFromAllocation(allocation);
         if (allocation.schemePaidQty && allocation.schemeFreeQty) {
-          const { paid: ap, free: af } = paidFreeFromAllocation(allocation);
           cleanItem.quantity = ap;
           cleanItem.freeQuantity = af;
         }
+        cleanItem.batchAllocations = [
+          {
+            batchNumber: allocation.batchNumber,
+            quantity: ap,
+            allocationFreeQty: af,
+            ...(allocation.expiryDate ? { expiryDate: allocation.expiryDate } : {}),
+            ...(allocation.mrp !== undefined && allocation.mrp !== null ? { mrp: allocation.mrp } : {}),
+            ...(allocation.purchasePrice !== undefined && allocation.purchasePrice !== null
+              ? { purchasePrice: allocation.purchasePrice }
+              : {}),
+            ...(allocation.gstRate !== undefined && allocation.gstRate !== null
+              ? { gstRate: allocation.gstRate }
+              : {}),
+            ...(allocation.schemePaidQty ? { schemePaidQty: allocation.schemePaidQty } : {}),
+            ...(allocation.schemeFreeQty ? { schemeFreeQty: allocation.schemeFreeQty } : {}),
+            discountPercentage: finalDiscountPct,
+          },
+        ];
         if (allocation.nonReturnable === true) {
           cleanItem.nonReturnable = true;
         }
