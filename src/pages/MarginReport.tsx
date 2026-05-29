@@ -33,17 +33,21 @@ import { alpha, useTheme } from '@mui/material/styles';
 import { useOrders } from '../hooks/useOrders';
 import { useMedicines } from '../hooks/useInventory';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
+import { useCreditNotes } from '../hooks/useCreditNotes';
+import { useExpiryReturns } from '../hooks/useExpiryReturns';
 import { Order, OrderStatus } from '../types';
-import { format, startOfMonth, isBefore, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
+import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
 import { computeOrderMarginSummary } from '../utils/orderLineMargin';
+import { computeReturnMarginSummary } from '../utils/returnMargin';
+import { coerceToDate, dateInMarginPeriod, type MarginPeriodFilter } from '../utils/marginPeriod';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 
-type PeriodFilter = 'this_month' | 'last_month' | 'all';
+type PeriodFilter = MarginPeriodFilter;
 
 type MarginOrderRow = {
   order: Order;
@@ -71,22 +75,10 @@ const getStatusColor = (status: string) => {
   }
 };
 
-const orderDate = (o: Order): Date => {
-  const d = o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate);
-  return isNaN(d.getTime()) ? new Date(0) : d;
-};
+const orderDate = (o: Order): Date => coerceToDate(o.orderDate);
 
-const inPeriod = (date: Date, period: PeriodFilter): boolean => {
-  const now = new Date();
-  if (period === 'all') return true;
-  if (period === 'this_month') {
-    const start = startOfMonth(now);
-    return !isBefore(date, start);
-  }
-  const lastStart = startOfMonth(subMonths(now, 1));
-  const lastEnd = endOfMonth(subMonths(now, 1));
-  return isWithinInterval(date, { start: lastStart, end: lastEnd });
-};
+const inPeriod = (date: Date, period: PeriodFilter): boolean =>
+  dateInMarginPeriod(date, period);
 
 export const MarginReportPage: React.FC = () => {
   const theme = useTheme();
@@ -94,6 +86,8 @@ export const MarginReportPage: React.FC = () => {
   const { data: orders, isLoading: ordersLoading } = useOrders();
   const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const { data: purchaseInvoices } = usePurchaseInvoices();
+  const { data: creditNotes } = useCreditNotes();
+  const { data: expiryReturns } = useExpiryReturns();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('Delivered');
@@ -189,18 +183,43 @@ export const MarginReportPage: React.FC = () => {
     return list;
   }, [filteredRows, sortKey, sortDirection]);
 
+  const returnSummary = useMemo(
+    () =>
+      computeReturnMarginSummary(
+        creditNotes,
+        expiryReturns,
+        medicines ?? [],
+        periodFilter,
+        purchaseInvoices
+      ),
+    [creditNotes, expiryReturns, medicines, periodFilter, purchaseInvoices]
+  );
+
   const summary = useMemo(() => {
     const netSales = filteredRows.reduce((s, r) => s + r.netSalesExGst, 0);
     const cogs = filteredRows.reduce((s, r) => s + r.cogsExGst, 0);
     const grossProfit = netSales - cogs;
+    const netSalesAfterReturns = netSales - returnSummary.salesReversalExGst;
+    const cogsAfterReturns = cogs - returnSummary.cogsReversalExGst;
+    const netGrossProfit = grossProfit - returnSummary.grossProfitReversalExGst;
     return {
       orderCount: filteredRows.length,
       netSales,
       cogs,
       grossProfit,
       marginPct: netSales > 0 ? (grossProfit / netSales) * 100 : null,
+      returnSalesReversal: returnSummary.salesReversalExGst,
+      returnCogsReversal: returnSummary.cogsReversalExGst,
+      returnProfitReversal: returnSummary.grossProfitReversalExGst,
+      netSalesAfterReturns,
+      cogsAfterReturns,
+      netGrossProfit,
+      netMarginPct:
+        netSalesAfterReturns > 0 ? (netGrossProfit / netSalesAfterReturns) * 100 : null,
+      orderReturnCount: returnSummary.orderReturnDocCount,
+      expiryReturnCount: returnSummary.expiryReturnDocCount,
     };
-  }, [filteredRows]);
+  }, [filteredRows, returnSummary]);
 
   const paginatedRows = sortedRows.slice((page - 1) * rowsPerPage, page * rowsPerPage);
   const pageCount = Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
@@ -209,11 +228,7 @@ export const MarginReportPage: React.FC = () => {
     return <Loading message="Loading margin report..." />;
   }
 
-  const accent = {
-    success: theme.palette.success.main,
-    primary: theme.palette.primary.main,
-    info: theme.palette.info.main,
-  };
+  const returnLines = returnSummary.lines;
 
   return (
     <Box sx={{ maxWidth: 1400, mx: 'auto' }}>
@@ -223,7 +238,7 @@ export const MarginReportPage: React.FC = () => {
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Profit per order from batch purchase cost vs invoice selling price (ex-GST, after line
-          discount). Only orders with batch allocations and batch cost in inventory are included.
+          discount). Returns (order credit notes and approved expiry returns) reduce net margin below.
         </Typography>
       </Box>
 
@@ -235,58 +250,49 @@ export const MarginReportPage: React.FC = () => {
               border: 1,
               borderColor: 'divider',
               borderLeft: 4,
-              borderLeftColor: accent.success,
-              bgcolor: alpha(accent.success, 0.04),
+              borderLeftColor: theme.palette.warning.main,
+              bgcolor: alpha(theme.palette.warning.main, 0.04),
             }}
           >
             <CardContent>
               <Typography color="text.secondary" variant="body2" gutterBottom>
-                Gross profit
+                Net gross profit
               </Typography>
               <Typography variant="h5" fontWeight={700}>
-                ₹{Math.round(summary.grossProfit).toLocaleString('en-IN')}
+                ₹{Math.round(summary.netGrossProfit).toLocaleString('en-IN')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                After {summary.orderReturnCount + summary.expiryReturnCount} return(s)
               </Typography>
             </CardContent>
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <Card
-            elevation={0}
-            sx={{
-              border: 1,
-              borderColor: 'divider',
-              borderLeft: 4,
-              borderLeftColor: accent.primary,
-              bgcolor: alpha(accent.primary, 0.04),
-            }}
-          >
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider' }}>
             <CardContent>
               <Typography color="text.secondary" variant="body2" gutterBottom>
-                Net sales (ex-GST)
+                Returns (ex-GST)
               </Typography>
-              <Typography variant="h5" fontWeight={700}>
-                ₹{Math.round(summary.netSales).toLocaleString('en-IN')}
+              <Typography variant="h5" fontWeight={700} color="warning.main">
+                −₹{Math.round(summary.returnSalesReversal).toLocaleString('en-IN')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                COGS back: ₹{Math.round(summary.returnCogsReversal).toLocaleString('en-IN')}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <Card
-            elevation={0}
-            sx={{
-              border: 1,
-              borderColor: 'divider',
-              borderLeft: 4,
-              borderLeftColor: accent.info,
-              bgcolor: alpha(accent.info, 0.04),
-            }}
-          >
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider' }}>
             <CardContent>
               <Typography color="text.secondary" variant="body2" gutterBottom>
-                Avg margin
+                Net margin
               </Typography>
               <Typography variant="h5" fontWeight={700}>
-                {summary.marginPct !== null ? `${summary.marginPct.toFixed(1)}%` : '—'}
+                {summary.netMarginPct !== null ? `${summary.netMarginPct.toFixed(1)}%` : '—'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Before returns: {summary.marginPct !== null ? `${summary.marginPct.toFixed(1)}%` : '—'}
               </Typography>
             </CardContent>
           </Card>
@@ -299,6 +305,69 @@ export const MarginReportPage: React.FC = () => {
               </Typography>
               <Typography variant="h5" fontWeight={700}>
                 {summary.orderCount}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider', opacity: 0.92 }}>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2" gutterBottom>
+                Gross profit (orders only)
+              </Typography>
+              <Typography variant="h6" fontWeight={600}>
+                ₹{Math.round(summary.grossProfit).toLocaleString('en-IN')}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider', opacity: 0.92 }}>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2" gutterBottom>
+                Net sales (orders only)
+              </Typography>
+              <Typography variant="h6" fontWeight={600}>
+                ₹{Math.round(summary.netSales).toLocaleString('en-IN')}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider', opacity: 0.92 }}>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2" gutterBottom>
+                Net sales after returns
+              </Typography>
+              <Typography variant="h6" fontWeight={600}>
+                ₹{Math.round(summary.netSalesAfterReturns).toLocaleString('en-IN')}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider', opacity: 0.92 }}>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2" gutterBottom>
+                Order returns
+              </Typography>
+              <Typography variant="h6" fontWeight={600}>
+                {summary.orderReturnCount}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider', opacity: 0.92 }}>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2" gutterBottom>
+                Expiry returns
+              </Typography>
+              <Typography variant="h6" fontWeight={600}>
+                {summary.expiryReturnCount}
               </Typography>
             </CardContent>
           </Card>
@@ -516,6 +585,69 @@ export const MarginReportPage: React.FC = () => {
             onChange={(_, p) => setPage(p)}
             color="primary"
           />
+        </Box>
+      )}
+
+      {returnLines.length > 0 && (
+        <Box sx={{ mt: 4 }}>
+          <Typography variant="h6" fontWeight={700} gutterBottom>
+            Returns & adjustments
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Order returns (credit notes) and approved/paid expiry returns in the selected period.
+            Profit impact = refund ex-GST minus landed cost of stock restored.
+          </Typography>
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Date</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell>Reference</TableCell>
+                  <TableCell>Retailer</TableCell>
+                  <TableCell>Medicine</TableCell>
+                  <TableCell>Batch</TableCell>
+                  <TableCell align="right">Qty</TableCell>
+                  <TableCell align="right">Sales reversal</TableCell>
+                  <TableCell align="right">COGS reversal</TableCell>
+                  <TableCell align="right">Profit impact</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {returnLines.map((line, idx) => (
+                  <TableRow key={`${line.source}-${line.referenceId}-${idx}`}>
+                    <TableCell>{format(line.date, 'dd MMM yyyy')}</TableCell>
+                    <TableCell>
+                      <Chip
+                        size="small"
+                        label={line.source === 'order_return' ? 'Order return' : 'Expiry return'}
+                        color={line.source === 'order_return' ? 'primary' : 'warning'}
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell>{line.referenceLabel}</TableCell>
+                    <TableCell>{line.retailerLabel || '—'}</TableCell>
+                    <TableCell>{line.medicineName || '—'}</TableCell>
+                    <TableCell>{line.batchNumber || '—'}</TableCell>
+                    <TableCell align="right">{line.quantity}</TableCell>
+                    <TableCell align="right" sx={{ color: 'warning.main' }}>
+                      −₹{line.salesReversalExGst.toFixed(2)}
+                    </TableCell>
+                    <TableCell align="right">₹{line.cogsReversalExGst.toFixed(2)}</TableCell>
+                    <TableCell
+                      align="right"
+                      sx={{
+                        fontWeight: 600,
+                        color: line.grossProfitReversalExGst >= 0 ? 'warning.main' : 'success.main',
+                      }}
+                    >
+                      −₹{line.grossProfitReversalExGst.toFixed(2)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
         </Box>
       )}
 
