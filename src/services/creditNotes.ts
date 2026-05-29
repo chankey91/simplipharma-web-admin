@@ -10,6 +10,7 @@ import {
   writeBatch,
   updateDoc,
   Timestamp,
+  serverTimestamp,
   db,
   auth,
 } from './firebase';
@@ -17,6 +18,7 @@ import { getOrderById } from './orders';
 import { getMedicineById } from './inventory';
 import { addStockBatch, restoreStockToBatch } from './inventory';
 import { generateCreditNoteNumber } from '../utils/invoiceNumber';
+import { getTodayStartIST } from '../utils/dateTime';
 import { CreditNote, CreditNoteLine } from '../types';
 
 type ReturnItemInput = {
@@ -245,7 +247,7 @@ export async function issueCreditNoteForOrderReturn(
     batch.update(reqRef, {
       creditNoteId: existing.id,
       creditNoteNumber: existing.creditNoteNumber,
-      updatedAt: Timestamp.now(),
+      updatedAt: serverTimestamp(),
     });
     await batch.commit();
     return {
@@ -284,10 +286,9 @@ export async function issueCreditNoteForOrderReturn(
     ? Timestamp.fromDate(options.creditNoteDate)
     : returnRequest.approvedAt
       ? toTimestamp(returnRequest.approvedAt)
-      : Timestamp.now();
-  const now = Timestamp.now();
+      : serverTimestamp();
 
-  const note: Omit<CreditNote, 'id'> = {
+  const note: Omit<CreditNote, 'id'> & { createdAt: ReturnType<typeof serverTimestamp> } = {
     creditNoteNumber,
     creditNoteDate,
     type: 'order_return',
@@ -304,7 +305,7 @@ export async function issueCreditNoteForOrderReturn(
     taxPercentage,
     status: 'issued',
     createdBy: returnRequest.approvedBy || auth.currentUser?.uid,
-    createdAt: now,
+    createdAt: serverTimestamp(),
   };
   const noteSafe = stripUndefinedDeep(note);
 
@@ -313,7 +314,7 @@ export async function issueCreditNoteForOrderReturn(
   batch.update(reqRef, {
     creditNoteId: creditNoteRef.id,
     creditNoteNumber,
-    updatedAt: now,
+    updatedAt: serverTimestamp(),
   });
   await batch.commit();
 
@@ -388,13 +389,12 @@ export const approveOrderReturnRequest = async (
     }
   }
 
-  const now = Timestamp.now();
   const approveBatch = writeBatch(db);
   approveBatch.update(reqRef, {
     status: 'approved',
     approvedBy: auth.currentUser?.uid,
-    approvedAt: now,
-    updatedAt: now,
+    approvedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
   await approveBatch.commit();
 
@@ -403,10 +403,9 @@ export const approveOrderReturnRequest = async (
       ...returnRequest,
       items: resolvedItems,
       status: 'approved',
-      approvedAt: now,
       approvedBy: auth.currentUser?.uid,
     },
-    { creditNoteDate: new Date() }
+    { creditNoteDate: getTodayStartIST() }
   );
 
   return { creditNoteId: issued.creditNoteId, creditNoteNumber: issued.creditNoteNumber };

@@ -24,6 +24,7 @@ import {
   ToggleButton,
 } from '@mui/material';
 import { format } from 'date-fns';
+import { getTodayDateStringIST } from '../utils/dateTime';
 import * as XLSX from 'xlsx';
 import { FileDownload, PostAdd, Search } from '@mui/icons-material';
 import { useProductDemands, useFulfillProductDemand, useRejectProductDemand } from '../hooks/useProductDemands';
@@ -309,7 +310,7 @@ export const ProductDemandsPage: React.FC = () => {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Product demands');
-    const stamp = format(new Date(), 'yyyy-MM-dd');
+    const stamp = getTodayDateStringIST();
     XLSX.writeFile(wb, `product-demands-${stamp}.xlsx`);
   };
 

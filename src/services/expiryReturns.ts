@@ -8,6 +8,7 @@ import {
   where,
   orderBy,
   Timestamp,
+  serverTimestamp,
   db,
   auth,
 } from './firebase';
@@ -161,8 +162,8 @@ export const approveExpiryReturnRequest = async (requestId: string): Promise<voi
   await updateDoc(reqRef, {
     status: 'approved',
     approvedBy: auth.currentUser?.uid,
-    approvedAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
+    approvedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 };
 
@@ -175,8 +176,8 @@ export const rejectExpiryReturnRequest = async (
     status: 'rejected',
     rejectionReason: reason || '',
     rejectedBy: auth.currentUser?.uid,
-    rejectedAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
+    rejectedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 };
 
@@ -195,7 +196,7 @@ export const recordExpiryReturnPayment = async (
     paymentDate: Timestamp.fromDate(data.paymentDate),
     paymentMethod: data.paymentMethod || 'Offline',
     paidBy: auth.currentUser?.uid,
-    paidAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
+    paidAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 };

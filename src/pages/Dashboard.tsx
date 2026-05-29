@@ -42,6 +42,7 @@ import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hook
 import { usePendingRetailerRequests } from '../hooks/usePendingRetailers';
 import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
 import { format, startOfMonth, isBefore } from 'date-fns';
+import { formatDateLongIST } from '../utils/dateTime';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
 import type { Order } from '../types';
@@ -290,7 +291,7 @@ export const DashboardPage: React.FC = () => {
           {isOperations ? 'Operations dashboard' : 'Dashboard'}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          {format(new Date(), 'EEEE, MMMM d, yyyy')} —{' '}
+          {formatDateLongIST()} —{' '}
           {isOperations
             ? 'Fulfillment, inventory, and daily operations at a glance.'
             : 'Orders, inventory, and quick actions at a glance.'}

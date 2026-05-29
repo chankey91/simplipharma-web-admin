@@ -7,6 +7,7 @@ import {
   where,
   orderBy,
   Timestamp,
+  serverTimestamp,
   db,
   auth,
 } from './firebase';
@@ -104,8 +105,8 @@ export const rejectOrderReturnRequest = async (requestId: string, reason?: strin
     status: 'rejected',
     rejectionReason: reason || '',
     rejectedBy: auth.currentUser?.uid,
-    rejectedAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
+    rejectedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 };
 
@@ -124,7 +125,7 @@ export const recordOrderReturnPayment = async (
     paymentDate: Timestamp.fromDate(data.paymentDate),
     paymentMethod: data.paymentMethod || 'Offline',
     paidBy: auth.currentUser?.uid,
-    paidAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
+    paidAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 };

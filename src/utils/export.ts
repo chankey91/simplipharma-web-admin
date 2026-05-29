@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx';
 import { orderReferenceWithoutInvoice } from './orderDisplay';
 import { Order, User } from '../types';
 import { getMedicineById } from '../services/inventory';
+import { istDateStampCompact } from './dateTime';
 
 // Helper function to extract town and district from address
 const parseAddress = (address?: string): { town: string; district: string } => {
@@ -179,6 +180,6 @@ export const exportPendingOrdersByStore = async (
   XLSX.utils.book_append_sheet(wb, ws, 'Pending Orders');
 
   // Save the file
-  const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const dateStr = istDateStampCompact();
   XLSX.writeFile(wb, `${filename}-${dateStr}.xlsx`);
 };

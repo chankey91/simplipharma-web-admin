@@ -55,6 +55,7 @@ import {
   refineMedicineSearchResults,
 } from '../services/medicineSearch';
 import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { getTodayDateStringIST, getYearIST } from '../utils/dateTime';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { normalizeFirestoreDate } from '../services/inventory';
@@ -69,7 +70,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: '',
     vendorId: '',
-    invoiceDate: new Date().toISOString().split('T')[0],
+    invoiceDate: getTodayDateStringIST(),
     notes: '',
   });
   
@@ -483,7 +484,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
     const expiryMonth = parseInt(expiryParts[0]);
     const expiryYear = parseInt(expiryParts[1]);
-    const currentYear = new Date().getFullYear();
+    const currentYear = getYearIST();
     
     // Detailed validation
     if (expiryParts[0].length !== 2) {
@@ -1173,7 +1174,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 onBlur={() => {
                   // Final validation on blur
                   const value = currentItem.expiryDate?.trim() || '';
-                  const currentYear = new Date().getFullYear();
+                  const currentYear = getYearIST();
                   
                   if (value.length === 0) {
                     setExpiryDateError(''); // Empty - let required validation handle it

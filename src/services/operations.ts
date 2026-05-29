@@ -1,4 +1,4 @@
-import { collection, getDocs, addDoc, deleteDoc, doc, Timestamp, db, query, where, auth } from './firebase';
+import { collection, getDocs, addDoc, deleteDoc, doc, Timestamp, serverTimestamp, db, query, where, auth } from './firebase';
 
 export interface Tray {
   id: string;
@@ -100,7 +100,7 @@ export const addTray = async (name: string): Promise<string> => {
   const traysRef = collection(db, TRAYS_COLLECTION);
   const docRef = await addDoc(traysRef, {
     name: name.trim(),
-    createdAt: Timestamp.now(),
+    createdAt: serverTimestamp(),
   });
   return docRef.id;
 };
@@ -109,7 +109,7 @@ export const addOperator = async (name: string): Promise<string> => {
   const operatorsRef = collection(db, OPERATORS_COLLECTION);
   const docRef = await addDoc(operatorsRef, {
     name: name.trim(),
-    createdAt: Timestamp.now(),
+    createdAt: serverTimestamp(),
   });
   return docRef.id;
 };

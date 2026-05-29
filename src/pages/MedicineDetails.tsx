@@ -36,6 +36,7 @@ import {
 } from '@mui/icons-material';
 import { useMedicines, useAddStockBatch, useUpdateMedicine } from '../hooks/useInventory';
 import { format } from 'date-fns';
+import { getTodayDateStringIST } from '../utils/dateTime';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
@@ -72,7 +73,7 @@ export const MedicineDetailsPage: React.FC = () => {
     expiryDate: '',
     mrp: '',
     purchasePrice: '',
-    purchaseDate: new Date().toISOString().split('T')[0],
+    purchaseDate: getTodayDateStringIST(),
   });
   const [qrCodeViewDialog, setQrCodeViewDialog] = useState<{ open: boolean; batchNumber: string; qrCodeData: string | null }>({
     open: false,
@@ -248,7 +249,7 @@ export const MedicineDetailsPage: React.FC = () => {
         expiryDate: '',
         mrp: '',
         purchasePrice: '',
-        purchaseDate: new Date().toISOString().split('T')[0],
+        purchaseDate: getTodayDateStringIST(),
       });
     } catch (error: any) {
       alert(error.message || 'Failed to add batch');
