@@ -22,6 +22,7 @@ import {
   orderBy,
   limit,
   Timestamp,
+  serverTimestamp,
   setDoc,
   getDoc,
   onSnapshot,
@@ -90,7 +91,7 @@ export const changeUserPassword = async (
   await updatePassword(user, newPassword);
   await updateDoc(doc(db, 'users', user.uid), {
     mustResetPassword: false,
-    updatedAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
   });
 };
 
@@ -166,7 +167,7 @@ export const isUserAdmin = async (userId: string): Promise<boolean> => {
       const userRef = doc(db, 'users', userId);
       await setDoc(
         userRef,
-        { role: 'admin', createdAt: Timestamp.now(), updatedAt: Timestamp.now() },
+        { role: 'admin', createdAt: serverTimestamp(), updatedAt: serverTimestamp() },
         { merge: true }
       );
       return true;
@@ -180,7 +181,8 @@ export const isUserAdmin = async (userId: string): Promise<boolean> => {
 
 // Export Firestore utilities (db is already exported above, so don't export it again)
 export { 
-  Timestamp, 
+  Timestamp,
+  serverTimestamp,
   collection, 
   getDocs, 
   addDoc, 

@@ -7,6 +7,7 @@ import {
   orderBy,
   query,
   Timestamp,
+  serverTimestamp,
   updateDoc,
   where,
 } from './firebase';
@@ -75,7 +76,7 @@ async function applyCreditApplications(
       if (apply <= 0.01) continue;
       await updateDoc(ref, {
         creditAmountUsed: Math.round((currentUsed + apply) * 100) / 100,
-        updatedAt: Timestamp.now(),
+        updatedAt: serverTimestamp(),
       });
       appliedTotal += apply;
       continue;
@@ -92,7 +93,7 @@ async function applyCreditApplications(
       if (apply <= 0.01) continue;
       await updateDoc(ref, {
         creditAmountUsed: Math.round((currentUsed + apply) * 100) / 100,
-        updatedAt: Timestamp.now(),
+        updatedAt: serverTimestamp(),
       });
       appliedTotal += apply;
       continue;
@@ -111,7 +112,7 @@ async function applyCreditApplications(
     if (apply <= 0.01) continue;
     await updateDoc(creditRef, {
       amountUsed: Math.round((currentUsed + apply) * 100) / 100,
-      updatedAt: Timestamp.now(),
+      updatedAt: serverTimestamp(),
     });
     appliedTotal += apply;
   }
@@ -228,10 +229,10 @@ export const approvePaymentRequest = async (
   await updateDoc(reqRef, {
     status: 'approved',
     reviewedBy: payload.reviewedBy,
-    reviewedAt: Timestamp.now(),
+    reviewedAt: serverTimestamp(),
     reviewNote: payload.reviewNote || null,
     approvedCreditAmount: approvedCredit,
-    updatedAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
   });
 
   return { orderId: request.orderId, paymentStatus: nextStatus };
@@ -264,8 +265,8 @@ export const rejectPaymentRequest = async (
   await updateDoc(reqRef, {
     status: 'rejected',
     reviewedBy: payload.reviewedBy,
-    reviewedAt: Timestamp.now(),
+    reviewedAt: serverTimestamp(),
     rejectionReason: payload.rejectionReason,
-    updatedAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
   });
 };

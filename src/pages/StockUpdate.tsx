@@ -33,6 +33,7 @@ import { Medicine } from '../types';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
 import { format } from 'date-fns';
+import { getTodayDateStringIST } from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
@@ -54,7 +55,7 @@ export const StockUpdatePage: React.FC = () => {
     batchNumber: '',
     mfgDate: '',
     expiryDate: '',
-    purchaseDate: new Date().toISOString().split('T')[0],
+    purchaseDate: getTodayDateStringIST(),
     purchasePrice: '',
     mrp: '',
   });
@@ -152,7 +153,7 @@ export const StockUpdatePage: React.FC = () => {
         batchNumber: '',
         mfgDate: '',
         expiryDate: '',
-        purchaseDate: new Date().toISOString().split('T')[0],
+        purchaseDate: getTodayDateStringIST(),
         purchasePrice: '',
         mrp: '',
       });

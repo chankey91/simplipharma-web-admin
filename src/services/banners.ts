@@ -7,6 +7,7 @@ import {
   query,
   orderBy,
   Timestamp,
+  serverTimestamp,
   db,
   deleteField,
 } from './firebase';
@@ -54,7 +55,7 @@ export const addBanner = async (bannerData: Omit<Banner, 'id'>): Promise<string>
   );
   const docRef = await addDoc(collection(db, 'banners'), {
     ...cleanData,
-    createdAt: Timestamp.now(),
+    createdAt: serverTimestamp(),
   });
   return docRef.id;
 };
@@ -72,7 +73,7 @@ export const updateBanner = async (
   }
   await updateDoc(doc(db, 'banners', bannerId), {
     ...cleanData,
-    updatedAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
   });
 };
 

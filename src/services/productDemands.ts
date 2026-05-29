@@ -7,6 +7,7 @@ import {
   getDoc,
   updateDoc,
   Timestamp,
+  serverTimestamp,
   writeBatch,
 } from './firebase';
 import { OrderMedicine, ProductDemand, PurchaseInvoice } from '../types';
@@ -118,11 +119,11 @@ export const fulfillProductDemand = async (
     status: 'fulfilled',
     fulfilledMedicineId: medicineId,
     fulfilledMedicineName: fulfilledName,
-    fulfilledAt: Timestamp.now(),
+    fulfilledAt: serverTimestamp(),
     fulfilledBy: uid,
     fulfillmentNote: options?.fulfillmentNote?.trim() || '',
     purchaseInvoiceId: options?.purchaseInvoiceId?.trim() || '',
-    updatedAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
   };
   if (cartQty != null) {
     demandUpdate.fulfilledCartQuantity = cartQty;
@@ -214,7 +215,7 @@ export const syncDemandPurchaseInvoiceRefs = async (
       if (nextRef && nextRef !== prevRef) {
         await updateDoc(doc(db, 'product_demands', d.id), {
           purchaseInvoiceId: nextRef,
-          updatedAt: Timestamp.now(),
+          updatedAt: serverTimestamp(),
         });
       }
       return enriched;
@@ -232,8 +233,8 @@ export const rejectProductDemand = async (demandId: string, reason: string): Pro
   await updateDoc(demandRef, {
     status: 'rejected',
     rejectionReason: reason.trim(),
-    rejectedAt: Timestamp.now(),
+    rejectedAt: serverTimestamp(),
     rejectedBy: auth.currentUser?.uid || '',
-    updatedAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
   });
 };

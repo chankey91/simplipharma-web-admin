@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, db, getDoc } from './firebase';
+import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, serverTimestamp, db, getDoc } from './firebase';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Vendor } from '../types';
 import { functions } from './firebase';
@@ -84,7 +84,7 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
     phoneNumber: vendorData.phoneNumber,
     gstNumber: vendorData.gstNumber,
     isActive: vendorData.isActive !== false,
-    createdAt: Timestamp.now(),
+    createdAt: serverTimestamp(),
   };
   
   // Add optional fields only if they have values

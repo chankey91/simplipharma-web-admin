@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
+import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where } from './firebase';
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem } from '../types';
 import { addStockBatch } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
@@ -247,7 +247,7 @@ export const createPurchaseInvoice = async (
     totalAmount: invoiceData.totalAmount,
     paymentStatus: invoiceData.paymentStatus,
     createdBy: invoiceData.createdBy,
-    createdAt: Timestamp.now()
+    createdAt: serverTimestamp()
   };
   
   // Add optional fields only if they exist

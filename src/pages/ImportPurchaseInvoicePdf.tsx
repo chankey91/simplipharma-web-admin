@@ -39,6 +39,7 @@ import {
 } from '../utils/purchaseInvoicePdfImport';
 import { resolveMedicineAfterPickerSelection } from '../services/medicineSearch';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { getTodayDateStringIST } from '../utils/dateTime';
 import { Medicine, PurchaseInvoiceItem } from '../types';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Loading } from '../components/Loading';
@@ -70,7 +71,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const createInvoiceMutation = useCreatePurchaseInvoice();
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
   const [vendorId, setVendorId] = useState('');
   const [detectedGstins, setDetectedGstins] = useState<string[]>([]);
   const [rows, setRows] = useState<ImportRow[]>([]);

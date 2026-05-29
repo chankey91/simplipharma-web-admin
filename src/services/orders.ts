@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
+import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where } from './firebase';
 import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
@@ -7,7 +7,7 @@ import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/sche
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
-  timestamp: Timestamp.now(),
+  timestamp: serverTimestamp(),
   updatedBy,
   note
 });
@@ -172,7 +172,7 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
   await updateDoc(orderRef, {
     status: 'Cancelled',
     cancelReason: reason,
-    cancelledAt: Timestamp.now(),
+    cancelledAt: serverTimestamp(),
     timeline: [...currentTimeline, createTimelineEvent('Cancelled', cancelledBy, reason)]
   });
 };
@@ -685,7 +685,7 @@ export const markOrderDelivered = async (orderId: string, deliveredBy: string) =
   await updateDoc(orderRef, {
     status: 'Delivered',
     deliveryConfirmation: {
-      deliveredAt: Timestamp.now(),
+      deliveredAt: serverTimestamp(),
       deliveredBy
     },
     timeline: [...currentTimeline, createTimelineEvent('Delivered', deliveredBy, 'Order delivered successfully')]

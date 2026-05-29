@@ -39,6 +39,7 @@ import {
 } from '../services/expiryReturns';
 import { Loading } from '../components/Loading';
 import { format } from 'date-fns';
+import { getTodayDateStringIST } from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
@@ -59,7 +60,7 @@ export const ExpiryReturnsPage: React.FC = () => {
   const [selectedRequest, setSelectedRequest] = useState<ExpiryReturnRequest | null>(null);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [paymentRef, setPaymentRef] = useState('');
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [paymentDate, setPaymentDate] = useState(getTodayDateStringIST());
   const [paymentMethod, setPaymentMethod] = useState('Bank Transfer');
 
   const { data: requests, isLoading, error, refetch } = useQuery({
@@ -138,7 +139,7 @@ export const ExpiryReturnsPage: React.FC = () => {
       setSelectedRequest(null);
       setPaymentDialogOpen(false);
       setPaymentRef('');
-      setPaymentDate(new Date().toISOString().slice(0, 10));
+      setPaymentDate(getTodayDateStringIST());
       setPaymentMethod('Bank Transfer');
     },
   });
@@ -166,7 +167,7 @@ export const ExpiryReturnsPage: React.FC = () => {
   const openPaymentDialog = (req: ExpiryReturnRequest) => {
     setSelectedRequest(req);
     setPaymentRef('');
-    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setPaymentDate(getTodayDateStringIST());
     setPaymentMethod('Bank Transfer');
     setPaymentDialogOpen(true);
   };

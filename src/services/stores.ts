@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, deleteField, db, functions } from './firebase';
+import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, serverTimestamp, deleteField, db, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
 import { generateStoreCode } from '../utils/storeCode';
@@ -115,7 +115,7 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
   const newStore: any = {
     ...cleanStoreData,
     role: 'retailer',
-    createdAt: Timestamp.now(),
+    createdAt: serverTimestamp(),
     isActive: cleanStoreData.isActive !== undefined ? cleanStoreData.isActive : true,
     mustResetPassword: true,
     ...(cleanStoreData.salesOfficerId && { salesOfficerId: cleanStoreData.salesOfficerId }),
