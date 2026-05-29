@@ -132,7 +132,8 @@ type PurchaseDiscountLookup = ReturnType<typeof buildPurchaseBatchDiscountLookup
 function mapRepairedLineToFulfillment(
   line: OrderMedicine,
   medicines: Medicine[],
-  purchaseDiscountLookup: PurchaseDiscountLookup
+  purchaseDiscountLookup: PurchaseDiscountLookup,
+  orderStatus?: string
 ) {
   if ((line as { lineType?: string }).lineType === 'product_demand') {
     return {
@@ -202,15 +203,23 @@ function mapRepairedLineToFulfillment(
         })()
       : lineSchemeFreeQty(line.batchNumber, toNumber(line.quantity));
 
-  const withDefaults = applyDefaultDiscountToFulfillmentLine(
-    {
-      ...line,
-      batchAllocations,
-      discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
-    },
-    purchaseDiscountLookup,
-    (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
-  );
+  const withDefaults =
+    orderStatus === 'Pending'
+      ? applyDefaultDiscountToFulfillmentLine(
+          {
+            ...line,
+            batchAllocations,
+            discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
+          },
+          purchaseDiscountLookup,
+          (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+        )
+      : {
+          ...line,
+          batchAllocations,
+          discountPercentage: line.discountPercentage,
+          discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
+        };
   discountPct = withDefaults.discountPercentage;
 
   return {
@@ -469,7 +478,12 @@ export const OrderDetailsPage: React.FC = () => {
           medicines:
             repaired.length > 0
               ? repaired.map((line) =>
-                  mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+                  mapRepairedLineToFulfillment(
+                    line,
+                    medicines,
+                    purchaseDiscountLookup,
+                    order.status
+                  )
                 )
               : [],
         };

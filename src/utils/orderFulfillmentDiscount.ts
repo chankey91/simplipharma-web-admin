@@ -115,6 +115,15 @@ export function resolveOrderLineDiscountPct(params: {
     if (manual !== undefined) return manual;
   }
 
+  const savedOnAllocation = parseDiscountPct(params.allocationDiscount);
+  const savedOnItem = parseDiscountPct(params.itemDiscount);
+  if (savedOnAllocation !== undefined && savedOnAllocation > 0) {
+    return savedOnAllocation;
+  }
+  if (savedOnItem !== undefined && savedOnItem > 0) {
+    return savedOnItem;
+  }
+
   const pi = lookupPurchaseDiscount(
     params.purchaseLookup,
     params.medicineId,
