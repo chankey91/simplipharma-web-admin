@@ -1,13 +1,14 @@
-import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where } from './firebase';
+import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
 import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
+import { nestedFirestoreTimestamp, serverTimestamp } from '../utils/firestoreTimestamps';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
-  timestamp: serverTimestamp(),
+  timestamp: nestedFirestoreTimestamp(),
   updatedBy,
   note
 });

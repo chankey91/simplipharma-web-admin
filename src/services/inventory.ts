@@ -1,4 +1,5 @@
-import { collection, getDocs, doc, updateDoc, addDoc, query, where, Timestamp, serverTimestamp, getDoc, setDoc, db } from './firebase';
+import { collection, getDocs, doc, updateDoc, addDoc, query, where, Timestamp, getDoc, setDoc, db } from './firebase';
+import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
 import { Medicine, StockBatch } from '../types';
 
 /**
@@ -322,7 +323,7 @@ export const addStockBatch = async (
       ? Timestamp.fromDate(batch.purchaseDate)
       : (batch.purchaseDate.toDate ? batch.purchaseDate : Timestamp.fromDate(new Date(batch.purchaseDate)));
   } else {
-    newBatch.purchaseDate = serverTimestamp();
+    newBatch.purchaseDate = nestedFirestoreTimestamp();
   }
   
   if (batch.purchasePrice !== undefined && batch.purchasePrice !== null) {
