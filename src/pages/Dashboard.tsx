@@ -41,6 +41,8 @@ import { useStores } from '../hooks/useStores';
 import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
 import { usePendingRetailerRequests } from '../hooks/usePendingRetailers';
 import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
+import { useExpiryReturns } from '../hooks/useExpiryReturns';
+import { sumExpiryRefundsInPeriod } from '../utils/returnMargin';
 import { format, startOfMonth, isBefore } from 'date-fns';
 import { formatDateLongIST } from '../utils/dateTime';
 import { Loading } from '../components/Loading';
@@ -156,6 +158,7 @@ export const DashboardPage: React.FC = () => {
   const { data: pendingRetailerRequests } = usePendingRetailerRequests(!isOperations);
   const { data: creditNotes, isLoading: creditLoading } = useCreditNotes();
   const { data: debitNotes, isLoading: debitLoading } = useDebitNotes();
+  const { data: expiryReturns, isLoading: expiryReturnsLoading } = useExpiryReturns();
 
   const stats = useMemo(() => {
     const list = orders ?? [];
@@ -213,6 +216,9 @@ export const DashboardPage: React.FC = () => {
       isOnOrAfterMonthStart(n.creditNoteDate, monthStart)
     ).length;
 
+    const thisMonthExpiryRefunds = sumExpiryRefundsInPeriod(expiryReturns, 'this_month');
+    const lifetimeExpiryRefunds = sumExpiryRefundsInPeriod(expiryReturns, 'all');
+
     return {
       pending,
       inFulfillment,
@@ -225,8 +231,11 @@ export const DashboardPage: React.FC = () => {
       lifetimeDebits,
       thisMonthCredits,
       thisMonthDebits,
-      netLifetime: lifetimeGross - lifetimeCredits + lifetimeDebits,
-      netThisMonth: thisMonthGross - thisMonthCredits + thisMonthDebits,
+      thisMonthExpiryRefunds,
+      lifetimeExpiryRefunds,
+      netLifetime: lifetimeGross - lifetimeCredits - lifetimeExpiryRefunds + lifetimeDebits,
+      netThisMonth:
+        thisMonthGross - thisMonthCredits - thisMonthExpiryRefunds + thisMonthDebits,
       creditNoteCount: credits.length,
       debitNoteCount: debits.length,
       thisMonthCreditCount,
@@ -237,7 +246,7 @@ export const DashboardPage: React.FC = () => {
       recent,
       pendingRetailers,
     };
-  }, [orders, medicines, stores, pendingRetailerRequests, creditNotes, debitNotes]);
+  }, [orders, medicines, stores, pendingRetailerRequests, creditNotes, debitNotes, expiryReturns]);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
   const sortedRecentOrders = useMemo(() => {
@@ -272,7 +281,14 @@ export const DashboardPage: React.FC = () => {
     return list;
   }, [stats.recent, sortKey, sortDirection]);
 
-  if (ordersLoading || creditLoading || debitLoading || (!isOperations && storesLoading) || medicinesLoading) {
+  if (
+    ordersLoading ||
+    creditLoading ||
+    debitLoading ||
+    expiryReturnsLoading ||
+    (!isOperations && storesLoading) ||
+    medicinesLoading
+  ) {
     return <Loading message="Loading dashboard..." />;
   }
 
@@ -391,7 +407,7 @@ export const DashboardPage: React.FC = () => {
             <StatCard
               title="This month (net)"
               value={formatInr(stats.netThisMonth)}
-              caption={`Orders ${formatInr(stats.thisMonthGross)} − credits ${formatInr(stats.thisMonthCredits)} + debits ${formatInr(stats.thisMonthDebits)}`}
+              caption={`Orders ${formatInr(stats.thisMonthGross)} − credits ${formatInr(stats.thisMonthCredits)} − expiry ${formatInr(stats.thisMonthExpiryRefunds)} + debits ${formatInr(stats.thisMonthDebits)}`}
               accent={theme.palette.secondary.main}
               icon={<TrendingUp sx={{ fontSize: 36 }} />}
               onClick={() => navigate('/credit-notes')}
