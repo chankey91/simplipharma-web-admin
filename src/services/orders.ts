@@ -354,16 +354,13 @@ export const fulfillOrder = async (
         const finalDiscountPct = discountPct !== undefined && !isNaN(discountPct) ? discountPct : 0;
         
         const purchasePrice = allocation.purchasePrice || 0;
-        const priceAfterDiscount = finalDiscountPct > 0 
-          ? purchasePrice * (1 - finalDiscountPct / 100)
-          : purchasePrice;
-        
+
         // Create a clean medicine item for this batch (no undefined values)
         const { paid: allocPaid, free: allocFree } = paidFreeFromAllocation(allocation);
         const batchItem: any = {
           medicineId: line.medicineId,
           name: line.name,
-          price: priceAfterDiscount, // Price after discount
+          price: purchasePrice > 0 ? purchasePrice : line.price || 0,
           quantity: allocPaid,
           freeQuantity: allocFree,
           batchNumber: allocation.batchNumber,
@@ -417,6 +414,9 @@ export const fulfillOrder = async (
         if (line.productDemandId) {
           batchItem.productDemandId = line.productDemandId;
           batchItem.lineType = 'medicine';
+        }
+        if ((line as { discountManuallySet?: boolean }).discountManuallySet === true) {
+          batchItem.discountManuallySet = true;
         }
 
         // Final cleanup: Remove any undefined or null values
@@ -487,13 +487,10 @@ export const fulfillOrder = async (
         
         // Default to 0 if still undefined
         const finalDiscountPct = discountPct !== undefined && !isNaN(discountPct) ? discountPct : 0;
-        
+
         const purchasePrice = allocation.purchasePrice || line.price || 0;
-        const priceAfterDiscount = finalDiscountPct > 0 
-          ? purchasePrice * (1 - finalDiscountPct / 100)
-          : purchasePrice;
-        
-        cleanItem.price = priceAfterDiscount;
+
+        cleanItem.price = purchasePrice > 0 ? purchasePrice : cleanItem.price;
         cleanItem.batchNumber = allocation.batchNumber;
         if (allocation.expiryDate) {
           cleanItem.expiryDate = allocation.expiryDate;
@@ -530,6 +527,9 @@ export const fulfillOrder = async (
         }
         // ALWAYS include discountPercentage (even if 0) - it's important to preserve this value
         cleanItem.discountPercentage = finalDiscountPct;
+        if ((line as { discountManuallySet?: boolean }).discountManuallySet === true) {
+          cleanItem.discountManuallySet = true;
+        }
       } else {
         if (line.mrp !== undefined && line.mrp !== null) cleanItem.mrp = line.mrp;
         if (line.gstRate !== undefined && line.gstRate !== null) cleanItem.gstRate = line.gstRate;

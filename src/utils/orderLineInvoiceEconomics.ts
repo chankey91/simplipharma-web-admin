@@ -122,7 +122,14 @@ export function orderLineInvoiceEconomics(
 
   const unitPrice = resolveOrderLineUnitPrice(item, allocs, gstRate);
 
-  const discountPct = toNum(item.discountPercentage);
+  let discountPct = toNum(item.discountPercentage);
+  if (allocs && allocs.length > 0) {
+    const fromAlloc = allocs.reduce(
+      (best: number, a: any) => Math.max(best, toNum(a.discountPercentage)),
+      0
+    );
+    if (fromAlloc > 0) discountPct = fromAlloc;
+  }
 
   return {
     totalO,
