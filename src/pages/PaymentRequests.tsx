@@ -56,20 +56,11 @@ export const PaymentRequestsPage: React.FC = () => {
     [data, tab]
   );
 
-  const handleApprove = async (requestId: string, requestedAmount: number) => {
-    const approvedAmountRaw = prompt('Approved amount', String(requestedAmount));
-    if (approvedAmountRaw === null) return;
-    const approvedAmount = Number(approvedAmountRaw);
-    if (Number.isNaN(approvedAmount) || approvedAmount < 0) {
-      alert('Enter a valid approved amount.');
-      return;
-    }
-
+  const handleApprove = async (requestId: string) => {
     try {
       const result = await approveMutation.mutateAsync({
         requestId,
         reviewedBy: auth.currentUser?.email || auth.currentUser?.uid || 'admin',
-        approvedAmount,
       });
       if (result?.paymentStatus === 'Paid') {
         alert('Payment approved. Order is now marked as Paid.');
@@ -216,7 +207,7 @@ export const PaymentRequestsPage: React.FC = () => {
                         <Button
                           size="small"
                           variant="contained"
-                          onClick={() => handleApprove(r.id, r.requestedAmount)}
+                          onClick={() => handleApprove(r.id)}
                           disabled={approveMutation.isPending || rejectMutation.isPending}
                         >
                           Approve
