@@ -133,8 +133,7 @@ type PurchaseDiscountLookup = ReturnType<typeof buildPurchaseBatchDiscountLookup
 function mapRepairedLineToFulfillment(
   line: OrderMedicine,
   medicines: Medicine[],
-  purchaseDiscountLookup: PurchaseDiscountLookup,
-  orderStatus?: string
+  purchaseDiscountLookup: PurchaseDiscountLookup
 ) {
   if ((line as { lineType?: string }).lineType === 'product_demand') {
     return {
@@ -204,23 +203,15 @@ function mapRepairedLineToFulfillment(
         })()
       : lineSchemeFreeQty(line.batchNumber, toNumber(line.quantity));
 
-  const withDefaults =
-    orderStatus === 'Pending'
-      ? applyDefaultDiscountToFulfillmentLine(
-          {
-            ...line,
-            batchAllocations,
-            discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
-          },
-          purchaseDiscountLookup,
-          (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
-        )
-      : {
-          ...line,
-          batchAllocations,
-          discountPercentage: line.discountPercentage,
-          discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
-        };
+  const withDefaults = applyDefaultDiscountToFulfillmentLine(
+    {
+      ...line,
+      batchAllocations,
+      discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
+    },
+    purchaseDiscountLookup,
+    (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+  );
   discountPct = withDefaults.discountPercentage;
 
   return {
@@ -483,8 +474,7 @@ export const OrderDetailsPage: React.FC = () => {
                   mapRepairedLineToFulfillment(
                     line,
                     medicines,
-                    purchaseDiscountLookup,
-                    order.status
+                    purchaseDiscountLookup
                   )
                 )
               : [],
@@ -558,7 +548,12 @@ export const OrderDetailsPage: React.FC = () => {
   const orderTotals = useMemo(
     () =>
       order
-        ? calculateOrderTotalsFromLines(fulfillmentData.medicines, medicines, taxPctForTotals)
+        ? calculateOrderTotalsFromLines(
+            fulfillmentData.medicines,
+            medicines,
+            taxPctForTotals,
+            purchaseDiscountLookup
+          )
         : {
             billableLines: [],
             subTotal: 0,
@@ -568,7 +563,7 @@ export const OrderDetailsPage: React.FC = () => {
             roundoff: 0,
             grandTotal: 0,
           },
-    [order, fulfillmentData.medicines, medicines, taxPctForTotals]
+    [order, fulfillmentData.medicines, medicines, taxPctForTotals, purchaseDiscountLookup]
   );
   const orderTotalSyncRef = useRef<number | null>(null);
 
@@ -1207,7 +1202,6 @@ export const OrderDetailsPage: React.FC = () => {
           mrp: batch.mrp,
           purchasePrice: batch.purchasePrice,
           gstRate: medicine.gstRate,
-          discountPercentage: batch.discountPercentage,
           schemePaidQty: toNumber(batch.schemePaidQty) || undefined,
           schemeFreeQty: toNumber(batch.schemeFreeQty) || undefined,
         };

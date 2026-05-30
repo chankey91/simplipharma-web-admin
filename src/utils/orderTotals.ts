@@ -1,5 +1,6 @@
 import { Medicine } from '../types';
 import { orderLineInvoiceEconomics, orderLineTaxableBeforeDiscount } from './orderLineInvoiceEconomics';
+import type { PurchaseBatchDiscountLookup } from './orderFulfillmentDiscount';
 
 const toNum = (value: unknown): number => {
   if (value === undefined || value === null || value === '') return 0;
@@ -39,19 +40,20 @@ export type OrderTotalsBreakdown = {
 export function calculateOrderTotalsFromLines(
   lines: any[],
   medicines: Medicine[] | undefined,
-  taxPercentage: number
+  taxPercentage: number,
+  purchaseLookup?: PurchaseBatchDiscountLookup
 ): OrderTotalsBreakdown {
   const billableLines = lines.filter(isBillableFulfillmentLine);
   const taxPct = taxPercentage || 5;
 
   const subTotal = billableLines.reduce((sum, item) => {
     const med = medicines?.find((m) => m.id === item.medicineId);
-    return sum + orderLineTaxableBeforeDiscount(item, med, taxPct);
+    return sum + orderLineTaxableBeforeDiscount(item, med, taxPct, purchaseLookup);
   }, 0);
 
   const totalDiscount = billableLines.reduce((sum, item) => {
     const med = medicines?.find((m) => m.id === item.medicineId);
-    const e = orderLineInvoiceEconomics(item, med, taxPct);
+    const e = orderLineInvoiceEconomics(item, med, taxPct, purchaseLookup);
     const lineAmt = e.unitPrice * e.paidQty;
     return sum + (lineAmt * e.discountPct) / 100;
   }, 0);

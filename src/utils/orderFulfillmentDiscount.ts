@@ -97,8 +97,10 @@ const parseDiscountPct = (value: unknown): number | undefined => {
 };
 
 /**
- * Resolve order-line trade discount %.
- * When `discountManuallySet` is true, keep saved item/allocation values (including 0).
+ * Resolve order-line trade discount % for retailer invoice.
+ * Unless `discountManuallySet`, always maps purchase/batch trade discount via
+ * defaultOrderDiscountPctFromPurchase (PI discount > 5 → 1.5%, else 0%).
+ * Raw batch `discountPercentage` is purchase-side only — not copied to orders.
  */
 export function resolveOrderLineDiscountPct(params: {
   itemDiscount?: unknown;
@@ -115,15 +117,6 @@ export function resolveOrderLineDiscountPct(params: {
     if (manual !== undefined) return manual;
   }
 
-  const savedOnAllocation = parseDiscountPct(params.allocationDiscount);
-  const savedOnItem = parseDiscountPct(params.itemDiscount);
-  if (savedOnAllocation !== undefined && savedOnAllocation > 0) {
-    return savedOnAllocation;
-  }
-  if (savedOnItem !== undefined && savedOnItem > 0) {
-    return savedOnItem;
-  }
-
   const pi = lookupPurchaseDiscount(
     params.purchaseLookup,
     params.medicineId,
@@ -133,8 +126,9 @@ export function resolveOrderLineDiscountPct(params: {
     return defaultOrderDiscountPctFromPurchase(pi.discountPct, pi.discountPricePerUnit);
   }
 
+  const batchPct = toNum(params.batch?.discountPercentage);
   const batchDiscountPrice = batchPurchaseDiscountPricePerUnit(params.batch);
-  return defaultOrderDiscountPctFromPurchase(0, batchDiscountPrice);
+  return defaultOrderDiscountPctFromPurchase(batchPct, batchDiscountPrice);
 }
 
 /** Apply default disc % to a fulfillment line (all allocations + line level). */

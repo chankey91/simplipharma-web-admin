@@ -5,6 +5,11 @@ import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './in
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
 import { nestedFirestoreTimestamp, serverTimestamp } from '../utils/firestoreTimestamps';
+import {
+  buildPurchaseBatchDiscountLookup,
+  resolveOrderLineDiscountPct,
+} from '../utils/orderFulfillmentDiscount';
+import { getAllPurchaseInvoices } from './purchaseInvoices';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -272,6 +277,28 @@ export const fulfillOrder = async (
   // Expand medicines with multiple batchAllocations into separate line items
   // This ensures each batch gets its own line item in the invoice
   const expandedMedicines: any[] = [];
+
+  let purchaseDiscountLookup = buildPurchaseBatchDiscountLookup([]);
+  try {
+    purchaseDiscountLookup = buildPurchaseBatchDiscountLookup(await getAllPurchaseInvoices());
+  } catch (error) {
+    console.warn('Failed to load purchase invoices for fulfill discount resolution:', error);
+  }
+
+  const resolveLineDiscount = (
+    line: any,
+    allocation: { batchNumber?: string; discountPercentage?: unknown } | undefined,
+    batch?: { purchasePrice?: number; discountPercentage?: number }
+  ): number =>
+    resolveOrderLineDiscountPct({
+      itemDiscount: line.discountPercentage,
+      allocationDiscount: allocation?.discountPercentage,
+      medicineId: line.medicineId,
+      batchNumber: allocation?.batchNumber ?? line.batchNumber,
+      purchaseLookup: purchaseDiscountLookup,
+      batch,
+      discountManuallySet: line.discountManuallySet === true,
+    });
   
   for (const item of fulfillmentData.medicines) {
     const isUnresolvedDemand =
@@ -312,47 +339,11 @@ export const fulfillOrder = async (
       }
       
       for (const allocation of line.batchAllocations) {
-        // Get discountPercentage - try allocation first, then line, then fetch from batch
-        let discountPct: number | undefined = undefined;
-        
-        // Priority 1: From allocation itself (should already have it from frontend)
-        if (allocation.discountPercentage !== undefined && allocation.discountPercentage !== null) {
-          const parsed = typeof allocation.discountPercentage === 'number' 
-            ? allocation.discountPercentage 
-            : parseFloat(String(allocation.discountPercentage));
-          if (!isNaN(parsed)) {
-            discountPct = parsed;
-            console.log(`[fulfillOrder] Using discountPercentage from allocation: ${discountPct}% for batch ${allocation.batchNumber}`);
-          }
-        }
-        
-        // Priority 2: From line itself
-        if ((discountPct === undefined || isNaN(discountPct)) && line.discountPercentage !== undefined && line.discountPercentage !== null) {
-          const parsed = typeof line.discountPercentage === 'number'
-            ? line.discountPercentage
-            : parseFloat(String(line.discountPercentage));
-          if (!isNaN(parsed)) {
-            discountPct = parsed;
-            console.log(`[fulfillOrder] Using discountPercentage from item: ${discountPct}% for batch ${allocation.batchNumber}`);
-          }
-        }
-        
-        // Priority 3: Fetch from actual batch in inventory (fallback)
-        if ((discountPct === undefined || isNaN(discountPct)) && medicineData && medicineData.stockBatches) {
-          const batch = medicineData.stockBatches.find(b => b.batchNumber === allocation.batchNumber);
-          if (batch && batch.discountPercentage !== undefined && batch.discountPercentage !== null) {
-            discountPct = typeof batch.discountPercentage === 'number'
-              ? batch.discountPercentage
-              : parseFloat(String(batch.discountPercentage));
-            if (!isNaN(discountPct)) {
-              console.log(`[fulfillOrder] Fetched discountPercentage from inventory batch: ${discountPct}% for batch ${allocation.batchNumber}`);
-            }
-          }
-        }
-        
-        // Default to 0 if still undefined
-        const finalDiscountPct = discountPct !== undefined && !isNaN(discountPct) ? discountPct : 0;
-        
+        const batch = medicineData?.stockBatches?.find(
+          (b) => b.batchNumber === allocation.batchNumber
+        );
+        const finalDiscountPct = resolveLineDiscount(line, allocation, batch);
+
         const purchasePrice = allocation.purchasePrice || 0;
 
         // Create a clean medicine item for this batch (no undefined values)
@@ -453,40 +444,24 @@ export const fulfillOrder = async (
       if (line.batchNumber) cleanItem.batchNumber = line.batchNumber;
       if (line.batchAllocations && line.batchAllocations.length === 1) {
         const allocation = line.batchAllocations[0];
-        
-        // Get discountPercentage - try allocation first, then line, then fetch from batch
-        let discountPct: number | undefined = undefined;
-        
-        if (allocation.discountPercentage !== undefined && allocation.discountPercentage !== null) {
-          discountPct = typeof allocation.discountPercentage === 'number'
-            ? allocation.discountPercentage
-            : parseFloat(String(allocation.discountPercentage));
-        } else if (line.discountPercentage !== undefined && line.discountPercentage !== null) {
-          discountPct = typeof line.discountPercentage === 'number'
-            ? line.discountPercentage
-            : parseFloat(String(line.discountPercentage));
-        } else if (line.medicineId) {
-          // Fetch from actual batch in inventory
+        let invBatch:
+          | { purchasePrice?: number; discountPercentage?: number; nonReturnable?: boolean }
+          | undefined;
+        if (line.medicineId) {
           try {
             const medicineData = await getMedicineById(line.medicineId);
-            if (medicineData && medicineData.stockBatches) {
-              const batch = medicineData.stockBatches.find(b => b.batchNumber === allocation.batchNumber);
-              if (batch && batch.discountPercentage !== undefined && batch.discountPercentage !== null) {
-                discountPct = typeof batch.discountPercentage === 'number'
-                  ? batch.discountPercentage
-                  : parseFloat(String(batch.discountPercentage));
-              }
-              if (batch?.nonReturnable === true) {
-                cleanItem.nonReturnable = true;
-              }
+            invBatch = medicineData?.stockBatches?.find(
+              (b) => b.batchNumber === allocation.batchNumber
+            );
+            if (invBatch?.nonReturnable === true) {
+              cleanItem.nonReturnable = true;
             }
           } catch (error) {
             console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
           }
         }
-        
-        // Default to 0 if still undefined
-        const finalDiscountPct = discountPct !== undefined && !isNaN(discountPct) ? discountPct : 0;
+
+        const finalDiscountPct = resolveLineDiscount(line, allocation, invBatch);
 
         const purchasePrice = allocation.purchasePrice || line.price || 0;
 
@@ -533,14 +508,6 @@ export const fulfillOrder = async (
       } else {
         if (line.mrp !== undefined && line.mrp !== null) cleanItem.mrp = line.mrp;
         if (line.gstRate !== undefined && line.gstRate !== null) cleanItem.gstRate = line.gstRate;
-        if (line.discountPercentage !== undefined && line.discountPercentage !== null) {
-          const discountPct = typeof line.discountPercentage === 'number'
-            ? line.discountPercentage
-            : parseFloat(String(line.discountPercentage));
-          if (!isNaN(discountPct)) {
-            cleanItem.discountPercentage = discountPct;
-          }
-        }
         if (line.batchNumber && line.medicineId) {
           try {
             const medicineData = await getMedicineById(line.medicineId);
@@ -550,11 +517,20 @@ export const fulfillOrder = async (
             if (invBatch?.nonReturnable === true) {
               cleanItem.nonReturnable = true;
             }
+            cleanItem.discountPercentage = resolveLineDiscount(line, undefined, invBatch);
           } catch (error) {
             console.warn(
-              `Failed to fetch medicine ${line.medicineId} for nonReturnable flag:`,
+              `Failed to fetch medicine ${line.medicineId} for batch metadata:`,
               error
             );
+          }
+        } else if (line.discountManuallySet === true && line.discountPercentage !== undefined) {
+          const discountPct =
+            typeof line.discountPercentage === 'number'
+              ? line.discountPercentage
+              : parseFloat(String(line.discountPercentage));
+          if (!isNaN(discountPct)) {
+            cleanItem.discountPercentage = discountPct;
           }
         }
       }
