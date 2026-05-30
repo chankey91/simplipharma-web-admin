@@ -43,6 +43,7 @@ import { User } from '../types';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -59,6 +60,7 @@ export const SalesOfficersPage: React.FC = () => {
   const createMutation = useCreateSalesOfficer();
   const updateProfileMutation = useUpdateSalesOfficerProfile();
   const assignMutation = useAssignRetailerToSalesOfficer();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const [openDialog, setOpenDialog] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -151,28 +153,28 @@ export const SalesOfficersPage: React.FC = () => {
           phoneNumber: editForm.phoneNumber.trim(),
         },
       });
-      alert('Sales Officer updated.');
+      await alert('Sales Officer updated.', { severity: 'success' });
       setEditOpen(false);
       setEditOfficer(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to update');
+      await alert(err.message || 'Failed to update', { severity: 'error' });
     }
   };
 
   const handleSendPasswordReset = async () => {
     if (!editOfficer?.email) return;
     if (
-      !window.confirm(
+      !(await confirm(
         `Send a password reset link to ${editOfficer.email}? The Sales Officer will use it to set a new password for the mobile app.`
-      )
+      ))
     ) {
       return;
     }
     try {
       const res = await resetPasswordMutation.mutateAsync(editOfficer.email);
-      alert(res.message);
+      await alert(res.message, { severity: 'success' });
     } catch (err: any) {
-      alert(err.message || 'Failed to send reset email');
+      await alert(err.message || 'Failed to send reset email', { severity: 'error' });
     }
   };
 
@@ -189,23 +191,25 @@ export const SalesOfficersPage: React.FC = () => {
         retailerUserId: assignPick.id,
         salesOfficerId: assignForSoId,
       });
-      alert(
-        `${assignPick.shopName || assignPick.displayName || assignPick.email} assigned to this Sales Officer.`
+      await alert(
+        `${assignPick.shopName || assignPick.displayName || assignPick.email} assigned to this Sales Officer.`,
+        { severity: 'success' }
       );
       setAssignOpen(false);
       setAssignForSoId(null);
       setAssignPick(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to assign retailer');
+      await alert(err.message || 'Failed to assign retailer', { severity: 'error' });
     }
   };
 
   const handleRemoveRetailer = async (retailer: User, officerLabel: string) => {
     const label = retailer.shopName || retailer.displayName || retailer.email;
     if (
-      !window.confirm(
-        `Remove "${label}" from ${officerLabel}? They will be unassigned from this Sales Officer.`
-      )
+      !(await confirm(
+        `Remove "${label}" from ${officerLabel}? They will be unassigned from this Sales Officer.`,
+        { destructive: true }
+      ))
     ) {
       return;
     }
@@ -215,17 +219,17 @@ export const SalesOfficersPage: React.FC = () => {
         salesOfficerId: null,
       });
     } catch (err: any) {
-      alert(err.message || 'Failed to remove assignment');
+      await alert(err.message || 'Failed to remove assignment', { severity: 'error' });
     }
   };
 
   const handleCreate = async () => {
     if (!formData.email.trim()) {
-      alert('Email is required');
+      await alert('Email is required', { severity: 'warning' });
       return;
     }
     if (!formData.password || formData.password.length < 6) {
-      alert('Password must be at least 6 characters');
+      await alert('Password must be at least 6 characters', { severity: 'warning' });
       return;
     }
     try {
@@ -235,10 +239,10 @@ export const SalesOfficersPage: React.FC = () => {
         phoneNumber: formData.phoneNumber.trim() || undefined,
         initialPassword: formData.password,
       });
-      alert('Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).');
+      await alert('Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).', { severity: 'success' });
       setOpenDialog(false);
     } catch (err: any) {
-      alert(err.message || 'Failed to create Sales Officer');
+      await alert(err.message || 'Failed to create Sales Officer', { severity: 'error' });
     }
   };
 

@@ -59,6 +59,7 @@ import { getTodayDateStringIST, getYearIST } from '../utils/dateTime';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { normalizeFirestoreDate } from '../services/inventory';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
 
@@ -110,7 +111,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const { data: medicines } = useMedicines();
   const createMedicineMutation = useCreateMedicine();
   const createInvoiceMutation = useCreatePurchaseInvoice();
-  
+  const { alert, confirm, prompt } = useAppDialog();
+
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: '',
     vendorId: '',
@@ -463,9 +465,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     setExpiryDateError('');
   };
 
-  const handleAddItem = () => {
+  const handleAddItem = async () => {
     if (!selectedMedicine) {
-      alert('Please select a medicine');
+      await alert('Please select a medicine', { severity: 'warning' });
       return;
     }
     setExpiryDateError(''); // Clear error when opening dialog
@@ -502,13 +504,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const handleSaveItem = async () => {
     if (!currentItem.medicineId || !currentItem.batchNumber || !currentItem.quantity || 
         !currentItem.expiryDate || !currentItem.purchasePrice) {
-      alert('Please fill all required fields');
+      await alert('Please fill all required fields', { severity: 'warning' });
       return;
     }
 
     // Validate expiry date format
     if (expiryDateError) {
-      alert(`Expiry date error: ${expiryDateError}`);
+      await alert(`Expiry date error: ${expiryDateError}`, { severity: 'warning' });
       return;
     }
 
@@ -516,7 +518,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const parsedExpiry = parseExpiryMmYy(currentItem.expiryDate);
     if (!parsedExpiry.ok) {
       setExpiryDateError(parsedExpiry.error);
-      alert(parsedExpiry.error);
+      await alert(parsedExpiry.error, { severity: 'warning' });
       return;
     }
     const { month: expiryMonth, year: expiryYear } = parsedExpiry;
@@ -681,7 +683,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const handleAddMedicine = async () => {
     if (!newMedicineData.name || !newMedicineData.code || !newMedicineData.type || !newMedicineData.packaging || !newMedicineData.manufacturer || !newMedicineData.gstRate) {
-      alert('Please fill all required fields');
+      await alert('Please fill all required fields', { severity: 'warning' });
       return;
     }
 
@@ -696,7 +698,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         setSelectedMedicine(existingMedicine);
         setAddMedicineDialog(false);
         setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
-        alert(`Medicine "${existingMedicine.name}" already exists. Selected from existing medicines.`);
+        await alert(`Medicine "${existingMedicine.name}" already exists. Selected from existing medicines.`, { severity: 'warning' });
         return;
       }
 
@@ -727,19 +729,19 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       setAddMedicineDialog(false);
       setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
     } catch (error: any) {
-      alert(error.message || 'Failed to add medicine');
+      await alert(error.message || 'Failed to add medicine', { severity: 'error' });
     }
   };
 
   const handleSaveInvoice = async () => {
     const user = auth.currentUser;
     if (!user) {
-      alert('Please login to continue');
+      await alert('Please login to continue', { severity: 'warning' });
       return;
     }
 
     if (!invoiceData.invoiceNumber || !invoiceData.vendorId || items.length === 0) {
-      alert('Please fill invoice number, select vendor, and add at least one item');
+      await alert('Please fill invoice number, select vendor, and add at least one item', { severity: 'warning' });
       return;
     }
 
@@ -765,7 +767,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
       navigate('/purchases');
     } catch (error: any) {
-      alert(error.message || 'Failed to create invoice');
+      await alert(error.message || 'Failed to create invoice', { severity: 'error' });
     }
   };
 

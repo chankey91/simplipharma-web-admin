@@ -6,6 +6,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { onAuthChange, getUserPanelRole } from './services/firebase';
 import { canAccessPath, type PanelRole } from './auth/permissions';
 import { AuthProvider } from './context/AuthContext';
+import { AppDialogProvider } from './context/AppDialogProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Loading } from './components/Loading';
 import { Layout } from './components/Layout';
@@ -152,9 +153,11 @@ function App() {
         <ThemeProvider theme={theme}>
           <CssBaseline />
           <BrowserRouter>
-            <AuthProvider>
-              <AppRoutes />
-            </AuthProvider>
+            <AppDialogProvider>
+              <AuthProvider>
+                <AppRoutes />
+              </AuthProvider>
+            </AppDialogProvider>
           </BrowserRouter>
         </ThemeProvider>
       </QueryClientProvider>

@@ -21,6 +21,7 @@ import {
   SupportTicketRow,
   SupportThreadMessage,
 } from '../services/supportTickets';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 function formatTime(v: SupportTicketRow['updatedAt']): string {
   if (!v) return '—';
@@ -45,6 +46,7 @@ export const SupportTicketsPage: React.FC = () => {
   const [reply, setReply] = useState('');
   const [listError, setListError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { alert, confirm, prompt } = useAppDialog();
 
   useEffect(() => {
     const unsub = subscribeOpenSupportTickets(
@@ -85,7 +87,7 @@ export const SupportTicketsPage: React.FC = () => {
       await postAdminSupportReply(selected.userId, selected.id, reply);
       setReply('');
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Failed to send');
+      await alert(e instanceof Error ? e.message : 'Failed to send', { severity: 'error' });
     } finally {
       setBusy(false);
     }
@@ -93,13 +95,13 @@ export const SupportTicketsPage: React.FC = () => {
 
   const onResolve = async () => {
     if (!selected) return;
-    if (!window.confirm('Mark this ticket resolved? The store will see a short notice in the app.')) return;
+    if (!(await confirm('Mark this ticket resolved? The store will see a short notice in the app.'))) return;
     try {
       setBusy(true);
       await resolveSupportTicket(selected.userId, selected.id);
       setSelected(null);
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Failed to resolve');
+      await alert(e instanceof Error ? e.message : 'Failed to resolve', { severity: 'error' });
     } finally {
       setBusy(false);
     }

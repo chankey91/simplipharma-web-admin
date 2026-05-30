@@ -38,12 +38,14 @@ import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
 import { PurchaseInvoiceItem } from '../types';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { invoiceId } = useParams<{ invoiceId: string }>();
   const navigate = useNavigate();
   const { data: invoice, isLoading } = usePurchaseInvoice(invoiceId || '');
   const updateInvoiceMutation = useUpdatePurchaseInvoice();
+  const { alert, confirm, prompt } = useAppDialog();
   const [items, setItems] = useState<PurchaseInvoiceItem[]>([]);
   const [itemDialog, setItemDialog] = useState<{ open: boolean; itemIndex: number | null }>({
     open: false,
@@ -182,20 +184,20 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const handleDeleteItem = async (index: number) => {
     const updatedItems = items.filter((_, i) => i !== index);
     if (updatedItems.length === 0) {
-      alert('Invoice must have at least one item.');
+      await alert('Invoice must have at least one item.', { severity: 'warning' });
       return;
     }
     try {
       await persistItems(updatedItems);
     } catch (error: any) {
-      alert(error?.message || 'Failed to delete item');
+      await alert(error?.message || 'Failed to delete item', { severity: 'error' });
     }
   };
 
   const handleSaveItem = async () => {
     if (itemDialog.itemIndex === null) return;
     if (!currentItem.batchNumber || !currentItem.quantity || !currentItem.purchasePrice || !currentItem.expiryDate) {
-      alert('Please fill batch, quantity, expiry and purchase price.');
+      await alert('Please fill batch, quantity, expiry and purchase price.', { severity: 'warning' });
       return;
     }
 
@@ -237,7 +239,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       await persistItems(updatedItems);
       setItemDialog({ open: false, itemIndex: null });
     } catch (error: any) {
-      alert(error?.message || 'Failed to update item');
+      await alert(error?.message || 'Failed to update item', { severity: 'error' });
     }
   };
 
@@ -272,9 +274,9 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
           startIcon={<Print />} 
           onClick={() => {
             if (invoice) {
-              generatePurchaseInvoice(invoice).catch(err => {
+              generatePurchaseInvoice(invoice).catch(async (err) => {
                 console.error('Error generating invoice:', err);
-                alert('Failed to generate invoice. Please try again.');
+                await alert('Failed to generate invoice. Please try again.', { severity: 'error' });
               });
             }
           }}

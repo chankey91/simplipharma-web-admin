@@ -18,6 +18,7 @@ import { getAllPurchaseInvoices, collectPurchaseInvoicesForDemands } from '../se
 import { tryPromoteFulfilledDemandLine } from './productDemandOrderLine';
 import { formatOrderInvoiceLabel } from './orderDisplay';
 import { sendOrderInvoicePdfToRetailer } from '../services/orderInvoiceEmail';
+import { appAlert } from './appDialog';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -919,7 +920,7 @@ export const generateOrderInvoice = async (
     if (options?.emailPdfToRetailer) {
       const em = order.retailerEmail?.trim();
       if (!em || !em.includes('@')) {
-        alert(
+        await appAlert(
           'Invoice downloaded, but this order has no retailer email — the PDF could not be emailed.'
         );
       } else {
@@ -936,23 +937,23 @@ export const generateOrderInvoice = async (
               csvFileName,
             });
             if (res.ok && res.emailedTo) {
-              alert(`Invoice emailed to ${res.emailedTo} (PDF and CSV).`);
+              await appAlert(`Invoice emailed to ${res.emailedTo} (PDF and CSV).`);
             } else {
-              alert(
+              await appAlert(
                 'Invoice was downloaded but email delivery could not be confirmed — check Firebase logs.'
               );
             }
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error('Email invoice failed:', err);
-            alert(`Invoice downloaded, but emailing the retailer failed: ${message}`);
+            await appAlert(`Invoice downloaded, but emailing the retailer failed: ${message}`);
           }
         })();
       }
     }
   } catch (error) {
     console.error('Error generating PDF:', error);
-    alert('Failed to generate invoice. Please try again.');
+    await appAlert('Failed to generate invoice. Please try again.');
   } finally {
     // Clean up
     document.body.removeChild(element);
@@ -1408,7 +1409,7 @@ export const generatePurchaseInvoice = async (invoice: PurchaseInvoice) => {
     pdf.save(`purchase-invoice-${invoice.invoiceNumber}.pdf`);
   } catch (error) {
     console.error('Error generating PDF:', error);
-    alert('Failed to generate invoice. Please try again.');
+    await appAlert('Failed to generate invoice. Please try again.');
   } finally {
     // Clean up
     document.body.removeChild(element);
