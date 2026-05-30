@@ -19,6 +19,10 @@ import { tryPromoteFulfilledDemandLine } from './productDemandOrderLine';
 import { formatOrderInvoiceLabel } from './orderDisplay';
 import { sendOrderInvoicePdfToRetailer } from '../services/orderInvoiceEmail';
 import { appAlert } from './appDialog';
+import {
+  buildPurchaseBatchDiscountLookup,
+  resolveOrderLineDiscountPct,
+} from './orderFulfillmentDiscount';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -220,6 +224,15 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       }
     })
   );
+
+  let purchaseDiscountLookup = buildPurchaseBatchDiscountLookup([]);
+  try {
+    const invoicesForDiscount =
+      mergedInvoices.length > 0 ? mergedInvoices : await getAllPurchaseInvoices();
+    purchaseDiscountLookup = buildPurchaseBatchDiscountLookup(invoicesForDiscount);
+  } catch (error) {
+    console.warn('Failed to load purchase invoices for invoice discount resolution:', error);
+  }
   
   // Calculate totals
   let totalSubTotal = 0;
@@ -339,13 +352,43 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     if (mrp <= 0) mrp = toNumber(primaryBatch?.mrp);
     if (mrp <= 0) mrp = toNumber(medicineDetails?.mrp);
 
-    let discountPercentage =
-      (item as any).discountPercentage !== undefined
-        ? toNumber((item as any).discountPercentage)
-        : 0;
-    if (discountPercentage <= 0) discountPercentage = firstPositiveFromAllocs('discountPercentage');
-    if (discountPercentage <= 0) {
-      discountPercentage = toNumber(primaryBatch?.discountPercentage);
+    let discountPercentage = 0;
+    const discountManuallySet = (item as { discountManuallySet?: boolean }).discountManuallySet === true;
+    if (allocs && allocs.length > 0) {
+      discountPercentage = allocs.reduce((best: number, a: any) => {
+        const batchFromInventory = medicineDetails?.stockBatches?.find(
+          (b: any) => b.batchNumber === a.batchNumber
+        );
+        const pct = resolveOrderLineDiscountPct({
+          itemDiscount: (item as any).discountPercentage,
+          allocationDiscount: a.discountPercentage,
+          medicineId: item.medicineId,
+          batchNumber: a.batchNumber,
+          purchaseLookup: purchaseDiscountLookup,
+          batch: batchFromInventory
+            ? {
+                purchasePrice: batchFromInventory.purchasePrice,
+                discountPercentage: batchFromInventory.discountPercentage,
+              }
+            : undefined,
+          discountManuallySet,
+        });
+        return Math.max(best, pct);
+      }, 0);
+    } else {
+      discountPercentage = resolveOrderLineDiscountPct({
+        itemDiscount: (item as any).discountPercentage,
+        medicineId: item.medicineId,
+        batchNumber: primaryBatchNumber,
+        purchaseLookup: purchaseDiscountLookup,
+        batch: primaryBatch
+          ? {
+              purchasePrice: primaryBatch.purchasePrice,
+              discountPercentage: primaryBatch.discountPercentage,
+            }
+          : undefined,
+        discountManuallySet,
+      });
     }
 
     let gstRate =

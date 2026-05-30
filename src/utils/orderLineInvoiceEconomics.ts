@@ -7,6 +7,10 @@ import {
   orderLineSchemeDisplayPhysical,
   schemeOrderLineDisplayTotals,
 } from './schemeFulfillment';
+import {
+  type PurchaseBatchDiscountLookup,
+  resolveOrderLineDiscountPct,
+} from './orderFulfillmentDiscount';
 
 const toNum = (v: unknown): number => {
   if (v === undefined || v === null || v === '') return 0;
@@ -67,7 +71,8 @@ export type OrderLineInvoiceEconomics = {
 export function orderLineInvoiceEconomics(
   item: any,
   medicine: { stockBatches?: any[] } | undefined,
-  orderTaxPercentage?: number
+  orderTaxPercentage?: number,
+  purchaseLookup?: PurchaseBatchDiscountLookup
 ): OrderLineInvoiceEconomics {
   const allocs = item.batchAllocations as any[] | undefined;
 
@@ -122,13 +127,39 @@ export function orderLineInvoiceEconomics(
 
   const unitPrice = resolveOrderLineUnitPrice(item, allocs, gstRate);
 
-  let discountPct = toNum(item.discountPercentage);
+  const discountManuallySet = (item as { discountManuallySet?: boolean }).discountManuallySet === true;
+  let discountPct = 0;
+
   if (allocs && allocs.length > 0) {
-    const fromAlloc = allocs.reduce(
-      (best: number, a: any) => Math.max(best, toNum(a.discountPercentage)),
-      0
-    );
-    if (fromAlloc > 0) discountPct = fromAlloc;
+    const resolved = allocs.map((a: any) => {
+      const batch = medicine?.stockBatches?.find((x: any) => x.batchNumber === a.batchNumber);
+      return resolveOrderLineDiscountPct({
+        itemDiscount: item.discountPercentage,
+        allocationDiscount: a.discountPercentage,
+        medicineId: item.medicineId,
+        batchNumber: a.batchNumber,
+        purchaseLookup,
+        batch: batch
+          ? { purchasePrice: batch.purchasePrice, discountPercentage: batch.discountPercentage }
+          : undefined,
+        discountManuallySet,
+      });
+    });
+    discountPct = resolved.reduce((best, pct) => Math.max(best, pct), 0);
+  } else if (item.batchNumber) {
+    const batch = medicine?.stockBatches?.find((x: any) => x.batchNumber === item.batchNumber);
+    discountPct = resolveOrderLineDiscountPct({
+      itemDiscount: item.discountPercentage,
+      medicineId: item.medicineId,
+      batchNumber: item.batchNumber,
+      purchaseLookup,
+      batch: batch
+        ? { purchasePrice: batch.purchasePrice, discountPercentage: batch.discountPercentage }
+        : undefined,
+      discountManuallySet,
+    });
+  } else if (discountManuallySet) {
+    discountPct = toNum(item.discountPercentage);
   }
 
   return {
@@ -146,7 +177,8 @@ export function orderLineInvoiceEconomics(
 export function orderLineTaxableBeforeDiscount(
   item: any,
   medicine: any | undefined,
-  orderTaxPercentage?: number
+  orderTaxPercentage?: number,
+  purchaseLookup?: PurchaseBatchDiscountLookup
 ): number {
   const allocs = item.batchAllocations as any[] | undefined;
   if (allocs && allocs.length > 1) {
@@ -157,6 +189,6 @@ export function orderLineTaxableBeforeDiscount(
     if (sumAmount > 0) return sumAmount;
   }
 
-  const e = orderLineInvoiceEconomics(item, medicine, orderTaxPercentage);
+  const e = orderLineInvoiceEconomics(item, medicine, orderTaxPercentage, purchaseLookup);
   return e.unitPrice * e.paidQty;
 }
