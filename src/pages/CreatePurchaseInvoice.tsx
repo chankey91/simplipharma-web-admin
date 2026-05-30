@@ -59,6 +59,51 @@ import { getTodayDateStringIST, getYearIST } from '../utils/dateTime';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { normalizeFirestoreDate } from '../services/inventory';
+import { useAppDialog } from '../context/AppDialogProvider';
+
+const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
+
+function formatExpiryMmYy(expiryDate: Date | unknown): string {
+  const d = normalizeFirestoreDate(expiryDate as Parameters<typeof normalizeFirestoreDate>[0]);
+  if (!d) return '';
+  return format(d, 'MM/yy');
+}
+
+type ExpiryParseResult =
+  | { ok: true; month: number; year: number }
+  | { ok: false; error: string };
+
+function parseExpiryMmYy(value: string): ExpiryParseResult {
+  const parts = value.trim().split('/');
+  if (parts.length !== 2) {
+    return { ok: false, error: 'Format must be MM/YY (e.g., 12/25)' };
+  }
+  const monthStr = parts[0].trim();
+  const yearStr = parts[1].trim();
+  if (monthStr.length !== 2) {
+    return { ok: false, error: 'Month must be 2 digits (e.g., 01, 02, ..., 12)' };
+  }
+  const month = parseInt(monthStr, 10);
+  if (isNaN(month) || month < 1 || month > 12) {
+    return { ok: false, error: 'Month must be between 01 and 12' };
+  }
+  if (yearStr.length !== 2) {
+    return { ok: false, error: 'Year must be 2 digits (e.g., 25)' };
+  }
+  const yy = parseInt(yearStr, 10);
+  if (isNaN(yy)) {
+    return { ok: false, error: 'Year must be a valid number' };
+  }
+  const year = 2000 + yy;
+  const currentYear = getYearIST();
+  if (year < currentYear || year > currentYear + 20) {
+    return {
+      ok: false,
+      error: `Year must be between ${currentYear} and ${currentYear + 20}`,
+    };
+  }
+  return { ok: true, month, year };
+}
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
@@ -66,7 +111,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const { data: medicines } = useMedicines();
   const createMedicineMutation = useCreateMedicine();
   const createInvoiceMutation = useCreatePurchaseInvoice();
-  
+  const { alert, confirm, prompt } = useAppDialog();
+
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: '',
     vendorId: '',
@@ -114,7 +160,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     medicineId: '',
     medicineName: '',
     batchNumber: '',
-    expiryDate: '', // MM/YYYY format
+    expiryDate: '', // MM/YY format
     quantity: '',
     freeQuantity: '',
     schemePaidQty: '',
@@ -344,12 +390,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     return (1 - (priceWithGST / mrp)) * 100;
   };
 
-  const formatBatchExpiryMmYyyy = (expiryDate: Date | unknown): string => {
-    const d = normalizeFirestoreDate(expiryDate as Parameters<typeof normalizeFirestoreDate>[0]);
-    if (!d) return '';
-    return format(d, 'MM/yyyy');
-  };
-
   const findExistingStockBatch = (
     medicineId: string | undefined,
     batchNumber: string
@@ -398,7 +438,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const batchSchemePaid = batch.schemePaidQty ?? batchLegacy.purchaseSchemeDeal;
     const batchSchemeFree = batch.schemeFreeQty ?? batchLegacy.purchaseSchemeFree;
 
-    const expiryStr = formatBatchExpiryMmYyyy(batch.expiryDate);
+    const expiryStr = formatExpiryMmYy(batch.expiryDate);
 
     setCurrentItem((prev) => ({
       ...prev,
@@ -425,9 +465,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     setExpiryDateError('');
   };
 
-  const handleAddItem = () => {
+  const handleAddItem = async () => {
     if (!selectedMedicine) {
-      alert('Please select a medicine');
+      await alert('Please select a medicine', { severity: 'warning' });
       return;
     }
     setExpiryDateError(''); // Clear error when opening dialog
@@ -435,7 +475,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: selectedMedicine.id,
       medicineName: selectedMedicine.name,
       batchNumber: '',
-      expiryDate: '', // MM/YYYY format
+      expiryDate: '', // MM/YY format
       quantity: '',
       freeQuantity: '',
       schemePaidQty: '',
@@ -464,58 +504,24 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const handleSaveItem = async () => {
     if (!currentItem.medicineId || !currentItem.batchNumber || !currentItem.quantity || 
         !currentItem.expiryDate || !currentItem.purchasePrice) {
-      alert('Please fill all required fields');
+      await alert('Please fill all required fields', { severity: 'warning' });
       return;
     }
 
     // Validate expiry date format
     if (expiryDateError) {
-      alert(`Expiry date error: ${expiryDateError}`);
+      await alert(`Expiry date error: ${expiryDateError}`, { severity: 'warning' });
       return;
     }
 
-    // Parse expiry date from MM/YYYY format
-    const expiryParts = currentItem.expiryDate.trim().split('/');
-    if (expiryParts.length !== 2) {
-      setExpiryDateError('Format must be MM/YYYY (e.g., 12/2025)');
-      alert('Expiry date must be in MM/YYYY format (e.g., 12/2025)');
+    // Parse expiry date from MM/YY format
+    const parsedExpiry = parseExpiryMmYy(currentItem.expiryDate);
+    if (!parsedExpiry.ok) {
+      setExpiryDateError(parsedExpiry.error);
+      await alert(parsedExpiry.error, { severity: 'warning' });
       return;
     }
-
-    const expiryMonth = parseInt(expiryParts[0]);
-    const expiryYear = parseInt(expiryParts[1]);
-    const currentYear = getYearIST();
-    
-    // Detailed validation
-    if (expiryParts[0].length !== 2) {
-      setExpiryDateError('Month must be 2 digits (e.g., 01, 02, ..., 12)');
-      alert('Month must be 2 digits (e.g., 01, 02, ..., 12)');
-      return;
-    }
-    
-    if (expiryParts[1].length !== 4) {
-      setExpiryDateError('Year must be 4 digits (e.g., 2025)');
-      alert('Year must be 4 digits (e.g., 2025)');
-      return;
-    }
-    
-    if (isNaN(expiryMonth) || expiryMonth < 1 || expiryMonth > 12) {
-      setExpiryDateError('Month must be between 01 and 12');
-      alert('Invalid month. Month must be between 01 and 12');
-      return;
-    }
-    
-    if (isNaN(expiryYear)) {
-      setExpiryDateError('Year must be a valid number');
-      alert('Invalid year. Year must be a valid number');
-      return;
-    }
-    
-    if (expiryYear < currentYear || expiryYear > currentYear + 20) {
-      setExpiryDateError(`Year must be between ${currentYear} and ${currentYear + 20}`);
-      alert(`Invalid year. Year must be between ${currentYear} and ${currentYear + 20}`);
-      return;
-    }
+    const { month: expiryMonth, year: expiryYear } = parsedExpiry;
 
     const quantity = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
     const freeQuantity = currentItem.freeQuantity ? (typeof currentItem.freeQuantity === 'number' ? currentItem.freeQuantity : parseFloat(String(currentItem.freeQuantity || '0'))) : 0;
@@ -550,7 +556,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const gstAmount = (amountAfterDiscount * gstRate) / 100;
     const totalAmount = amountAfterDiscount + gstAmount;
 
-    // Create expiry date from MM/YYYY format
+    // Create expiry date from MM/YY format
     const expiryDate = new Date(expiryYear, expiryMonth - 1, 1);
 
     // Generate QR code data
@@ -558,7 +564,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: currentItem.medicineId,
       medicineName: currentItem.medicineName,
       batchNumber: currentItem.batchNumber,
-      expiryDate: format(expiryDate, 'MM/yyyy'),
+      expiryDate: format(expiryDate, 'MM/yy'),
       quantity,
       freeQuantity,
       schemePaidQty,
@@ -630,7 +636,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: item.medicineId,
       medicineName: item.medicineName,
       batchNumber: item.batchNumber,
-      expiryDate: format(expiryDate, 'MM/yyyy'), // Single field in MM/YYYY format
+      expiryDate: format(expiryDate, 'MM/yy'),
       quantity: item.quantity.toString(),
       freeQuantity: item.freeQuantity?.toString() || '',
       schemePaidQty: item.schemePaidQty?.toString() || '',
@@ -677,7 +683,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const handleAddMedicine = async () => {
     if (!newMedicineData.name || !newMedicineData.code || !newMedicineData.type || !newMedicineData.packaging || !newMedicineData.manufacturer || !newMedicineData.gstRate) {
-      alert('Please fill all required fields');
+      await alert('Please fill all required fields', { severity: 'warning' });
       return;
     }
 
@@ -692,7 +698,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         setSelectedMedicine(existingMedicine);
         setAddMedicineDialog(false);
         setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
-        alert(`Medicine "${existingMedicine.name}" already exists. Selected from existing medicines.`);
+        await alert(`Medicine "${existingMedicine.name}" already exists. Selected from existing medicines.`, { severity: 'warning' });
         return;
       }
 
@@ -723,19 +729,19 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       setAddMedicineDialog(false);
       setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
     } catch (error: any) {
-      alert(error.message || 'Failed to add medicine');
+      await alert(error.message || 'Failed to add medicine', { severity: 'error' });
     }
   };
 
   const handleSaveInvoice = async () => {
     const user = auth.currentUser;
     if (!user) {
-      alert('Please login to continue');
+      await alert('Please login to continue', { severity: 'warning' });
       return;
     }
 
     if (!invoiceData.invoiceNumber || !invoiceData.vendorId || items.length === 0) {
-      alert('Please fill invoice number, select vendor, and add at least one item');
+      await alert('Please fill invoice number, select vendor, and add at least one item', { severity: 'warning' });
       return;
     }
 
@@ -761,7 +767,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
       navigate('/purchases');
     } catch (error: any) {
-      alert(error.message || 'Failed to create invoice');
+      await alert(error.message || 'Failed to create invoice', { severity: 'error' });
     }
   };
 
@@ -989,7 +995,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{item.medicineName}</Typography>
                           <Typography variant="caption" color="textSecondary">
-                            Exp: {format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yyyy')}
+                            Exp: {format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yy')}
                           </Typography>
                         </TableCell>
                         <TableCell>{item.batchNumber}</TableCell>
@@ -1159,8 +1165,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     value = value.substring(0, 2) + '/' + value.substring(2);
                   }
                   
-                  // Limit to 7 characters (MM/YYYY)
-                  if (value.length <= 7) {
+                  // Limit to 5 characters (MM/YY)
+                  if (value.length <= 5) {
                     setCurrentItem({ ...currentItem, expiryDate: value });
                     
                     // Clear error while typing if format looks correct
@@ -1172,62 +1178,18 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   }
                 }}
                 onBlur={() => {
-                  // Final validation on blur
                   const value = currentItem.expiryDate?.trim() || '';
-                  const currentYear = getYearIST();
-                  
                   if (value.length === 0) {
-                    setExpiryDateError(''); // Empty - let required validation handle it
+                    setExpiryDateError('');
                     return;
                   }
-                  
-                  const parts = value.split('/');
-                  
-                  // Check format structure
-                  if (parts.length !== 2) {
-                    setExpiryDateError('Format must be MM/YYYY (e.g., 12/2025)');
-                    return;
-                  }
-                  
-                  const monthStr = parts[0].trim();
-                  const yearStr = parts[1].trim();
-                  
-                  // Check month format and value
-                  if (monthStr.length !== 2) {
-                    setExpiryDateError('Month must be 2 digits (e.g., 01, 02, ..., 12)');
-                    return;
-                  }
-                  
-                  const month = parseInt(monthStr);
-                  if (isNaN(month) || month < 1 || month > 12) {
-                    setExpiryDateError('Month must be between 01 and 12');
-                    return;
-                  }
-                  
-                  // Check year format and value
-                  if (yearStr.length !== 4) {
-                    setExpiryDateError('Year must be 4 digits (e.g., 2025)');
-                    return;
-                  }
-                  
-                  const year = parseInt(yearStr);
-                  if (isNaN(year)) {
-                    setExpiryDateError('Year must be a valid number');
-                    return;
-                  }
-                  
-                  if (year < currentYear || year > currentYear + 20) {
-                    setExpiryDateError(`Year must be between ${currentYear} and ${currentYear + 20}`);
-                    return;
-                  }
-                  
-                  // All validations passed
-                  setExpiryDateError('');
+                  const parsed = parseExpiryMmYy(value);
+                  setExpiryDateError(parsed.ok ? '' : parsed.error);
                 }}
-                placeholder="MM/YYYY"
+                placeholder="MM/YY"
                 error={!!expiryDateError}
-                helperText={expiryDateError || "Format: MM/YYYY (e.g., 12/2025)"}
-                inputProps={{ maxLength: 7 }}
+                helperText={expiryDateError || EXPIRY_MM_YY_HELPER}
+                inputProps={{ maxLength: 5 }}
               />
             </Grid>
             <Grid item xs={12} sm={6}>

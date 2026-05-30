@@ -43,6 +43,7 @@ import { getTodayDateStringIST } from '../utils/dateTime';
 import { Medicine, PurchaseInvoiceItem } from '../types';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Loading } from '../components/Loading';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 type ImportRow = {
   id: string;
@@ -69,6 +70,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const { data: vendors } = useVendors();
   const { data: medicines, isLoading: medLoading } = useMedicines();
   const createInvoiceMutation = useCreatePurchaseInvoice();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
@@ -306,22 +308,22 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const handleSaveInvoice = async () => {
     const user = auth.currentUser;
     if (!user) {
-      alert('Please login');
+      await alert('Please login', { severity: 'warning' });
       return;
     }
     if (!invoiceNumber.trim() || !vendorId || rows.length === 0) {
-      alert('Invoice number, vendor, and at least one row are required.');
+      await alert('Invoice number, vendor, and at least one row are required.', { severity: 'warning' });
       return;
     }
     const unresolved = rows.filter((r) => !r.medicine);
     if (unresolved.length) {
-      alert(`Link medicine for ${unresolved.length} row(s) before saving.`);
+      await alert(`Link medicine for ${unresolved.length} row(s) before saving.`, { severity: 'warning' });
       return;
     }
     try {
       const items = await buildPurchaseItems();
       if (items.length === 0) {
-        alert('No valid rows to save.');
+        await alert('No valid rows to save.', { severity: 'warning' });
         return;
       }
       const { subTotal, totalDiscount, totalTax, grandTotal } = calculateTotals(items);
@@ -344,7 +346,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
       });
       navigate('/purchases');
     } catch (e: any) {
-      alert(e?.message || 'Failed to create invoice');
+      await alert(e?.message || 'Failed to create invoice', { severity: 'error' });
     }
   };
 

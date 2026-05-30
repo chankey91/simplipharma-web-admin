@@ -30,6 +30,7 @@ import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -69,6 +70,7 @@ export const OperationsPage: React.FC = () => {
   const addOperatorMutation = useAddOperator();
   const deleteTrayMutation = useDeleteTray();
   const deleteOperatorMutation = useDeleteOperator();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const traySort = useTableSort('name', 'asc');
   const sortedTrays = useMemo(() => {
@@ -90,7 +92,7 @@ export const OperationsPage: React.FC = () => {
       await addTrayMutation.mutateAsync(newTrayName.trim());
       setNewTrayName('');
     } catch (err: any) {
-      alert(err.message || 'Failed to add tray');
+      await alert(err.message || 'Failed to add tray', { severity: 'error' });
     }
   };
 
@@ -100,25 +102,25 @@ export const OperationsPage: React.FC = () => {
       await addOperatorMutation.mutateAsync(newOperatorName.trim());
       setNewOperatorName('');
     } catch (err: any) {
-      alert(err.message || 'Failed to add operator');
+      await alert(err.message || 'Failed to add operator', { severity: 'error' });
     }
   };
 
   const handleDeleteTray = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this tray?')) return;
+    if (!(await confirm('Are you sure you want to delete this tray?', { destructive: true }))) return;
     try {
       await deleteTrayMutation.mutateAsync(id);
     } catch (err: any) {
-      alert(err.message || 'Failed to delete tray');
+      await alert(err.message || 'Failed to delete tray', { severity: 'error' });
     }
   };
 
   const handleDeleteOperator = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this operator?')) return;
+    if (!(await confirm('Are you sure you want to delete this operator?', { destructive: true }))) return;
     try {
       await deleteOperatorMutation.mutateAsync(id);
     } catch (err: any) {
-      alert(err.message || 'Failed to delete operator');
+      await alert(err.message || 'Failed to delete operator', { severity: 'error' });
     }
   };
 

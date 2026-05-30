@@ -30,6 +30,7 @@ import { CreditNote, DebitNote } from '../types';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 type NoteTab = 'credit' | 'debit';
 
@@ -46,6 +47,7 @@ export const CreditNotesPage: React.FC = () => {
   const [rowsPerPage] = useState(10);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const backfillMutation = useBackfillCreditNotes();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const { sortKey, sortDirection, requestSort } = useTableSort('documentDate', 'desc');
 
@@ -176,20 +178,21 @@ export const CreditNotesPage: React.FC = () => {
 
   const handleBackfillOldCreditNotes = async () => {
     if (
-      !confirm(
+      !(await confirm(
         'Repair batch and MRP on older credit notes from linked order/return data? This updates stored credit note documents in Firestore.'
-      )
+      ))
     ) {
       return;
     }
     try {
       const summary = await backfillMutation.mutateAsync();
-      alert(
-        `Backfill complete.\nScanned: ${summary.scanned}\nUpdated: ${summary.updated}\nUnchanged: ${summary.unchanged}\nFailed: ${summary.failed}`
+      await alert(
+        `Backfill complete.\nScanned: ${summary.scanned}\nUpdated: ${summary.updated}\nUnchanged: ${summary.unchanged}\nFailed: ${summary.failed}`,
+        { severity: 'success' }
       );
       refetchCredit();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Backfill failed');
+      await alert(err instanceof Error ? err.message : 'Backfill failed', { severity: 'error' });
     }
   };
 

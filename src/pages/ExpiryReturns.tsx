@@ -43,6 +43,7 @@ import { getTodayDateStringIST } from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const STATUS_OPTIONS: { value: ExpiryReturnStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -62,6 +63,7 @@ export const ExpiryReturnsPage: React.FC = () => {
   const [paymentRef, setPaymentRef] = useState('');
   const [paymentDate, setPaymentDate] = useState(getTodayDateStringIST());
   const [paymentMethod, setPaymentMethod] = useState('Bank Transfer');
+  const { alert, confirm, prompt } = useAppDialog();
 
   const { data: requests, isLoading, error, refetch } = useQuery({
     queryKey: ['expiryReturns', statusFilter],
@@ -145,22 +147,22 @@ export const ExpiryReturnsPage: React.FC = () => {
   });
 
   const handleApprove = async (req: ExpiryReturnRequest) => {
-    if (!confirm('Approve this expiry return request? The retailer can then receive payment.')) return;
+    if (!(await confirm('Approve this expiry return request? The retailer can then receive payment.'))) return;
     try {
       await approveMutation.mutateAsync(req.id);
-      alert('Request approved. You can now record payment when it is done offline.');
+      await alert('Request approved. You can now record payment when it is done offline.', { severity: 'success' });
     } catch (err: any) {
-      alert(err.message || 'Failed to approve');
+      await alert(err.message || 'Failed to approve', { severity: 'error' });
     }
   };
 
   const handleReject = async (req: ExpiryReturnRequest) => {
-    const reason = prompt('Optional: Enter reason for rejection');
+    const reason = await prompt('Optional: Enter reason for rejection');
     try {
       await rejectMutation.mutateAsync({ requestId: req.id, reason: reason || '' });
-      alert('Request rejected');
+      await alert('Request rejected', { severity: 'success' });
     } catch (err: any) {
-      alert(err.message || 'Failed to reject');
+      await alert(err.message || 'Failed to reject', { severity: 'error' });
     }
   };
 
@@ -175,7 +177,7 @@ export const ExpiryReturnsPage: React.FC = () => {
   const handleRecordPayment = async () => {
     if (!selectedRequest) return;
     if (!paymentRef.trim()) {
-      alert('Payment reference number is required');
+      await alert('Payment reference number is required', { severity: 'warning' });
       return;
     }
     try {
@@ -185,9 +187,9 @@ export const ExpiryReturnsPage: React.FC = () => {
         paymentDate: new Date(paymentDate),
         paymentMethod: paymentMethod,
       });
-      alert('Payment recorded successfully');
+      await alert('Payment recorded successfully', { severity: 'success' });
     } catch (err: any) {
-      alert(err.message || 'Failed to record payment');
+      await alert(err.message || 'Failed to record payment', { severity: 'error' });
     }
   };
 

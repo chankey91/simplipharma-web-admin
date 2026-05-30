@@ -41,6 +41,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 interface InvoiceItem {
   id: string;
@@ -57,6 +58,7 @@ interface InvoiceItem {
 export const InvoicesPage: React.FC = () => {
   const { data: purchaseInvoices, isLoading: purchaseLoading } = usePurchaseInvoices();
   const { data: orders, isLoading: ordersLoading } = useOrders();
+  const { alert, confirm, prompt } = useAppDialog();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'purchase' | 'order'>('all');
   const [statusFilter, setStatusFilter] = useState<string>('All');
@@ -176,7 +178,7 @@ export const InvoicesPage: React.FC = () => {
         await generateOrderInvoice(invoice.order, { emailPdfToRetailer: true });
       }
     } catch (error: any) {
-      alert(`Failed to download invoice: ${error.message || 'Unknown error'}`);
+      await alert(`Failed to download invoice: ${error.message || 'Unknown error'}`, { severity: 'error' });
     }
   };
 

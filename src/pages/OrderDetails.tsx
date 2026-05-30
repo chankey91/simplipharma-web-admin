@@ -89,6 +89,7 @@ import {
   buildPurchaseBatchDiscountLookup,
   resolveOrderLineDiscountPct,
 } from '../utils/orderFulfillmentDiscount';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -245,6 +246,7 @@ export const OrderDetailsPage: React.FC = () => {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { alert, confirm, prompt } = useAppDialog();
   const { data: order, isLoading } = useOrder(orderId || '');
   const { data: medicines } = useMedicines();
   const { data: productDemands } = useProductDemands();
@@ -635,13 +637,13 @@ export const OrderDetailsPage: React.FC = () => {
       }));
 
       if (changed) {
-        alert('Order lines updated from purchase invoice.');
+        await alert('Order lines updated from purchase invoice.', { severity: 'success' });
       } else {
-        alert('Lines checked — no changes were needed (confirm demand has purchase invoice ref).');
+        await alert('Lines checked — no changes were needed (confirm demand has purchase invoice ref).', { severity: 'info' });
       }
     } catch (err) {
       console.error('Resync demand lines from PI failed:', err);
-      alert('Could not sync lines from purchase invoice. See console for details.');
+      await alert('Could not sync lines from purchase invoice. See console for details.', { severity: 'error' });
     } finally {
       setResyncingDemandLines(false);
     }
@@ -653,6 +655,7 @@ export const OrderDetailsPage: React.FC = () => {
     purchaseInvoicesList,
     purchaseDiscountLookup,
     queryClient,
+    alert,
   ]);
 
   if (isLoading) return <Loading message="Loading order details..." />;
@@ -698,7 +701,7 @@ export const OrderDetailsPage: React.FC = () => {
   const executeAction = async () => {
     const user = auth.currentUser;
     if (!user) {
-      alert('You must be logged in to perform this action');
+      await alert('You must be logged in to perform this action', { severity: 'warning' });
       return;
     }
 
@@ -741,7 +744,7 @@ export const OrderDetailsPage: React.FC = () => {
             processedBy: (processedBy || order?.processedBy || '').trim() || undefined
           }
         });
-        alert('Order fulfilled successfully!');
+        await alert('Order fulfilled successfully!', { severity: 'success' });
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
           orderId: order.id,
@@ -754,16 +757,16 @@ export const OrderDetailsPage: React.FC = () => {
             dispatchNotes: dispatchInfo.notes
           }
         });
-        alert('Order dispatched successfully!');
+        await alert('Order dispatched successfully!', { severity: 'success' });
       } else if (confirmDialog.action === 'deliver') {
         await deliverOrderMutation.mutateAsync({
           orderId: order.id,
           deliveredBy: user.uid
         });
-        alert('Order marked as delivered successfully!');
+        await alert('Order marked as delivered successfully!', { severity: 'success' });
       } else if (confirmDialog.action === 'cancel') {
         if (!cancelReason.trim()) {
-          alert('Please provide a cancellation reason');
+          await alert('Please provide a cancellation reason', { severity: 'warning' });
           return;
         }
         await cancelOrderMutation.mutateAsync({
@@ -771,12 +774,12 @@ export const OrderDetailsPage: React.FC = () => {
           cancelledBy: user.uid,
           reason: cancelReason
         });
-        alert('Order cancelled successfully!');
+        await alert('Order cancelled successfully!', { severity: 'success' });
       }
       setConfirmDialog({ ...confirmDialog, open: false });
     } catch (error: any) {
       console.error('Action failed:', error);
-      alert(`Failed to ${confirmDialog.action} order: ${error.message || 'Unknown error'}`);
+      await alert(`Failed to ${confirmDialog.action} order: ${error.message || 'Unknown error'}`, { severity: 'error' });
     }
   };
 
@@ -806,21 +809,21 @@ export const OrderDetailsPage: React.FC = () => {
       // Keep trayNumber and processedBy in state for use when fulfilling
       
       if (order?.status === 'Pending') {
-        alert('Tray number and processor information saved successfully!');
+        await alert('Tray number and processor information saved successfully!', { severity: 'success' });
       } else {
-        alert('Tray number and processor information saved successfully!');
+        await alert('Tray number and processor information saved successfully!', { severity: 'success' });
       }
     } catch (error: any) {
       console.error('Failed to save tray number and processor:', error);
-      alert(`Failed to save information: ${error.message || 'Unknown error'}`);
+      await alert(`Failed to save information: ${error.message || 'Unknown error'}`, { severity: 'error' });
     }
   };
 
-  const handleScan = (qrCode: string) => {
+  const handleScan = async (qrCode: string) => {
     if (scanningItemIndex !== null) {
       const item = fulfillmentData.medicines[scanningItemIndex];
       if (!item || (item as any).lineType === 'product_demand' || !item.medicineId) {
-        alert('Invalid item selected');
+        await alert('Invalid item selected', { severity: 'warning' });
         setScannerOpen(false);
         setScanningItemIndex(null);
         return;
@@ -917,18 +920,18 @@ export const OrderDetailsPage: React.FC = () => {
         }
         setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
       } else {
-        alert('QR code does not match this medicine!');
+        await alert('QR code does not match this medicine!', { severity: 'warning' });
       }
       setScannerOpen(false);
       setScanningItemIndex(null);
     }
   };
 
-  const handleManualEntry = () => {
+  const handleManualEntry = async () => {
     if (manualEntryDialog.itemIndex >= 0) {
       const item = fulfillmentData.medicines[manualEntryDialog.itemIndex];
       if (!item || (item as any).lineType === 'product_demand' || !item.medicineId) {
-        alert('Invalid item selected');
+        await alert('Invalid item selected', { severity: 'warning' });
         return;
       }
       const medicine = medicines?.find(m => m.id === item.medicineId);
@@ -1088,23 +1091,24 @@ export const OrderDetailsPage: React.FC = () => {
   };
 
   // Function to open batch allocation dialog
-  const handleAssignBatches = (itemIndex: number) => {
+  const handleAssignBatches = async (itemIndex: number) => {
     const item = fulfillmentData.medicines[itemIndex];
     if (!item || (item as any).lineType === 'product_demand' || !item.medicineId) {
-      alert('Invalid item selected');
+      await alert('Invalid item selected', { severity: 'warning' });
       return;
     }
 
     const medicine = medicines?.find(m => m.id === item.medicineId);
     if (!medicine) {
-      alert(
+      await alert(
         `Medicine not found in master data (ID: ${item.medicineId}). ` +
-          'The order may reference a deleted product or mismatched ID. Check Inventory.'
+          'The order may reference a deleted product or mismatched ID. Check Inventory.',
+        { severity: 'error' }
       );
       return;
     }
     if (!medicine.stockBatches || medicine.stockBatches.length === 0) {
-      alert(`No stock batches for "${medicine.name}". Add batches in Inventory before fulfilling.`);
+      await alert(`No stock batches for "${medicine.name}". Add batches in Inventory before fulfilling.`, { severity: 'warning' });
       return;
     }
 
@@ -1183,7 +1187,7 @@ export const OrderDetailsPage: React.FC = () => {
     
     // If no batches are available and none are allocated, show alert
     if (filteredBatches.length === 0) {
-      alert('No batches with available stock for this medicine');
+      await alert('No batches with available stock for this medicine', { severity: 'warning' });
       return;
     }
 
@@ -1220,12 +1224,12 @@ export const OrderDetailsPage: React.FC = () => {
   };
 
   // Function to save batch allocations
-  const handleSaveBatchAllocations = () => {
+  const handleSaveBatchAllocations = async () => {
     const { itemIndex, requiredQuantity } = batchAllocationDialog;
     const item = fulfillmentData.medicines[itemIndex];
 
     if (!item) {
-      alert('Item not found');
+      await alert('Item not found', { severity: 'error' });
       return;
     }
 
@@ -1236,20 +1240,21 @@ export const OrderDetailsPage: React.FC = () => {
     );
     
     if (totalAllocated === 0) {
-      alert('Please allocate at least some quantity');
+      await alert('Please allocate at least some quantity', { severity: 'warning' });
       return;
     }
     
     if (totalAllocated > requiredQuantity) {
-      alert(`Total allocated quantity (${totalAllocated}) cannot exceed required quantity (${requiredQuantity})`);
+      await alert(`Total allocated quantity (${totalAllocated}) cannot exceed required quantity (${requiredQuantity})`, { severity: 'warning' });
       return;
     }
     
     // Warn if partial fulfillment
     if (totalAllocated < requiredQuantity) {
-      const confirmPartial = window.confirm(
+      const confirmPartial = await confirm(
         `Warning: Only ${totalAllocated} out of ${requiredQuantity} units will be fulfilled. ` +
-        `The remaining ${requiredQuantity - totalAllocated} units will not be fulfilled. Continue?`
+        `The remaining ${requiredQuantity - totalAllocated} units will not be fulfilled. Continue?`,
+        { title: 'Partial fulfillment' }
       );
       if (!confirmPartial) {
         return;
@@ -1262,8 +1267,9 @@ export const OrderDetailsPage: React.FC = () => {
     for (const allocation of batchAllocations) {
       const phys = orderedUnitsFromAllocation(allocation);
       if (phys > 0 && phys > allocation.availableQuantity) {
-        alert(
-          `Batch ${allocation.batchNumber} only has ${allocation.availableQuantity} units available, but ${phys} were allocated`
+        await alert(
+          `Batch ${allocation.batchNumber} only has ${allocation.availableQuantity} units available, but ${phys} were allocated`,
+          { severity: 'warning' }
         );
         return;
       }
@@ -1275,7 +1281,7 @@ export const OrderDetailsPage: React.FC = () => {
     );
 
     if (validAllocations.length === 0) {
-      alert('Please allocate at least one batch');
+      await alert('Please allocate at least one batch', { severity: 'warning' });
       return;
     }
 
@@ -1466,7 +1472,7 @@ export const OrderDetailsPage: React.FC = () => {
 
   const handleAddMedicineToMaster = async () => {
     if (!newMedicineData.name || !newMedicineData.manufacturer || !newMedicineData.category) {
-      alert('Please fill all required fields');
+      await alert('Please fill all required fields', { severity: 'warning' });
       return;
     }
 
@@ -1484,9 +1490,9 @@ export const OrderDetailsPage: React.FC = () => {
       
       setAddMedicineDialog(false);
       setNewMedicineData({ name: '', code: '', category: '', manufacturer: '', mrp: '' });
-      alert('Medicine added to master data successfully!');
+      await alert('Medicine added to master data successfully!', { severity: 'success' });
     } catch (error: any) {
-      alert(error.message || 'Failed to add medicine');
+      await alert(error.message || 'Failed to add medicine', { severity: 'error' });
     }
   };
 
@@ -1550,7 +1556,7 @@ export const OrderDetailsPage: React.FC = () => {
           variant="outlined" 
           startIcon={<Print />}
           title="Downloads the PDF immediately, then sends PDF + CSV to the retailer email in the background (requires SMTP on Cloud Functions)."
-          onClick={() => {
+          onClick={async () => {
             // Check if all items have batches assigned (either batchNumber or batchAllocations)
             const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
               fulfillmentData.medicines.every(m => 
@@ -1559,7 +1565,7 @@ export const OrderDetailsPage: React.FC = () => {
               );
             
             if (!allBatchesAssigned && order.status === 'Pending') {
-              alert('Please assign batches to all items before generating invoice');
+              await alert('Please assign batches to all items before generating invoice', { severity: 'warning' });
               return;
             }
             
@@ -1658,13 +1664,13 @@ export const OrderDetailsPage: React.FC = () => {
             };
             
             try {
-              generateOrderInvoice(invoiceOrder, { emailPdfToRetailer: true }).catch((err) => {
+              generateOrderInvoice(invoiceOrder, { emailPdfToRetailer: true }).catch(async (err) => {
                 console.error('Error generating invoice:', err);
-                alert('Failed to generate invoice. Please try again.');
+                await alert('Failed to generate invoice. Please try again.', { severity: 'error' });
               });
             } catch (error) {
               console.error('Error generating invoice:', error);
-              alert('Failed to generate invoice. Please try again.');
+              await alert('Failed to generate invoice. Please try again.', { severity: 'error' });
             }
           }}
         >

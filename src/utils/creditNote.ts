@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
 import { CreditNote } from '../types';
+import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState } from './invoicePartyDefaults';
@@ -437,7 +438,7 @@ export const generateCreditNotePdf = async (note: CreditNote) => {
     pdf.save(`credit-note-${note.creditNoteNumber}.pdf`);
   } catch (error) {
     console.error('Error generating credit note PDF:', error);
-    alert('Failed to generate credit note. Please try again.');
+    await appAlert('Failed to generate credit note. Please try again.', { severity: 'error' });
   } finally {
     document.body.removeChild(element);
   }

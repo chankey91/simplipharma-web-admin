@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
 import { DebitNote } from '../types';
+import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState } from './invoicePartyDefaults';
@@ -416,7 +417,7 @@ export const generateDebitNotePdf = async (note: DebitNote) => {
     pdf.save(`debit-note-${note.debitNoteNumber}.pdf`);
   } catch (error) {
     console.error('Error generating debit note PDF:', error);
-    alert('Failed to generate debit note. Please try again.');
+    await appAlert('Failed to generate debit note. Please try again.', { severity: 'error' });
   } finally {
     document.body.removeChild(element);
   }

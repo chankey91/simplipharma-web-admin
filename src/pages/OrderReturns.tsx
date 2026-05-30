@@ -49,6 +49,7 @@ import { getTodayDateStringIST } from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const STATUS_OPTIONS: { value: OrderReturnStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -71,6 +72,7 @@ export const OrderReturnsPage: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState('Bank Transfer');
   const [downloadingCreditNote, setDownloadingCreditNote] = useState(false);
   const issueCreditNoteMutation = useIssueCreditNoteForReturn();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const { data: requests, isLoading, error, refetch } = useQuery({
     queryKey: ['orderReturns', statusFilter],
@@ -155,7 +157,7 @@ export const OrderReturnsPage: React.FC = () => {
   });
 
   const handleApprove = async (req: OrderReturnRequest) => {
-    if (!confirm('Approve this order return? A credit note will be generated for the retailer.')) return;
+    if (!(await confirm('Approve this order return? A credit note will be generated for the retailer.'))) return;
     try {
       const result = await approveMutation.mutateAsync(req.id);
       let emailMessage = 'Credit note email could not be sent automatically.';
@@ -177,42 +179,44 @@ export const OrderReturnsPage: React.FC = () => {
         emailMessage = emailErr?.message || emailMessage;
       }
 
-      alert(
-        `Return approved. Credit note ${result.creditNoteNumber} has been generated. ${emailMessage} Record payment when the refund is made offline.`
+      await alert(
+        `Return approved. Credit note ${result.creditNoteNumber} has been generated. ${emailMessage} Record payment when the refund is made offline.`,
+        { severity: 'success' }
       );
     } catch (err: any) {
-      alert(err.message || 'Failed to approve');
+      await alert(err.message || 'Failed to approve', { severity: 'error' });
     }
   };
 
   const handleDownloadCreditNote = async (req: OrderReturnRequest) => {
     if (!req.creditNoteId && !req.creditNoteNumber) {
-      alert('No credit note found for this return.');
+      await alert('No credit note found for this return.', { severity: 'warning' });
       return;
     }
     setDownloadingCreditNote(true);
     try {
       const note = req.creditNoteId ? await getCreditNoteById(req.creditNoteId) : null;
       if (!note) {
-        alert('Credit note not found.');
+        await alert('Credit note not found.', { severity: 'error' });
         return;
       }
       await generateCreditNotePdf(note);
     } catch (err: any) {
-      alert(err.message || 'Failed to download credit note');
+      await alert(err.message || 'Failed to download credit note', { severity: 'error' });
     } finally {
       setDownloadingCreditNote(false);
     }
   };
 
   const handleGenerateCreditNote = async (req: OrderReturnRequest) => {
-    if (!confirm('Generate credit note for this return?')) return;
+    if (!(await confirm('Generate credit note for this return?'))) return;
     try {
       const result = await issueCreditNoteMutation.mutateAsync(req.id);
-      alert(
+      await alert(
         result.created
           ? `Credit note ${result.creditNoteNumber} created.`
-          : `Credit note ${result.creditNoteNumber} is already linked.`
+          : `Credit note ${result.creditNoteNumber} is already linked.`,
+        { severity: 'success' }
       );
       setSelectedRequest((prev) =>
         prev?.id === req.id
@@ -220,7 +224,7 @@ export const OrderReturnsPage: React.FC = () => {
           : prev
       );
     } catch (err: any) {
-      alert(err.message || 'Failed to generate credit note');
+      await alert(err.message || 'Failed to generate credit note', { severity: 'error' });
     }
   };
 
@@ -230,12 +234,12 @@ export const OrderReturnsPage: React.FC = () => {
     !req.creditNoteNumber;
 
   const handleReject = async (req: OrderReturnRequest) => {
-    const reason = prompt('Optional: Enter reason for rejection');
+    const reason = await prompt('Optional: Enter reason for rejection');
     try {
       await rejectMutation.mutateAsync({ requestId: req.id, reason: reason || '' });
-      alert('Request rejected');
+      await alert('Request rejected', { severity: 'success' });
     } catch (err: any) {
-      alert(err.message || 'Failed to reject');
+      await alert(err.message || 'Failed to reject', { severity: 'error' });
     }
   };
 
@@ -250,7 +254,7 @@ export const OrderReturnsPage: React.FC = () => {
   const handleRecordPayment = async () => {
     if (!selectedRequest) return;
     if (!paymentRef.trim()) {
-      alert('Payment reference number is required');
+      await alert('Payment reference number is required', { severity: 'warning' });
       return;
     }
     try {
@@ -260,9 +264,9 @@ export const OrderReturnsPage: React.FC = () => {
         paymentDate: new Date(paymentDate),
         paymentMethod: paymentMethod,
       });
-      alert('Payment recorded successfully');
+      await alert('Payment recorded successfully', { severity: 'success' });
     } catch (err: any) {
-      alert(err.message || 'Failed to record payment');
+      await alert(err.message || 'Failed to record payment', { severity: 'error' });
     }
   };
 

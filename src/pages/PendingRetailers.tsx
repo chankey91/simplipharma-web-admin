@@ -37,11 +37,13 @@ import { format } from 'date-fns';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 export const PendingRetailersPage: React.FC = () => {
   const { data: requests, isLoading, error, refetch } = usePendingRetailerRequests();
   const approveMutation = useApproveRetailerRequest();
   const rejectMutation = useRejectRetailerRequest();
+  const { alert, confirm, prompt } = useAppDialog();
   const [selectedRequest, setSelectedRequest] = useState<RetailerRegistrationRequest | null>(null);
 
   const detailImageUrls = useMemo(
@@ -87,18 +89,18 @@ export const PendingRetailersPage: React.FC = () => {
   );
 
   const handleApprove = async (req: RetailerRegistrationRequest) => {
-    if (!confirm('Have you verified all details and documents? The retailer account will be activated.')) return;
+    if (!(await confirm('Have you verified all details and documents? The retailer account will be activated.'))) return;
     try {
       await approveMutation.mutateAsync(req.id);
-      alert('Retailer approved successfully! Account has been created and activated.');
+      await alert('Retailer approved successfully! Account has been created and activated.', { severity: 'success' });
       setSelectedRequest(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to approve');
+      await alert(err.message || 'Failed to approve', { severity: 'error' });
     }
   };
 
   const handleReject = async (req: RetailerRegistrationRequest) => {
-    const reason = prompt('Optional: Enter reason for rejection');
+    const reason = await prompt('Optional: Enter reason for rejection');
     try {
       const result = await rejectMutation.mutateAsync({ requestId: req.id, reason: reason || '' });
       const lines: string[] = ['Request rejected.'];
@@ -108,10 +110,10 @@ export const PendingRetailersPage: React.FC = () => {
       if (result.salesOfficerEmailSent === true) lines.push('Sales Officer was notified by email.');
       else if (result.salesOfficerEmailSent === false) lines.push('Could not send email to the Sales Officer.');
       if (result.emailErrors) lines.push(result.emailErrors);
-      alert(lines.join('\n'));
+      await alert(lines.join('\n'), { severity: 'success' });
       setSelectedRequest(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to reject');
+      await alert(err.message || 'Failed to reject', { severity: 'error' });
     }
   };
 

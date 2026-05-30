@@ -52,6 +52,7 @@ import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -89,7 +90,8 @@ export const StoresPage: React.FC = () => {
   const updateStoreMutation = useUpdateStore();
   const createStoreMutation = useCreateStore();
   const toggleStatusMutation = useToggleStoreStatus();
-  
+  const { alert, confirm, prompt } = useAppDialog();
+
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
@@ -305,7 +307,7 @@ export const StoresPage: React.FC = () => {
     if (file) {
       // Validate file size (max 2MB)
       if (file.size > 2 * 1024 * 1024) {
-        alert('Image size should be less than 2MB');
+        void alert('Image size should be less than 2MB', { severity: 'warning' });
         return;
       }
       const reader = new FileReader();
@@ -314,7 +316,7 @@ export const StoresPage: React.FC = () => {
         setFormData({ ...formData, shopImage: base64String });
       };
       reader.onerror = () => {
-        alert('Error reading image file');
+        void alert('Error reading image file', { severity: 'error' });
       };
       reader.readAsDataURL(file);
     }
@@ -347,7 +349,7 @@ export const StoresPage: React.FC = () => {
           storeId: editingStore.id,
           data: storeData
         });
-        alert('Store updated successfully!');
+        await alert('Store updated successfully!', { severity: 'success' });
       } else {
         // In creation, we'd also include the password to be sent to email
         console.log('Creating store with email:', formData.email, 'Password:', generatedPassword);
@@ -359,15 +361,15 @@ export const StoresPage: React.FC = () => {
           
           const emailSent = result && typeof result === 'object' && 'emailSent' in result && result.emailSent;
           if (emailSent) {
-            alert(`Store created successfully!\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nAn email with the password has been sent to ${formData.email}.`);
+            await alert(`Store created successfully!\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nAn email with the password has been sent to ${formData.email}.`, { severity: 'success' });
           } else {
-            alert(`Store created successfully!\n\n⚠️ Email could not be sent (SMTP authentication failed). Please share these credentials with the store owner:\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nTo fix email sending: Generate a new Gmail App Password and run:\nfirebase functions:config:set smtp.password="NEW_APP_PASSWORD"\nfirebase deploy --only functions`);
+            await alert(`Store created successfully!\n\n⚠️ Email could not be sent (SMTP authentication failed). Please share these credentials with the store owner:\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nTo fix email sending: Generate a new Gmail App Password and run:\nfirebase functions:config:set smtp.password="NEW_APP_PASSWORD"\nfirebase deploy --only functions`, { severity: 'warning' });
           }
         } catch (createError: any) {
           // Check if store was created but email failed
           if (createError.storeCreated) {
             // Store was created but email failed
-            alert(`Store created successfully, but email could not be sent.\n\nPlease share these credentials with the store owner:\n\nEmail: ${createError.email || formData.email}\nPassword: ${createError.password || generatedPassword}\n\nNote: Cloud Function for email sending is not configured or failed. Please set up Firebase Cloud Functions with SMTP to enable email notifications.\n\nError: ${createError.message}`);
+            await alert(`Store created successfully, but email could not be sent.\n\nPlease share these credentials with the store owner:\n\nEmail: ${createError.email || formData.email}\nPassword: ${createError.password || generatedPassword}\n\nNote: Cloud Function for email sending is not configured or failed. Please set up Firebase Cloud Functions with SMTP to enable email notifications.\n\nError: ${createError.message}`, { severity: 'warning' });
           } else {
             // Complete failure
             throw createError; // Re-throw to be caught by outer catch
@@ -396,7 +398,7 @@ export const StoresPage: React.FC = () => {
       setGeneratedPassword('');
     } catch (error: any) {
       console.error('Error saving store:', error);
-      alert(`Failed to save store: ${error.message || 'Unknown error'}`);
+      await alert(`Failed to save store: ${error.message || 'Unknown error'}`, { severity: 'error' });
     }
   };
 

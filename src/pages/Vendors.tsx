@@ -38,6 +38,7 @@ import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const generatePassword = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -53,7 +54,8 @@ export const VendorsPage: React.FC = () => {
   const createVendorMutation = useCreateVendor();
   const updateVendorMutation = useUpdateVendor();
   const toggleStatusMutation = useToggleVendorStatus();
-  
+  const { alert, confirm, prompt } = useAppDialog();
+
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
@@ -260,7 +262,7 @@ export const VendorsPage: React.FC = () => {
         
         // Check if email is provided for new vendor (reuse trimmedEmail from validation above)
         if (!trimmedEmail) {
-          const confirmNoEmail = window.confirm(
+          const confirmNoEmail = await confirm(
             'No email address provided. The vendor password will not be sent automatically.\n\n' +
             'Password: ' + generatedPassword + '\n\n' +
             'Please share this password with the vendor manually.\n\n' +
@@ -277,9 +279,9 @@ export const VendorsPage: React.FC = () => {
         
         // Show success message if email was sent successfully
         if (trimmedEmail) {
-          alert('Vendor created successfully! ✅\n\nPassword email has been sent to: ' + trimmedEmail);
+          await alert('Vendor created successfully! ✅\n\nPassword email has been sent to: ' + trimmedEmail, { severity: 'success' });
         } else {
-          alert('Vendor created successfully! ✅\n\n⚠️ No email provided - password was not sent.\n\nPassword: ' + generatedPassword + '\n\nPlease share this password with the vendor manually.');
+          await alert('Vendor created successfully! ✅\n\n⚠️ No email provided - password was not sent.\n\nPassword: ' + generatedPassword + '\n\nPlease share this password with the vendor manually.', { severity: 'warning' });
         }
       }
     } catch (error: any) {
@@ -334,7 +336,7 @@ export const VendorsPage: React.FC = () => {
           message += `- Network connection is stable`;
         }
         
-        alert(message);
+        await alert(message, { severity: 'warning' });
         setOpenDialog(false);
         setGeneratedPassword('');
       } else {

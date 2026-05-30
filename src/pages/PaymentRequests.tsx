@@ -27,6 +27,7 @@ import {
   useRejectPaymentRequest,
 } from '../hooks/usePaymentRequests';
 import { useOrders } from '../hooks/useOrders';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 type RequestTab = 'pending_admin_review' | 'approved' | 'rejected';
 
@@ -40,6 +41,7 @@ export const PaymentRequestsPage: React.FC = () => {
   const { data: orders } = useOrders();
   const approveMutation = useApprovePaymentRequest();
   const rejectMutation = useRejectPaymentRequest();
+  const { alert, confirm, prompt } = useAppDialog();
   const [tab, setTab] = useState<RequestTab>('pending_admin_review');
   const [rejectReasonById, setRejectReasonById] = useState<Record<string, string>>({});
 
@@ -56,33 +58,24 @@ export const PaymentRequestsPage: React.FC = () => {
     [data, tab]
   );
 
-  const handleApprove = async (requestId: string, requestedAmount: number) => {
-    const approvedAmountRaw = prompt('Approved amount', String(requestedAmount));
-    if (approvedAmountRaw === null) return;
-    const approvedAmount = Number(approvedAmountRaw);
-    if (Number.isNaN(approvedAmount) || approvedAmount < 0) {
-      alert('Enter a valid approved amount.');
-      return;
-    }
-
+  const handleApprove = async (requestId: string) => {
     try {
       const result = await approveMutation.mutateAsync({
         requestId,
         reviewedBy: auth.currentUser?.email || auth.currentUser?.uid || 'admin',
-        approvedAmount,
       });
       if (result?.paymentStatus === 'Paid') {
-        alert('Payment approved. Order is now marked as Paid.');
+        await alert('Payment approved. Order is now marked as Paid.', { severity: 'success' });
       }
     } catch (err: any) {
-      alert(err?.message || 'Failed to approve payment request');
+      await alert(err?.message || 'Failed to approve payment request', { severity: 'error' });
     }
   };
 
   const handleReject = async (requestId: string) => {
     const reason = rejectReasonById[requestId]?.trim();
     if (!reason) {
-      alert('Please enter rejection reason.');
+      await alert('Please enter rejection reason.', { severity: 'warning' });
       return;
     }
     try {
@@ -93,7 +86,7 @@ export const PaymentRequestsPage: React.FC = () => {
       });
       setRejectReasonById((prev) => ({ ...prev, [requestId]: '' }));
     } catch (err: any) {
-      alert(err?.message || 'Failed to reject payment request');
+      await alert(err?.message || 'Failed to reject payment request', { severity: 'error' });
     }
   };
 
@@ -216,7 +209,7 @@ export const PaymentRequestsPage: React.FC = () => {
                         <Button
                           size="small"
                           variant="contained"
-                          onClick={() => handleApprove(r.id, r.requestedAmount)}
+                          onClick={() => handleApprove(r.id)}
                           disabled={approveMutation.isPending || rejectMutation.isPending}
                         >
                           Approve

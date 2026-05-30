@@ -44,6 +44,7 @@ import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 export const MedicineDetailsPage: React.FC = () => {
   const { medicineId } = useParams<{ medicineId: string }>();
@@ -51,7 +52,8 @@ export const MedicineDetailsPage: React.FC = () => {
   const { data: medicines, isLoading } = useMedicines();
   const addBatchMutation = useAddStockBatch();
   const updateMedicineMutation = useUpdateMedicine();
-  
+  const { alert, confirm, prompt } = useAppDialog();
+
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editData, setEditData] = useState({
@@ -224,7 +226,7 @@ export const MedicineDetailsPage: React.FC = () => {
 
   const handleAddBatch = async () => {
     if (!medicine || !batchData.batchNumber || !batchData.quantity || !batchData.expiryDate) {
-      alert('Please fill all required fields (Batch Number, Quantity, Expiry Date)');
+      await alert('Please fill all required fields (Batch Number, Quantity, Expiry Date)', { severity: 'warning' });
       return;
     }
 
@@ -252,7 +254,7 @@ export const MedicineDetailsPage: React.FC = () => {
         purchaseDate: getTodayDateStringIST(),
       });
     } catch (error: any) {
-      alert(error.message || 'Failed to add batch');
+      await alert(error.message || 'Failed to add batch', { severity: 'error' });
     }
   };
 
@@ -277,13 +279,13 @@ export const MedicineDetailsPage: React.FC = () => {
       });
       setEditDialogOpen(false);
     } catch (error: any) {
-      alert(error.message || 'Failed to update medicine');
+      await alert(error.message || 'Failed to update medicine', { severity: 'error' });
     }
   };
 
   const handleGeneratePDF = async () => {
     if (!medicine || !medicine.stockBatches || medicine.stockBatches.length === 0) {
-      alert('No batches available to generate QR codes');
+      await alert('No batches available to generate QR codes', { severity: 'warning' });
       return;
     }
     

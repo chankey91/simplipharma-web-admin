@@ -3,6 +3,7 @@ import { orderReferenceWithoutInvoice } from './orderDisplay';
 import { Order, User } from '../types';
 import { getMedicineById } from '../services/inventory';
 import { istDateStampCompact } from './dateTime';
+import { appAlert } from './appDialog';
 
 // Helper function to extract town and district from address
 const parseAddress = (address?: string): { town: string; district: string } => {
@@ -37,7 +38,7 @@ export const exportPendingOrdersByStore = async (
   console.log(`Total orders: ${orders.length}, Pending orders: ${pendingOrders.length}`);
   
   if (pendingOrders.length === 0) {
-    alert('No pending orders found');
+    await appAlert('No pending orders found', { severity: 'warning' });
     return;
   }
 

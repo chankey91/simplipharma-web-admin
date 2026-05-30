@@ -32,6 +32,7 @@ import { User } from '../types';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -46,6 +47,7 @@ export const OperationsUsersPage: React.FC = () => {
   const { data: operationsUsers, isLoading, error } = useOperationsUsers();
   const createMutation = useCreateOperationsUser();
   const updateMutation = useUpdateOperationsUserProfile();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const [openDialog, setOpenDialog] = useState(false);
   const [formData, setFormData] = useState({
@@ -114,11 +116,11 @@ export const OperationsUsersPage: React.FC = () => {
 
   const handleCreate = async () => {
     if (!formData.email.trim()) {
-      alert('Email is required');
+      await alert('Email is required', { severity: 'warning' });
       return;
     }
     if (!formData.password || formData.password.length < 6) {
-      alert('Password must be at least 6 characters');
+      await alert('Password must be at least 6 characters', { severity: 'warning' });
       return;
     }
     try {
@@ -128,13 +130,14 @@ export const OperationsUsersPage: React.FC = () => {
         phoneNumber: formData.phoneNumber.trim() || undefined,
         initialPassword: formData.password,
       });
-      alert(
-        'Operations user created. Credentials have been sent via email if SMTP is configured; otherwise share the password securely.'
+      await alert(
+        'Operations user created. Credentials have been sent via email if SMTP is configured; otherwise share the password securely.',
+        { severity: 'success' }
       );
       setOpenDialog(false);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to create operations user';
-      alert(message);
+      await alert(message, { severity: 'error' });
     }
   };
 
@@ -149,12 +152,12 @@ export const OperationsUsersPage: React.FC = () => {
           isActive: editForm.isActive,
         },
       });
-      alert('Operations user updated.');
+      await alert('Operations user updated.', { severity: 'success' });
       setEditOpen(false);
       setEditUser(null);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to update';
-      alert(message);
+      await alert(message, { severity: 'error' });
     }
   };
 

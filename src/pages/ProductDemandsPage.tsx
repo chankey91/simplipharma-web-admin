@@ -43,6 +43,7 @@ import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 type Filter = 'pending' | 'all';
 
@@ -65,6 +66,7 @@ export const ProductDemandsPage: React.FC = () => {
   const { data: medicines } = useMedicines();
   const fulfillMutation = useFulfillProductDemand();
   const rejectMutation = useRejectProductDemand();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const [filter, setFilter] = useState<Filter>('pending');
   const [fulfillOpen, setFulfillOpen] = useState(false);
@@ -263,7 +265,7 @@ export const ProductDemandsPage: React.FC = () => {
 
   const handleFulfill = async () => {
     if (!selectedDemand || !selectedMedicine) {
-      alert('Select the medicine that was added to inventory (after purchase / master data).');
+      await alert('Select the medicine that was added to inventory (after purchase / master data).', { severity: 'warning' });
       return;
     }
     const q = parseInt(cartQty, 10);
@@ -277,13 +279,13 @@ export const ProductDemandsPage: React.FC = () => {
       });
       closeFulfillDialog({ navigateBack: true });
     } catch (e: any) {
-      alert(e?.message || 'Failed to fulfill');
+      await alert(e?.message || 'Failed to fulfill', { severity: 'error' });
     }
   };
 
-  const downloadDemandsExcel = () => {
+  const downloadDemandsExcel = async () => {
     if (sortedDemands.length === 0) {
-      alert('No demands in this view to export');
+      await alert('No demands in this view to export', { severity: 'warning' });
       return;
     }
     const rows = sortedDemands.map((d) => ({
@@ -316,7 +318,7 @@ export const ProductDemandsPage: React.FC = () => {
 
   const handleReject = async () => {
     if (!selectedDemand || !rejectReason.trim()) {
-      alert('Enter a rejection reason');
+      await alert('Enter a rejection reason', { severity: 'warning' });
       return;
     }
     try {
@@ -324,7 +326,7 @@ export const ProductDemandsPage: React.FC = () => {
       setRejectOpen(false);
       setSelectedDemand(null);
     } catch (e: any) {
-      alert(e?.message || 'Failed to reject');
+      await alert(e?.message || 'Failed to reject', { severity: 'error' });
     }
   };
 

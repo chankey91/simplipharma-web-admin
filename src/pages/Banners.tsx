@@ -33,6 +33,7 @@ import { useBanners, useAddBanner, useUpdateBanner, useDeleteBanner } from '../h
 import { Banner } from '../services/banners';
 import { uploadBannerImage } from '../services/bannerImages';
 import { Loading } from '../components/Loading';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const COLOR_OPTIONS = [
   { name: 'Red', value: '#FF6B6B' },
@@ -69,6 +70,7 @@ export const BannersPage: React.FC = () => {
   const addBannerMutation = useAddBanner();
   const updateBannerMutation = useUpdateBanner();
   const deleteBannerMutation = useDeleteBanner();
+  const { alert, confirm, prompt } = useAppDialog();
 
   const [openDialog, setOpenDialog] = useState(false);
   const [editingBanner, setEditingBanner] = useState<Banner | null>(null);
@@ -157,7 +159,7 @@ export const BannersPage: React.FC = () => {
       );
 
     if (!willHaveImage && (!trimmedTitle || !trimmedSubtitle)) {
-      alert('Add a banner image, or fill in both title and subtitle for a text-only banner.');
+      await alert('Add a banner image, or fill in both title and subtitle for a text-only banner.', { severity: 'warning' });
       return;
     }
 
@@ -192,25 +194,25 @@ export const BannersPage: React.FC = () => {
           bannerData,
           removeImageUrl,
         });
-        alert('Banner updated successfully');
+        await alert('Banner updated successfully', { severity: 'success' });
       } else {
         await addBannerMutation.mutateAsync(bannerData);
-        alert('Banner added successfully');
+        await alert('Banner added successfully', { severity: 'success' });
       }
       handleClose();
     } catch (err: any) {
-      alert(err.message || 'Failed to save banner');
+      await alert(err.message || 'Failed to save banner', { severity: 'error' });
     }
   };
 
   const handleDelete = async (banner: Banner) => {
     const label = banner.title.trim() || (banner.imageUrl ? 'this image banner' : 'this banner');
-    if (!confirm(`Are you sure you want to delete "${label}"?`)) return;
+    if (!(await confirm(`Are you sure you want to delete "${label}"?`, { destructive: true }))) return;
     try {
       await deleteBannerMutation.mutateAsync(banner.id);
-      alert('Banner deleted successfully');
+      await alert('Banner deleted successfully', { severity: 'success' });
     } catch (err: any) {
-      alert(err.message || 'Failed to delete banner');
+      await alert(err.message || 'Failed to delete banner', { severity: 'error' });
     }
   };
 

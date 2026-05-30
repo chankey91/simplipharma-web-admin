@@ -45,13 +45,15 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 export const OrdersPage: React.FC = () => {
   const { data: orders, isLoading } = useOrders();
   const { data: stores } = useStores();
   const cancelOrderMutation = useCancelOrder();
   const navigate = useNavigate();
-  
+  const { alert, confirm, prompt } = useAppDialog();
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
   const [page, setPage] = useState(1);
@@ -157,17 +159,17 @@ export const OrdersPage: React.FC = () => {
     const pendingOrders = orders?.filter(o => o.status === 'Pending') || [];
     
     if (pendingOrders.length === 0) {
-      alert('No pending orders to export');
+      await alert('No pending orders to export', { severity: 'warning' });
       return;
     }
 
     setIsExporting(true);
     try {
       await exportPendingOrdersByStore(pendingOrders, stores || []);
-      alert('Excel file generated successfully!');
+      await alert('Excel file generated successfully!', { severity: 'success' });
     } catch (error: any) {
       console.error('Error exporting orders:', error);
-      alert(`Failed to export: ${error.message || 'Unknown error'}`);
+      await alert(`Failed to export: ${error.message || 'Unknown error'}`, { severity: 'error' });
     } finally {
       setIsExporting(false);
     }
