@@ -85,6 +85,25 @@ export const updateOrderMedicines = async (
   await updateDoc(orderRef, { medicines });
 };
 
+export const saveOrderFulfillmentDraft = async (
+  orderId: string,
+  draft: { medicines: any[]; taxPercentage?: number }
+): Promise<void> => {
+  const orderRef = doc(db, 'orders', orderId);
+  await updateDoc(orderRef, {
+    fulfillmentDraft: {
+      medicines: draft.medicines,
+      taxPercentage: draft.taxPercentage ?? 5,
+      updatedAt: serverTimestamp(),
+    },
+  });
+};
+
+export const clearOrderFulfillmentDraft = async (orderId: string): Promise<void> => {
+  const orderRef = doc(db, 'orders', orderId);
+  await updateDoc(orderRef, { fulfillmentDraft: deleteField() });
+};
+
 export const updateOrderTotalAmount = async (
   orderId: string,
   totalAmount: number,
@@ -409,6 +428,9 @@ export const fulfillOrder = async (
         if ((line as { discountManuallySet?: boolean }).discountManuallySet === true) {
           batchItem.discountManuallySet = true;
         }
+        if (line.notes?.trim()) {
+          batchItem.notes = line.notes.trim();
+        }
 
         // Final cleanup: Remove any undefined or null values
         Object.keys(batchItem).forEach(key => {
@@ -539,6 +561,9 @@ export const fulfillOrder = async (
         cleanItem.productDemandId = line.productDemandId;
         cleanItem.lineType = 'medicine';
       }
+      if (line.notes?.trim()) {
+        cleanItem.notes = line.notes.trim();
+      }
       
       // Final cleanup: Remove any undefined or null values that might have been missed
       Object.keys(cleanItem).forEach(key => {
@@ -597,6 +622,7 @@ export const fulfillOrder = async (
     ...cleanFulfillmentData,
     medicines: processedMedicines, // Use processed medicines array with proper Timestamps
     status: 'Order Fulfillment',
+    fulfillmentDraft: deleteField(),
     timeline: [...currentTimeline, createTimelineEvent('Order Fulfillment', fulfilledBy, 'Order items verified and tax added')]
   };
   

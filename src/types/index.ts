@@ -147,6 +147,12 @@ export interface Order {
     deliveredBy: string;
     signature?: string;
   };
+  /** In-progress fulfillment (batch assignments) while status is Pending. */
+  fulfillmentDraft?: {
+    medicines: OrderMedicine[];
+    taxPercentage?: number;
+    updatedAt?: Date | any;
+  };
 }
 
 export type PaymentStatus = 'Paid' | 'Unpaid' | 'Partial';
