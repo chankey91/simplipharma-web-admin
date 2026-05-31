@@ -58,7 +58,7 @@ import {
   useCancelOrder,
   useUpdatePaymentStatus,
 } from '../hooks/useOrders';
-import { updateOrderMedicines, updateOrderTotalAmount } from '../services/orders';
+import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft } from '../services/orders';
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
@@ -74,6 +74,13 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Medicine, OrderMedicine, OrderStatus, ProductDemand } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
+import {
+  clearSessionFulfillmentDraft,
+  mergeFulfillmentWorkIntoLines,
+  pickFulfillmentDraft,
+  serializeDraftMedicines,
+  writeSessionFulfillmentDraft,
+} from '../utils/orderFulfillmentDraft';
 import { normalizeFirestoreDate } from '../services/inventory';
 import {
   computeSchemeFulfillmentFreeQty,
@@ -97,6 +104,16 @@ const toNumber = (value: unknown): number => {
   if (value === undefined || value === null || value === '') return 0;
   const parsed = typeof value === 'number' ? value : parseFloat(String(value));
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatExpiryMmYyyy = (value: unknown): string | null => {
+  const d = normalizeFirestoreDate(value);
+  return d ? format(d, 'MM/yyyy') : null;
+};
+
+const expiryIsAfterNow = (value: unknown): boolean => {
+  const d = normalizeFirestoreDate(value);
+  return d ? d.getTime() > Date.now() : true;
 };
 
 const parseDiscountPct = (value: unknown): number | undefined => {
@@ -239,7 +256,7 @@ export const OrderDetailsPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { alert, confirm, prompt } = useAppDialog();
   const { data: order, isLoading } = useOrder(orderId || '');
-  const { data: medicines } = useMedicines();
+  const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const { data: productDemands } = useProductDemands();
   const demandById = useMemo(() => {
     const m = new Map<string, ProductDemand>();
@@ -248,13 +265,14 @@ export const OrderDetailsPage: React.FC = () => {
     }
     return m;
   }, [productDemands]);
-  const { data: purchaseInvoices } = usePurchaseInvoices();
+  const { data: purchaseInvoices, isLoading: purchaseInvoicesLoading } = usePurchaseInvoices();
   const purchaseInvoicesList = purchaseInvoices || [];
   const purchaseDiscountLookup = useMemo(
     () => buildPurchaseBatchDiscountLookup(purchaseInvoices || []),
     [purchaseInvoices]
   );
   const orderDemandRepairAttempted = useRef<string | null>(null);
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localPendingEditsRef = useRef<{ orderId: string | null; dirty: boolean }>({
     orderId: null,
     dirty: false,
@@ -286,6 +304,39 @@ export const OrderDetailsPage: React.FC = () => {
       }),
     [purchaseDiscountLookup]
   );
+
+  const markFulfillmentDirty = useCallback(() => {
+    if (order?.id) {
+      localPendingEditsRef.current = { orderId: order.id, dirty: true };
+    }
+  }, [order?.id]);
+
+  const persistFulfillmentDraft = useCallback(
+    async (meds: any[], taxPct?: number) => {
+      if (!order?.id || order.status !== 'Pending') return;
+      const payload = {
+        medicines: serializeDraftMedicines(meds),
+        taxPercentage: taxPct ?? order.taxPercentage ?? 5,
+      };
+      writeSessionFulfillmentDraft(order.id, payload);
+      await saveOrderFulfillmentDraft(order.id, payload);
+    },
+    [order?.id, order?.status, order?.taxPercentage]
+  );
+
+  const scheduleFulfillmentDraftSave = useCallback(
+    (meds: any[]) => {
+      if (!order?.id || order.status !== 'Pending') return;
+      if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = setTimeout(() => {
+        void persistFulfillmentDraft(meds).catch((err) =>
+          console.warn('Failed to save fulfillment draft:', err)
+        );
+      }, 600);
+    },
+    [order?.id, order?.status, persistFulfillmentDraft]
+  );
+
   const { data: trays, isError: traysQueryError, error: traysQueryErr, isFetching: traysFetching } = useTrays();
   const { data: operators, isError: operatorsQueryError, error: operatorsQueryErr } = useOperators();
   const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
@@ -358,6 +409,8 @@ export const OrderDetailsPage: React.FC = () => {
     taxPercentage: 5,
     medicines: [] as any[]
   });
+  /** Tracks which order id has had fulfillment lines synced (avoids empty table on first paint). */
+  const [fulfillmentInitOrderId, setFulfillmentInitOrderId] = useState<string | null>(null);
 
   // Batch allocation dialog state
   const [batchAllocationDialog, setBatchAllocationDialog] = useState<{
@@ -405,6 +458,13 @@ export const OrderDetailsPage: React.FC = () => {
   const [manualQRCodeInput, setManualQRCodeInput] = useState('');
 
   useEffect(() => {
+    setFulfillmentInitOrderId(null);
+    setFulfillmentData({ taxPercentage: 5, medicines: [] });
+    localPendingEditsRef.current = { orderId: null, dirty: false };
+    orderDemandRepairAttempted.current = null;
+  }, [orderId]);
+
+  useEffect(() => {
     if (!order || !medicines || purchaseInvoices === undefined) return;
 
     if (localPendingEditsRef.current.orderId !== order.id) {
@@ -431,6 +491,43 @@ export const OrderDetailsPage: React.FC = () => {
 
     const rawMedicines =
       order.medicines && Array.isArray(order.medicines) ? order.medicines : [];
+
+    const savedDraft =
+      order.status === 'Pending'
+        ? pickFulfillmentDraft(order.id, order.fulfillmentDraft)
+        : null;
+
+    const mappedFromServer = rawMedicines.map((line) =>
+      mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+    );
+
+    const initialMedicines = savedDraft
+      ? mergeFulfillmentWorkIntoLines(mappedFromServer, savedDraft.medicines)
+      : mappedFromServer;
+
+    if (savedDraft) {
+      localPendingEditsRef.current = { orderId: order.id, dirty: true };
+    }
+
+    setFulfillmentData((prev) => {
+      if (
+        order.status === 'Pending' &&
+        localPendingEditsRef.current.orderId === order.id &&
+        localPendingEditsRef.current.dirty &&
+        prev.medicines.length > 0
+      ) {
+        return {
+          ...prev,
+          medicines: mergeFulfillmentWorkIntoLines(mappedFromServer, prev.medicines),
+        };
+      }
+      return {
+        ...prev,
+        taxPercentage: savedDraft?.taxPercentage ?? order.taxPercentage ?? prev.taxPercentage ?? 5,
+        medicines: initialMedicines,
+      };
+    });
+    setFulfillmentInitOrderId(order.id);
 
     let cancelled = false;
 
@@ -459,26 +556,26 @@ export const OrderDetailsPage: React.FC = () => {
       if (cancelled) return;
 
       setFulfillmentData((prev) => {
+        const repairedMapped = repaired.map((line) =>
+          mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+        );
+
         if (
           order.status === 'Pending' &&
           localPendingEditsRef.current.orderId === order.id &&
           localPendingEditsRef.current.dirty
         ) {
-          return prev;
+          const workSource =
+            prev.medicines.length > 0
+              ? prev.medicines
+              : savedDraft?.medicines ?? [];
+          return {
+            ...prev,
+            medicines: mergeFulfillmentWorkIntoLines(repairedMapped, workSource),
+          };
         }
-        return {
-          ...prev,
-          medicines:
-            repaired.length > 0
-              ? repaired.map((line) =>
-                  mapRepairedLineToFulfillment(
-                    line,
-                    medicines,
-                    purchaseDiscountLookup
-                  )
-                )
-              : [],
-        };
+
+        return { ...prev, medicines: repairedMapped };
       });
     })();
 
@@ -491,7 +588,6 @@ export const OrderDetailsPage: React.FC = () => {
     productDemands,
     purchaseInvoices,
     purchaseInvoicesList,
-    purchaseDiscountLookup,
     queryClient,
   ]);
 
@@ -531,6 +627,17 @@ export const OrderDetailsPage: React.FC = () => {
       return changed ? { ...prev, medicines: nextMedicines } : prev;
     });
   }, [purchaseDiscountLookup, order?.status, medicines]);
+
+  // Auto-save in-progress fulfillment while Pending (survives navigation to Product Demands).
+  useEffect(() => {
+    if (order?.status !== 'Pending') return;
+    if (!localPendingEditsRef.current.dirty) return;
+    if (!fulfillmentData.medicines.length) return;
+    scheduleFulfillmentDraftSave(fulfillmentData.medicines);
+    return () => {
+      if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    };
+  }, [fulfillmentData.medicines, order?.status, scheduleFulfillmentDraftSave]);
 
   const allBatchesAssignedForTotals = useMemo(
     () =>
@@ -653,8 +760,16 @@ export const OrderDetailsPage: React.FC = () => {
     alert,
   ]);
 
-  if (isLoading) return <Loading message="Loading order details..." />;
+  if (isLoading || medicinesLoading || purchaseInvoicesLoading) {
+    return <Loading message="Loading order details..." />;
+  }
+
   if (!order) return <Alert severity="error">Order not found</Alert>;
+
+  const hasOrderLines = (order.medicines?.length ?? 0) > 0;
+  if (hasOrderLines && fulfillmentInitOrderId !== order.id) {
+    return <Loading message="Loading order items..." />;
+  }
 
   const handleAction = (action: string) => {
     switch (action) {
@@ -739,6 +854,8 @@ export const OrderDetailsPage: React.FC = () => {
             processedBy: (processedBy || order?.processedBy || '').trim() || undefined
           }
         });
+        clearSessionFulfillmentDraft(order.id);
+        localPendingEditsRef.current = { orderId: order.id, dirty: false };
         await alert('Order fulfilled successfully!', { severity: 'success' });
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
@@ -913,6 +1030,7 @@ export const OrderDetailsPage: React.FC = () => {
           }];
           newMedicines[scanningItemIndex].freeQuantity = lineSplit.freeQty;
         }
+        markFulfillmentDirty();
         setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
       } else {
         await alert('QR code does not match this medicine!', { severity: 'warning' });
@@ -1076,6 +1194,7 @@ export const OrderDetailsPage: React.FC = () => {
           newMedicines[itemIndex].verified = true;
         }
         
+        markFulfillmentDirty();
         setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
       }
       
@@ -1365,7 +1484,7 @@ export const OrderDetailsPage: React.FC = () => {
       (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
     );
 
-    localPendingEditsRef.current = { orderId: order?.id || null, dirty: true };
+    markFulfillmentDirty();
     setFulfillmentData((prev) => {
       const newMedicines = [...prev.medicines];
       newMedicines[itemIndex] = lineAfterBatches;
@@ -1383,6 +1502,7 @@ export const OrderDetailsPage: React.FC = () => {
     const newMedicines = [...fulfillmentData.medicines];
     if (newMedicines[index]) {
       newMedicines[index].verified = !newMedicines[index].verified;
+      markFulfillmentDirty();
       setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
     }
   };
@@ -1391,6 +1511,7 @@ export const OrderDetailsPage: React.FC = () => {
     const parsed = raw === '' ? 0 : parseFloat(raw);
     const value = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0;
 
+    markFulfillmentDirty();
     setFulfillmentData((prev) => {
       const medicines = [...prev.medicines];
       const item = { ...medicines[itemIndex] };
@@ -1903,13 +2024,16 @@ export const OrderDetailsPage: React.FC = () => {
                                 variant="contained"
                                 color="warning"
                                 sx={{ mt: 1 }}
-                                onClick={() =>
-                                  navigate(
-                                    `/product-demands?demandId=${encodeURIComponent(
-                                      (item as OrderMedicine).productDemandId!
-                                    )}&returnTo=${encodeURIComponent(`/orders/${order.id}`)}`
-                                  )
-                                }
+                                onClick={() => {
+                                  markFulfillmentDirty();
+                                  void persistFulfillmentDraft(fulfillmentData.medicines).finally(() => {
+                                    navigate(
+                                      `/product-demands?demandId=${encodeURIComponent(
+                                        (item as OrderMedicine).productDemandId!
+                                      )}&returnTo=${encodeURIComponent(`/orders/${order.id}`)}`
+                                    );
+                                  });
+                                }}
                               >
                                 Fulfill request
                               </Button>
@@ -1972,6 +2096,11 @@ export const OrderDetailsPage: React.FC = () => {
                           <TableRow sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.12)' : 'rgba(0, 0, 0, 0.04)' }}>
                             <TableCell colSpan={2}>
                               <Typography variant="body2" fontWeight="bold">{item.name || 'Unknown'}</Typography>
+                              {item.notes ? (
+                                <Typography variant="caption" color="textSecondary" display="block">
+                                  Remark: {item.notes}
+                                </Typography>
+                              ) : null}
                               <Typography variant="caption" color="textSecondary">
                                 {item.batchAllocations.length} Batch{item.batchAllocations.length > 1 ? 'es' : ''} allocated
                                 {item.scannedQRCode && ` | Scanned: ${item.scannedQRCode}`}
@@ -2090,12 +2219,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 </TableCell>
                                 <TableCell>
                                   <Typography variant="caption" color="textSecondary">
-                                    {allocation.expiryDate ? format(
-                                      allocation.expiryDate instanceof Date 
-                                        ? allocation.expiryDate 
-                                        : allocation.expiryDate.toDate(),
-                                      'MM/yyyy'
-                                    ) : '-'}
+                                    {allocation.expiryDate ? formatExpiryMmYyyy(allocation.expiryDate) ?? '-' : '-'}
                                   </Typography>
                                 </TableCell>
                                 <TableCell align="right">
@@ -2199,16 +2323,14 @@ export const OrderDetailsPage: React.FC = () => {
                       <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{item.name || 'Unknown'}</Typography>
+                          {item.notes ? (
+                            <Typography variant="caption" color="textSecondary" display="block">
+                              Remark: {item.notes}
+                            </Typography>
+                          ) : null}
                           <Typography variant="caption" color="textSecondary">
                             {item.batchExpiryDate && (
-                              <>
-                                Exp: {format(
-                                  item.batchExpiryDate instanceof Date 
-                                    ? item.batchExpiryDate 
-                                    : item.batchExpiryDate.toDate(),
-                                  'MM/yyyy'
-                                )}
-                              </>
+                              <>Exp: {formatExpiryMmYyyy(item.batchExpiryDate)}</>
                             )}
                             {item.scannedQRCode && (
                               <>
@@ -2910,8 +3032,7 @@ export const OrderDetailsPage: React.FC = () => {
               
               const allBatches = medicine.stockBatches || [];
               const availableBatches = allBatches.filter(b => 
-                b.quantity > 0 && 
-                (!b.expiryDate || (b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate()) > new Date())
+                b.quantity > 0 && expiryIsAfterNow(b.expiryDate)
               );
               
               if (allBatches.length === 0) {
@@ -2936,7 +3057,7 @@ export const OrderDetailsPage: React.FC = () => {
                     </MenuItem>
                     {allBatches.map((batch) => {
                       const isAvailable = batch.quantity > 0 && 
-                        (!batch.expiryDate || (batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate()) > new Date());
+                        (!batch.expiryDate || expiryIsAfterNow(batch.expiryDate));
                       return (
                         <MenuItem key={batch.id} value={batch.batchNumber} disabled={!isAvailable}>
                           <Box>
@@ -2945,10 +3066,7 @@ export const OrderDetailsPage: React.FC = () => {
                             </Typography>
                             <Typography variant="caption" color={isAvailable ? "textSecondary" : "error"}>
                               Qty: {batch.quantity} | 
-                              Expiry: {batch.expiryDate ? format(
-                                batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate(),
-                                'MMM yyyy'
-                              ) : 'N/A'}
+                              Expiry: {formatExpiryMmYyyy(batch.expiryDate) ?? 'N/A'}
                               {!isAvailable && ' (Unavailable)'}
                             </Typography>
                           </Box>
@@ -3076,12 +3194,7 @@ export const OrderDetailsPage: React.FC = () => {
                     <TableRow key={allocation.batchNumber}>
                       <TableCell>{allocation.batchNumber}</TableCell>
                       <TableCell>
-                        {allocation.expiryDate ? format(
-                          allocation.expiryDate instanceof Date 
-                            ? allocation.expiryDate 
-                            : allocation.expiryDate.toDate(),
-                          'MM/yyyy'
-                        ) : '-'}
+                        {allocation.expiryDate ? formatExpiryMmYyyy(allocation.expiryDate) ?? '-' : '-'}
                       </TableCell>
                       <TableCell align="right">
                         <Chip 
