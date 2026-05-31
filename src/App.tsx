@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
@@ -7,6 +7,7 @@ import { onAuthChange, getUserPanelRole } from './services/firebase';
 import { canAccessPath, type PanelRole } from './auth/permissions';
 import { AuthProvider } from './context/AuthContext';
 import { AppDialogProvider } from './context/AppDialogProvider';
+import { FulfillmentLeaveGuardProvider } from './context/FulfillmentLeaveGuardContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Loading } from './components/Loading';
 import { Layout } from './components/Layout';
@@ -111,40 +112,36 @@ const withLayout = (page: React.ReactNode) => (
   </ProtectedRoute>
 );
 
-function AppRoutes() {
-  return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/" element={withLayout(<DashboardPage />)} />
-      <Route path="/support" element={withLayout(<SupportTicketsPage />)} />
-      <Route path="/stores" element={withLayout(<StoresPage />)} />
-      <Route path="/store-receivables" element={withLayout(<StoreReceivablesPage />)} />
-      <Route path="/payment-requests" element={withLayout(<PaymentRequestsPage />)} />
-      <Route path="/vendors" element={withLayout(<VendorsPage />)} />
-      <Route path="/orders" element={withLayout(<OrdersPage />)} />
-      <Route path="/orders/:orderId" element={withLayout(<OrderDetailsPage />)} />
-      <Route path="/operations" element={withLayout(<OperationsPage />)} />
-      <Route path="/purchases" element={withLayout(<PurchaseInvoicesPage />)} />
-      <Route path="/purchases/new" element={withLayout(<CreatePurchaseInvoicePage />)} />
-      <Route path="/purchases/import-pdf" element={withLayout(<ImportPurchaseInvoicePdfPage />)} />
-      <Route path="/purchases/:invoiceId" element={withLayout(<PurchaseInvoiceDetailsPage />)} />
-      <Route path="/inventory" element={withLayout(<InventoryPage />)} />
-      <Route path="/inventory/:medicineId" element={withLayout(<MedicineDetailsPage />)} />
-      <Route path="/inventory/stock-update" element={withLayout(<StockUpdatePage />)} />
-      <Route path="/invoices" element={withLayout(<InvoicesPage />)} />
-      <Route path="/credit-notes" element={withLayout(<CreditNotesPage />)} />
-      <Route path="/banners" element={withLayout(<BannersPage />)} />
-      <Route path="/home-feed" element={withLayout(<HomeFeedPage />)} />
-      <Route path="/sales-officers" element={withLayout(<SalesOfficersPage />)} />
-      <Route path="/operations-users" element={withLayout(<OperationsUsersPage />)} />
-      <Route path="/pending-retailers" element={withLayout(<PendingRetailersPage />)} />
-      <Route path="/expiry-returns" element={withLayout(<ExpiryReturnsPage />)} />
-      <Route path="/order-returns" element={withLayout(<OrderReturnsPage />)} />
-      <Route path="/margin" element={withLayout(<MarginReportPage />)} />
-      <Route path="/product-demands" element={withLayout(<ProductDemandsPage />)} />
-    </Routes>
-  );
-}
+const router = createBrowserRouter([
+  { path: '/login', element: <LoginPage /> },
+  { path: '/', element: withLayout(<DashboardPage />) },
+  { path: '/support', element: withLayout(<SupportTicketsPage />) },
+  { path: '/stores', element: withLayout(<StoresPage />) },
+  { path: '/store-receivables', element: withLayout(<StoreReceivablesPage />) },
+  { path: '/payment-requests', element: withLayout(<PaymentRequestsPage />) },
+  { path: '/vendors', element: withLayout(<VendorsPage />) },
+  { path: '/orders', element: withLayout(<OrdersPage />) },
+  { path: '/orders/:orderId', element: withLayout(<OrderDetailsPage />) },
+  { path: '/operations', element: withLayout(<OperationsPage />) },
+  { path: '/purchases', element: withLayout(<PurchaseInvoicesPage />) },
+  { path: '/purchases/new', element: withLayout(<CreatePurchaseInvoicePage />) },
+  { path: '/purchases/import-pdf', element: withLayout(<ImportPurchaseInvoicePdfPage />) },
+  { path: '/purchases/:invoiceId', element: withLayout(<PurchaseInvoiceDetailsPage />) },
+  { path: '/inventory', element: withLayout(<InventoryPage />) },
+  { path: '/inventory/:medicineId', element: withLayout(<MedicineDetailsPage />) },
+  { path: '/inventory/stock-update', element: withLayout(<StockUpdatePage />) },
+  { path: '/invoices', element: withLayout(<InvoicesPage />) },
+  { path: '/credit-notes', element: withLayout(<CreditNotesPage />) },
+  { path: '/banners', element: withLayout(<BannersPage />) },
+  { path: '/home-feed', element: withLayout(<HomeFeedPage />) },
+  { path: '/sales-officers', element: withLayout(<SalesOfficersPage />) },
+  { path: '/operations-users', element: withLayout(<OperationsUsersPage />) },
+  { path: '/pending-retailers', element: withLayout(<PendingRetailersPage />) },
+  { path: '/expiry-returns', element: withLayout(<ExpiryReturnsPage />) },
+  { path: '/order-returns', element: withLayout(<OrderReturnsPage />) },
+  { path: '/margin', element: withLayout(<MarginReportPage />) },
+  { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
+]);
 
 function App() {
   return (
@@ -152,13 +149,13 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <ThemeProvider theme={theme}>
           <CssBaseline />
-          <BrowserRouter>
-            <AppDialogProvider>
+          <AppDialogProvider>
+            <FulfillmentLeaveGuardProvider>
               <AuthProvider>
-                <AppRoutes />
+                <RouterProvider router={router} />
               </AuthProvider>
-            </AppDialogProvider>
-          </BrowserRouter>
+            </FulfillmentLeaveGuardProvider>
+          </AppDialogProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </ErrorBoundary>

@@ -49,6 +49,7 @@ import { BrandLogo } from './BrandLogo';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { brandColors } from '../theme/brand';
 import { useAuth } from '../context/AuthContext';
+import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContext';
 import { ROLE_MENU_PATHS, getPanelTitle, type PanelRole } from '../auth/permissions';
 import { AdminNotificationBell } from './AdminNotificationBell';
 import { useAdminNotifications } from '../hooks/useAdminNotifications';
@@ -139,6 +140,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const navigate = useNavigate();
   const location = useLocation();
   const { panelRole } = useAuth();
+  const { guardedNavigate } = useFulfillmentLeaveGuard();
   const { notifications, unreadCount, loading: notificationsLoading, markAllSeen } =
     useAdminNotifications(panelRole);
 
@@ -204,7 +206,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 <ListItemButton
                   selected={isSelected(item.path)}
                   onClick={() => {
-                    navigate(item.path);
+                    void guardedNavigate(navigate, item.path);
                     setMobileOpen(false);
                   }}
                   sx={{ py: 0.75 }}

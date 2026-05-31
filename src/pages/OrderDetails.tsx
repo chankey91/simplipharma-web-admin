@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useBlocker } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -51,6 +51,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useOrder,
+  useOrders,
   useUpdateOrderStatus,
   useFulfillOrder,
   useUpdateOrderDispatch,
@@ -81,6 +82,14 @@ import {
   serializeDraftMedicines,
   writeSessionFulfillmentDraft,
 } from '../utils/orderFulfillmentDraft';
+import {
+  buildExternalPendingReservations,
+  computeBatchAvailability,
+  findBatchStockConflicts,
+  formatBatchStockConflictMessage,
+  lineUsesConflictingBatch,
+  batchReservationKey,
+} from '../utils/fulfillmentBatchReservations';
 import { normalizeFirestoreDate } from '../services/inventory';
 import {
   computeSchemeFulfillmentFreeQty,
@@ -97,6 +106,7 @@ import {
   resolveOrderLineDiscountPct,
 } from '../utils/orderFulfillmentDiscount';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContext';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -255,7 +265,10 @@ export const OrderDetailsPage: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { alert, confirm, prompt } = useAppDialog();
+  const { setGuardActive, allowNextNavigation, guardedNavigate, confirmLeaveIfNeeded } =
+    useFulfillmentLeaveGuard();
   const { data: order, isLoading } = useOrder(orderId || '');
+  const { data: allOrders } = useOrders();
   const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const { data: productDemands } = useProductDemands();
   const demandById = useMemo(() => {
@@ -305,9 +318,13 @@ export const OrderDetailsPage: React.FC = () => {
     [purchaseDiscountLookup]
   );
 
+  /** Tracks in-progress batch assignments (synced with leave guard + draft save). */
+  const [fulfillmentDirty, setFulfillmentDirty] = useState(false);
+
   const markFulfillmentDirty = useCallback(() => {
     if (order?.id) {
       localPendingEditsRef.current = { orderId: order.id, dirty: true };
+      setFulfillmentDirty(true);
     }
   }, [order?.id]);
 
@@ -320,8 +337,9 @@ export const OrderDetailsPage: React.FC = () => {
       };
       writeSessionFulfillmentDraft(order.id, payload);
       await saveOrderFulfillmentDraft(order.id, payload);
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
     },
-    [order?.id, order?.status, order?.taxPercentage]
+    [order?.id, order?.status, order?.taxPercentage, queryClient]
   );
 
   const scheduleFulfillmentDraftSave = useCallback(
@@ -431,6 +449,9 @@ export const OrderDetailsPage: React.FC = () => {
     batchNumber: string;
     quantity: number;
     availableQuantity: number;
+    stockQuantity?: number;
+    reservedElsewhere?: number;
+    reservedSameOrderOtherLines?: number;
     expiryDate?: Date | any;
     mrp?: number;
     purchasePrice?: number;
@@ -460,9 +481,41 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     setFulfillmentInitOrderId(null);
     setFulfillmentData({ taxPercentage: 5, medicines: [] });
+    setFulfillmentDirty(false);
     localPendingEditsRef.current = { orderId: null, dirty: false };
     orderDemandRepairAttempted.current = null;
   }, [orderId]);
+
+  useEffect(() => {
+    const guardOn = fulfillmentDirty && order?.status === 'Pending';
+    setGuardActive(guardOn);
+    return () => setGuardActive(false);
+  }, [fulfillmentDirty, order?.status, setGuardActive]);
+
+  useEffect(() => {
+    if (!fulfillmentDirty || order?.status !== 'Pending') return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [fulfillmentDirty, order?.status]);
+
+  const leaveBlocker = useBlocker(
+    Boolean(fulfillmentDirty && order?.status === 'Pending')
+  );
+  const leaveConfirmInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (leaveBlocker.state !== 'blocked' || leaveConfirmInFlightRef.current) return;
+    leaveConfirmInFlightRef.current = true;
+    void confirmLeaveIfNeeded().then((ok) => {
+      leaveConfirmInFlightRef.current = false;
+      if (ok) leaveBlocker.proceed?.();
+      else leaveBlocker.reset?.();
+    });
+  }, [leaveBlocker.state, confirmLeaveIfNeeded, leaveBlocker]);
 
   useEffect(() => {
     if (!order || !medicines || purchaseInvoices === undefined) return;
@@ -507,6 +560,7 @@ export const OrderDetailsPage: React.FC = () => {
 
     if (savedDraft) {
       localPendingEditsRef.current = { orderId: order.id, dirty: true };
+      setFulfillmentDirty(true);
     }
 
     setFulfillmentData((prev) => {
@@ -651,6 +705,44 @@ export const OrderDetailsPage: React.FC = () => {
     [fulfillmentData.medicines]
   );
 
+  const externalBatchReservations = useMemo(
+    () => buildExternalPendingReservations(allOrders, order?.id || ''),
+    [allOrders, order?.id]
+  );
+
+  const getBatchStockQuantity = useCallback(
+    (medicineId: string, batchNumber: string) => {
+      const med = medicines?.find((m) => m.id === medicineId);
+      const batch = med?.stockBatches?.find((b) => b.batchNumber === batchNumber);
+      return Number(batch?.quantity) || 0;
+    },
+    [medicines]
+  );
+
+  const batchStockConflicts = useMemo(() => {
+    if (order?.status !== 'Pending' || !fulfillmentData.medicines.length) return [];
+    return findBatchStockConflicts(
+      fulfillmentData.medicines,
+      externalBatchReservations,
+      getBatchStockQuantity,
+      (medicineId) => medicines?.find((m) => m.id === medicineId)?.name || medicineId
+    );
+  }, [
+    order?.status,
+    fulfillmentData.medicines,
+    externalBatchReservations,
+    getBatchStockQuantity,
+    medicines,
+  ]);
+
+  const batchConflictKeys = useMemo(
+    () =>
+      new Set(
+        batchStockConflicts.map((c) => batchReservationKey(c.medicineId, c.batchNumber))
+      ),
+    [batchStockConflicts]
+  );
+
   const taxPctForTotals = order?.taxPercentage || fulfillmentData.taxPercentage || 5;
   const orderTotals = useMemo(
     () =>
@@ -774,12 +866,22 @@ export const OrderDetailsPage: React.FC = () => {
   const handleAction = (action: string) => {
     switch (action) {
       case 'fulfill':
-        setConfirmDialog({
-          open: true,
-          action: 'fulfill',
-          title: 'Confirm Fulfillment',
-          message: 'Are you sure you want to mark this order as fulfilled? This will generate the tax invoice.'
-        });
+        void (async () => {
+          if (batchStockConflicts.length > 0) {
+            await alert(
+              `Cannot fulfill — batch assignments exceed available stock (other pending orders may have reserved the same batches).\n\n${formatBatchStockConflictMessage(batchStockConflicts)}`,
+              { severity: 'error', title: 'Stock conflict' }
+            );
+            return;
+          }
+          setConfirmDialog({
+            open: true,
+            action: 'fulfill',
+            title: 'Confirm Fulfillment',
+            message:
+              'Are you sure you want to mark this order as fulfilled? This will generate the tax invoice.',
+          });
+        })();
         break;
       case 'dispatch':
         setConfirmDialog({
@@ -856,6 +958,7 @@ export const OrderDetailsPage: React.FC = () => {
         });
         clearSessionFulfillmentDraft(order.id);
         localPendingEditsRef.current = { orderId: order.id, dirty: false };
+        setFulfillmentDirty(false);
         await alert('Order fulfilled successfully!', { severity: 'success' });
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
@@ -1309,14 +1412,22 @@ export const OrderDetailsPage: React.FC = () => {
       filteredBatches.map(batch => {
         const existing = existingAllocations.find((a: any) => a.batchNumber === batch.batchNumber);
         const alreadyAllocated = existing ? orderedUnitsFromAllocation(existing) : 0;
-        // Available quantity = current batch quantity
-        // Note: If order hasn't been fulfilled yet, batch.quantity is the original stock
-        // If order has been fulfilled, batch.quantity is already reduced
-        const availableQty = batch.quantity || 0;
+        const stockQty = Number(batch.quantity) || 0;
+        const avail = computeBatchAvailability(
+          item.medicineId!,
+          batch.batchNumber,
+          stockQty,
+          externalBatchReservations,
+          fulfillmentData.medicines,
+          { excludeLineIndex: itemIndex }
+        );
         return {
           batchNumber: batch.batchNumber,
           quantity: alreadyAllocated,
-          availableQuantity: availableQty, // Current available stock in batch
+          availableQuantity: avail.effectiveAvailable,
+          stockQuantity: avail.stockQuantity,
+          reservedElsewhere: avail.reservedElsewhere,
+          reservedSameOrderOtherLines: avail.reservedSameOrderOtherLines,
           expiryDate: batch.expiryDate,
           mrp: batch.mrp,
           purchasePrice: batch.purchasePrice,
@@ -1374,14 +1485,16 @@ export const OrderDetailsPage: React.FC = () => {
       }
     }
 
-    // Validate each batch has enough stock
-    // Note: If order status is 'Pending', stock hasn't been reduced yet, so availableQuantity is the actual stock
-    // If order has been fulfilled, stock is already reduced, so availableQuantity reflects current stock
+    // Validate each batch has enough stock (after soft reservations from other pending orders)
     for (const allocation of batchAllocations) {
       const phys = orderedUnitsFromAllocation(allocation);
       if (phys > 0 && phys > allocation.availableQuantity) {
+        const reservedNote =
+          (allocation.reservedElsewhere ?? 0) > 0
+            ? ` (${allocation.reservedElsewhere} reserved in other pending orders)`
+            : '';
         await alert(
-          `Batch ${allocation.batchNumber} only has ${allocation.availableQuantity} units available, but ${phys} were allocated`,
+          `Batch ${allocation.batchNumber} only has ${allocation.availableQuantity} units available for this order${reservedNote}, but ${phys} were allocated`,
           { severity: 'warning' }
         );
         return;
@@ -1637,7 +1750,7 @@ export const OrderDetailsPage: React.FC = () => {
         { label: `Order #${formatOrderNumberForDisplay(order.id)}` }
       ]} />
       <Box display="flex" alignItems="center" mb={3}>
-        <IconButton onClick={() => navigate('/orders')} sx={{ mr: 2 }}>
+        <IconButton onClick={() => void guardedNavigate(navigate, '/orders')} sx={{ mr: 2 }}>
           <ArrowBack />
         </IconButton>
         <Typography variant="h4">Order #{formatOrderNumberForDisplay(order.id)}</Typography>
@@ -1907,6 +2020,26 @@ export const OrderDetailsPage: React.FC = () => {
 
         {/* Order Items & Fulfillment */}
         <Grid item xs={12} md={9} sx={{ maxWidth: '72%', flexBasis: '72%', flexGrow: 0 }}>
+          {fulfillmentDirty && order.status === 'Pending' && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Fulfillment in progress — batch assignments are saved automatically and will be restored
+              when you return. Refreshing the page or navigating away will ask you to confirm first.
+            </Alert>
+          )}
+          {batchStockConflicts.length > 0 && order.status === 'Pending' && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Batch assignments may be stale — stock conflict with other pending orders
+              </Typography>
+              {batchStockConflicts.map((c) => (
+                <Typography key={`${c.medicineId}:${c.batchNumber}`} variant="body2" sx={{ mb: 0.5 }}>
+                  {c.medicineName} / {c.batchNumber}: {c.allocatedOnThisOrder} allocated, only{' '}
+                  {c.effectiveAvailable} available ({c.stockQuantity} in stock, {c.reservedElsewhere}{' '}
+                  reserved elsewhere). Re-assign batches before fulfilling.
+                </Typography>
+              ))}
+            </Alert>
+          )}
           <Paper sx={{ p: 3, mb: 3 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
               <Typography variant="h6">Order Items</Typography>
@@ -2027,6 +2160,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 onClick={() => {
                                   markFulfillmentDirty();
                                   void persistFulfillmentDraft(fulfillmentData.medicines).finally(() => {
+                                    allowNextNavigation();
                                     navigate(
                                       `/product-demands?demandId=${encodeURIComponent(
                                         (item as OrderMedicine).productDemandId!
@@ -2105,6 +2239,14 @@ export const OrderDetailsPage: React.FC = () => {
                                 {item.batchAllocations.length} Batch{item.batchAllocations.length > 1 ? 'es' : ''} allocated
                                 {item.scannedQRCode && ` | Scanned: ${item.scannedQRCode}`}
                               </Typography>
+                              {lineUsesConflictingBatch(item, batchConflictKeys) && (
+                                <Chip
+                                  label="Stock conflict — re-assign batches"
+                                  size="small"
+                                  color="warning"
+                                  sx={{ mt: 0.5, height: 20, fontSize: '0.7rem' }}
+                                />
+                              )}
                             </TableCell>
                             <TableCell align="right">
                               <Typography variant="body2" fontWeight="medium">{paidQtyForLine}</Typography>
@@ -2339,6 +2481,14 @@ export const OrderDetailsPage: React.FC = () => {
                               </>
                             )}
                           </Typography>
+                          {lineUsesConflictingBatch(item, batchConflictKeys) && (
+                            <Chip
+                              label="Stock conflict — re-assign batches"
+                              size="small"
+                              color="warning"
+                              sx={{ mt: 0.5, height: 20, fontSize: '0.7rem' }}
+                            />
+                          )}
                         </TableCell>
                         <TableCell>
                           {item.batchAllocations && item.batchAllocations.length === 1
@@ -2495,7 +2645,12 @@ export const OrderDetailsPage: React.FC = () => {
                   size="large"
                   startIcon={<Receipt />}
                   onClick={() => handleAction('fulfill')}
-                  disabled={!fulfillmentData.medicines.every(m => (m as any).lineType === 'product_demand' || m.verified)}
+                  disabled={
+                    batchStockConflicts.length > 0 ||
+                    !fulfillmentData.medicines.every(
+                      (m) => (m as any).lineType === 'product_demand' || m.verified
+                    )
+                  }
                 >
                   Generate Invoice & Fulfill
                 </Button>
@@ -3182,7 +3337,7 @@ export const OrderDetailsPage: React.FC = () => {
                   <TableRow>
                     <TableCell>Batch Number</TableCell>
                     <TableCell>Expiry</TableCell>
-                    <TableCell align="right">Available</TableCell>
+                    <TableCell align="right">Available (this order)</TableCell>
                     <TableCell align="right">Allocate</TableCell>
                     <TableCell align="right">Price</TableCell>
                     <TableCell align="right">MRP</TableCell>
@@ -3197,11 +3352,19 @@ export const OrderDetailsPage: React.FC = () => {
                         {allocation.expiryDate ? formatExpiryMmYyyy(allocation.expiryDate) ?? '-' : '-'}
                       </TableCell>
                       <TableCell align="right">
-                        <Chip 
-                          label={allocation.availableQuantity} 
-                          size="small"
-                          color={allocation.availableQuantity > 0 ? 'success' : 'error'}
-                        />
+                        <Box display="flex" flexDirection="column" alignItems="flex-end" gap={0.5}>
+                          <Chip
+                            label={allocation.availableQuantity}
+                            size="small"
+                            color={allocation.availableQuantity > 0 ? 'success' : 'error'}
+                          />
+                          {(allocation.reservedElsewhere ?? 0) > 0 && (
+                            <Typography variant="caption" color="text.secondary">
+                              {allocation.stockQuantity ?? allocation.availableQuantity} in stock,{' '}
+                              {allocation.reservedElsewhere} reserved elsewhere
+                            </Typography>
+                          )}
+                        </Box>
                       </TableCell>
                       <TableCell align="right">
                         <TextField
