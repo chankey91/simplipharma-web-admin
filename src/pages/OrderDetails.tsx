@@ -97,6 +97,8 @@ import {
   orderedUnitsFromAllocation,
   schemeLinePaidFreeConserved,
   schemeOrderLineDisplayTotals,
+  formatSchemeQty,
+  splitSchemeAcrossAllocationPhysical,
 } from '../utils/schemeFulfillment';
 import { orderLineInvoiceEconomics, orderLineTaxableBeforeDiscount } from '../utils/orderLineInvoiceEconomics';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
@@ -1552,8 +1554,12 @@ export const OrderDetailsPage: React.FC = () => {
       );
 
       const qi = orderedUnitsFromAllocation(a);
-      const free_i = O > 0 ? (qi / O) * lineSplit.freeQty : 0;
-      const paid_i = qi - free_i;
+      const { paid: paid_i, free: free_i } = splitSchemeAcrossAllocationPhysical(
+        qi,
+        O,
+        lineSplit.paidQty,
+        lineSplit.freeQty
+      );
 
       return {
         batchNumber: a.batchNumber,
@@ -1583,7 +1589,7 @@ export const OrderDetailsPage: React.FC = () => {
         ...item,
         batchAllocations: processedAllocations,
         originalQuantity: totalAllocated < requiredQuantity ? requiredQuantity : item.originalQuantity || item.quantity,
-        quantity: totalAllocated,
+        quantity: lineSplit.paidQty,
         freeQuantity: totalFreeQuantity,
         batchNumber: validAllocations[0].batchNumber,
         batchExpiryDate: validAllocations[0].expiryDate,
@@ -2249,12 +2255,14 @@ export const OrderDetailsPage: React.FC = () => {
                               )}
                             </TableCell>
                             <TableCell align="right">
-                              <Typography variant="body2" fontWeight="medium">{paidQtyForLine}</Typography>
+                              <Typography variant="body2" fontWeight="medium">
+                                {formatSchemeQty(paidQtyForLine)}
+                              </Typography>
                             </TableCell>
                             <TableCell align="right">
                               <Box>
                                 <Typography variant="body2">
-                                  {lineDisplay.freeQty > 0 ? lineDisplay.freeQty : '-'}
+                                  {lineDisplay.freeQty > 0 ? formatSchemeQty(lineDisplay.freeQty) : '-'}
                                 </Typography>
                                 {schemeLabels.length > 0 && (
                                   <Typography variant="caption" color="text.secondary">
@@ -2265,7 +2273,7 @@ export const OrderDetailsPage: React.FC = () => {
                             </TableCell>
                             <TableCell align="right">
                               <Typography variant="body2" fontWeight="bold">
-                                {physicalQtyForLine}
+                                {formatSchemeQty(physicalQtyForLine)}
                               </Typography>
                             </TableCell>
                             <TableCell align="right" colSpan={4}>
@@ -2373,7 +2381,7 @@ export const OrderDetailsPage: React.FC = () => {
                                   </Typography>
                                 </TableCell>
                                 <TableCell align="right">
-                                  <Typography variant="caption">{batchPhysical}</Typography>
+                                  <Typography variant="caption">{formatSchemeQty(batchPhysical)}</Typography>
                                 </TableCell>
                                 <TableCell align="right">
                                   <Typography variant="caption">
@@ -2505,7 +2513,7 @@ export const OrderDetailsPage: React.FC = () => {
                           {item.originalQuantity && item.originalQuantity !== item.quantity ? (
                             <Box>
                               <Typography variant="body2" fontWeight="medium">
-                                {paidForDisplay}
+                                {formatSchemeQty(paidForDisplay)}
                               </Typography>
                               <Typography variant="caption" color="text.secondary" display="block">
                                 Line strips fulfilled: {item.quantity} / {item.originalQuantity}
@@ -2518,13 +2526,13 @@ export const OrderDetailsPage: React.FC = () => {
                               />
                             </Box>
                           ) : (
-                            paidForDisplay
+                            formatSchemeQty(paidForDisplay)
                           )}
                         </TableCell>
                         <TableCell align="right">
                           <Box>
                             <Typography variant="body2">
-                              {singleLineDisplay.freeQty > 0 ? singleLineDisplay.freeQty : '-'}
+                              {singleLineDisplay.freeQty > 0 ? formatSchemeQty(singleLineDisplay.freeQty) : '-'}
                             </Typography>
                             {schemeLabels.length > 0 && (
                               <Typography variant="caption" color="text.secondary">
@@ -2535,7 +2543,7 @@ export const OrderDetailsPage: React.FC = () => {
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">
-                            {physicalForDisplay}
+                            {formatSchemeQty(physicalForDisplay)}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
