@@ -11,7 +11,7 @@ import {
   writeBatch,
 } from './firebase';
 import { OrderMedicine, ProductDemand, PurchaseInvoice } from '../types';
-import { getMedicineById } from './inventory';
+import { createMedicine, getAllMedicines, getMedicineById } from './inventory';
 import { getAllPurchaseInvoices, getPurchaseInvoiceByReference } from './purchaseInvoices';
 import {
   buildFulfilledDemandOrderLine,
@@ -69,6 +69,226 @@ export const getProductDemandsByIds = async (ids: string[]): Promise<Map<string,
   return map;
 };
 
+/**
+ * Ensure a catalog medicine exists for a fulfilled product demand.
+ * Matches existing medicines by name (case-insensitive); otherwise creates a new medicines doc.
+ */
+export async function ensureMedicineForProductDemand(
+  demand: {
+    productName: string;
+    manufacturerName: string;
+    requestedUnit: string;
+    notes?: string;
+    imageUrl?: string;
+  },
+  nameToMedicineId?: Map<string, string>
+): Promise<{ medicineId: string; created: boolean }> {
+  const name = demand.productName.trim();
+  if (!name) throw new Error('Product name is required to create a medicine');
+
+  const key = name.toLowerCase().trim();
+  const cachedId = nameToMedicineId?.get(key);
+  if (cachedId) {
+    return { medicineId: cachedId, created: false };
+  }
+
+  if (!nameToMedicineId) {
+    const all = await getAllMedicines();
+    const existing = all.find((m) => m.name.toLowerCase().trim() === key);
+    if (existing) {
+      return { medicineId: existing.id, created: false };
+    }
+  }
+
+  const medicineId = await createMedicine({
+    name,
+    manufacturer: (demand.manufacturerName || '').trim() || '—',
+    category: 'General',
+    unit: demand.requestedUnit?.trim() || undefined,
+    stock: 0,
+    price: 0,
+    gstRate: 5,
+    description: demand.notes?.trim() || undefined,
+    imageUrl: demand.imageUrl?.trim() || undefined,
+  });
+
+  nameToMedicineId?.set(key, medicineId);
+  return { medicineId, created: true };
+}
+
+export type MigrateProductDemandsToMedicinesResult = {
+  processed: number;
+  created: number;
+  linkedExisting: number;
+  demandsUpdated: number;
+  ordersRepaired: number;
+  skipped: number;
+  errors: string[];
+};
+
+/**
+ * Backfill medicines catalog from existing product_demands (fulfilled, and optionally pending).
+ * Does not delete product_demands — links via fulfilledMedicineId and repairs order lines when needed.
+ */
+export async function migrateProductDemandsToMedicines(options?: {
+  /** Also create catalog rows for pending demands (status stays pending). */
+  includePending?: boolean;
+  /** Promote product_demand lines on linked orders. Default true. */
+  repairOrders?: boolean;
+}): Promise<MigrateProductDemandsToMedicinesResult> {
+  const result: MigrateProductDemandsToMedicinesResult = {
+    processed: 0,
+    created: 0,
+    linkedExisting: 0,
+    demandsUpdated: 0,
+    ordersRepaired: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  const demands = await getAllProductDemands();
+  const toProcess = demands.filter((d) => {
+    if (d.status === 'rejected') return false;
+    if (d.status === 'fulfilled') return true;
+    return Boolean(options?.includePending && d.status === 'pending');
+  });
+
+  const allMedicines = await getAllMedicines();
+  const nameToMedicineId = new Map<string, string>();
+  for (const m of allMedicines) {
+    const k = m.name.toLowerCase().trim();
+    if (k && !nameToMedicineId.has(k)) {
+      nameToMedicineId.set(k, m.id);
+    }
+  }
+
+  let purchaseInvoices: PurchaseInvoice[] | undefined;
+  try {
+    purchaseInvoices = await getAllPurchaseInvoices();
+  } catch {
+    purchaseInvoices = undefined;
+  }
+
+  for (const demand of toProcess) {
+    result.processed++;
+    try {
+      if (!demand.productName?.trim()) {
+        result.skipped++;
+        continue;
+      }
+
+      let medicineId = demand.fulfilledMedicineId?.trim() || '';
+      if (medicineId) {
+        const med = await getMedicineById(medicineId);
+        if (!med) medicineId = '';
+      }
+
+      let created = false;
+      if (!medicineId) {
+        const ensured = await ensureMedicineForProductDemand(
+          {
+            productName: demand.productName,
+            manufacturerName: demand.manufacturerName,
+            requestedUnit: demand.requestedUnit,
+            notes: demand.notes,
+            imageUrl: demand.imageUrl,
+          },
+          nameToMedicineId
+        );
+        medicineId = ensured.medicineId;
+        created = ensured.created;
+        if (created) result.created++;
+        else result.linkedExisting++;
+      } else {
+        result.linkedExisting++;
+      }
+
+      const medicine = await getMedicineById(medicineId);
+      if (!medicine) {
+        throw new Error('Medicine missing after ensure');
+      }
+
+      const fulfilledName = medicine.name || demand.productName;
+
+      if (demand.status === 'fulfilled') {
+        const needsDemandUpdate =
+          demand.fulfilledMedicineId !== medicineId ||
+          !demand.fulfilledMedicineName ||
+          demand.fulfilledMedicineName !== fulfilledName;
+
+        if (needsDemandUpdate) {
+          await updateDoc(doc(db, 'product_demands', demand.id), {
+            fulfilledMedicineId: medicineId,
+            fulfilledMedicineName: fulfilledName,
+            updatedAt: serverTimestamp(),
+          });
+          result.demandsUpdated++;
+        }
+      }
+
+      const orderId = demand.orderId?.trim();
+      if (options?.repairOrders !== false && orderId && demand.status === 'fulfilled') {
+        const orderRef = doc(db, 'orders', orderId);
+        const orderSnap = await getDoc(orderRef);
+        if (orderSnap.exists()) {
+          const orderMedicines = (orderSnap.data().medicines || []) as OrderMedicine[];
+          const lineIndex = orderMedicines.findIndex(
+            (m) =>
+              m.productDemandId === demand.id ||
+              (m.lineType === 'product_demand' &&
+                String(m.name || '')
+                  .toLowerCase()
+                  .includes(demand.productName.toLowerCase().slice(0, 8)))
+          );
+          if (lineIndex >= 0 && orderMedicines[lineIndex].lineType === 'product_demand') {
+            const dSnap = await getDoc(doc(db, 'product_demands', demand.id));
+            const d = dSnap.data() as Record<string, unknown>;
+            const cartQty =
+              typeof demand.fulfilledCartQuantity === 'number'
+                ? demand.fulfilledCartQuantity
+                : undefined;
+            const demandForLine = parseDemandDoc(demand.id, {
+              ...d,
+              status: 'fulfilled',
+              fulfilledMedicineId: medicineId,
+              fulfilledMedicineName: fulfilledName,
+            });
+            let medList = [medicine];
+            const piPreview = findPiItemForFulfilledDemand(
+              purchaseInvoices,
+              demandForLine,
+              orderMedicines[lineIndex].name
+            );
+            if (piPreview?.medicineId && piPreview.medicineId !== medicine.id) {
+              const linked = await getMedicineById(piPreview.medicineId);
+              if (linked) medList = [linked];
+            }
+            const promoted = buildFulfilledDemandOrderLine(
+              orderMedicines[lineIndex],
+              demandForLine,
+              purchaseInvoices,
+              medList,
+              cartQty
+            );
+            const nextMedicines = orderMedicines.map((m, i) =>
+              i === lineIndex ? (serializePromotedDemandLine(promoted) as unknown as OrderMedicine) : m
+            );
+            await updateDoc(orderRef, { medicines: nextMedicines });
+            result.ordersRepaired++;
+          }
+        }
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (result.errors.length < 40) {
+        result.errors.push(`${demand.id} (${demand.productName}): ${msg}`);
+      }
+    }
+  }
+
+  return result;
+}
+
 export const getAllProductDemands = async (): Promise<ProductDemand[]> => {
   const snap = await getDocs(collection(db, 'product_demands'));
   const list = snap.docs.map((d) => parseDemandDoc(d.id, d.data()));
@@ -81,14 +301,34 @@ export const getAllProductDemands = async (): Promise<ProductDemand[]> => {
 
 export const fulfillProductDemand = async (
   demandId: string,
-  medicineId: string,
-  options?: { quantity?: number; fulfillmentNote?: string; purchaseInvoiceId?: string }
-): Promise<{ orderId?: string }> => {
+  options?: {
+    /** Link to an existing catalog item; if omitted, creates or matches by product name. */
+    medicineId?: string;
+    quantity?: number;
+    fulfillmentNote?: string;
+    purchaseInvoiceId?: string;
+  }
+): Promise<{ orderId?: string; medicineId: string; medicineCreated: boolean }> => {
   const demandRef = doc(db, 'product_demands', demandId);
   const demandSnap = await getDoc(demandRef);
   if (!demandSnap.exists()) throw new Error('Demand not found');
   const d = demandSnap.data() as Record<string, unknown>;
   if (d.status !== 'pending') throw new Error('Demand is not pending');
+
+  let medicineId = options?.medicineId?.trim() || '';
+  let medicineCreated = false;
+
+  if (!medicineId) {
+    const ensured = await ensureMedicineForProductDemand({
+      productName: String(d.productName || ''),
+      manufacturerName: String(d.manufacturerName || ''),
+      requestedUnit: String(d.requestedUnit || '—'),
+      notes: typeof d.notes === 'string' ? d.notes : undefined,
+      imageUrl: typeof d.imageUrl === 'string' ? d.imageUrl : undefined,
+    });
+    medicineId = ensured.medicineId;
+    medicineCreated = ensured.created;
+  }
 
   const medicine = await getMedicineById(medicineId);
   if (!medicine) throw new Error('Medicine not found');
@@ -197,7 +437,11 @@ export const fulfillProductDemand = async (
 
   await batch.commit();
 
-  return { orderId: orderId || undefined };
+  return {
+    orderId: orderId || undefined,
+    medicineId,
+    medicineCreated,
+  };
 };
 
 /** Attach PI doc id / invoice number to demands when it can be inferred from PI lines. */

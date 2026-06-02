@@ -786,7 +786,8 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
   if (medicineData.code) newMedicine.code = medicineData.code;
   if (medicineData.unit) newMedicine.unit = medicineData.unit;
   if (medicineData.description) newMedicine.description = medicineData.description;
-  
+  if (medicineData.imageUrl) newMedicine.imageUrl = medicineData.imageUrl;
+
   await setDoc(medicineRef, newMedicine);
   return medicineRef.id;
 };

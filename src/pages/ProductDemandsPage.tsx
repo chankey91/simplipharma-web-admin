@@ -27,7 +27,12 @@ import { format } from 'date-fns';
 import { getTodayDateStringIST } from '../utils/dateTime';
 import * as XLSX from 'xlsx';
 import { FileDownload, PostAdd, Search } from '@mui/icons-material';
-import { useProductDemands, useFulfillProductDemand, useRejectProductDemand } from '../hooks/useProductDemands';
+import {
+  useProductDemands,
+  useFulfillProductDemand,
+  useRejectProductDemand,
+  useMigrateProductDemandsToMedicines,
+} from '../hooks/useProductDemands';
 import { useMedicines } from '../hooks/useInventory';
 import { ProductDemand, Medicine } from '../types';
 import { Loading } from '../components/Loading';
@@ -66,6 +71,7 @@ export const ProductDemandsPage: React.FC = () => {
   const { data: medicines } = useMedicines();
   const fulfillMutation = useFulfillProductDemand();
   const rejectMutation = useRejectProductDemand();
+  const migrateMutation = useMigrateProductDemandsToMedicines();
   const { alert, confirm, prompt } = useAppDialog();
 
   const [filter, setFilter] = useState<Filter>('pending');
@@ -264,19 +270,27 @@ export const ProductDemandsPage: React.FC = () => {
   );
 
   const handleFulfill = async () => {
-    if (!selectedDemand || !selectedMedicine) {
-      await alert('Select the medicine that was added to inventory (after purchase / master data).', { severity: 'warning' });
-      return;
-    }
+    if (!selectedDemand) return;
     const q = parseInt(cartQty, 10);
     try {
-      await fulfillMutation.mutateAsync({
+      const result = await fulfillMutation.mutateAsync({
         demandId: selectedDemand.id,
-        medicineId: selectedMedicine.id,
+        medicineId: selectedMedicine?.id,
         quantity: !isNaN(q) && q > 0 ? q : 1,
         fulfillmentNote: fulfillNote,
         purchaseInvoiceId: purchaseInvoiceId,
       });
+      if (result.medicineCreated) {
+        await alert(
+          `Added "${selectedDemand.productName}" to the medicine catalog (medicines collection) and fulfilled the demand.`,
+          { severity: 'success', title: 'Catalog item created' }
+        );
+      } else if (!selectedMedicine) {
+        await alert(
+          `Linked to existing catalog medicine and fulfilled the demand.`,
+          { severity: 'success' }
+        );
+      }
       closeFulfillDialog({ navigateBack: true });
     } catch (e: any) {
       await alert(e?.message || 'Failed to fulfill', { severity: 'error' });
@@ -314,6 +328,50 @@ export const ProductDemandsPage: React.FC = () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Product demands');
     const stamp = getTodayDateStringIST();
     XLSX.writeFile(wb, `product-demands-${stamp}.xlsx`);
+  };
+
+  const handleMigrateToCatalog = async () => {
+    const fulfilledCount = demands?.filter((d) => d.status === 'fulfilled').length ?? 0;
+    if (fulfilledCount === 0) {
+      await alert('No fulfilled demands to migrate. Fulfill demands first, or use Fulfill on each row.', {
+        severity: 'info',
+      });
+      return;
+    }
+    const ok = await confirm(
+      `Sync ${fulfilledCount} fulfilled demand(s) into the medicines catalog?\n\n` +
+        `• Creates missing medicines documents (matched by product name)\n` +
+        `• Updates fulfilledMedicineId on product_demands\n` +
+        `• Repairs order lines still marked as product requests\n\n` +
+        `product_demands records are kept for history.`,
+      {
+        title: 'Sync demands → medicines',
+        confirmLabel: 'Run migration',
+        cancelLabel: 'Cancel',
+      }
+    );
+    if (!ok) return;
+
+    try {
+      const result = await migrateMutation.mutateAsync({
+        includePending: false,
+        repairOrders: true,
+      });
+      await alert(
+        `Migration finished.\n\n` +
+          `Processed: ${result.processed}\n` +
+          `Created in medicines: ${result.created}\n` +
+          `Linked to existing: ${result.linkedExisting}\n` +
+          `Demands updated: ${result.demandsUpdated}\n` +
+          `Orders repaired: ${result.ordersRepaired}\n` +
+          `Skipped: ${result.skipped}` +
+          (result.errors.length ? `\n\nErrors:\n${result.errors.slice(0, 8).join('\n')}` : ''),
+        { severity: result.errors.length ? 'warning' : 'success', title: 'Migration complete' }
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Migration failed';
+      await alert(msg, { severity: 'error' });
+    }
   };
 
   const handleReject = async () => {
@@ -354,6 +412,14 @@ export const ProductDemandsPage: React.FC = () => {
           <Button
             variant="outlined"
             size="small"
+            onClick={() => void handleMigrateToCatalog()}
+            disabled={!demands?.length || migrateMutation.isPending}
+          >
+            {migrateMutation.isPending ? 'Migrating…' : 'Sync to medicines catalog'}
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
             startIcon={<FileDownload />}
             onClick={downloadDemandsExcel}
             disabled={!demands?.length || sortedDemands.length === 0}
@@ -364,15 +430,14 @@ export const ProductDemandsPage: React.FC = () => {
       </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>
-        Workflow: add the medicine in{' '}
-        <MuiLink component="button" type="button" onClick={() => navigate('/inventory')}>
-          Inventory
-        </MuiLink>
-        , record stock via{' '}
+        Fulfill creates or links a row in the <strong>medicines</strong> catalog (matched by product name if it
+        already exists), updates <strong>product_demands</strong> to fulfilled, and promotes any linked order
+        line. Optionally pick an existing medicine below, or leave blank to auto-add from the request. Record
+        stock via{' '}
         <MuiLink component="button" type="button" onClick={() => navigate('/purchases/new')}>
           New purchase invoice
-        </MuiLink>
-        , then select that product below and fulfill — the retailer gets a notification and the item is queued for their cart.
+        </MuiLink>{' '}
+        when stock arrives.
       </Alert>
 
       <TableContainer component={Paper}>
@@ -557,9 +622,8 @@ export const ProductDemandsPage: React.FC = () => {
             renderInput={(params) => (
               <TextField
                 {...params}
-                label="Medicine in master (after you added + purchased stock)"
-                required
-                placeholder="Type 2+ letters to search by name or manufacturer…"
+                label="Link existing medicine (optional)"
+                placeholder="Leave empty to add to catalog from request, or search to link existing…"
                 InputProps={{
                   ...params.InputProps,
                   startAdornment: <Search sx={{ mr: 1, color: 'text.secondary' }} />,
