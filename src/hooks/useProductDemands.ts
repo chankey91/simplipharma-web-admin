@@ -3,6 +3,7 @@ import {
   getAllProductDemands,
   fulfillProductDemand,
   rejectProductDemand,
+  migrateProductDemandsToMedicines,
 } from '../services/productDemands';
 
 export const useProductDemands = () => {
@@ -23,22 +24,39 @@ export const useFulfillProductDemand = () => {
       purchaseInvoiceId,
     }: {
       demandId: string;
-      medicineId: string;
+      medicineId?: string;
       quantity?: number;
       fulfillmentNote?: string;
       purchaseInvoiceId?: string;
-    }) => fulfillProductDemand(demandId, medicineId, {
+    }) =>
+      fulfillProductDemand(demandId, {
+        medicineId,
         quantity,
         fulfillmentNote,
         purchaseInvoiceId,
       }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+      queryClient.invalidateQueries({ queryKey: ['medicines'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['order'] });
       if (data?.orderId) {
         queryClient.invalidateQueries({ queryKey: ['order', data.orderId] });
       }
+    },
+  });
+};
+
+export const useMigrateProductDemandsToMedicines = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (options?: { includePending?: boolean; repairOrders?: boolean }) =>
+      migrateProductDemandsToMedicines(options),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+      queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['order'] });
     },
   });
 };
