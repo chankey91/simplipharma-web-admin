@@ -23,6 +23,13 @@ import {
   buildPurchaseBatchDiscountLookup,
   resolveOrderLineDiscountPct,
 } from './orderFulfillmentDiscount';
+import {
+  GST_INVOICE_STYLES,
+  buildGstInvoiceFooter,
+  buildGstInvoiceItemTableHtml,
+  buildGstInvoiceTotalsSection,
+  type GstInvoiceLineItem,
+} from './gstInvoiceTemplate';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -76,26 +83,7 @@ const numberToWords = (num: number): string => {
 
 // HTML Template for Order Invoice
 
-type OrderInvoiceLineItem = {
-  sn: number;
-  name: string;
-  pack: string;
-  hsn: string;
-  batch: string;
-  exp: string;
-  qty: string;
-  free: string;
-  totalQty: string;
-  mrp: string;
-  rate: string;
-  disc: string;
-  sgst: string;
-  cgst: string;
-  amount: string;
-  rowClass?: string;
-};
-
-/** Shared line items + totals for PDF invoice and CSV export */
+type OrderInvoiceLineItem = GstInvoiceLineItem;
 export type OrderInvoicePrepared = {
   items: OrderInvoiceLineItem[];
   summary: {
@@ -105,6 +93,7 @@ export type OrderInvoicePrepared = {
     cgst: string;
     roundOff: string;
     grandTotal: string;
+    amountInWords: string;
   };
   tax: { taxable: string; cgst: string; sgst: string; rate: string };
   invoiceData: {
@@ -577,6 +566,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     cgst: totalCGST.toFixed(2),
     roundOff: roundoff.toFixed(2),
     grandTotal: grandTotal.toFixed(2),
+    amountInWords: numberToWords(grandTotal),
   };
 
   return {
@@ -603,27 +593,6 @@ const getOrderInvoiceHTML = async (order: Order) => {
 
   const companyState = resolveInvoiceState();
 
-  // Generate items HTML
-  const itemsHTML = items.map(item => `
-    <tr class="center ${item.rowClass || ''}">
-      <td>${item.sn}</td>
-      <td style="text-align:left">${item.name}</td>
-      <td>${item.pack}</td>
-      <td>${item.hsn}</td>
-      <td>${item.batch}</td>
-      <td>${item.exp}</td>
-      <td>${item.qty}</td>
-      <td>${item.free}</td>
-      <td>${item.totalQty}</td>
-      <td>${item.mrp}</td>
-      <td>${item.rate}</td>
-      <td>${item.disc}</td>
-      <td>${item.sgst}</td>
-      <td>${item.cgst}</td>
-      <td class="right">${item.amount}</td>
-    </tr>
-  `).join('');
-  
   // Complete HTML template
   return `
 <!DOCTYPE html>
@@ -631,56 +600,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
 <head>
 <meta charset="UTF-8">
 <title>Sales GST Invoice</title>
-<style>
-  body {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 11px;
-    background: #fff;
-  }
-  .invoice-box {
-    width: 100%;
-    max-width: 1000px;
-    margin: auto;
-    border: 1px solid #000;
-    padding: 10px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-  }
-  td, th {
-    border: 1px solid #000;
-    padding: 3px;
-    vertical-align: top;
-    word-wrap: break-word;
-  }
-  /* Remove borders between items in item table */
-  table tbody tr td {
-    border-top: none;
-    border-bottom: none;
-  }
-  table tbody tr:first-child td {
-    border-top: 1px solid #000;
-  }
-  table tbody tr:last-child td {
-    border-bottom: 1px solid #000;
-  }
-  .no-border td {
-    border: none;
-  }
-  .center { text-align: center; }
-  .right  { text-align: right; }
-  .bold   { font-weight: bold; }
-  .title  { font-size: 16px; font-weight: bold; text-align: center; }
-  .line-rejected td {
-    text-decoration: line-through;
-    color: #666;
-  }
-  @media print {
-    body { margin: 0; }
-  }
-</style>
+<style>${GST_INVOICE_STYLES}</style>
 </head>
 <body>
 <div class="invoice-box">
@@ -723,69 +643,11 @@ const getOrderInvoiceHTML = async (order: Order) => {
   </tr>
 </table>
 <!-- ITEM TABLE -->
-<table>
-  <thead>
-    <tr class="center bold">
-      <th style="width:3%">SN</th>
-      <th style="width:18%">PRODUCT NAME</th>
-      <th style="width:6%">PACK</th>
-      <th style="width:6%">HSN</th>
-      <th style="width:7%">BATCH</th>
-      <th style="width:5%">EXP</th>
-      <th style="width:4%">QTY</th>
-      <th style="width:4%">FREE</th>
-      <th style="width:4%">TQT</th>
-      <th style="width:6%">MRP</th>
-      <th style="width:6%">RATE</th>
-      <th style="width:4%">DISC</th>
-      <th style="width:5%">SGST</th>
-      <th style="width:5%">CGST</th>
-      <th style="width:7%">AMOUNT</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${itemsHTML}
-  </tbody>
-</table>
+${buildGstInvoiceItemTableHtml(items)}
 <!-- TOTAL SECTION -->
-<table>
-  <tr>
-    <td width="70%">
-      <b>Tax Summary</b><br>
-      Amt ${tax.rate}%: ${tax.taxable} |
-      CGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.cgst} |
-      SGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.sgst}
-    </td>
-    <td width="30%">
-      <table class="no-border">
-        <tr><td>SUB TOTAL</td><td class="right">${summary.subTotal}</td></tr>
-        <tr><td>PRODUCT DISCOUNT</td><td class="right">-${summary.discount}</td></tr>
-        <tr><td>SGST</td><td class="right">${summary.sgst}</td></tr>
-        <tr><td>CGST</td><td class="right">${summary.cgst}</td></tr>
-        <tr><td>Round Off</td><td class="right">${parseFloat(summary.roundOff) >= 0 ? '+' : ''}${summary.roundOff}</td></tr>
-        <tr class="bold">
-          <td>GRAND TOTAL</td>
-          <td class="right">${summary.grandTotal}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
+${buildGstInvoiceTotalsSection(tax, summary, gstRatePercent / 2)}
 <!-- FOOTER -->
-<table>
-  <tr>
-    <td width="60%">
-      <b>Terms & Conditions</b><br>
-      Bills not paid by due date will attract 24% interest.<br>
-      Subject to Indore jurisdiction only.<br>
-      Cold storage items will not be returned.
-    </td>
-    <td width="40%" class="center">
-      For ${company.name}<br><br><br>
-      <b>Authorised Signatory</b>
-    </td>
-  </tr>
-</table>
+${buildGstInvoiceFooter(order.dispatchNotes || '', summary.amountInWords, company.name)}
 </div>
 </body>
 </html>
@@ -1161,7 +1023,8 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     sgst: totalSGST.toFixed(2),
     cgst: totalCGST.toFixed(2),
     roundOff: roundoff.toFixed(2),
-    grandTotal: grandTotal.toFixed(2)
+    grandTotal: grandTotal.toFixed(2),
+    amountInWords: numberToWords(grandTotal),
   };
   
   // Party details - Always SimpliPharma (on top right)
@@ -1216,80 +1079,14 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     tray: '-'
   };
   
-  // Generate items HTML
-  const itemsHTML = items.map(item => `
-    <tr class="center">
-      <td>${item.sn}</td>
-      <td style="text-align:left">${item.name}</td>
-      <td>${item.pack}</td>
-      <td>${item.hsn}</td>
-      <td>${item.batch}</td>
-      <td>${item.exp}</td>
-      <td>${item.qty}</td>
-      <td>${item.free}</td>
-      <td>${item.totalQty}</td>
-      <td>${item.mrp}</td>
-      <td>${item.rate}</td>
-      <td>${item.disc}</td>
-      <td>${item.sgst}</td>
-      <td>${item.cgst}</td>
-      <td class="right">${item.amount}</td>
-    </tr>
-  `).join('');
-  
   // Complete HTML template
   return `
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Sales GST Invoice</title>
-<style>
-  body {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 11px;
-    background: #fff;
-  }
-  .invoice-box {
-    width: 100%;
-    max-width: 1000px;
-    margin: auto;
-    border: 1px solid #000;
-    padding: 10px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-  }
-  td, th {
-    border: 1px solid #000;
-    padding: 3px;
-    vertical-align: top;
-    word-wrap: break-word;
-  }
-  /* Remove borders between items in item table */
-  table tbody tr td {
-    border-top: none;
-    border-bottom: none;
-  }
-  table tbody tr:first-child td {
-    border-top: 1px solid #000;
-  }
-  table tbody tr:last-child td {
-    border-bottom: 1px solid #000;
-  }
-  .no-border td {
-    border: none;
-  }
-  .center { text-align: center; }
-  .right  { text-align: right; }
-  .bold   { font-weight: bold; }
-  .title  { font-size: 16px; font-weight: bold; text-align: center; }
-  @media print {
-    body { margin: 0; }
-  }
-</style>
+<title>Purchase GST Invoice</title>
+<style>${GST_INVOICE_STYLES}</style>
 </head>
 <body>
 <div class="invoice-box">
@@ -1330,69 +1127,11 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
   </tr>
 </table>
 <!-- ITEM TABLE -->
-<table>
-  <thead>
-    <tr class="center bold">
-      <th style="width:3%">SN</th>
-      <th style="width:18%">PRODUCT NAME</th>
-      <th style="width:6%">PACK</th>
-      <th style="width:6%">HSN</th>
-      <th style="width:7%">BATCH</th>
-      <th style="width:5%">EXP</th>
-      <th style="width:4%">QTY</th>
-      <th style="width:4%">FREE</th>
-      <th style="width:4%">TQT</th>
-      <th style="width:6%">MRP</th>
-      <th style="width:6%">RATE</th>
-      <th style="width:4%">DISC</th>
-      <th style="width:5%">SGST</th>
-      <th style="width:5%">CGST</th>
-      <th style="width:7%">AMOUNT</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${itemsHTML}
-  </tbody>
-</table>
+${buildGstInvoiceItemTableHtml(items)}
 <!-- TOTAL SECTION -->
-<table>
-  <tr>
-    <td width="70%">
-      <b>Tax Summary</b><br>
-      Amt ${tax.rate}%: ${tax.taxable} |
-      CGST ${(avgGstRate / 2).toFixed(1)}%: ${tax.cgst} |
-      SGST ${(avgGstRate / 2).toFixed(1)}%: ${tax.sgst}
-    </td>
-    <td width="30%">
-      <table class="no-border">
-        <tr><td>SUB TOTAL</td><td class="right">${summary.subTotal}</td></tr>
-        <tr><td>PRODUCT DISCOUNT</td><td class="right">-${summary.discount}</td></tr>
-        <tr><td>SGST</td><td class="right">${summary.sgst}</td></tr>
-        <tr><td>CGST</td><td class="right">${summary.cgst}</td></tr>
-        <tr><td>Round Off</td><td class="right">${summary.roundOff}</td></tr>
-        <tr class="bold">
-          <td>GRAND TOTAL</td>
-          <td class="right">${summary.grandTotal}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
+${buildGstInvoiceTotalsSection(tax, summary, avgGstRate / 2)}
 <!-- FOOTER -->
-<table>
-  <tr>
-    <td width="60%">
-      <b>Terms & Conditions</b><br>
-      Bills not paid by due date will attract 24% interest.<br>
-      Subject to Indore jurisdiction only.<br>
-      Cold storage items will not be returned.
-    </td>
-    <td width="40%" class="center">
-      For ${company.name}<br><br><br>
-      <b>Authorised Signatory</b>
-    </td>
-  </tr>
-</table>
+${buildGstInvoiceFooter(invoice.notes || '', summary.amountInWords, party.name)}
 </div>
 </body>
 </html>
