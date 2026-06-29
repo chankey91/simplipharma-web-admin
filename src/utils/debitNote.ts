@@ -6,6 +6,13 @@ import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState } from './invoicePartyDefaults';
+import {
+  GST_INVOICE_STYLES,
+  buildGstInvoiceFooter,
+  buildGstInvoiceItemTableHtml,
+  buildGstInvoiceTotalsSection,
+  type GstInvoiceLineItem,
+} from './gstInvoiceTemplate';
 
 const numberToWords = (num: number): string => {
   const ones = [
@@ -50,23 +57,7 @@ const numberToWords = (num: number): string => {
   return words.trim() + ' Rupees Only';
 };
 
-type DebitNoteItemRow = {
-  sn: number;
-  name: string;
-  pack: string;
-  hsn: string;
-  batch: string;
-  exp: string;
-  qty: string;
-  free: string;
-  totalQty: string;
-  mrp: string;
-  rate: string;
-  disc: string;
-  sgst: string;
-  cgst: string;
-  amount: string;
-};
+type DebitNoteItemRow = GstInvoiceLineItem;
 
 async function prepareDebitNoteItemRows(note: DebitNote): Promise<DebitNoteItemRow[]> {
   return Promise.all(
@@ -190,28 +181,10 @@ const getDebitNoteHTML = async (note: DebitNote) => {
     amountInWords: numberToWords(grandTotal),
   };
 
-  const itemsHTML = items
-    .map(
-      (item) => `
-    <tr class="center">
-      <td>${item.sn}</td>
-      <td style="text-align:left">${item.name}</td>
-      <td>${item.pack}</td>
-      <td>${item.hsn}</td>
-      <td>${item.batch}</td>
-      <td>${item.exp}</td>
-      <td>${item.qty}</td>
-      <td>${item.free}</td>
-      <td>${item.totalQty}</td>
-      <td>${item.mrp}</td>
-      <td>${item.rate}</td>
-      <td>${item.disc}</td>
-      <td>${item.sgst}</td>
-      <td>${item.cgst}</td>
-      <td class="right">${item.amount}</td>
-    </tr>`
-    )
-    .join('');
+  const debitNoteTerms = `Debit note issued for expiry returns or billing corrections against the original tax invoice referenced above.<br>
+      Subject to Indore jurisdiction only.<br>
+      Goods once sold will not be taken back.<br>
+      Cold storage items will not be returned.`;
 
   return `
 <!DOCTYPE html>
@@ -219,51 +192,7 @@ const getDebitNoteHTML = async (note: DebitNote) => {
 <head>
 <meta charset="UTF-8">
 <title>Debit Note</title>
-<style>
-  body {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 11px;
-    background: #fff;
-  }
-  .invoice-box {
-    width: 100%;
-    max-width: 1000px;
-    margin: auto;
-    border: 1px solid #000;
-    padding: 10px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-  }
-  td, th {
-    border: 1px solid #000;
-    padding: 3px;
-    vertical-align: top;
-    word-wrap: break-word;
-  }
-  table tbody tr td {
-    border-top: none;
-    border-bottom: none;
-  }
-  table tbody tr:first-child td {
-    border-top: 1px solid #000;
-  }
-  table tbody tr:last-child td {
-    border-bottom: 1px solid #000;
-  }
-  .no-border td {
-    border: none;
-  }
-  .center { text-align: center; }
-  .right  { text-align: right; }
-  .bold   { font-weight: bold; }
-  .title  { font-size: 16px; font-weight: bold; text-align: center; }
-  @media print {
-    body { margin: 0; }
-  }
-</style>
+<style>${GST_INVOICE_STYLES}</style>
 </head>
 <body>
 <div class="invoice-box">
@@ -301,75 +230,16 @@ const getDebitNoteHTML = async (note: DebitNote) => {
     </td>
     <td>
       Date: ${documentData.date}<br>
-      Reason: ${documentData.reason}<br>
-      Amount in words: ${summary.amountInWords}
+      Reason: ${documentData.reason}
     </td>
   </tr>
 </table>
 <!-- ITEM TABLE -->
-<table>
-  <thead>
-    <tr class="center bold">
-      <th style="width:3%">SN</th>
-      <th style="width:18%">PRODUCT NAME</th>
-      <th style="width:6%">PACK</th>
-      <th style="width:6%">HSN</th>
-      <th style="width:7%">BATCH</th>
-      <th style="width:5%">EXP</th>
-      <th style="width:4%">QTY</th>
-      <th style="width:4%">FREE</th>
-      <th style="width:4%">TQT</th>
-      <th style="width:6%">MRP</th>
-      <th style="width:6%">RATE</th>
-      <th style="width:4%">DISC</th>
-      <th style="width:5%">SGST</th>
-      <th style="width:5%">CGST</th>
-      <th style="width:7%">AMOUNT</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${itemsHTML}
-  </tbody>
-</table>
+${buildGstInvoiceItemTableHtml(items)}
 <!-- TOTAL SECTION -->
-<table>
-  <tr>
-    <td width="70%">
-      <b>Tax Summary</b><br>
-      Amt ${tax.rate}%: ${tax.taxable} |
-      CGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.cgst} |
-      SGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.sgst}
-    </td>
-    <td width="30%">
-      <table class="no-border">
-        <tr><td>SUB TOTAL</td><td class="right">${summary.subTotal}</td></tr>
-        <tr><td>PRODUCT DISCOUNT</td><td class="right">-${summary.discount}</td></tr>
-        <tr><td>SGST</td><td class="right">${summary.sgst}</td></tr>
-        <tr><td>CGST</td><td class="right">${summary.cgst}</td></tr>
-        <tr><td>Round Off</td><td class="right">${parseFloat(summary.roundOff) >= 0 ? '+' : ''}${summary.roundOff}</td></tr>
-        <tr class="bold">
-          <td>DEBIT TOTAL</td>
-          <td class="right">${summary.grandTotal}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
+${buildGstInvoiceTotalsSection(tax, summary, gstRatePercent / 2, 'DEBIT TOTAL')}
 <!-- FOOTER -->
-<table>
-  <tr>
-    <td width="60%">
-      <b>Terms & Conditions</b><br>
-      Debit note issued for additional charges or billing corrections against the original tax invoice referenced above.<br>
-      Subject to Indore jurisdiction only.<br>
-      Cold storage items will not be returned.
-    </td>
-    <td width="40%" class="center">
-      For ${company.name}<br><br><br>
-      <b>Authorised Signatory</b>
-    </td>
-  </tr>
-</table>
+${buildGstInvoiceFooter(note.reason || '', summary.amountInWords, company.name, debitNoteTerms)}
 </div>
 </body>
 </html>`;
