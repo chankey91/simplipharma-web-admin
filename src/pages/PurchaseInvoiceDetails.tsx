@@ -23,6 +23,8 @@ import {
   DialogActions,
   TextField,
   CircularProgress,
+  ToggleButtonGroup,
+  ToggleButton,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -30,8 +32,10 @@ import {
   Search,
   Delete,
   QrCode,
+  Payment,
+  AttachMoney,
 } from '@mui/icons-material';
-import { usePurchaseInvoice, useUpdatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
+import { usePurchaseInvoice, useUpdatePurchaseInvoice, useUpdatePurchaseInvoicePayment } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
@@ -45,7 +49,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: invoice, isLoading } = usePurchaseInvoice(invoiceId || '');
   const updateInvoiceMutation = useUpdatePurchaseInvoice();
+  const updatePaymentMutation = useUpdatePurchaseInvoicePayment();
   const { alert, confirm, prompt } = useAppDialog();
+  const [paymentDialog, setPaymentDialog] = useState({
+    open: false,
+    method: 'Cash' as 'Cash' | 'Online',
+  });
   const [items, setItems] = useState<PurchaseInvoiceItem[]>([]);
   const [itemDialog, setItemDialog] = useState<{ open: boolean; itemIndex: number | null }>({
     open: false,
@@ -454,14 +463,49 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
               <Typography variant="h6">Total:</Typography>
               <Typography variant="h6">₹{grandTotal.toFixed(2)}</Typography>
             </Box>
-            <Chip
-              label={invoice.paymentStatus}
-              color={
-                invoice.paymentStatus === 'Paid' ? 'success' :
-                invoice.paymentStatus === 'Partial' ? 'warning' : 'error'
-              }
-              sx={{ width: '100%', mb: 2 }}
-            />
+
+            <Card sx={{ mt: 2, border: '1px solid', borderColor: 'divider', borderLeft: 4, borderLeftColor: (invoice.paymentStatus === 'Paid' ? 'success.main' : invoice.paymentStatus === 'Partial' ? 'warning.main' : 'error.main') }}>
+              <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                  <Typography variant="subtitle1" fontWeight="600">Payment</Typography>
+                  <Chip
+                    size="small"
+                    label={`${invoice.paymentStatus || 'Unpaid'}${invoice.paymentMethod ? ` · ${invoice.paymentMethod}` : ''}`}
+                    color={
+                      invoice.paymentStatus === 'Paid' ? 'success' :
+                      invoice.paymentStatus === 'Partial' ? 'warning' : 'error'
+                    }
+                  />
+                </Box>
+                {invoice.paymentStatus !== 'Paid' ? (
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    color="primary"
+                    startIcon={<Payment />}
+                    onClick={() => setPaymentDialog({ open: true, method: 'Cash' })}
+                    disabled={updatePaymentMutation.isPending}
+                  >
+                    Mark as Paid
+                  </Button>
+                ) : (
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    size="small"
+                    color="inherit"
+                    onClick={() => updatePaymentMutation.mutate({
+                      invoiceId: invoice.id,
+                      paymentStatus: 'Unpaid',
+                    })}
+                    disabled={updatePaymentMutation.isPending}
+                  >
+                    Mark Unpaid
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+
             {invoice.notes && (
               <Card variant="outlined">
                 <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
@@ -597,6 +641,59 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
             disabled={updateInvoiceMutation.isPending}
           >
             {updateInvoiceMutation.isPending ? <CircularProgress size={20} /> : 'Save Changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={paymentDialog.open}
+        onClose={() => setPaymentDialog({ ...paymentDialog, open: false })}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Mark purchase invoice as paid</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+            Total: ₹{grandTotal.toFixed(2)}
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            value={paymentDialog.method}
+            onChange={(_, value) => {
+              if (value) setPaymentDialog({ ...paymentDialog, method: value });
+            }}
+          >
+            <ToggleButton value="Cash" sx={{ py: 1.25 }}>
+              <AttachMoney sx={{ mr: 0.5, fontSize: 18 }} /> Cash
+            </ToggleButton>
+            <ToggleButton value="Online" sx={{ py: 1.25 }}>
+              <Payment sx={{ mr: 0.5, fontSize: 18 }} /> Online
+            </ToggleButton>
+          </ToggleButtonGroup>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPaymentDialog({ ...paymentDialog, open: false })}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={updatePaymentMutation.isPending}
+            onClick={async () => {
+              if (!invoice) return;
+              try {
+                await updatePaymentMutation.mutateAsync({
+                  invoiceId: invoice.id,
+                  paymentStatus: 'Paid',
+                  paymentMethod: paymentDialog.method,
+                });
+                setPaymentDialog({ ...paymentDialog, open: false });
+                await alert('Payment marked as paid.', { severity: 'success' });
+              } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : 'Unknown error';
+                await alert(`Failed to update payment: ${message}`, { severity: 'error' });
+              }
+            }}
+          >
+            {updatePaymentMutation.isPending ? <CircularProgress size={24} /> : 'Confirm Paid'}
           </Button>
         </DialogActions>
       </Dialog>
