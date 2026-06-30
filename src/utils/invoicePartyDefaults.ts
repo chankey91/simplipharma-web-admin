@@ -3,7 +3,7 @@ export const DEFAULT_INVOICE_STATE_CODE = '23';
 
 /** Issuer details on sales/purchase GST invoices, credit notes, and debit notes. */
 export const COMPANY_INVOICE_DETAILS = {
-  name: 'Sanchet Pharmaceuticals and Solutions',
+  name: 'Sanchet Pharmaceuticals and Solutions (Sumukh Pharma Agency)',
   address: 'E2-303, Treasure Vihar, Bijalpur, Indore, Madhya Pradesh. 452012',
   phone: '+918319369626',
   email: 'simplipharma.2025@gmail.com',
