@@ -684,6 +684,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                   invoiceId: invoice.id,
                   paymentStatus: 'Paid',
                   paymentMethod: paymentDialog.method,
+                  paidAmount: grandTotal,
                 });
                 setPaymentDialog({ ...paymentDialog, open: false });
                 await alert('Payment marked as paid.', { severity: 'success' });

@@ -301,6 +301,7 @@ export interface PurchaseInvoice {
   totalAmount: number;
   paymentStatus: PaymentStatus;
   paymentMethod?: PaymentMethod;
+  paidAmount?: number;
   notes?: string;
   createdAt: Date | any;
   createdBy: string;
