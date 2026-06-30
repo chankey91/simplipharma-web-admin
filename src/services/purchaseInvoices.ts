@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where } from './firebase';
+import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where, deleteField } from './firebase';
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem } from '../types';
 import { addStockBatch } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
@@ -390,6 +390,22 @@ export const updatePurchaseInvoice = async (
     }));
   }
   
+  await updateDoc(invoiceRef, updateData);
+};
+
+export const updatePurchaseInvoicePayment = async (
+  invoiceId: string,
+  paymentStatus: 'Paid' | 'Unpaid' | 'Partial',
+  paymentMethod?: 'Cash' | 'Online'
+) => {
+  const invoiceRef = doc(db, 'purchaseInvoices', invoiceId);
+  const updateData: Record<string, unknown> = { paymentStatus };
+  if (paymentMethod) {
+    updateData.paymentMethod = paymentMethod;
+  }
+  if (paymentStatus === 'Unpaid') {
+    updateData.paymentMethod = deleteField();
+  }
   await updateDoc(invoiceRef, updateData);
 };
 

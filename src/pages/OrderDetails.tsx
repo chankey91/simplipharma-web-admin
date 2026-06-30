@@ -59,7 +59,7 @@ import {
   useCancelOrder,
   useUpdatePaymentStatus,
 } from '../hooks/useOrders';
-import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft } from '../services/orders';
+import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
@@ -961,7 +961,21 @@ export const OrderDetailsPage: React.FC = () => {
         clearSessionFulfillmentDraft(order.id);
         localPendingEditsRef.current = { orderId: order.id, dirty: false };
         setFulfillmentDirty(false);
-        await alert('Order fulfilled successfully!', { severity: 'success' });
+        try {
+          const refreshed = await getOrderById(order.id);
+          if (refreshed) {
+            void generateOrderInvoice(refreshed, { emailPdfToRetailer: true }).catch(async (err) => {
+              console.error('Error emailing invoice after fulfill:', err);
+              await alert(
+                'Order fulfilled, but the invoice email could not be sent. Download from Print Invoice or check Firebase logs.',
+                { severity: 'warning' }
+              );
+            });
+          }
+        } catch (emailErr) {
+          console.error('Error loading order for invoice email:', emailErr);
+        }
+        await alert('Order fulfilled successfully! Invoice will be emailed to the retailer.', { severity: 'success' });
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
           orderId: order.id,
@@ -1789,7 +1803,7 @@ export const OrderDetailsPage: React.FC = () => {
         <Button 
           variant="outlined" 
           startIcon={<Print />}
-          title="Downloads the PDF immediately, then sends PDF + CSV to the retailer email in the background (requires SMTP on Cloud Functions)."
+          title="Download the tax invoice PDF only (no email)."
           onClick={async () => {
             // Check if all items have batches assigned (either batchNumber or batchAllocations)
             const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
@@ -1898,7 +1912,7 @@ export const OrderDetailsPage: React.FC = () => {
             };
             
             try {
-              generateOrderInvoice(invoiceOrder, { emailPdfToRetailer: true }).catch(async (err) => {
+              generateOrderInvoice(invoiceOrder).catch(async (err) => {
                 console.error('Error generating invoice:', err);
                 await alert('Failed to generate invoice. Please try again.', { severity: 'error' });
               });

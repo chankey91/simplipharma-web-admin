@@ -4,6 +4,7 @@ import {
   getPurchaseInvoiceById, 
   createPurchaseInvoice, 
   updatePurchaseInvoice,
+  updatePurchaseInvoicePayment,
   updateStockForExistingInvoice,
   updateStockForAllExistingInvoices
 } from '../services/purchaseInvoices';
@@ -55,6 +56,26 @@ export const useUpdatePurchaseInvoice = () => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
     }
+  });
+};
+
+export const useUpdatePurchaseInvoicePayment = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      invoiceId,
+      paymentStatus,
+      paymentMethod,
+    }: {
+      invoiceId: string;
+      paymentStatus: 'Paid' | 'Unpaid' | 'Partial';
+      paymentMethod?: 'Cash' | 'Online';
+    }) => updatePurchaseInvoicePayment(invoiceId, paymentStatus, paymentMethod),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
+    },
   });
 };
 
