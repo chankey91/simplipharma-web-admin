@@ -13,7 +13,7 @@ import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById, getAllMedicines } from '../services/inventory';
 import { getProductDemandsByIds } from '../services/productDemands';
-import { invoiceStateHtml, resolveInvoiceState } from './invoicePartyDefaults';
+import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
 import { getAllPurchaseInvoices, collectPurchaseInvoicesForDemands } from '../services/purchaseInvoices';
 import { tryPromoteFulfilledDemandLine } from './productDemandOrderLine';
 import { formatOrderInvoiceLabel } from './orderDisplay';
@@ -500,14 +500,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
   const grandTotal = Math.round(calculatedTotal);
 
   // Company details
-  const company = {
-    name: 'SimpliPharma Solution Pvt. Ltd.',
-    address: 'AG 50, Scheme No. 74, Indore, Madhya Pradesh. 452010',
-    phone: '',
-    email: 'simplipharma.2025@gmail.com',
-    dl: '20B/2876/12/2021,20B/2876/12/2021',
-    gstin: '23AALCP3728L1Z4'
-  };
+  const company = { ...COMPANY_INVOICE_DETAILS };
   
   // Party/Retailer details - fetch from user if retailerId is available
   let party = {
@@ -1027,16 +1020,8 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     amountInWords: numberToWords(grandTotal),
   };
   
-  // Party details - Always SimpliPharma (on top right)
-  const party = {
-    name: 'SimpliPharma Solution Pvt. Ltd.',
-    address: 'AG 50, Scheme No. 74, Indore, Madhya Pradesh. 452010',
-    phone: '',
-    email: 'simplipharma.2025@gmail.com',
-    dl: '20B/2876/12/2021,20B/2876/12/2021',
-    gstin: '23AALCP3728L1Z4',
-    ...resolveInvoiceState(),
-  };
+  // Party details - buyer (SimpliPharma / Sanchet on purchase invoices)
+  const party = { ...COMPANY_INVOICE_DETAILS, ...resolveInvoiceState() };
 
   // Company/Vendor details - fetch from vendor if vendorId is available (on top left)
   let company = {

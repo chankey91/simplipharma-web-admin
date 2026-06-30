@@ -5,7 +5,7 @@ import { CreditNote } from '../types';
 import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
-import { invoiceStateHtml, resolveInvoiceState } from './invoicePartyDefaults';
+import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceFooter,
@@ -130,14 +130,7 @@ const getCreditNoteHTML = async (note: CreditNote) => {
   const creditDate =
     note.creditNoteDate instanceof Date ? note.creditNoteDate : new Date(note.creditNoteDate);
 
-  const company = {
-    name: 'SimpliPharma Solution Pvt. Ltd.',
-    address: 'AG 50, Scheme No. 74, Indore, Madhya Pradesh. 452010',
-    phone: '',
-    email: 'simplipharma.2025@gmail.com',
-    dl: '20B/2876/12/2021,20B/2876/12/2021',
-    gstin: '23AALCP3728L1Z4',
-  };
+  const company = { ...COMPANY_INVOICE_DETAILS };
 
   let party = {
     name: note.retailerName || note.retailerEmail || 'N/A',
