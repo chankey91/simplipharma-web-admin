@@ -40,7 +40,7 @@ import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
-import { exportPendingOrdersByStore } from '../utils/export';
+import { exportPendingOrdersByStore, exportPendingOrdersProductSummary } from '../utils/export';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
@@ -59,6 +59,7 @@ export const OrdersPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingProductSummary, setIsExportingProductSummary] = useState(false);
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
@@ -155,6 +156,8 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
+  const pendingOrderCount = orders?.filter((o) => o.status === 'Pending').length ?? 0;
+
   const handleExportPendingOrders = async () => {
     const pendingOrders = orders?.filter(o => o.status === 'Pending') || [];
     
@@ -172,6 +175,25 @@ export const OrdersPage: React.FC = () => {
       await alert(`Failed to export: ${error.message || 'Unknown error'}`, { severity: 'error' });
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleExportPendingProductSummary = async () => {
+    if (pendingOrderCount === 0) {
+      await alert('No pending orders to export', { severity: 'warning' });
+      return;
+    }
+
+    setIsExportingProductSummary(true);
+    try {
+      await exportPendingOrdersProductSummary(orders || []);
+      await alert('Product summary Excel file generated successfully!', { severity: 'success' });
+    } catch (error: unknown) {
+      console.error('Error exporting product summary:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await alert(`Failed to export: ${message}`, { severity: 'error' });
+    } finally {
+      setIsExportingProductSummary(false);
     }
   };
 
@@ -245,10 +267,19 @@ export const OrdersPage: React.FC = () => {
           variant="outlined"
           startIcon={<Download />}
           onClick={handleExportPendingOrders}
-          disabled={!orders || orders.filter(o => o.status === 'Pending').length === 0 || isExporting}
+          disabled={pendingOrderCount === 0 || isExporting || isExportingProductSummary}
           sx={{ minWidth: 200 }}
         >
           {isExporting ? 'Exporting...' : 'Export Pending Orders (Excel)'}
+        </Button>
+        <Button
+          variant="outlined"
+          startIcon={<Download />}
+          onClick={handleExportPendingProductSummary}
+          disabled={pendingOrderCount === 0 || isExporting || isExportingProductSummary}
+          sx={{ minWidth: 240 }}
+        >
+          {isExportingProductSummary ? 'Exporting...' : 'Export Product Summary (Excel)'}
         </Button>
       </Box>
 

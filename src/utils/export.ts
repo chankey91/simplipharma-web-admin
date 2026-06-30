@@ -184,3 +184,117 @@ export const exportPendingOrdersByStore = async (
   const dateStr = istDateStampCompact();
   XLSX.writeFile(wb, `${filename}-${dateStr}.xlsx`);
 };
+
+function productAggregateKey(medicine: Order['medicines'][number]): string {
+  if (medicine.medicineId?.trim()) return `med:${medicine.medicineId.trim()}`;
+  if (medicine.productDemandId?.trim()) return `demand:${medicine.productDemandId.trim()}`;
+  return `name:${medicine.name.trim().toLowerCase()}`;
+}
+
+/** Pending orders: one row per product with total quantity across all orders (no store details). */
+export const exportPendingOrdersProductSummary = async (
+  orders: Order[],
+  filename: string = 'pending-orders-product-summary'
+) => {
+  const pendingOrders = orders.filter((order) => order.status === 'Pending');
+
+  if (pendingOrders.length === 0) {
+    await appAlert('No pending orders found', { severity: 'warning' });
+    return;
+  }
+
+  const medicineMap = new Map<string, string>();
+  const allMedicineIds = new Set<string>();
+
+  for (const order of pendingOrders) {
+    for (const medicine of order.medicines) {
+      if (medicine.medicineId) allMedicineIds.add(medicine.medicineId);
+    }
+  }
+
+  for (const medicineId of allMedicineIds) {
+    if (medicineMap.has(medicineId)) continue;
+    try {
+      const med = await getMedicineById(medicineId);
+      if (med) medicineMap.set(medicineId, med.manufacturer);
+    } catch (error) {
+      console.warn(`Failed to fetch medicine ${medicineId}:`, error);
+    }
+  }
+
+  const productAggregate = new Map<
+    string,
+    {
+      medicineId: string;
+      medicineName: string;
+      manufacturer: string;
+      totalQty: number;
+      orderNumbers: Set<string>;
+    }
+  >();
+
+  for (const order of pendingOrders) {
+    const orderNumber = order.invoiceNumber || orderReferenceWithoutInvoice(order.id);
+
+    for (const medicine of order.medicines) {
+      const key = productAggregateKey(medicine);
+      const manufacturer =
+        medicineMap.get(medicine.medicineId) || medicine.manufacturerName || 'N/A';
+      const qty = medicine.quantity || 0;
+
+      const existing = productAggregate.get(key);
+      if (existing) {
+        existing.totalQty += qty;
+        existing.orderNumbers.add(orderNumber);
+      } else {
+        productAggregate.set(key, {
+          medicineId: medicine.medicineId || '',
+          medicineName: medicine.name,
+          manufacturer,
+          totalQty: qty,
+          orderNumbers: new Set([orderNumber]),
+        });
+      }
+    }
+  }
+
+  const rows = Array.from(productAggregate.values()).sort((a, b) =>
+    a.medicineName.localeCompare(b.medicineName)
+  );
+
+  const excelData: (string | number)[][] = [
+    ['SR', 'Medicine Name', 'Medicine ID', 'Manufacturer', 'Total Quantity', 'Order Count', 'Order Numbers', 'Remark'],
+  ];
+
+  rows.forEach((row, index) => {
+    excelData.push([
+      index + 1,
+      row.medicineName,
+      row.medicineId || '—',
+      row.manufacturer,
+      row.totalQty,
+      row.orderNumbers.size,
+      Array.from(row.orderNumbers).sort().join(', '),
+      '',
+    ]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(excelData);
+
+  ws['!cols'] = [
+    { wch: 5 },
+    { wch: 40 },
+    { wch: 28 },
+    { wch: 30 },
+    { wch: 14 },
+    { wch: 12 },
+    { wch: 40 },
+    { wch: 20 },
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Product Summary');
+
+  const dateStr = istDateStampCompact();
+  XLSX.writeFile(wb, `${filename}-${dateStr}.xlsx`);
+};
