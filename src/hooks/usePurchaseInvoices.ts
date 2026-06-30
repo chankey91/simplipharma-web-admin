@@ -67,11 +67,13 @@ export const useUpdatePurchaseInvoicePayment = () => {
       invoiceId,
       paymentStatus,
       paymentMethod,
+      paidAmount,
     }: {
       invoiceId: string;
       paymentStatus: 'Paid' | 'Unpaid' | 'Partial';
       paymentMethod?: 'Cash' | 'Online';
-    }) => updatePurchaseInvoicePayment(invoiceId, paymentStatus, paymentMethod),
+      paidAmount?: number;
+    }) => updatePurchaseInvoicePayment(invoiceId, paymentStatus, paymentMethod, paidAmount),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });

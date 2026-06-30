@@ -396,15 +396,29 @@ export const updatePurchaseInvoice = async (
 export const updatePurchaseInvoicePayment = async (
   invoiceId: string,
   paymentStatus: 'Paid' | 'Unpaid' | 'Partial',
-  paymentMethod?: 'Cash' | 'Online'
+  paymentMethod?: 'Cash' | 'Online',
+  paidAmount?: number
 ) => {
   const invoiceRef = doc(db, 'purchaseInvoices', invoiceId);
   const updateData: Record<string, unknown> = { paymentStatus };
   if (paymentMethod) {
     updateData.paymentMethod = paymentMethod;
   }
+  if (paidAmount !== undefined) {
+    updateData.paidAmount = paidAmount;
+  }
+  if (paymentStatus === 'Paid' && paidAmount === undefined) {
+    const snap = await getDoc(invoiceRef);
+    if (snap.exists()) {
+      const total = snap.data().totalAmount;
+      if (typeof total === 'number') {
+        updateData.paidAmount = total;
+      }
+    }
+  }
   if (paymentStatus === 'Unpaid') {
     updateData.paymentMethod = deleteField();
+    updateData.paidAmount = 0;
   }
   await updateDoc(invoiceRef, updateData);
 };
