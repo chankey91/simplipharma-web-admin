@@ -37,6 +37,31 @@ export const GST_INVOICE_STYLES = `
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .items-table td,
+  .items-table th {
+    padding: 1px 2px;
+    line-height: 1.2;
+    vertical-align: middle;
+  }
+  .items-table thead th {
+    white-space: nowrap;
+    font-size: 10px;
+    padding: 2px 2px;
+    font-weight: bold;
+  }
+  .items-table tbody tr td {
+    border-top: none;
+    border-bottom: none;
+  }
+  .items-table tbody tr:first-child td {
+    border-top: 1px solid #000;
+  }
+  .items-table tbody tr:last-child td {
+    border-bottom: 1px solid #000;
+  }
+  .nowrap-cell {
+    white-space: nowrap;
+  }
   .totals-panel {
     padding: 2px 3px;
     vertical-align: top;
@@ -57,6 +82,19 @@ export const GST_INVOICE_STYLES = `
   .center { text-align: center; }
   .right  { text-align: right; }
   .bold   { font-weight: bold; }
+  .title-cell { padding: 2px 3px; vertical-align: top; }
+  .title-cell .title {
+    font-size: 16px;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+  .title-cell .title-licenses {
+    text-align: center;
+    font-size: 11px;
+    font-weight: normal;
+    line-height: 1.35;
+  }
   .title  { font-size: 16px; font-weight: bold; text-align: center; }
   .line-rejected td {
     text-decoration: line-through;
@@ -68,6 +106,20 @@ export const GST_INVOICE_STYLES = `
     body { margin: 0; }
   }
 `;
+
+export function buildGstCompanyLicenseHtml(dl: string, gstin: string): string {
+  return `<b>D.L. No:</b> ${dl}<br>
+      <b>GSTIN:</b> ${gstin}`;
+}
+
+/** Title cell with D.L. No + GSTIN directly below the heading. */
+export function buildGstInvoiceTitleCell(title: string, dl: string, gstin: string): string {
+  return `
+    <td colspan="2" class="title-cell">
+      <div class="title">${title}</div>
+      <div class="title-licenses">${buildGstCompanyLicenseHtml(dl, gstin)}</div>
+    </td>`;
+}
 
 export type GstInvoiceLineItem = {
   sn: number;
@@ -109,9 +161,9 @@ export function buildGstInvoiceItemsHtml(items: GstInvoiceLineItem[]): string {
       <td>${item.hsn}</td>
       <td class="ellipsis-cell">${item.batch}</td>
       <td>${item.exp}</td>
-      <td>${item.qty}</td>
-      <td>${item.free}</td>
-      <td>${item.totalQty}</td>
+      <td class="nowrap-cell">${item.qty}</td>
+      <td class="nowrap-cell">${item.free}</td>
+      <td class="nowrap-cell">${item.totalQty}</td>
       <td>${item.mrp}</td>
       <td>${item.rate}</td>
       <td>${item.disc}</td>
@@ -125,17 +177,17 @@ export function buildGstInvoiceItemsHtml(items: GstInvoiceLineItem[]): string {
 
 export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): string {
   return `
-<table>
+<table class="items-table">
   <thead>
-    <tr class="center bold">
+    <tr class="center">
       <th style="width:3%">SN</th>
-      <th style="width:18%">PRODUCT NAME</th>
+      <th style="width:17%">PRODUCT NAME</th>
       <th style="width:6%">PACK</th>
       <th style="width:6%">HSN</th>
       <th style="width:7%">BATCH</th>
       <th style="width:5%">EXP</th>
       <th style="width:4%">QTY</th>
-      <th style="width:4%">FREE</th>
+      <th style="width:5%">FREE</th>
       <th style="width:4%">TQT</th>
       <th style="width:6%">MRP</th>
       <th style="width:6%">RATE</th>

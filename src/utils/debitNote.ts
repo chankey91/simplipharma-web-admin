@@ -8,6 +8,7 @@ import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
 import {
   GST_INVOICE_STYLES,
+  buildGstInvoiceTitleCell,
   buildGstInvoiceFooter,
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
@@ -197,9 +198,7 @@ const getDebitNoteHTML = async (note: DebitNote) => {
       ${company.address}<br>
       ${invoiceStateHtml(companyState.state, companyState.stateCode)}
       Phone: ${company.phone}<br>
-      Email: ${company.email}<br><br>
-      <b>D.L. No:</b> ${company.dl}<br>
-      <b>GSTIN:</b> ${company.gstin}
+      Email: ${company.email}
     </td>
     <td width="50%">
       <b>${party.name}</b><br>
@@ -214,7 +213,7 @@ const getDebitNoteHTML = async (note: DebitNote) => {
 <!-- DEBIT NOTE INFO -->
 <table>
   <tr>
-    <td colspan="2" class="title">DEBIT NOTE</td>
+    ${buildGstInvoiceTitleCell('DEBIT NOTE', company.dl, company.gstin)}
     <td>
       Debit Note No: ${documentData.no}<br>
       Original Invoice: ${documentData.originalInvoice}<br>

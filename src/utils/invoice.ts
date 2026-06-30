@@ -25,6 +25,7 @@ import {
 } from './orderFulfillmentDiscount';
 import {
   GST_INVOICE_STYLES,
+  buildGstInvoiceTitleCell,
   buildGstInvoiceFooter,
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
@@ -605,9 +606,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
       ${company.address}<br>
       ${invoiceStateHtml(companyState.state, companyState.stateCode)}
       Phone: ${company.phone}<br>
-      Email: ${company.email}<br><br>
-      <b>D.L. No:</b> ${company.dl}<br>
-      <b>GSTIN:</b> ${company.gstin}
+      Email: ${company.email}
     </td>
     <td width="50%">
       <b>${party.name}</b><br>
@@ -622,7 +621,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
 <!-- INVOICE INFO -->
 <table>
   <tr>
-    <td colspan="2" class="title">SALES GST INVOICE</td>
+    ${buildGstInvoiceTitleCell('SALES GST INVOICE', company.dl, company.gstin)}
     <td>
       Invoice No: ${invoiceData.no}<br>
       Due Date: ${invoiceData.dueDate}<br>
@@ -1083,9 +1082,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
       ${company.address}<br>
       ${invoiceStateHtml(company.state, company.stateCode)}
       Phone: ${company.phone}<br>
-      Email: ${company.email}<br><br>
-      <b>D.L. No:</b> ${company.dl}<br>
-      <b>GSTIN:</b> ${company.gstin}
+      Email: ${company.email}
     </td>
     <td width="50%">
       <b>${party.name}</b><br>
@@ -1100,7 +1097,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
 <!-- INVOICE INFO -->
 <table>
   <tr>
-    <td colspan="2" class="title">PURCHASE GST INVOICE</td>
+    ${buildGstInvoiceTitleCell('PURCHASE GST INVOICE', company.dl, company.gstin)}
     <td>
       Invoice No: ${invoiceData.no}<br>
       Due Date: ${invoiceData.dueDate}<br>
