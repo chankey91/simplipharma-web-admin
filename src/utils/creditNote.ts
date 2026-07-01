@@ -9,6 +9,8 @@ import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from '
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
+  formatInvoiceProductName,
+  formatInvoiceLineGst,
   buildGstInvoiceFooter,
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
@@ -108,7 +110,7 @@ async function prepareCreditNoteItemRows(note: CreditNote): Promise<CreditNoteIt
       const batchDisplay = String(item.batchNumber || '').trim() || '—';
       return {
         sn: index + 1,
-        name: item.medicineName,
+        name: formatInvoiceProductName(item.medicineName),
         pack,
         hsn: item.hsn || '—',
         batch: batchDisplay,
@@ -119,8 +121,7 @@ async function prepareCreditNoteItemRows(note: CreditNote): Promise<CreditNoteIt
         mrp,
         rate: item.unitRefundPrice.toFixed(2),
         disc: '0.00',
-        sgst: `${(gstRate / 2).toFixed(1)}%`,
-        cgst: `${(gstRate / 2).toFixed(1)}%`,
+        gst: formatInvoiceLineGst(gstRate),
         amount: item.refundAmount.toFixed(2),
       };
     })
