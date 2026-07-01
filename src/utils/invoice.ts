@@ -26,6 +26,8 @@ import {
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
+  formatInvoiceProductName,
+  formatInvoiceLineGst,
   buildGstInvoiceFooter,
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
@@ -235,7 +237,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       const demand = item.productDemandId ? demandById.get(item.productDemandId) : undefined;
       const isRejected = demand?.status === 'rejected';
       const qty = toNumber(item.quantity);
-      const nameBase = item.name || 'Product request';
+      const nameBase = formatInvoiceProductName(item.name || 'Product request');
       return {
         sn: index + 1,
         name: isRejected ? `${nameBase} — not supplied` : `${nameBase} (product request)`,
@@ -249,8 +251,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
         mrp: '-',
         rate: '0.00',
         disc: '0.00',
-        sgst: `${(gstRate / 2).toFixed(1)}%`,
-        cgst: `${(gstRate / 2).toFixed(1)}%`,
+        gst: formatInvoiceLineGst(gstRate),
         amount: '0.00',
         rowClass: isRejected ? 'line-rejected' : '',
       };
@@ -455,15 +456,10 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     
     // Get packaging from medicine master data
     const packaging = item.medicineId ? (medicineMap.get(item.medicineId) || '-') : '-';
-    
-    const schemeLabel =
-      schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0
-        ? ` [Sch ${schemeP}+${schemeF}]`
-        : '';
 
     return {
       sn: index + 1,
-      name: `${item.name || 'Unknown'}${schemeLabel}`,
+      name: formatInvoiceProductName(item.name || 'Unknown'),
       pack: packaging,
       hsn: (item as any).hsn || '300490',
       batch:
@@ -481,8 +477,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       mrp: mrp > 0 ? mrp.toFixed(2) : '-',
       rate: price.toFixed(2), // Price is already after discount
       disc: discountPercentage > 0 ? discountPercentage.toFixed(2) : '0.00',
-      sgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
-      cgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
+      gst: formatInvoiceLineGst(gstRate),
       amount: itemAmount.toFixed(2),
       rowClass: '',
     };
@@ -681,8 +676,7 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
       'MRP',
       'RATE',
       'DISC',
-      'SGST',
-      'CGST',
+      'GST',
       'AMOUNT',
     ],
     ...items.map((it) => [
@@ -698,8 +692,7 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
       it.mrp,
       it.rate,
       it.disc,
-      it.sgst,
-      it.cgst,
+      it.gst,
       it.amount,
     ]),
     [],
@@ -968,7 +961,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     
     return {
       sn: index + 1,
-      name: item.medicineName || 'Unknown',
+      name: formatInvoiceProductName(item.medicineName || 'Unknown'),
       pack: packaging,
       hsn: (item as any).hsn || '300490',
       batch: item.batchNumber || '-',
@@ -979,8 +972,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
       mrp: mrp > 0 ? mrp.toFixed(2) : '-',
       rate: price.toFixed(2),
       disc: discountPercentage > 0 ? discountPercentage.toFixed(2) : '0.00',
-      sgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
-      cgst: `${(gstRate / 2).toFixed(1)}%`, // Show percentage instead of amount
+      gst: formatInvoiceLineGst(gstRate),
       amount: itemAmount.toFixed(2)
     };
   });

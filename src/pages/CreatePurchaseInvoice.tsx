@@ -48,7 +48,6 @@ import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
-import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
 import {
   searchMedicinesTypesenseAdmin,
   resolveMedicineAfterPickerSelection,
@@ -180,6 +179,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [medicineSearchLoading, setMedicineSearchLoading] = useState(false);
   const medicineSearchSeq = useRef(0);
   const medicineSearchInputElRef = useRef<HTMLInputElement | null>(null);
+  const savingInvoiceRef = useRef(false);
 
   const [addMedicineSearchHits, setAddMedicineSearchHits] = useState<Medicine[]>([]);
   const addMedicineSearchSeq = useRef(0);
@@ -190,23 +190,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   newMedicineNameRef.current = newMedicineData.name;
 
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
-
-  // Auto-generate invoice number on mount
-  useEffect(() => {
-    const loadInvoiceNumber = async () => {
-      try {
-        const invoiceNumber = await generatePurchaseInvoiceNumber();
-        setInvoiceData(prev => ({ ...prev, invoiceNumber }));
-      } catch (error) {
-        console.error('Failed to generate invoice number:', error);
-      }
-    };
-    
-    // Only generate if invoice number is empty
-    if (!invoiceData.invoiceNumber) {
-      loadInvoiceNumber();
-    }
-  }, []); // Run once on mount
+  const isSavingInvoice = createInvoiceMutation.isPending;
 
   useEffect(() => {
     const t = window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 0);
@@ -734,21 +718,25 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const handleSaveInvoice = async () => {
+    if (savingInvoiceRef.current || createInvoiceMutation.isPending) return;
+
     const user = auth.currentUser;
     if (!user) {
       await alert('Please login to continue', { severity: 'warning' });
       return;
     }
 
-    if (!invoiceData.invoiceNumber || !invoiceData.vendorId || items.length === 0) {
+    const invoiceNumber = invoiceData.invoiceNumber.trim();
+    if (!invoiceNumber || !invoiceData.vendorId || items.length === 0) {
       await alert('Please fill invoice number, select vendor, and add at least one item', { severity: 'warning' });
       return;
     }
 
+    savingInvoiceRef.current = true;
     try {
       await createInvoiceMutation.mutateAsync({
         invoiceData: {
-          invoiceNumber: invoiceData.invoiceNumber,
+          invoiceNumber,
           vendorId: invoiceData.vendorId,
           vendorName: selectedVendor?.vendorName || '',
           invoiceDate: new Date(invoiceData.invoiceDate),
@@ -768,6 +756,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       navigate('/purchases');
     } catch (error: any) {
       await alert(error.message || 'Failed to create invoice', { severity: 'error' });
+    } finally {
+      savingInvoiceRef.current = false;
     }
   };
 
@@ -783,8 +773,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         </IconButton>
         <Typography variant="h4">Create Purchase Invoice</Typography>
         <Box sx={{ flexGrow: 1 }} />
-        <Button variant="contained" startIcon={<Save />} onClick={handleSaveInvoice}>
-          Save Invoice
+        <Button
+          variant="contained"
+          startIcon={<Save />}
+          onClick={handleSaveInvoice}
+          disabled={isSavingInvoice}
+        >
+          {isSavingInvoice ? 'Saving...' : 'Save Invoice'}
         </Button>
       </Box>
 
@@ -797,6 +792,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               fullWidth
               label="Invoice Number"
               required
+              placeholder="Enter vendor bill / invoice number"
               value={invoiceData.invoiceNumber}
               onChange={(e) => setInvoiceData({ ...invoiceData, invoiceNumber: e.target.value })}
               sx={{ mb: 2 }}

@@ -107,6 +107,18 @@ export const GST_INVOICE_STYLES = `
   }
 `;
 
+/** Clean product name for printed GST invoices (scheme tags, trailing pack suffixes). */
+export function formatInvoiceProductName(name: string): string {
+  return name
+    .replace(/\s*\[Sch\s+\d+\+\d+\]/gi, '')
+    .replace(
+      /\s*\(\d+\s*(?:TAB|TABLET|TABLETS|CAP|CAPS|CAPSULE|CAPSULES|TABS?)\b[^)]*\)\s*$/i,
+      ''
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function buildGstCompanyLicenseHtml(dl: string, gstin: string): string {
   return `<b>D.L. No:</b> ${dl}<br>
       <b>GSTIN:</b> ${gstin}`;
@@ -119,6 +131,10 @@ export function buildGstInvoiceTitleCell(title: string, dl: string, gstin: strin
       <div class="title">${title}</div>
       <div class="title-licenses">${buildGstCompanyLicenseHtml(dl, gstin)}</div>
     </td>`;
+}
+
+export function formatInvoiceLineGst(gstRatePercent: number): string {
+  return `${gstRatePercent.toFixed(1)}%`;
 }
 
 export type GstInvoiceLineItem = {
@@ -134,8 +150,7 @@ export type GstInvoiceLineItem = {
   mrp: string;
   rate: string;
   disc: string;
-  sgst: string;
-  cgst: string;
+  gst: string;
   amount: string;
   rowClass?: string;
 };
@@ -167,8 +182,7 @@ export function buildGstInvoiceItemsHtml(items: GstInvoiceLineItem[]): string {
       <td>${item.mrp}</td>
       <td>${item.rate}</td>
       <td>${item.disc}</td>
-      <td>${item.sgst}</td>
-      <td>${item.cgst}</td>
+      <td class="nowrap-cell">${item.gst}</td>
       <td class="right">${item.amount}</td>
     </tr>`
     )
@@ -181,7 +195,7 @@ export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): strin
   <thead>
     <tr class="center">
       <th style="width:3%">SN</th>
-      <th style="width:17%">PRODUCT NAME</th>
+      <th style="width:26%">PRODUCT NAME</th>
       <th style="width:6%">PACK</th>
       <th style="width:6%">HSN</th>
       <th style="width:7%">BATCH</th>
@@ -192,8 +206,7 @@ export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): strin
       <th style="width:6%">MRP</th>
       <th style="width:6%">RATE</th>
       <th style="width:4%">DISC</th>
-      <th style="width:5%">SGST</th>
-      <th style="width:5%">CGST</th>
+      <th style="width:6%">GST</th>
       <th style="width:7%">AMOUNT</th>
     </tr>
   </thead>
