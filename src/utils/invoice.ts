@@ -22,6 +22,9 @@ import { appAlert } from './appDialog';
 import {
   buildPurchaseBatchDiscountLookup,
   resolveOrderLineDiscountPct,
+  resolveOrderLineDisplayDiscountPct,
+  resolveSellDiscountPct,
+  unitPriceFromMrp,
 } from './orderFulfillmentDiscount';
 import {
   GST_INVOICE_STYLES,
@@ -343,7 +346,20 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     if (mrp <= 0) mrp = toNumber(primaryBatch?.mrp);
     if (mrp <= 0) mrp = toNumber(medicineDetails?.mrp);
 
+    let gstRate =
+      (item as any).gstRate !== undefined
+        ? toNumber((item as any).gstRate)
+        : 0;
+    if (gstRate <= 0) gstRate = firstPositiveFromAllocs('gstRate');
+    if (gstRate <= 0) {
+      gstRate = toNumber(medicineDetails?.gstRate);
+    }
+    if (gstRate <= 0) {
+      gstRate = order.taxPercentage || 5;
+    }
+
     let discountPercentage = 0;
+    let displayDiscountPercentage = 0;
     const discountManuallySet = (item as { discountManuallySet?: boolean }).discountManuallySet === true;
     if (allocs && allocs.length > 0) {
       discountPercentage = allocs.reduce((best: number, a: any) => {
@@ -358,10 +374,36 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
           purchaseLookup: purchaseDiscountLookup,
           batch: batchFromInventory
             ? {
+                mrp: batchFromInventory.mrp,
                 purchasePrice: batchFromInventory.purchasePrice,
                 discountPercentage: batchFromInventory.discountPercentage,
+                batchNumber: a.batchNumber,
               }
             : undefined,
+          gstRate,
+          discountManuallySet,
+        });
+        return Math.max(best, pct);
+      }, 0);
+      displayDiscountPercentage = allocs.reduce((best: number, a: any) => {
+        const batchFromInventory = medicineDetails?.stockBatches?.find(
+          (b: any) => b.batchNumber === a.batchNumber
+        );
+        const pct = resolveOrderLineDisplayDiscountPct({
+          itemDiscount: (item as any).discountPercentage,
+          allocationDiscount: a.discountPercentage,
+          medicineId: item.medicineId,
+          batchNumber: a.batchNumber,
+          purchaseLookup: purchaseDiscountLookup,
+          batch: batchFromInventory
+            ? {
+                mrp: batchFromInventory.mrp,
+                purchasePrice: batchFromInventory.purchasePrice,
+                discountPercentage: batchFromInventory.discountPercentage,
+                batchNumber: a.batchNumber,
+              }
+            : undefined,
+          gstRate,
           discountManuallySet,
         });
         return Math.max(best, pct);
@@ -374,26 +416,33 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
         purchaseLookup: purchaseDiscountLookup,
         batch: primaryBatch
           ? {
+              mrp: primaryBatch.mrp,
               purchasePrice: primaryBatch.purchasePrice,
               discountPercentage: primaryBatch.discountPercentage,
+              batchNumber: primaryBatchNumber,
             }
           : undefined,
+        gstRate,
+        discountManuallySet,
+      });
+      displayDiscountPercentage = resolveOrderLineDisplayDiscountPct({
+        itemDiscount: (item as any).discountPercentage,
+        medicineId: item.medicineId,
+        batchNumber: primaryBatchNumber,
+        purchaseLookup: purchaseDiscountLookup,
+        batch: primaryBatch
+          ? {
+              mrp: primaryBatch.mrp,
+              purchasePrice: primaryBatch.purchasePrice,
+              discountPercentage: primaryBatch.discountPercentage,
+              batchNumber: primaryBatchNumber,
+            }
+          : undefined,
+        gstRate,
         discountManuallySet,
       });
     }
 
-    let gstRate =
-      (item as any).gstRate !== undefined
-        ? toNumber((item as any).gstRate)
-        : 0;
-    if (gstRate <= 0) gstRate = firstPositiveFromAllocs('gstRate');
-    if (gstRate <= 0) {
-      gstRate = toNumber(medicineDetails?.gstRate);
-    }
-    if (gstRate <= 0) {
-      gstRate = order.taxPercentage || 5;
-    }
-    
     let price = 0;
     if (allocs && allocs.length === 1 && toNumber(allocs[0].purchasePrice) > 0) {
       price = toNumber(allocs[0].purchasePrice);
@@ -415,8 +464,21 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       price = toNumber(item.price);
     }
     if (price <= 0 && mrp > 0) {
-      const afterDiscount = mrp * 0.80;
-      price = afterDiscount / (1 + gstRate / 100);
+      const sellDisc = resolveSellDiscountPct({
+        batch: primaryBatch
+          ? {
+              mrp,
+              purchasePrice: primaryBatch.purchasePrice,
+              discountPercentage: primaryBatch.discountPercentage,
+              batchNumber: primaryBatchNumber,
+            }
+          : { mrp, purchasePrice: toNumber(item.price) },
+        gstRate,
+        medicineId: item.medicineId,
+        batchNumber: primaryBatchNumber,
+        purchaseLookup: purchaseDiscountLookup,
+      });
+      price = unitPriceFromMrp(mrp, gstRate, sellDisc);
     }
     
     // Total Amount = Price × billable (paid) qty — free units are not charged
@@ -476,7 +538,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       totalQty: totalQty.toFixed(2),
       mrp: mrp > 0 ? mrp.toFixed(2) : '-',
       rate: price.toFixed(2), // Price is already after discount
-      disc: discountPercentage > 0 ? discountPercentage.toFixed(2) : '0.00',
+      disc: displayDiscountPercentage > 0 ? displayDiscountPercentage.toFixed(2) : '0.00',
       gst: formatInvoiceLineGst(gstRate),
       amount: itemAmount.toFixed(2),
       rowClass: '',

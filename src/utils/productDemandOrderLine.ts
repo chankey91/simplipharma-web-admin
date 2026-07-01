@@ -7,6 +7,12 @@ import {
   PurchaseInvoiceItem,
 } from '../types';
 
+import {
+  resolveSellDiscountPct,
+  unitPriceFromBatch,
+  unitPriceFromMrp,
+} from './orderFulfillmentDiscount';
+
 const toNumber = (value: unknown): number => {
   if (value === undefined || value === null || value === '') return 0;
   const parsed = typeof value === 'number' ? value : parseFloat(String(value));
@@ -58,10 +64,17 @@ export function pickBestStockBatch(med: Medicine): StockBatch | undefined {
   return [...pool].sort((a, b) => toDateMs(b.purchaseDate) - toDateMs(a.purchaseDate))[0];
 }
 
-export function purchasePriceFromMrp(mrp: number, gstRate: number): number {
+export function purchasePriceFromMrp(
+  mrp: number,
+  gstRate: number,
+  batch?: Pick<StockBatch, 'purchasePrice' | 'discountPercentage' | 'batchNumber'>,
+  medicineId?: string
+): number {
   if (mrp <= 0) return 0;
-  const afterDiscount = mrp * 0.8;
-  return afterDiscount / (1 + gstRate / 100);
+  if (batch) {
+    return unitPriceFromBatch({ ...batch, mrp }, gstRate, { medicineId });
+  }
+  return unitPriceFromMrp(mrp, gstRate, resolveSellDiscountPct({ batch: { mrp }, gstRate }));
 }
 
 export function medicinePriceForOrderLine(med: Pick<Medicine, 'salesPrice' | 'price'>): number {
@@ -311,11 +324,19 @@ export function buildFulfilledDemandOrderLine(
 
   let price = toNumber(piItem?.purchasePrice);
   if (price <= 0 && stockBatch?.purchasePrice) price = toNumber(stockBatch.purchasePrice);
-  if (price <= 0 && mrp > 0 && !piItem) price = purchasePriceFromMrp(mrp, gstRate);
+  if (price <= 0 && mrp > 0 && !piItem) {
+    price = purchasePriceFromMrp(mrp, gstRate, stockBatch, med.id);
+  }
   if (price <= 0) price = medicinePriceForOrderLine(med);
 
-  let discountPct = piItem?.discountPercentage ?? stockBatch?.discountPercentage;
-  if (discountPct == null) discountPct = line.discountPercentage ?? 0;
+  let discountPct =
+    stockBatch && mrp > 0
+      ? resolveSellDiscountPct({
+          batch: { ...stockBatch, mrp, batchNumber: stockBatch.batchNumber },
+          gstRate,
+          medicineId: med.id,
+        })
+      : piItem?.discountPercentage ?? stockBatch?.discountPercentage ?? line.discountPercentage ?? 0;
 
   const displayName =
     piItem?.medicineName ||

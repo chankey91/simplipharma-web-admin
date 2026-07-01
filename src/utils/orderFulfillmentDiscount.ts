@@ -35,10 +35,7 @@ export function batchPurchaseDiscountPricePerUnit(batch?: {
 }
 
 /**
- * Order fulfillment default from purchase invoice:
- * - Discount % on PI > 5 → 1.5%
- * - Discount price (₹/unit) on PI > 5 → 1.5% (when % not set)
- * - Otherwise → 0%
+ * @deprecated Legacy PI → order trade discount mapping (1.5% / 0%). Prefer {@link resolveSellDiscountPct}.
  */
 export function defaultOrderDiscountPctFromPurchase(
   purchaseDiscountPct: number,
@@ -54,6 +51,13 @@ export type PurchaseBatchDiscountLookup = Map<
   string,
   { discountPct: number; discountPricePerUnit: number }
 >;
+
+export type SellDiscountBatch = {
+  mrp?: number;
+  purchasePrice?: number;
+  discountPercentage?: number;
+  batchNumber?: string;
+};
 
 export function purchaseBatchLookupKey(medicineId: string, batchNumber: string): string {
   return `${medicineId}|${batchNumber}`;
@@ -97,10 +101,77 @@ const parseDiscountPct = (value: unknown): number | undefined => {
 };
 
 /**
- * Resolve order-line trade discount % for retailer invoice.
- * Unless `discountManuallySet`, always maps purchase/batch trade discount via
- * defaultOrderDiscountPctFromPurchase (PI discount > 5 → 1.5%, else 0%).
- * Raw batch `discountPercentage` is purchase-side only — not copied to orders.
+ * Standard margin off MRP from landed purchase cost (matches Medicine Details column).
+ * Falls back to 20% when MRP or purchase price is missing.
+ */
+export function calculateStandardDiscountPct(
+  mrp: number,
+  purchasePrice: number,
+  gstRate: number
+): number {
+  if (mrp > 0 && purchasePrice > 0) {
+    const priceWithGst = purchasePrice * (1 + gstRate / 100);
+    const pct = (1 - priceWithGst / mrp) * 100;
+    if (Number.isFinite(pct) && pct >= 0 && pct <= 100) return pct;
+  }
+  return 20;
+}
+
+/**
+ * Sell-side discount % for unit price: batch `discountPercentage` when set, else PI line discount,
+ * else standard discount from MRP + purchase price.
+ */
+export function resolveSellDiscountPct(params: {
+  batch?: SellDiscountBatch;
+  gstRate?: number;
+  medicineId?: string;
+  batchNumber?: string;
+  purchaseLookup?: PurchaseBatchDiscountLookup;
+}): number {
+  const batchPct = parseDiscountPct(params.batch?.discountPercentage);
+  if (batchPct !== undefined && batchPct > 0) return batchPct;
+
+  const pi = lookupPurchaseDiscount(
+    params.purchaseLookup,
+    params.medicineId,
+    params.batchNumber ?? params.batch?.batchNumber
+  );
+  if (pi && pi.discountPct > 0) return pi.discountPct;
+
+  const mrp = toNum(params.batch?.mrp);
+  const purchasePrice = toNum(params.batch?.purchasePrice);
+  const gstRate = params.gstRate !== undefined ? toNum(params.gstRate) : 5;
+  return calculateStandardDiscountPct(mrp, purchasePrice, gstRate);
+}
+
+/** Ex-GST unit price from MRP after applying sell discount %. */
+export function unitPriceFromMrp(mrp: number, gstRate: number, discountPct: number): number {
+  if (mrp <= 0) return 0;
+  const clamped = Math.min(100, Math.max(0, discountPct));
+  return (mrp * (1 - clamped / 100)) / (1 + gstRate / 100);
+}
+
+/** Unit sell price from batch MRP using batch → standard discount resolution. */
+export function unitPriceFromBatch(
+  batch: SellDiscountBatch,
+  gstRate: number,
+  ctx?: { medicineId?: string; purchaseLookup?: PurchaseBatchDiscountLookup }
+): number {
+  const mrp = toNum(batch.mrp);
+  if (mrp <= 0) return toNum(batch.purchasePrice);
+  const disc = resolveSellDiscountPct({
+    batch,
+    gstRate,
+    medicineId: ctx?.medicineId,
+    batchNumber: batch.batchNumber,
+    purchaseLookup: ctx?.purchaseLookup,
+  });
+  return unitPriceFromMrp(mrp, gstRate, disc);
+}
+
+/**
+ * Extra trade discount % applied on subtotal (manual override only).
+ * Batch / standard sell discount is embedded in the unit price.
  */
 export function resolveOrderLineDiscountPct(params: {
   itemDiscount?: unknown;
@@ -108,7 +179,8 @@ export function resolveOrderLineDiscountPct(params: {
   medicineId?: string;
   batchNumber?: string;
   purchaseLookup?: PurchaseBatchDiscountLookup;
-  batch?: { purchasePrice?: number; discountPercentage?: number };
+  batch?: SellDiscountBatch;
+  gstRate?: number;
   discountManuallySet?: boolean;
 }): number {
   if (params.discountManuallySet) {
@@ -116,22 +188,35 @@ export function resolveOrderLineDiscountPct(params: {
       parseDiscountPct(params.itemDiscount) ?? parseDiscountPct(params.allocationDiscount);
     if (manual !== undefined) return manual;
   }
-
-  const pi = lookupPurchaseDiscount(
-    params.purchaseLookup,
-    params.medicineId,
-    params.batchNumber
-  );
-  if (pi) {
-    return defaultOrderDiscountPctFromPurchase(pi.discountPct, pi.discountPricePerUnit);
-  }
-
-  const batchPct = toNum(params.batch?.discountPercentage);
-  const batchDiscountPrice = batchPurchaseDiscountPricePerUnit(params.batch);
-  return defaultOrderDiscountPctFromPurchase(batchPct, batchDiscountPrice);
+  return 0;
 }
 
-/** Apply default disc % to a fulfillment line (all allocations + line level). */
+/** Discount % shown on invoice / fulfillment UI (manual override or sell discount). */
+export function resolveOrderLineDisplayDiscountPct(params: {
+  itemDiscount?: unknown;
+  allocationDiscount?: unknown;
+  medicineId?: string;
+  batchNumber?: string;
+  purchaseLookup?: PurchaseBatchDiscountLookup;
+  batch?: SellDiscountBatch;
+  gstRate?: number;
+  discountManuallySet?: boolean;
+}): number {
+  if (params.discountManuallySet) {
+    const manual =
+      parseDiscountPct(params.itemDiscount) ?? parseDiscountPct(params.allocationDiscount);
+    if (manual !== undefined) return manual;
+  }
+  return resolveSellDiscountPct({
+    batch: params.batch,
+    gstRate: params.gstRate,
+    medicineId: params.medicineId,
+    batchNumber: params.batchNumber ?? params.batch?.batchNumber,
+    purchaseLookup: params.purchaseLookup,
+  });
+}
+
+/** Apply sell disc % to a fulfillment line (all allocations + line level). */
 export function applyDefaultDiscountToFulfillmentLine(
   item: {
     medicineId?: string;
@@ -141,19 +226,25 @@ export function applyDefaultDiscountToFulfillmentLine(
     batchAllocations?: Array<{ batchNumber: string; discountPercentage?: number }>;
   },
   purchaseLookup: PurchaseBatchDiscountLookup | undefined,
-  getBatch?: (batchNumber: string) => { purchasePrice?: number; discountPercentage?: number } | undefined
+  getBatch?: (
+    batchNumber: string
+  ) => { mrp?: number; purchasePrice?: number; discountPercentage?: number } | undefined,
+  gstRate?: number
 ): typeof item {
   if (item.discountManuallySet) return item;
 
-  const applyForBatch = (batchNumber: string | undefined, batch?: { purchasePrice?: number; discountPercentage?: number }) => {
+  const applyForBatch = (
+    batchNumber: string | undefined,
+    batch?: { mrp?: number; purchasePrice?: number; discountPercentage?: number }
+  ) => {
     if (!batchNumber) return undefined;
     const b = batch ?? getBatch?.(batchNumber);
-    return resolveOrderLineDiscountPct({
+    return resolveSellDiscountPct({
       medicineId: item.medicineId,
       batchNumber,
       purchaseLookup,
-      batch: b,
-      discountManuallySet: false,
+      batch: b ? { ...b, batchNumber } : { batchNumber },
+      gstRate,
     });
   };
 

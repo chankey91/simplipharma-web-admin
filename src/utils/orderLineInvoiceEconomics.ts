@@ -10,6 +10,8 @@ import {
 import {
   type PurchaseBatchDiscountLookup,
   resolveOrderLineDiscountPct,
+  resolveSellDiscountPct,
+  unitPriceFromMrp,
 } from './orderFulfillmentDiscount';
 
 const toNum = (v: unknown): number => {
@@ -27,7 +29,9 @@ const schemePair = (source: any) => ({
 function resolveOrderLineUnitPrice(
   item: any,
   allocs: any[] | undefined,
-  gstRate: number
+  gstRate: number,
+  medicine: { stockBatches?: any[] } | undefined,
+  purchaseLookup?: PurchaseBatchDiscountLookup
 ): number {
   if (allocs && allocs.length > 0) {
     if (allocs.length === 1) {
@@ -51,7 +55,26 @@ function resolveOrderLineUnitPrice(
     mrp = toNum(allocs[0].mrp);
   }
   if (mrp > 0) {
-    return (mrp * 0.8) / (1 + gstRate / 100);
+    const batchNumber =
+      item.batchNumber || (allocs?.[0]?.batchNumber as string | undefined);
+    const batch = batchNumber
+      ? medicine?.stockBatches?.find((x: any) => x.batchNumber === batchNumber)
+      : undefined;
+    const sellDisc = resolveSellDiscountPct({
+      batch: batch
+        ? {
+            mrp,
+            purchasePrice: batch.purchasePrice,
+            discountPercentage: batch.discountPercentage,
+            batchNumber,
+          }
+        : { mrp, purchasePrice: toNum(item.price) },
+      gstRate,
+      medicineId: item.medicineId,
+      batchNumber,
+      purchaseLookup,
+    });
+    return unitPriceFromMrp(mrp, gstRate, sellDisc);
   }
 
   return 0;
@@ -125,7 +148,13 @@ export function orderLineInvoiceEconomics(
   const gstRate =
     item.gstRate !== undefined ? toNum(item.gstRate) : taxFallback;
 
-  const unitPrice = resolveOrderLineUnitPrice(item, allocs, gstRate);
+  const unitPrice = resolveOrderLineUnitPrice(
+    item,
+    allocs,
+    gstRate,
+    medicine,
+    purchaseLookup
+  );
 
   const discountManuallySet = (item as { discountManuallySet?: boolean }).discountManuallySet === true;
   let discountPct = 0;
@@ -140,8 +169,14 @@ export function orderLineInvoiceEconomics(
         batchNumber: a.batchNumber,
         purchaseLookup,
         batch: batch
-          ? { purchasePrice: batch.purchasePrice, discountPercentage: batch.discountPercentage }
+          ? {
+              mrp: batch.mrp,
+              purchasePrice: batch.purchasePrice,
+              discountPercentage: batch.discountPercentage,
+              batchNumber: a.batchNumber,
+            }
           : undefined,
+        gstRate,
         discountManuallySet,
       });
     });
@@ -154,8 +189,14 @@ export function orderLineInvoiceEconomics(
       batchNumber: item.batchNumber,
       purchaseLookup,
       batch: batch
-        ? { purchasePrice: batch.purchasePrice, discountPercentage: batch.discountPercentage }
+        ? {
+            mrp: batch.mrp,
+            purchasePrice: batch.purchasePrice,
+            discountPercentage: batch.discountPercentage,
+            batchNumber: item.batchNumber,
+          }
         : undefined,
+      gstRate,
       discountManuallySet,
     });
   } else if (discountManuallySet) {

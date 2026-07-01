@@ -106,6 +106,9 @@ import {
   applyDefaultDiscountToFulfillmentLine,
   buildPurchaseBatchDiscountLookup,
   resolveOrderLineDiscountPct,
+  resolveOrderLineDisplayDiscountPct,
+  resolveSellDiscountPct,
+  unitPriceFromBatch,
 } from '../utils/orderFulfillmentDiscount';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContext';
@@ -239,7 +242,8 @@ function mapRepairedLineToFulfillment(
       discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
     },
     purchaseDiscountLookup,
-    (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+    (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber),
+    medicine?.gstRate || line.gstRate || 5
   );
   discountPct = withDefaults.discountPercentage;
 
@@ -305,18 +309,28 @@ export const OrderDetailsPage: React.FC = () => {
       batchNumber: string | undefined,
       itemDiscount?: unknown,
       allocationDiscount?: unknown,
-      batch?: { purchasePrice?: number; discountPercentage?: number },
-      discountManuallySet?: boolean
+      batch?: { mrp?: number; purchasePrice?: number; discountPercentage?: number },
+      discountManuallySet?: boolean,
+      gstRate?: number
     ) =>
-      resolveOrderLineDiscountPct({
-        itemDiscount,
-        allocationDiscount,
-        medicineId,
-        batchNumber,
-        purchaseLookup: purchaseDiscountLookup,
-        batch,
-        discountManuallySet,
-      }),
+      discountManuallySet
+        ? resolveOrderLineDisplayDiscountPct({
+            itemDiscount,
+            allocationDiscount,
+            medicineId,
+            batchNumber,
+            purchaseLookup: purchaseDiscountLookup,
+            batch: batch ? { ...batch, batchNumber } : undefined,
+            gstRate,
+            discountManuallySet,
+          })
+        : resolveSellDiscountPct({
+            batch: batch ? { ...batch, batchNumber } : undefined,
+            gstRate,
+            medicineId,
+            batchNumber,
+            purchaseLookup: purchaseDiscountLookup,
+          }),
     [purchaseDiscountLookup]
   );
 
@@ -922,7 +936,7 @@ export const OrderDetailsPage: React.FC = () => {
     try {
       if (confirmDialog.action === 'fulfill') {
         // Calculate subtotal from items with batches assigned
-        // Price is calculated from MRP: (MRP * 0.80) / (1 + GST/100)
+        // Unit price uses batch discount % when set, else standard discount off MRP
         // Total Amount = Price * Quantity
         // Discount = Total Amount * discountPercentage / 100
         // Subtotal = Sum of (Total Amount - Discount)
@@ -1101,9 +1115,10 @@ export const OrderDetailsPage: React.FC = () => {
           let calculatedPrice = 0;
           if (foundBatch.mrp && foundBatch.mrp > 0) {
             newMedicines[scanningItemIndex].mrp = foundBatch.mrp;
-            // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
-            const afterDiscount = foundBatch.mrp * 0.80; // 20% discount
-            calculatedPrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+            calculatedPrice = unitPriceFromBatch(foundBatch, gstRate, {
+              medicineId: item.medicineId,
+              purchaseLookup: purchaseDiscountLookup,
+            });
             newMedicines[scanningItemIndex].price = calculatedPrice;
           } else {
             newMedicines[scanningItemIndex].mrp = undefined;
@@ -1124,7 +1139,8 @@ export const OrderDetailsPage: React.FC = () => {
             item.discountPercentage,
             undefined,
             foundBatch,
-            item.discountManuallySet
+            item.discountManuallySet,
+            gstRate
           );
           newMedicines[scanningItemIndex].discountPercentage = discountPct;
           newMedicines[scanningItemIndex].discountManuallySet = false;
@@ -1199,9 +1215,10 @@ export const OrderDetailsPage: React.FC = () => {
             // Store MRP from batch
             if (foundBatch.mrp && foundBatch.mrp > 0) {
               newMedicines[itemIndex].mrp = foundBatch.mrp;
-              // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
-              const afterDiscount = foundBatch.mrp * 0.80; // 20% discount
-              calculatedPrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+              calculatedPrice = unitPriceFromBatch(foundBatch, gstRate, {
+                medicineId: item.medicineId,
+                purchaseLookup: purchaseDiscountLookup,
+              });
               newMedicines[itemIndex].price = calculatedPrice;
             } else {
               newMedicines[itemIndex].mrp = undefined;
@@ -1223,7 +1240,8 @@ export const OrderDetailsPage: React.FC = () => {
               item.discountPercentage,
               undefined,
               foundBatch,
-              item.discountManuallySet
+              item.discountManuallySet,
+              gstRate
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
             newMedicines[itemIndex].discountManuallySet = false;
@@ -1260,9 +1278,10 @@ export const OrderDetailsPage: React.FC = () => {
             // Store MRP from batch
             if (batch.mrp && batch.mrp > 0) {
               newMedicines[itemIndex].mrp = batch.mrp;
-              // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
-              const afterDiscount = batch.mrp * 0.80; // 20% discount
-              calculatedPrice = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+              calculatedPrice = unitPriceFromBatch(batch, gstRate, {
+                medicineId: item.medicineId,
+                purchaseLookup: purchaseDiscountLookup,
+              });
               newMedicines[itemIndex].price = calculatedPrice;
             } else {
               newMedicines[itemIndex].mrp = undefined;
@@ -1283,7 +1302,8 @@ export const OrderDetailsPage: React.FC = () => {
               item.discountPercentage,
               undefined,
               batch,
-              item.discountManuallySet
+              item.discountManuallySet,
+              gstRate
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
             newMedicines[itemIndex].discountManuallySet = false;
@@ -1351,13 +1371,15 @@ export const OrderDetailsPage: React.FC = () => {
       // Migrate from old single batch to new structure
       const existingBatch = medicine.stockBatches.find(b => b.batchNumber === item.batchNumber);
       if (existingBatch) {
+        const migrateGstRate = item.gstRate || medicine.gstRate || 5;
         const discountPct = resolveFulfillmentDiscountPct(
           item.medicineId,
           item.batchNumber,
           item.discountPercentage,
           undefined,
           existingBatch,
-          item.discountManuallySet
+          item.discountManuallySet,
+          migrateGstRate
         );
         
         existingAllocations.push({
@@ -1531,11 +1553,22 @@ export const OrderDetailsPage: React.FC = () => {
     const medicine = medicines?.find(m => m.id === item.medicineId);
     const defaultGstRate = medicine?.gstRate || 5;
 
-    // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
-    const calculatePriceFromMRP = (mrp: number | undefined, gstRate: number): number => {
+    const calculatePriceFromMRP = (
+      mrp: number | undefined,
+      gstRate: number,
+      batch?: { purchasePrice?: number; discountPercentage?: number; batchNumber?: string }
+    ): number => {
       if (!mrp || mrp <= 0) return 0;
-      const afterDiscount = mrp * 0.80; // 20% discount
-      return afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
+      if (batch) {
+        return unitPriceFromBatch({ ...batch, mrp }, gstRate, {
+          medicineId: item.medicineId,
+          purchaseLookup: purchaseDiscountLookup,
+        });
+      }
+      return unitPriceFromBatch({ mrp }, gstRate, {
+        medicineId: item.medicineId,
+        purchaseLookup: purchaseDiscountLookup,
+      });
     };
 
     const O = totalAllocated;
@@ -1555,16 +1588,21 @@ export const OrderDetailsPage: React.FC = () => {
     // Update fulfillment data - store individual batch allocations (quantity = billable paid, allocationFreeQty = scheme free)
     const processedAllocations = validAllocations.map((a) => {
       const gstRate = a.gstRate || defaultGstRate;
-      const calculatedPrice = calculatePriceFromMRP(a.mrp, gstRate);
-
       const actualBatch = medicine?.stockBatches?.find((b) => b.batchNumber === a.batchNumber);
+      const calculatedPrice = calculatePriceFromMRP(a.mrp, gstRate, {
+        purchasePrice: a.purchasePrice ?? actualBatch?.purchasePrice,
+        discountPercentage: actualBatch?.discountPercentage,
+        batchNumber: a.batchNumber,
+      });
+
       const discountPct = resolveFulfillmentDiscountPct(
         item.medicineId,
         a.batchNumber,
         item.discountPercentage,
         a.discountPercentage,
         actualBatch,
-        item.discountManuallySet
+        item.discountManuallySet,
+        gstRate
       );
 
       const qi = orderedUnitsFromAllocation(a);
@@ -1614,7 +1652,8 @@ export const OrderDetailsPage: React.FC = () => {
         verified: true,
       },
       purchaseDiscountLookup,
-      (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+      (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber),
+      defaultGstRate
     );
 
     markFulfillmentDirty();
@@ -1684,6 +1723,8 @@ export const OrderDetailsPage: React.FC = () => {
       ? med?.stockBatches?.find((b) => b.batchNumber === batchNumber)
       : undefined;
 
+    const gstRateForDisc =
+      toNumber(allocation?.gstRate) || toNumber(item.gstRate) || toNumber(med?.gstRate) || 5;
     const discountPct = batchNumber
       ? resolveFulfillmentDiscountPct(
           item.medicineId,
@@ -1691,7 +1732,8 @@ export const OrderDetailsPage: React.FC = () => {
           item.discountPercentage,
           allocation?.discountPercentage,
           batch,
-          item.discountManuallySet
+          item.discountManuallySet,
+          gstRateForDisc
         )
       : 0;
 
@@ -2355,14 +2397,24 @@ export const OrderDetailsPage: React.FC = () => {
                               toNumber((stockBatch as any)?.gstRate) ||
                               taxPercentage ||
                               5;
-                            // Calculate price from MRP: (MRP * 0.80) / (1 + GST/100)
                             let batchPurchasePrice = toNumber(allocation.purchasePrice);
                             if (batchPurchasePrice <= 0) {
-                              batchPurchasePrice = toNumber((stockBatch as any)?.purchasePrice);
+                              batchPurchasePrice = toNumber(stockBatch?.purchasePrice);
                             }
                             if (batchPurchasePrice <= 0 && batchMRP > 0) {
-                              const afterDiscount = batchMRP * 0.80;
-                              batchPurchasePrice = afterDiscount / (1 + gstRate / 100);
+                              batchPurchasePrice = unitPriceFromBatch(
+                                {
+                                  mrp: batchMRP,
+                                  purchasePrice: stockBatch?.purchasePrice,
+                                  discountPercentage: stockBatch?.discountPercentage,
+                                  batchNumber: allocation.batchNumber,
+                                },
+                                gstRate,
+                                {
+                                  medicineId: item.medicineId,
+                                  purchaseLookup: purchaseDiscountLookup,
+                                }
+                              );
                             }
 
                             const batchTotal =
@@ -2571,12 +2623,27 @@ export const OrderDetailsPage: React.FC = () => {
                         <TableCell align="right">
                           {canShowPricingColumns && item.batchAllocations && item.batchAllocations.length === 1
                             ? (() => {
-                                const mrp = item.batchAllocations[0].mrp || 0;
-                                const gstRate = item.batchAllocations[0].gstRate || item.gstRate || 5;
-                                let purchasePrice = toNumber(item.batchAllocations[0].purchasePrice);
+                                const alloc = item.batchAllocations[0];
+                                const mrp = alloc.mrp || 0;
+                                const gstRate = alloc.gstRate || item.gstRate || 5;
+                                const stockBatch = medSingle?.stockBatches?.find(
+                                  (b) => b.batchNumber === alloc.batchNumber
+                                );
+                                let purchasePrice = toNumber(alloc.purchasePrice);
                                 if (purchasePrice <= 0 && mrp > 0) {
-                                  const afterDiscount = mrp * 0.80;
-                                  purchasePrice = afterDiscount / (1 + gstRate / 100);
+                                  purchasePrice = unitPriceFromBatch(
+                                    {
+                                      mrp,
+                                      purchasePrice: stockBatch?.purchasePrice,
+                                      discountPercentage: stockBatch?.discountPercentage,
+                                      batchNumber: alloc.batchNumber,
+                                    },
+                                    gstRate,
+                                    {
+                                      medicineId: item.medicineId,
+                                      purchaseLookup: purchaseDiscountLookup,
+                                    }
+                                  );
                                 }
                                 return `₹${purchasePrice.toFixed(2)}`;
                               })()
@@ -2584,10 +2651,24 @@ export const OrderDetailsPage: React.FC = () => {
                               ? (() => {
                                   const mrp = item.mrp || 0;
                                   const gstRate = item.gstRate || 5;
+                                  const stockBatch = medSingle?.stockBatches?.find(
+                                    (b) => b.batchNumber === item.batchNumber
+                                  );
                                   let purchasePrice = toNumber(item.price);
                                   if (purchasePrice <= 0 && mrp > 0) {
-                                    const afterDiscount = mrp * 0.80;
-                                    purchasePrice = afterDiscount / (1 + gstRate / 100);
+                                    purchasePrice = unitPriceFromBatch(
+                                      {
+                                        mrp,
+                                        purchasePrice: stockBatch?.purchasePrice,
+                                        discountPercentage: stockBatch?.discountPercentage,
+                                        batchNumber: item.batchNumber,
+                                      },
+                                      gstRate,
+                                      {
+                                        medicineId: item.medicineId,
+                                        purchaseLookup: purchaseDiscountLookup,
+                                      }
+                                    );
                                   }
                                   return `₹${purchasePrice.toFixed(2)}`;
                                 })()
