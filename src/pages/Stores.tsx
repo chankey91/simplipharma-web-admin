@@ -323,12 +323,29 @@ export const StoresPage: React.FC = () => {
   };
 
   const handleSave = async () => {
+    const email = formData.email.trim();
+
+    if (!editingStore) {
+      if (!formData.shopName.trim()) {
+        await alert('Store name is required', { severity: 'warning' });
+        return;
+      }
+      if (!email) {
+        await alert('Email address is required', { severity: 'warning' });
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        await alert('Please enter a valid email address', { severity: 'warning' });
+        return;
+      }
+    }
+
     const storeData: any = {
       displayName: formData.displayName,
       shopName: formData.shopName,
       phoneNumber: formData.phoneNumber,
       address: formData.address,
-      email: formData.email,
+      email,
       licenceNumber: formData.licenceNumber,
       ownerName: formData.ownerName,
       licenceHolderName: formData.licenceHolderName,
@@ -568,10 +585,12 @@ export const StoresPage: React.FC = () => {
                 <TextField
                   fullWidth
                   label="Email Address"
+                  type="email"
                   required
                   disabled={!!editingStore}
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  helperText={editingStore ? 'Email cannot be changed after creation' : 'Required — login credentials are sent to this address'}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -736,7 +755,11 @@ export const StoresPage: React.FC = () => {
             variant="contained"
             startIcon={<Save />}
             onClick={handleSave}
-            disabled={createStoreMutation.isPending || updateStoreMutation.isPending}
+            disabled={
+              createStoreMutation.isPending ||
+              updateStoreMutation.isPending ||
+              (!editingStore && !formData.email.trim())
+            }
           >
             {editingStore ? 'Update Store' : 'Create Store'}
           </Button>
