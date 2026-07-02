@@ -62,6 +62,15 @@ export const GST_INVOICE_STYLES = `
   .nowrap-cell {
     white-space: nowrap;
   }
+  .items-table .col-left {
+    text-align: left;
+  }
+  .items-table .col-center {
+    text-align: center;
+  }
+  .items-table .col-right {
+    text-align: right;
+  }
   .totals-panel {
     padding: 2px 3px;
     vertical-align: top;
@@ -169,21 +178,21 @@ export function buildGstInvoiceItemsHtml(items: GstInvoiceLineItem[]): string {
   return items
     .map(
       (item) => `
-    <tr class="center ${item.rowClass || ''}">
-      <td>${item.sn}</td>
-      <td style="text-align:left">${item.name}</td>
-      <td class="ellipsis-cell">${item.pack}</td>
-      <td>${item.hsn}</td>
-      <td class="ellipsis-cell">${item.batch}</td>
-      <td>${item.exp}</td>
-      <td class="nowrap-cell">${item.qty}</td>
-      <td class="nowrap-cell">${item.free}</td>
-      <td class="nowrap-cell">${item.totalQty}</td>
-      <td>${item.mrp}</td>
-      <td>${item.rate}</td>
-      <td>${item.disc}</td>
-      <td class="nowrap-cell">${item.gst}</td>
-      <td class="right">${item.amount}</td>
+    <tr class="${item.rowClass || ''}">
+      <td class="col-center">${item.sn}</td>
+      <td class="col-left">${item.name}</td>
+      <td class="col-center ellipsis-cell">${item.pack}</td>
+      <td class="col-center">${item.hsn}</td>
+      <td class="col-center ellipsis-cell">${item.batch}</td>
+      <td class="col-center">${item.exp}</td>
+      <td class="col-center nowrap-cell">${item.qty}</td>
+      <td class="col-center nowrap-cell">${item.free}</td>
+      <td class="col-center nowrap-cell">${item.totalQty}</td>
+      <td class="col-center">${item.mrp}</td>
+      <td class="col-center">${item.rate}</td>
+      <td class="col-center">${item.disc}</td>
+      <td class="col-center nowrap-cell">${item.gst}</td>
+      <td class="col-right">${item.amount}</td>
     </tr>`
     )
     .join('');
@@ -193,21 +202,21 @@ export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): strin
   return `
 <table class="items-table">
   <thead>
-    <tr class="center">
-      <th style="width:3%">SN</th>
-      <th style="width:26%">PRODUCT NAME</th>
-      <th style="width:6%">PACK</th>
-      <th style="width:6%">HSN</th>
-      <th style="width:7%">BATCH</th>
-      <th style="width:5%">EXP</th>
-      <th style="width:4%">QTY</th>
-      <th style="width:5%">FREE</th>
-      <th style="width:4%">TQT</th>
-      <th style="width:6%">MRP</th>
-      <th style="width:6%">RATE</th>
-      <th style="width:4%">DISC</th>
-      <th style="width:6%">GST</th>
-      <th style="width:7%">AMOUNT</th>
+    <tr>
+      <th class="col-center" style="width:3%">SN</th>
+      <th class="col-left" style="width:26%">PRODUCT NAME</th>
+      <th class="col-center" style="width:6%">PACK</th>
+      <th class="col-center" style="width:6%">HSN</th>
+      <th class="col-center" style="width:7%">BATCH</th>
+      <th class="col-center" style="width:5%">EXP</th>
+      <th class="col-center" style="width:4%">QTY</th>
+      <th class="col-center" style="width:5%">FREE</th>
+      <th class="col-center" style="width:4%">TQT</th>
+      <th class="col-center" style="width:6%">MRP</th>
+      <th class="col-center" style="width:6%">RATE</th>
+      <th class="col-center" style="width:4%">DISC</th>
+      <th class="col-center" style="width:6%">GST</th>
+      <th class="col-right" style="width:7%">AMOUNT</th>
     </tr>
   </thead>
   <tbody>
