@@ -29,11 +29,19 @@ export const updateStore = async (storeId: string, data: Partial<User>) => {
 };
 
 export const createStore = async (storeData: Partial<User> & { initialPassword?: string }) => {
+  const email = storeData.email?.trim();
+  if (!email) {
+    throw new Error('Email address is required to create a store');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('Please enter a valid email address');
+  }
+
   let cloudFunctionSucceeded = false;
   let cloudFunctionError: string | null = null;
   
   // Try to use Cloud Function if password is provided (for user creation)
-  if (storeData.initialPassword && storeData.email) {
+  if (storeData.initialPassword && email) {
     try {
       const createStoreUser = httpsCallable(functions, 'createStoreUser');
       // Remove undefined values and initialPassword from storeData before sending
@@ -65,7 +73,7 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
       });
       
       const result = await createStoreUser({
-        email: storeData.email,
+        email,
         password: storeData.initialPassword,
         storeData: {
           ...cleanData,
@@ -114,6 +122,7 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
   const { initialPassword, ...cleanStoreData } = storeData;
   const newStore: any = {
     ...cleanStoreData,
+    email,
     role: 'retailer',
     createdAt: serverTimestamp(),
     isActive: cleanStoreData.isActive !== undefined ? cleanStoreData.isActive : true,
@@ -141,7 +150,7 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
     error.storeCreated = true;
     error.storeId = storeRef.id;
     error.password = initialPassword;
-    error.email = storeData.email;
+    error.email = email;
     throw error;
   }
   
