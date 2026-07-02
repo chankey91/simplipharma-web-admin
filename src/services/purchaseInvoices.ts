@@ -2,6 +2,7 @@ import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp,
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem } from '../types';
 import { addStockBatch } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
+import { attachStandardDiscountToBatchData } from '../utils/orderFulfillmentDiscount';
 
 export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
   const invoicesCol = collection(db, 'purchaseInvoices');
@@ -328,6 +329,7 @@ export const createPurchaseInvoice = async (
               delete batchData.discountPercentage;
             }
           }
+          attachStandardDiscountToBatchData(batchData, item);
           if (
             item.schemePaidQty !== undefined &&
             item.schemePaidQty !== null &&
@@ -489,6 +491,7 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
             delete batchData.discountPercentage;
           }
         }
+        attachStandardDiscountToBatchData(batchData, item);
         if (
           item.schemePaidQty !== undefined &&
           item.schemePaidQty !== null &&

@@ -47,6 +47,8 @@ import {
   Assignment,
   Payment,
   AttachMoney,
+  Undo,
+  Refresh,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -54,6 +56,8 @@ import {
   useOrders,
   useUpdateOrderStatus,
   useFulfillOrder,
+  useUnfulfillOrder,
+  useRecalculateOrderPricing,
   useUpdateOrderDispatch,
   useMarkOrderDelivered,
   useCancelOrder,
@@ -105,13 +109,15 @@ import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import {
   applyDefaultDiscountToFulfillmentLine,
   buildPurchaseBatchDiscountLookup,
+  findStockBatch,
   resolveOrderLineDiscountPct,
   resolveOrderLineDisplayDiscountPct,
-  resolveSellDiscountPct,
+  toSellDiscountBatch,
   unitPriceFromBatch,
 } from '../utils/orderFulfillmentDiscount';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContext';
+import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -242,7 +248,7 @@ function mapRepairedLineToFulfillment(
       discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
     },
     purchaseDiscountLookup,
-    (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber),
+    (batchNumber) => findStockBatch(medicine, batchNumber),
     medicine?.gstRate || line.gstRate || 5
   );
   discountPct = withDefaults.discountPercentage;
@@ -297,6 +303,7 @@ export const OrderDetailsPage: React.FC = () => {
     dirty: false,
   });
   const [resyncingDemandLines, setResyncingDemandLines] = useState(false);
+  const [recalculatingPricing, setRecalculatingPricing] = useState(false);
 
   const hasFulfilledProductDemands = useMemo(() => {
     if (!order?.id || !productDemands?.length) return false;
@@ -313,24 +320,16 @@ export const OrderDetailsPage: React.FC = () => {
       discountManuallySet?: boolean,
       gstRate?: number
     ) =>
-      discountManuallySet
-        ? resolveOrderLineDisplayDiscountPct({
-            itemDiscount,
-            allocationDiscount,
-            medicineId,
-            batchNumber,
-            purchaseLookup: purchaseDiscountLookup,
-            batch: batch ? { ...batch, batchNumber } : undefined,
-            gstRate,
-            discountManuallySet,
-          })
-        : resolveSellDiscountPct({
-            batch: batch ? { ...batch, batchNumber } : undefined,
-            gstRate,
-            medicineId,
-            batchNumber,
-            purchaseLookup: purchaseDiscountLookup,
-          }),
+      resolveOrderLineDisplayDiscountPct({
+        itemDiscount,
+        allocationDiscount,
+        medicineId,
+        batchNumber,
+        purchaseLookup: purchaseDiscountLookup,
+        batch: batch ? { ...batch, batchNumber } : undefined,
+        gstRate,
+        discountManuallySet,
+      }),
     [purchaseDiscountLookup]
   );
 
@@ -376,6 +375,8 @@ export const OrderDetailsPage: React.FC = () => {
   const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
   
   const fulfillOrderMutation = useFulfillOrder();
+  const unfulfillOrderMutation = useUnfulfillOrder();
+  const recalculateOrderPricingMutation = useRecalculateOrderPricing();
   const dispatchOrderMutation = useUpdateOrderDispatch();
   const deliverOrderMutation = useMarkOrderDelivered();
   const cancelOrderMutation = useCancelOrder();
@@ -661,9 +662,9 @@ export const OrderDetailsPage: React.FC = () => {
     queryClient,
   ]);
 
-  // Re-apply PI-based defaults when purchase invoices finish loading (lookup was empty on first pass).
+  // Re-apply batch/PI standard discount when purchase invoices load or order is in fulfillment.
   useEffect(() => {
-    if (order?.status !== 'Pending' || purchaseDiscountLookup.size === 0) return;
+    if (!order || (order.status !== 'Pending' && order.status !== 'Order Fulfillment')) return;
 
     setFulfillmentData((prev) => {
       if (!prev.medicines.length) return prev;
@@ -676,11 +677,12 @@ export const OrderDetailsPage: React.FC = () => {
           return m;
         }
         const medicine = medicines?.find((med) => med.id === m.medicineId);
+        const defaultGst = medicine?.gstRate || m.gstRate || order.taxPercentage || 5;
         const updated = applyDefaultDiscountToFulfillmentLine(
           m,
           purchaseDiscountLookup,
-          (batchNumber) =>
-            medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber)
+          (batchNumber) => findStockBatch(medicine, batchNumber),
+          defaultGst
         );
         if (updated.discountPercentage !== m.discountPercentage) {
           changed = true;
@@ -696,7 +698,7 @@ export const OrderDetailsPage: React.FC = () => {
 
       return changed ? { ...prev, medicines: nextMedicines } : prev;
     });
-  }, [purchaseDiscountLookup, order?.status, medicines]);
+  }, [purchaseDiscountLookup, order?.status, order?.taxPercentage, medicines]);
 
   // Auto-save in-progress fulfillment while Pending (survives navigation to Product Demands).
   useEffect(() => {
@@ -720,6 +722,10 @@ export const OrderDetailsPage: React.FC = () => {
       ),
     [fulfillmentData.medicines]
   );
+
+  const canRecalculatePricing =
+    (order?.status === 'Pending' || order?.status === 'Order Fulfillment') &&
+    allBatchesAssignedForTotals;
 
   const externalBatchReservations = useMemo(
     () => buildExternalPendingReservations(allOrders, order?.id || ''),
@@ -868,6 +874,74 @@ export const OrderDetailsPage: React.FC = () => {
     alert,
   ]);
 
+  const handleRecalculatePricing = useCallback(async () => {
+    if (!order?.id || !medicines) return;
+    if (!canRecalculatePricing) {
+      await alert('Assign batches to all lines before recalculating pricing.', { severity: 'warning' });
+      return;
+    }
+
+    const proceed = await confirm(
+      order.status === 'Pending'
+        ? 'Update unit prices and discount % on this screen from current inventory batch data?'
+        : 'Recalculate saved order line prices and totals from current inventory? Re-print the invoice afterward.',
+      { title: 'Recalculate pricing from inventory' }
+    );
+    if (!proceed) return;
+
+    setRecalculatingPricing(true);
+    try {
+      if (order.status === 'Pending') {
+        const recalculated = recalculateMedicinesPricingFromInventory(
+          fulfillmentData.medicines,
+          medicines,
+          purchaseDiscountLookup
+        );
+        markFulfillmentDirty();
+        setFulfillmentData((prev) => ({ ...prev, medicines: recalculated }));
+        await persistFulfillmentDraft(recalculated);
+        await alert('Pricing updated from current inventory.', { severity: 'success' });
+      } else {
+        const result = await recalculateOrderPricingMutation.mutateAsync({
+          orderId: order.id,
+          medicinesCatalog: medicines,
+          purchaseInvoices: purchaseInvoicesList,
+        });
+        setFulfillmentData((prev) => ({
+          ...prev,
+          medicines: result.medicines.map((line) =>
+            mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+          ),
+        }));
+        const warn =
+          result.totals.grandTotal !== (order.totalAmount ?? 0)
+            ? ` New grand total: ₹${result.totals.grandTotal.toFixed(2)}.`
+            : '';
+        await alert(`Order pricing recalculated from inventory.${warn}`, { severity: 'success' });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('Recalculate pricing failed:', err);
+      await alert(`Could not recalculate pricing: ${message}`, { severity: 'error' });
+    } finally {
+      setRecalculatingPricing(false);
+    }
+  }, [
+    order?.id,
+    order?.status,
+    order?.totalAmount,
+    medicines,
+    canRecalculatePricing,
+    fulfillmentData.medicines,
+    purchaseDiscountLookup,
+    purchaseInvoicesList,
+    persistFulfillmentDraft,
+    recalculateOrderPricingMutation,
+    alert,
+    confirm,
+    markFulfillmentDirty,
+  ]);
+
   if (isLoading || medicinesLoading || purchaseInvoicesLoading) {
     return <Loading message="Loading order details..." />;
   }
@@ -921,6 +995,16 @@ export const OrderDetailsPage: React.FC = () => {
           action: 'cancel',
           title: 'Cancel Order',
           message: 'Please provide a reason for cancelling this order.'
+        });
+        break;
+      case 'unfulfill':
+        setConfirmDialog({
+          open: true,
+          action: 'unfulfill',
+          title: 'Un-fulfill order',
+          message:
+            'Return this order to Pending, restore stock to inventory, and allow batch/discount edits. ' +
+            'The invoice number and line assignments will be kept. You will need to fulfill again to deduct stock.',
         });
         break;
     }
@@ -1020,6 +1104,24 @@ export const OrderDetailsPage: React.FC = () => {
           reason: cancelReason
         });
         await alert('Order cancelled successfully!', { severity: 'success' });
+      } else if (confirmDialog.action === 'unfulfill') {
+        const res = await unfulfillOrderMutation.mutateAsync({
+          orderId: order.id,
+          unfulfilledBy: user.uid,
+        });
+        localPendingEditsRef.current = { orderId: order.id, dirty: false };
+        setFulfillmentDirty(false);
+        if (res.stockRestoreErrors.length > 0) {
+          await alert(
+            `Order returned to Pending, but some stock could not be restored:\n${res.stockRestoreErrors.slice(0, 3).join('\n')}`,
+            { severity: 'warning' }
+          );
+        } else {
+          await alert(
+            'Order un-fulfilled. Stock restored — you can edit batches/pricing and fulfill again.',
+            { severity: 'success' }
+          );
+        }
       }
       setConfirmDialog({ ...confirmDialog, open: false });
     } catch (error: any) {
@@ -1469,6 +1571,7 @@ export const OrderDetailsPage: React.FC = () => {
           expiryDate: batch.expiryDate,
           mrp: batch.mrp,
           purchasePrice: batch.purchasePrice,
+          standardDiscount: batch.standardDiscount,
           gstRate: medicine.gstRate,
           schemePaidQty: toNumber(batch.schemePaidQty) || undefined,
           schemeFreeQty: toNumber(batch.schemeFreeQty) || undefined,
@@ -1556,7 +1659,7 @@ export const OrderDetailsPage: React.FC = () => {
     const calculatePriceFromMRP = (
       mrp: number | undefined,
       gstRate: number,
-      batch?: { purchasePrice?: number; discountPercentage?: number; batchNumber?: string }
+      batch?: { purchasePrice?: number; discountPercentage?: number; standardDiscount?: number; batchNumber?: string }
     ): number => {
       if (!mrp || mrp <= 0) return 0;
       if (batch) {
@@ -1588,12 +1691,9 @@ export const OrderDetailsPage: React.FC = () => {
     // Update fulfillment data - store individual batch allocations (quantity = billable paid, allocationFreeQty = scheme free)
     const processedAllocations = validAllocations.map((a) => {
       const gstRate = a.gstRate || defaultGstRate;
-      const actualBatch = medicine?.stockBatches?.find((b) => b.batchNumber === a.batchNumber);
-      const calculatedPrice = calculatePriceFromMRP(a.mrp, gstRate, {
-        purchasePrice: a.purchasePrice ?? actualBatch?.purchasePrice,
-        discountPercentage: actualBatch?.discountPercentage,
-        batchNumber: a.batchNumber,
-      });
+      const actualBatch = findStockBatch(medicine, a.batchNumber);
+      const sellBatch = toSellDiscountBatch(actualBatch, a.batchNumber, a.mrp, gstRate);
+      const calculatedPrice = calculatePriceFromMRP(a.mrp, gstRate, sellBatch);
 
       const discountPct = resolveFulfillmentDiscountPct(
         item.medicineId,
@@ -1601,7 +1701,7 @@ export const OrderDetailsPage: React.FC = () => {
         item.discountPercentage,
         a.discountPercentage,
         actualBatch,
-        item.discountManuallySet,
+        false,
         gstRate
       );
 
@@ -1630,7 +1730,9 @@ export const OrderDetailsPage: React.FC = () => {
           getSchemeFromAny(actualBatch).schemeFreeQty ||
           getSchemeFromAny(a).schemeFreeQty ||
           undefined,
-        ...(actualBatch?.nonReturnable === true ? { nonReturnable: true as const } : {}),
+        ...((actualBatch as { nonReturnable?: boolean } | undefined)?.nonReturnable === true
+          ? { nonReturnable: true as const }
+          : {}),
       };
     });
 
@@ -1648,11 +1750,11 @@ export const OrderDetailsPage: React.FC = () => {
         price: validAllocations.length === 1 ? (processedAllocations[0].purchasePrice || 0) : 0,
         mrp: validAllocations.length === 1 ? validAllocations[0].mrp : undefined,
         gstRate: defaultGstRate,
-        discountManuallySet: item.discountManuallySet,
+        discountManuallySet: false,
         verified: true,
       },
       purchaseDiscountLookup,
-      (batchNumber) => medicine?.stockBatches?.find((b) => b.batchNumber === batchNumber),
+      (batchNumber) => findStockBatch(medicine, batchNumber),
       defaultGstRate
     );
 
@@ -1719,12 +1821,12 @@ export const OrderDetailsPage: React.FC = () => {
     const med = medicines?.find((m) => m.id === item.medicineId);
     const batchNumber =
       allocation?.batchNumber ?? item.batchNumber ?? item.batchAllocations?.[0]?.batchNumber;
-    const batch = batchNumber
-      ? med?.stockBatches?.find((b) => b.batchNumber === batchNumber)
-      : undefined;
+    const batch = batchNumber ? findStockBatch(med, batchNumber) : undefined;
 
     const gstRateForDisc =
       toNumber(allocation?.gstRate) || toNumber(item.gstRate) || toNumber(med?.gstRate) || 5;
+    const useManualOverride =
+      order?.status === 'Pending' && item.discountManuallySet === true;
     const discountPct = batchNumber
       ? resolveFulfillmentDiscountPct(
           item.medicineId,
@@ -1732,7 +1834,7 @@ export const OrderDetailsPage: React.FC = () => {
           item.discountPercentage,
           allocation?.discountPercentage,
           batch,
-          item.discountManuallySet,
+          useManualOverride,
           gstRateForDisc
         )
       : 0;
@@ -1829,6 +1931,31 @@ export const OrderDetailsPage: React.FC = () => {
             sx={{ mr: 2 }}
           >
             {resyncingDemandLines ? 'Syncing PI…' : 'Sync from purchase invoice'}
+          </Button>
+        )}
+        {canRecalculatePricing && (
+          <Button
+            variant="outlined"
+            startIcon={recalculatingPricing ? <CircularProgress size={18} /> : <Refresh />}
+            disabled={recalculatingPricing || recalculateOrderPricingMutation.isPending}
+            onClick={() => void handleRecalculatePricing()}
+            sx={{ mr: 2 }}
+            title="Apply batch discount (or standard discount) from current inventory to line rates"
+          >
+            Recalculate pricing
+          </Button>
+        )}
+        {order.status === 'Order Fulfillment' && (
+          <Button
+            variant="outlined"
+            color="warning"
+            startIcon={<Undo />}
+            disabled={unfulfillOrderMutation.isPending}
+            onClick={() => handleAction('unfulfill')}
+            sx={{ mr: 2 }}
+            title="Restore stock and return order to Pending for edits"
+          >
+            Un-fulfill
           </Button>
         )}
         {order.status !== 'Cancelled' && order.status !== 'In Transit' && order.status !== 'Delivered' && (
@@ -2378,9 +2505,7 @@ export const OrderDetailsPage: React.FC = () => {
                           
                           {/* Individual Batch Rows */}
                           {item.batchAllocations.map((allocation: any, batchIdx: number) => {
-                            const stockBatch = medForLine?.stockBatches?.find(
-                              (b: any) => b.batchNumber === allocation.batchNumber
-                            );
+                            const stockBatch = findStockBatch(medForLine, allocation.batchNumber);
                             const batchPhysical = orderedUnitsFromAllocation(allocation);
                             const w =
                               fromAllocsSumForWeights > 0
@@ -2403,12 +2528,12 @@ export const OrderDetailsPage: React.FC = () => {
                             }
                             if (batchPurchasePrice <= 0 && batchMRP > 0) {
                               batchPurchasePrice = unitPriceFromBatch(
-                                {
-                                  mrp: batchMRP,
-                                  purchasePrice: stockBatch?.purchasePrice,
-                                  discountPercentage: stockBatch?.discountPercentage,
-                                  batchNumber: allocation.batchNumber,
-                                },
+                                toSellDiscountBatch(
+                                  stockBatch,
+                                  allocation.batchNumber,
+                                  batchMRP,
+                                  gstRate
+                                ),
                                 gstRate,
                                 {
                                   medicineId: item.medicineId,
@@ -2533,8 +2658,31 @@ export const OrderDetailsPage: React.FC = () => {
                       toNumber(lineEcon.gstRate) ||
                       toNumber(taxPercentage) ||
                       5;
-                    const displayDiscountPct =
-                      toNumber(item.discountPercentage) || toNumber(lineEcon.discountPct);
+                    const batchNumberForDisc =
+                      item.batchAllocations?.length === 1
+                        ? item.batchAllocations[0].batchNumber
+                        : item.batchNumber;
+                    const batchForDisc = batchNumberForDisc
+                      ? findStockBatch(medSingle, batchNumberForDisc)
+                      : undefined;
+                    const displayDiscountPct = batchNumberForDisc
+                      ? resolveOrderLineDisplayDiscountPct({
+                          itemDiscount: item.discountPercentage,
+                          allocationDiscount: item.batchAllocations?.[0]?.discountPercentage,
+                          medicineId: item.medicineId,
+                          batchNumber: batchNumberForDisc,
+                          purchaseLookup: purchaseDiscountLookup,
+                          batch: toSellDiscountBatch(
+                            batchForDisc,
+                            batchNumberForDisc,
+                            toNumber(item.batchAllocations?.[0]?.mrp) || toNumber(item.mrp),
+                            displayGstRate
+                          ),
+                          gstRate: displayGstRate,
+                          discountManuallySet:
+                            order?.status === 'Pending' && item.discountManuallySet === true,
+                        })
+                      : toNumber(item.discountPercentage);
                     return (
                       <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                         <TableCell>
@@ -2687,9 +2835,9 @@ export const OrderDetailsPage: React.FC = () => {
                             ? renderDiscPctCell(item, index, item.batchAllocations[0], 0)
                             : canShowPricingColumns && (item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0))
                               ? renderDiscPctCell(item, index)
-                              : displayDiscountPct > 0
-                                ? `${displayDiscountPct}%`
-                                : <Typography variant="caption" color="textSecondary">-</Typography>
+                              : canShowPricingColumns && batchNumberForDisc
+                                ? `${displayDiscountPct.toFixed(2)}%`
+                                : <Typography variant="caption" color="textSecondary">0%</Typography>
                           }
                         </TableCell>
                         <TableCell align="right">
@@ -3018,12 +3166,17 @@ export const OrderDetailsPage: React.FC = () => {
             disabled={
               (confirmDialog.action === 'cancel' && !cancelReason) ||
               fulfillOrderMutation.isPending ||
+              unfulfillOrderMutation.isPending ||
               dispatchOrderMutation.isPending ||
               deliverOrderMutation.isPending ||
               cancelOrderMutation.isPending
             }
           >
-            {confirmDialog.action === 'cancel' ? 'Confirm Cancellation' : 'Proceed'}
+            {confirmDialog.action === 'cancel'
+              ? 'Confirm Cancellation'
+              : confirmDialog.action === 'unfulfill'
+                ? 'Un-fulfill'
+                : 'Proceed'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -3444,6 +3597,7 @@ export const OrderDetailsPage: React.FC = () => {
                     <TableCell align="right">Allocate</TableCell>
                     <TableCell align="right">Price</TableCell>
                     <TableCell align="right">MRP</TableCell>
+                    <TableCell align="right">Purchase Disc %</TableCell>
                     <TableCell align="center">Scheme</TableCell>
                   </TableRow>
                 </TableHead>
@@ -3511,6 +3665,14 @@ export const OrderDetailsPage: React.FC = () => {
                       </TableCell>
                       <TableCell align="right">
                         ₹{allocation.mrp?.toFixed(2) || '-'}
+                      </TableCell>
+                      <TableCell align="right">
+                        {(() => {
+                          const med = medicines?.find((m) => m.id === batchAllocationDialog.medicineId);
+                          const stockBatch = findStockBatch(med, allocation.batchNumber);
+                          const piDisc = toNumber(stockBatch?.discountPercentage);
+                          return `${piDisc.toFixed(2)}%`;
+                        })()}
                       </TableCell>
                       <TableCell align="center">
                         <Typography variant="body2">

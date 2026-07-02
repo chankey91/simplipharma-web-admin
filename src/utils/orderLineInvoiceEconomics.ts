@@ -9,8 +9,10 @@ import {
 } from './schemeFulfillment';
 import {
   type PurchaseBatchDiscountLookup,
+  findStockBatch,
   resolveOrderLineDiscountPct,
   resolveSellDiscountPct,
+  toSellDiscountBatch,
   unitPriceFromMrp,
 } from './orderFulfillmentDiscount';
 
@@ -57,18 +59,9 @@ function resolveOrderLineUnitPrice(
   if (mrp > 0) {
     const batchNumber =
       item.batchNumber || (allocs?.[0]?.batchNumber as string | undefined);
-    const batch = batchNumber
-      ? medicine?.stockBatches?.find((x: any) => x.batchNumber === batchNumber)
-      : undefined;
+    const batch = findStockBatch(medicine, batchNumber);
     const sellDisc = resolveSellDiscountPct({
-      batch: batch
-        ? {
-            mrp,
-            purchasePrice: batch.purchasePrice,
-            discountPercentage: batch.discountPercentage,
-            batchNumber,
-          }
-        : { mrp, purchasePrice: toNum(item.price) },
+      batch: toSellDiscountBatch(batch, batchNumber || '', mrp, gstRate),
       gstRate,
       medicineId: item.medicineId,
       batchNumber,
@@ -161,41 +154,28 @@ export function orderLineInvoiceEconomics(
 
   if (allocs && allocs.length > 0) {
     const resolved = allocs.map((a: any) => {
-      const batch = medicine?.stockBatches?.find((x: any) => x.batchNumber === a.batchNumber);
+      const batch = findStockBatch(medicine, a.batchNumber);
+      const gst = toNum(a.gstRate) || gstRate;
       return resolveOrderLineDiscountPct({
         itemDiscount: item.discountPercentage,
         allocationDiscount: a.discountPercentage,
         medicineId: item.medicineId,
         batchNumber: a.batchNumber,
         purchaseLookup,
-        batch: batch
-          ? {
-              mrp: batch.mrp,
-              purchasePrice: batch.purchasePrice,
-              discountPercentage: batch.discountPercentage,
-              batchNumber: a.batchNumber,
-            }
-          : undefined,
-        gstRate,
+        batch: toSellDiscountBatch(batch, a.batchNumber, toNum(a.mrp), gst),
+        gstRate: gst,
         discountManuallySet,
       });
     });
     discountPct = resolved.reduce((best, pct) => Math.max(best, pct), 0);
   } else if (item.batchNumber) {
-    const batch = medicine?.stockBatches?.find((x: any) => x.batchNumber === item.batchNumber);
+    const batch = findStockBatch(medicine, item.batchNumber);
     discountPct = resolveOrderLineDiscountPct({
       itemDiscount: item.discountPercentage,
       medicineId: item.medicineId,
       batchNumber: item.batchNumber,
       purchaseLookup,
-      batch: batch
-        ? {
-            mrp: batch.mrp,
-            purchasePrice: batch.purchasePrice,
-            discountPercentage: batch.discountPercentage,
-            batchNumber: item.batchNumber,
-          }
-        : undefined,
+      batch: toSellDiscountBatch(batch, item.batchNumber, toNum(item.mrp), gstRate),
       gstRate,
       discountManuallySet,
     });

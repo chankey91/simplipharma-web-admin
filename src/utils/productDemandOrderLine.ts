@@ -8,6 +8,7 @@ import {
 } from '../types';
 
 import {
+  orderTradeDiscountFromPurchasePct,
   resolveSellDiscountPct,
   unitPriceFromBatch,
   unitPriceFromMrp,
@@ -329,14 +330,16 @@ export function buildFulfilledDemandOrderLine(
   }
   if (price <= 0) price = medicinePriceForOrderLine(med);
 
-  let discountPct =
-    stockBatch && mrp > 0
-      ? resolveSellDiscountPct({
-          batch: { ...stockBatch, mrp, batchNumber: stockBatch.batchNumber },
-          gstRate,
-          medicineId: med.id,
-        })
-      : piItem?.discountPercentage ?? stockBatch?.discountPercentage ?? line.discountPercentage ?? 0;
+  let purchaseDisc = 0;
+  if (
+    stockBatch?.discountPercentage !== undefined &&
+    stockBatch.discountPercentage !== null
+  ) {
+    purchaseDisc = toNumber(stockBatch.discountPercentage);
+  } else if (piItem?.discountPercentage != null) {
+    purchaseDisc = toNumber(piItem.discountPercentage);
+  }
+  const discountPct = orderTradeDiscountFromPurchasePct(purchaseDisc);
 
   const displayName =
     piItem?.medicineName ||

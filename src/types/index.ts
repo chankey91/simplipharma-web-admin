@@ -48,6 +48,8 @@ export interface StockBatch {
   landedUnitCostExGst?: number;
   mrp?: number;
   discountPercentage?: number;
+  /** Retail margin % off MRP (from PI standard discount); used for sell pricing. */
+  standardDiscount?: number;
   /** Retailer-facing purchase offer: pay for this many units, get schemeFreeQty free (e.g. 10 + 1). */
   schemePaidQty?: number;
   schemeFreeQty?: number;
@@ -72,6 +74,8 @@ export interface OrderMedicine {
   batchNumber?: string; // Keep for backward compatibility
   expiryDate?: Date | any;
   discountPercentage?: number; // Discount percentage for the item
+  /** When true, user overrode discount % manually in fulfillment UI. */
+  discountManuallySet?: boolean;
   gstRate?: number; // GST rate for the item
   mrp?: number; // MRP for the item
   /** When true, this line was fulfilled from non-returnable stock and must not be returned. */

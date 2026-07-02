@@ -1,15 +1,17 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
 import { deleteField } from 'firebase/firestore';
-import { Order, OrderStatus, OrderTimelineEvent } from '../types';
+import { Order, OrderStatus, OrderTimelineEvent, Medicine, PurchaseInvoice } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
 import { nestedFirestoreTimestamp, serverTimestamp } from '../utils/firestoreTimestamps';
 import {
   buildPurchaseBatchDiscountLookup,
-  resolveOrderLineDiscountPct,
+  resolveOrderLineDisplayDiscountPct,
 } from '../utils/orderFulfillmentDiscount';
 import { getAllPurchaseInvoices } from './purchaseInvoices';
+import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
+import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -17,6 +19,52 @@ const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: stri
   updatedBy,
   note
 });
+
+/** Restore inventory deducted at fulfill time (paid + scheme-free physical qty). */
+async function restoreStockForOrderMedicines(medicines: Order['medicines'] | undefined): Promise<string[]> {
+  const errors: string[] = [];
+  if (!medicines?.length) return errors;
+
+  for (const item of medicines) {
+    if (item.lineType === 'product_demand') continue;
+    if (!item.medicineId) continue;
+
+    if (item.batchAllocations && Array.isArray(item.batchAllocations) && item.batchAllocations.length > 0) {
+      for (const allocation of item.batchAllocations) {
+        const qty = physicalQtyFromAllocation(allocation);
+        if (!allocation.batchNumber || qty <= 0) continue;
+        try {
+          await restoreStockToBatch(item.medicineId, allocation.batchNumber, qty);
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : String(error);
+          errors.push(
+            `Failed to restore stock for ${item.name || item.medicineId} (batch ${allocation.batchNumber}): ${msg}`
+          );
+        }
+      }
+    } else if (item.batchNumber) {
+      const qty = toNum(item.quantity) + toNum(item.freeQuantity);
+      const restoreQty = qty > 0 ? qty : toNum(item.quantity);
+      if (restoreQty <= 0) continue;
+      try {
+        await restoreStockToBatch(item.medicineId, item.batchNumber, restoreQty);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        errors.push(
+          `Failed to restore stock for ${item.name || item.medicineId} (batch ${item.batchNumber}): ${msg}`
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+function toNum(value: unknown): number {
+  if (value === undefined || value === null || value === '') return 0;
+  const n = typeof value === 'number' ? value : parseFloat(String(value));
+  return Number.isFinite(n) ? n : 0;
+}
 
 export const getOrderById = async (orderId: string): Promise<Order | null> => {
   const orderRef = doc(db, 'orders', orderId);
@@ -147,50 +195,11 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
   // If order has been fulfilled (has batch assignments), restore stock
   if (currentStatus && currentStatus !== 'Pending' && currentStatus !== 'Cancelled' && orderData.medicines) {
     console.log(`Order ${orderId} has status ${currentStatus}, restoring stock from batches...`);
-    
-    try {
-      // Restore stock for each medicine with batch assignments
-      for (const item of orderData.medicines) {
-        if (item.lineType === 'product_demand') continue;
-        if (!item.medicineId) continue;
-        
-        // Check if item has batchAllocations (multiple batches)
-        if (item.batchAllocations && Array.isArray(item.batchAllocations) && item.batchAllocations.length > 0) {
-          for (const allocation of item.batchAllocations) {
-            if (allocation.batchNumber && allocation.quantity) {
-              try {
-                await restoreStockToBatch(
-                  item.medicineId,
-                  allocation.batchNumber,
-                  allocation.quantity || 0
-                );
-                console.log(`✓ Stock restored for medicine ${item.medicineId}, batch ${allocation.batchNumber}, quantity: ${allocation.quantity}`);
-              } catch (error: any) {
-                console.error(`Failed to restore stock for ${item.name || item.medicineId} (batch ${allocation.batchNumber}):`, error);
-                // Continue with other batches even if one fails
-              }
-            }
-          }
-        } 
-        // Check if item has single batchNumber
-        else if (item.batchNumber && item.quantity) {
-          try {
-            await restoreStockToBatch(
-              item.medicineId,
-              item.batchNumber,
-              item.quantity || 0
-            );
-            console.log(`✓ Stock restored for medicine ${item.medicineId}, batch ${item.batchNumber}, quantity: ${item.quantity}`);
-          } catch (error: any) {
-            console.error(`Failed to restore stock for ${item.name || item.medicineId} (batch ${item.batchNumber}):`, error);
-            // Continue with other items even if one fails
-          }
-        }
-      }
+    const restoreErrors = await restoreStockForOrderMedicines(orderData.medicines);
+    if (restoreErrors.length > 0) {
+      console.warn('Some stock restorations failed during cancel:', restoreErrors);
+    } else {
       console.log(`✓ All stock restored for order ${orderId}`);
-    } catch (error: any) {
-      console.error(`Error restoring stock for order ${orderId}:`, error);
-      // Still cancel the order even if stock restoration fails
     }
   }
   
@@ -304,20 +313,38 @@ export const fulfillOrder = async (
     console.warn('Failed to load purchase invoices for fulfill discount resolution:', error);
   }
 
+  const toNum = (value: unknown): number => {
+    if (value === undefined || value === null || value === '') return 0;
+    const n = typeof value === 'number' ? value : parseFloat(String(value));
+    return Number.isFinite(n) ? n : 0;
+  };
+
   const resolveLineDiscount = (
     line: any,
-    allocation: { batchNumber?: string; discountPercentage?: unknown } | undefined,
-    batch?: { purchasePrice?: number; discountPercentage?: number }
-  ): number =>
-    resolveOrderLineDiscountPct({
+    allocation:
+      | { batchNumber?: string; discountPercentage?: unknown; mrp?: number; gstRate?: number }
+      | undefined,
+    batch?: { mrp?: number; purchasePrice?: number; discountPercentage?: number; standardDiscount?: number }
+  ): number => {
+    const batchNumber = allocation?.batchNumber ?? line.batchNumber;
+    const gstRate = toNum(allocation?.gstRate) || toNum(line.gstRate) || 5;
+    return resolveOrderLineDisplayDiscountPct({
       itemDiscount: line.discountPercentage,
       allocationDiscount: allocation?.discountPercentage,
       medicineId: line.medicineId,
-      batchNumber: allocation?.batchNumber ?? line.batchNumber,
+      batchNumber,
       purchaseLookup: purchaseDiscountLookup,
-      batch,
+      batch: {
+        batchNumber,
+        mrp: toNum(allocation?.mrp) || toNum(batch?.mrp) || toNum(line.mrp),
+        purchasePrice: batch?.purchasePrice,
+        discountPercentage: batch?.discountPercentage,
+        standardDiscount: batch?.standardDiscount,
+      },
+      gstRate,
       discountManuallySet: line.discountManuallySet === true,
     });
+  };
   
   for (const item of fulfillmentData.medicines) {
     const isUnresolvedDemand =
@@ -640,6 +667,96 @@ export const fulfillOrder = async (
   }
   
   await updateDoc(orderRef, updateData);
+};
+
+/**
+ * Revert Order Fulfillment → Pending: restores batch stock and keeps line/batch assignments.
+ * Only allowed before dispatch (not In Transit / Delivered).
+ */
+export const unfulfillOrder = async (
+  orderId: string,
+  unfulfilledBy: string,
+  note?: string
+): Promise<{ stockRestoreErrors: string[] }> => {
+  const orderRef = doc(db, 'orders', orderId);
+  const orderDoc = await getDoc(orderRef);
+
+  if (!orderDoc.exists()) {
+    throw new Error('Order not found');
+  }
+
+  const data = orderDoc.data();
+  const status = data?.status as OrderStatus | undefined;
+
+  if (status !== 'Order Fulfillment') {
+    throw new Error(
+      'Only orders in Order Fulfillment can be un-fulfilled. Dispatched or delivered orders cannot be reversed here.'
+    );
+  }
+
+  const stockRestoreErrors = await restoreStockForOrderMedicines(data.medicines as Order['medicines']);
+  const currentTimeline = data.timeline || [];
+
+  await updateDoc(orderRef, {
+    status: 'Pending',
+    timeline: [
+      ...currentTimeline,
+      createTimelineEvent(
+        'Pending',
+        unfulfilledBy,
+        note || 'Order un-fulfilled; stock restored and order returned to Pending for edits'
+      ),
+    ],
+  });
+
+  return { stockRestoreErrors };
+};
+
+/** Recompute line prices/discounts from current inventory and persist order totals. */
+export const recalculateOrderPricing = async (
+  orderId: string,
+  medicinesCatalog: Medicine[],
+  purchaseInvoices: PurchaseInvoice[]
+): Promise<{ medicines: Order['medicines']; totals: ReturnType<typeof calculateOrderTotalsFromLines> }> => {
+  const order = await getOrderById(orderId);
+  if (!order) {
+    throw new Error('Order not found');
+  }
+
+  if (
+    order.status === 'Cancelled' ||
+    order.status === 'In Transit' ||
+    order.status === 'Delivered'
+  ) {
+    throw new Error('Cannot recalculate pricing for cancelled, in-transit, or delivered orders');
+  }
+
+  const purchaseLookup = buildPurchaseBatchDiscountLookup(purchaseInvoices);
+  const recalculated = recalculateMedicinesPricingFromInventory(
+    order.medicines || [],
+    medicinesCatalog,
+    purchaseLookup
+  );
+
+  const taxPct = order.taxPercentage || 5;
+  const totals = calculateOrderTotalsFromLines(
+    recalculated,
+    medicinesCatalog,
+    taxPct,
+    purchaseLookup
+  );
+
+  const paidAmount = toNum(order.paidAmount);
+  const orderRef = doc(db, 'orders', orderId);
+  await updateDoc(orderRef, {
+    medicines: recalculated,
+    subTotal: totals.subTotal,
+    taxAmount: totals.taxAmount,
+    totalAmount: totals.grandTotal,
+    dueAmount: Math.max(0, totals.grandTotal - paidAmount),
+  });
+
+  return { medicines: recalculated, totals };
 };
 
 export const updateOrderDispatch = async (

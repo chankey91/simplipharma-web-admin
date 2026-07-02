@@ -6,6 +6,8 @@ import {
   markOrderDelivered, 
   cancelOrder, 
   fulfillOrder,
+  unfulfillOrder,
+  recalculateOrderPricing,
   getOrderById,
   updatePaymentStatus
 } from '../services/orders';
@@ -87,6 +89,48 @@ export const useFulfillOrder = () => {
       queryClient.invalidateQueries({ queryKey: ['medicines'] }); // Invalidate medicines to reflect stock changes
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] }); // Refresh tray availability
     }
+  });
+};
+
+export const useUnfulfillOrder = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      orderId,
+      unfulfilledBy,
+      note,
+    }: {
+      orderId: string;
+      unfulfilledBy: string;
+      note?: string;
+    }) => unfulfillOrder(orderId, unfulfilledBy, note),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
+      queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['traysInUse'] });
+    },
+  });
+};
+
+export const useRecalculateOrderPricing = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      orderId,
+      medicinesCatalog,
+      purchaseInvoices,
+    }: {
+      orderId: string;
+      medicinesCatalog: Parameters<typeof recalculateOrderPricing>[1];
+      purchaseInvoices: Parameters<typeof recalculateOrderPricing>[2];
+    }) => recalculateOrderPricing(orderId, medicinesCatalog, purchaseInvoices),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
+    },
   });
 };
 

@@ -510,14 +510,18 @@ export const MedicineDetailsPage: React.FC = () => {
                         }
                       }
                       
-                      // Calculate standard discount from MRP and Purchase Price
-                      // Formula: Standard Discount = (1 - (Purchase Price * (1 + GST/100) / MRP)) * 100
+                      // Standard discount: stored on batch from PI, else derived from MRP + purchase price
                       let standardDiscount: number | null = null;
-                      if (mrpValue !== null && mrpValue > 0 && purchasePrice > 0) {
+                      if (
+                        batch.standardDiscount !== undefined &&
+                        batch.standardDiscount !== null &&
+                        !isNaN(Number(batch.standardDiscount))
+                      ) {
+                        standardDiscount = Number(batch.standardDiscount);
+                      } else if (mrpValue !== null && mrpValue > 0 && purchasePrice > 0) {
                         const priceWithGST = purchasePrice * (1 + gstRate / 100);
                         standardDiscount = (1 - (priceWithGST / mrpValue)) * 100;
                       } else if (mrpValue === null || mrpValue === 0) {
-                        // Default to 20% if MRP not available
                         standardDiscount = 20;
                       }
                       

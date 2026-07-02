@@ -377,6 +377,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
                 mrp: batchFromInventory.mrp,
                 purchasePrice: batchFromInventory.purchasePrice,
                 discountPercentage: batchFromInventory.discountPercentage,
+                standardDiscount: batchFromInventory.standardDiscount,
                 batchNumber: a.batchNumber,
               }
             : undefined,
@@ -400,6 +401,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
                 mrp: batchFromInventory.mrp,
                 purchasePrice: batchFromInventory.purchasePrice,
                 discountPercentage: batchFromInventory.discountPercentage,
+                standardDiscount: batchFromInventory.standardDiscount,
                 batchNumber: a.batchNumber,
               }
             : undefined,
@@ -419,6 +421,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
               mrp: primaryBatch.mrp,
               purchasePrice: primaryBatch.purchasePrice,
               discountPercentage: primaryBatch.discountPercentage,
+              standardDiscount: primaryBatch.standardDiscount,
               batchNumber: primaryBatchNumber,
             }
           : undefined,
@@ -435,6 +438,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
               mrp: primaryBatch.mrp,
               purchasePrice: primaryBatch.purchasePrice,
               discountPercentage: primaryBatch.discountPercentage,
+              standardDiscount: primaryBatch.standardDiscount,
               batchNumber: primaryBatchNumber,
             }
           : undefined,
@@ -470,6 +474,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
               mrp,
               purchasePrice: primaryBatch.purchasePrice,
               discountPercentage: primaryBatch.discountPercentage,
+              standardDiscount: primaryBatch.standardDiscount,
               batchNumber: primaryBatchNumber,
             }
           : { mrp, purchasePrice: toNumber(item.price) },

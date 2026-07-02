@@ -1,6 +1,7 @@
 import { collection, getDocs, doc, updateDoc, addDoc, query, where, Timestamp, getDoc, setDoc, db } from './firebase';
 import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
 import { Medicine, StockBatch } from '../types';
+import { standardDiscountFromStockBatch } from '../utils/orderFulfillmentDiscount';
 
 /**
  * Firestore Timestamp, Date, ISO string, or plain { seconds, nanoseconds } → Date.
@@ -143,6 +144,14 @@ export const getAllMedicines = async (): Promise<Medicine[]> => {
         discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
           ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
           : undefined,
+        standardDiscount: standardDiscountFromStockBatch(
+          { ...batch, mrp: mrpValue, purchasePrice: batch.purchasePrice },
+          data.gstRate !== undefined && data.gstRate !== null
+            ? typeof data.gstRate === 'number'
+              ? data.gstRate
+              : parseFloat(String(data.gstRate))
+            : 5
+        ),
         ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
         ...mapBatchLandedCost(batch),
         ...normalizeSchemeFromBatch(batch),
@@ -237,6 +246,14 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
       discountPercentage: batch.discountPercentage !== undefined && batch.discountPercentage !== null
         ? (typeof batch.discountPercentage === 'number' ? batch.discountPercentage : parseFloat(String(batch.discountPercentage)))
         : undefined,
+      standardDiscount: standardDiscountFromStockBatch(
+        { ...batch, mrp: mrpValue, purchasePrice: batch.purchasePrice },
+        data.gstRate !== undefined && data.gstRate !== null
+          ? typeof data.gstRate === 'number'
+            ? data.gstRate
+            : parseFloat(String(data.gstRate))
+          : 5
+      ),
       ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
       ...mapBatchLandedCost(batch),
       ...normalizeSchemeFromBatch(batch),
@@ -338,6 +355,10 @@ export const addStockBatch = async (
     newBatch.discountPercentage = batch.discountPercentage;
   }
 
+  if (batch.standardDiscount !== undefined && batch.standardDiscount !== null) {
+    newBatch.standardDiscount = batch.standardDiscount;
+  }
+
   const landed = parseOptionalPositiveNumber((batch as StockBatch).landedUnitCostExGst);
   if (landed !== undefined) {
     newBatch.landedUnitCostExGst = landed;
@@ -378,6 +399,10 @@ export const addStockBatch = async (
     if (newBatch.discountPercentage !== undefined && newBatch.discountPercentage !== null) {
       batches[existingBatchIndex].discountPercentage = newBatch.discountPercentage;
       console.log(`Updated discountPercentage for batch ${batch.batchNumber} to ${newBatch.discountPercentage}`);
+    }
+    if (newBatch.standardDiscount !== undefined && newBatch.standardDiscount !== null) {
+      batches[existingBatchIndex].standardDiscount = newBatch.standardDiscount;
+      console.log(`Updated standardDiscount for batch ${batch.batchNumber} to ${newBatch.standardDiscount}`);
     }
     if (newBatch.landedUnitCostExGst !== undefined && newBatch.landedUnitCostExGst !== null) {
       batches[existingBatchIndex].landedUnitCostExGst = newBatch.landedUnitCostExGst;
@@ -450,6 +475,16 @@ export const addStockBatch = async (
         console.log(`Saving discountPercentage ${discountValue} for batch ${b.batchNumber}`);
       } else {
         console.warn(`Invalid discountPercentage value for batch ${b.batchNumber}: ${b.discountPercentage}`);
+      }
+    }
+
+    if (b.standardDiscount !== undefined && b.standardDiscount !== null) {
+      const stdValue =
+        typeof b.standardDiscount === 'number'
+          ? b.standardDiscount
+          : parseFloat(String(b.standardDiscount));
+      if (!isNaN(stdValue)) {
+        firestoreBatch.standardDiscount = stdValue;
       }
     }
 
