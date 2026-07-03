@@ -223,6 +223,19 @@ const parseDiscountPct = (value: unknown): number | undefined => {
   return n;
 };
 
+/** Order invoice Disc % — trade discount only (0% or 1.5%), not PI/purchase % or standard margin. */
+export function isOrderTradeDiscountPct(n: number): boolean {
+  return n === 0 || Math.abs(n - 1.5) < 0.001;
+}
+
+function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const n = parseDiscountPct(value);
+    if (n !== undefined && isOrderTradeDiscountPct(n)) return n;
+  }
+  return undefined;
+}
+
 /**
  * Standard margin off MRP from landed purchase cost (matches Medicine Details column).
  * Falls back to 20% when MRP or purchase price is missing.
@@ -370,10 +383,11 @@ export function resolveOrderLineDiscountPct(params: {
     if (manual !== undefined) return manual;
   }
 
-  const persistedAlloc = parseDiscountPct(params.allocationDiscount);
-  if (persistedAlloc !== undefined) return persistedAlloc;
-  const persistedItem = parseDiscountPct(params.itemDiscount);
-  if (persistedItem !== undefined) return persistedItem;
+  const persisted = readPersistedOrderTradeDiscount(
+    params.allocationDiscount,
+    params.itemDiscount
+  );
+  if (persisted !== undefined) return persisted;
 
   const purchaseDisc = resolvePurchaseDiscountPct({
     batch: params.batch,
