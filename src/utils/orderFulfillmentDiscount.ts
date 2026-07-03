@@ -369,6 +369,12 @@ export function resolveOrderLineDiscountPct(params: {
       parseDiscountPct(params.itemDiscount) ?? parseDiscountPct(params.allocationDiscount);
     if (manual !== undefined) return manual;
   }
+
+  const persistedAlloc = parseDiscountPct(params.allocationDiscount);
+  if (persistedAlloc !== undefined) return persistedAlloc;
+  const persistedItem = parseDiscountPct(params.itemDiscount);
+  if (persistedItem !== undefined) return persistedItem;
+
   const purchaseDisc = resolvePurchaseDiscountPct({
     batch: params.batch,
     medicineId: params.medicineId,
