@@ -264,6 +264,7 @@ function mapRepairedLineToFulfillment(
         ...line,
         batchAllocations,
         discountPercentage: line.discountPercentage,
+        discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
       };
   discountPct = withDefaults.discountPercentage ?? toNumber(line.discountPercentage);
 
@@ -277,6 +278,7 @@ function mapRepairedLineToFulfillment(
         ? line.batchAllocations[0].expiryDate
         : line.expiryDate,
     discountPercentage: discountPct,
+    discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
     batchAllocations: withDefaults.batchAllocations ?? batchAllocations,
     freeQuantity:
       line.freeQuantity !== undefined && line.freeQuantity !== null
@@ -1839,8 +1841,7 @@ export const OrderDetailsPage: React.FC = () => {
 
     const gstRateForDisc =
       toNumber(allocation?.gstRate) || toNumber(item.gstRate) || toNumber(med?.gstRate) || 5;
-    const useManualOverride =
-      order?.status === 'Pending' && item.discountManuallySet === true;
+    const useManualOverride = item.discountManuallySet === true;
     const discountPct = batchNumber
       ? resolveFulfillmentDiscountPct(
           item.medicineId,
@@ -2134,6 +2135,9 @@ export const OrderDetailsPage: React.FC = () => {
             <CardContent sx={{ p: '8px !important', '&:last-child': { pb: '8px' } }}>
               <Box display="flex" alignItems="center" flexWrap="wrap" gap={2}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mr: 1 }}>Store Information:</Typography>
+                <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+                  <strong>Store Name:</strong> {order.retailerName || 'N/A'}
+                </Typography>
                 <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
                   <strong>Email:</strong> {order.retailerEmail}
                 </Typography>
@@ -2693,8 +2697,7 @@ export const OrderDetailsPage: React.FC = () => {
                             displayGstRate
                           ),
                           gstRate: displayGstRate,
-                          discountManuallySet:
-                            order?.status === 'Pending' && item.discountManuallySet === true,
+                          discountManuallySet: item.discountManuallySet === true,
                         })
                       : toNumber(item.discountPercentage);
                     return (
