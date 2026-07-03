@@ -36,6 +36,7 @@ import {
   MyLocation,
   PhotoCamera,
   History,
+  LockReset,
 } from '@mui/icons-material';
 import { RetailerVisitLogDialog } from '../components/RetailerVisitLogDialog';
 import {
@@ -44,7 +45,7 @@ import {
   Select,
   MenuItem,
 } from '@mui/material';
-import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore } from '../hooks/useStores';
+import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore, useSendRetailerPasswordResetEmail } from '../hooks/useStores';
 import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
 import { getSalesOfficers } from '../services/salesOfficers';
 import { User } from '../types';
@@ -90,6 +91,7 @@ export const StoresPage: React.FC = () => {
   const updateStoreMutation = useUpdateStore();
   const createStoreMutation = useCreateStore();
   const toggleStatusMutation = useToggleStoreStatus();
+  const resetPasswordMutation = useSendRetailerPasswordResetEmail();
   const { alert, confirm, prompt } = useAppDialog();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -288,6 +290,24 @@ export const StoresPage: React.FC = () => {
       setSalesOfficers([]);
     }
     setOpenDialog(true);
+  };
+
+  const handleSendPasswordReset = async () => {
+    const email = (editingStore?.email || '').trim();
+    if (!email) return;
+    if (
+      !(await confirm(
+        `Send a password reset link to ${email}? The retailer will use it to set a new password for the SimpliPharma mobile app.`
+      ))
+    ) {
+      return;
+    }
+    try {
+      const res = await resetPasswordMutation.mutateAsync(email);
+      await alert(res.message, { severity: 'success' });
+    } catch (err: any) {
+      await alert(err.message || 'Failed to send reset email', { severity: 'error' });
+    }
   };
 
   const handleGetCurrentLocation = () => {
@@ -749,8 +769,19 @@ export const StoresPage: React.FC = () => {
             </Grid>
           </Box>
         </DialogContent>
-        <DialogActions sx={{ p: 3 }}>
+        <DialogActions sx={{ p: 3, flexWrap: 'wrap', gap: 1 }}>
           <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
+          {editingStore && (
+            <Button
+              variant="outlined"
+              startIcon={<LockReset />}
+              onClick={handleSendPasswordReset}
+              disabled={resetPasswordMutation.isPending || !editingStore?.email}
+            >
+              {resetPasswordMutation.isPending ? 'Sending…' : 'Send password reset link'}
+            </Button>
+          )}
+          <Box sx={{ flexGrow: 1 }} />
           <Button
             variant="contained"
             startIcon={<Save />}

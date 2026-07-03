@@ -5,6 +5,7 @@ import {
   toggleStoreStatus,
   createStore,
   assignRetailerToSalesOfficer,
+  sendRetailerPasswordResetEmail,
 } from '../services/stores';
 import { User } from '../types';
 
@@ -48,6 +49,12 @@ export const useToggleStoreStatus = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] });
     }
+  });
+};
+
+export const useSendRetailerPasswordResetEmail = () => {
+  return useMutation({
+    mutationFn: (email: string) => sendRetailerPasswordResetEmail(email),
   });
 };
 

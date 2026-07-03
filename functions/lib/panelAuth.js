@@ -6,6 +6,7 @@ exports.isOperationsRole = isOperationsRole;
 exports.isAdminOrOperationsRole = isAdminOrOperationsRole;
 exports.isPanelRole = isPanelRole;
 exports.isSalesOfficerRole = isSalesOfficerRole;
+exports.isRetailerRole = isRetailerRole;
 exports.assertAdminOrOperations = assertAdminOrOperations;
 exports.assertAdmin = assertAdmin;
 const admin = require("firebase-admin");
@@ -28,6 +29,9 @@ function isPanelRole(role) {
 }
 function isSalesOfficerRole(role) {
     return role === 'salesOfficer' || role === 'SalesOfficer';
+}
+function isRetailerRole(role) {
+    return role === 'retailer' || role === 'Retailer';
 }
 async function assertAdminOrOperations(uid) {
     const role = await getUserRole(uid);

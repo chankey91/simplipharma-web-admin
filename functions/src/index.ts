@@ -8,6 +8,7 @@ import {
   isAdminOrOperationsRole,
   isPanelRole,
   isSalesOfficerRole,
+  isRetailerRole,
 } from './panelAuth';
 
 admin.initializeApp();
@@ -773,6 +774,14 @@ function getSalesOfficerPasswordResetContinueUrl(): string {
   return getPanelLoginUrl();
 }
 
+/** Continue URL after Firebase password reset for a retailer (mobile app); configurable via `app.retailer_password_reset_continue_url`. */
+function getRetailerPasswordResetContinueUrl(): string {
+  const cfg = functions.config().app as { retailer_password_reset_continue_url?: string } | undefined;
+  const custom = cfg?.retailer_password_reset_continue_url?.trim();
+  if (custom) return custom.replace(/\/$/, '');
+  return getPanelLoginUrl();
+}
+
 function getPanelSupportInboxUrl(): string {
   const cfg = functions.config().app as { panel_url?: string } | undefined;
   let base = (cfg?.panel_url || 'http://localhost:3001').replace(/\/$/, '');
@@ -986,6 +995,110 @@ export const sendSalesOfficerPasswordResetEmail = functions.https.onCall(async (
   return {
     success: true,
     message: 'Password reset link sent to the Sales Officer email.',
+    emailSent: true,
+  };
+});
+
+/**
+ * Admin/operations only: send a password reset link to a retailer’s email (mobile app account).
+ * The retailer has no self-service reset in the mobile app, so the admin triggers it here.
+ * Requires SMTP (same as other transactional emails).
+ */
+export const sendRetailerPasswordResetEmail = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  try {
+    await assertAdminOrOperations(context.auth.uid);
+  } catch {
+    throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
+  }
+
+  const rawEmail = String(data?.email || '').trim();
+  if (!rawEmail) {
+    throw new functions.https.HttpsError('invalid-argument', 'Email is required');
+  }
+
+  let userRecord: admin.auth.UserRecord;
+  try {
+    userRecord = await admin.auth().getUserByEmail(rawEmail);
+  } catch {
+    throw new functions.https.HttpsError('not-found', 'No user found with this email');
+  }
+
+  const role = await getUserRole(userRecord.uid);
+  if (!isRetailerRole(role)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'This email is not a retailer account'
+    );
+  }
+
+  const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
+  if (!userDoc.exists || userDoc.data()?.isActive === false) {
+    throw new functions.https.HttpsError('failed-precondition', 'This retailer account is inactive');
+  }
+
+  const email = String(userRecord.email || rawEmail).trim();
+
+  let resetLink: string;
+  try {
+    const continueUrl = getRetailerPasswordResetContinueUrl();
+    try {
+      resetLink = await admin.auth().generatePasswordResetLink(email, {
+        url: continueUrl,
+        handleCodeInApp: false,
+      });
+    } catch (err: any) {
+      // A continue URL whose domain is not in Firebase Auth "Authorized domains"
+      // throws "Domain not allowlisted by project". Fall back to the default
+      // Firebase-hosted action handler (always allowlisted) so the email still sends.
+      const message = String(err?.message || '');
+      if (/allowlist|allow-list|authoriz|domain/i.test(message)) {
+        console.warn(
+          `sendRetailerPasswordResetEmail: continue URL "${continueUrl}" not allowlisted; falling back to default action handler.`
+        );
+        resetLink = await admin.auth().generatePasswordResetLink(email);
+      } else {
+        throw err;
+      }
+    }
+  } catch (err: any) {
+    console.error('sendRetailerPasswordResetEmail: generatePasswordResetLink failed:', err?.message);
+    throw new functions.https.HttpsError('internal', 'Could not generate password reset link');
+  }
+
+  const mail = await sendSmtpMail({
+    to: email,
+    subject: 'SimpliPharma — Reset your password',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2196F3;">Password reset</h2>
+        <p>An administrator requested a password reset for your SimpliPharma (mobile app) account.</p>
+        <p style="margin: 24px 0;">
+          <a href="${resetLink}"
+             style="background: #00a99d; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Choose a new password
+          </a>
+        </p>
+        <p style="color: #666; font-size: 14px;">Or copy this link into your browser:</p>
+        <p style="word-break: break-all; font-size: 13px; color: #333;">${escapeHtmlText(resetLink)}</p>
+        <p style="color: #666; font-size: 12px; margin-top: 24px;">If you did not expect this, contact your administrator. The link expires after a short time.</p>
+      </div>
+    `,
+  });
+
+  if (!mail.ok) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      mail.error || 'SMTP is not configured. Set smtp.user and smtp.password in Firebase Functions config.'
+    );
+  }
+
+  return {
+    success: true,
+    message: 'Password reset link sent to the retailer email.',
     emailSent: true,
   };
 });
