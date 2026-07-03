@@ -213,3 +213,15 @@ export function orderLineTaxableBeforeDiscount(
   const e = orderLineInvoiceEconomics(item, medicine, orderTaxPercentage, purchaseLookup);
   return e.unitPrice * e.paidQty;
 }
+
+/** Line amount after trade discount % — matches invoice line taxable. */
+export function orderLineAmountAfterDiscount(
+  item: any,
+  medicine: any | undefined,
+  orderTaxPercentage?: number,
+  purchaseLookup?: PurchaseBatchDiscountLookup
+): number {
+  const e = orderLineInvoiceEconomics(item, medicine, orderTaxPercentage, purchaseLookup);
+  const base = e.unitPrice * e.paidQty;
+  return base * (1 - e.discountPct / 100);
+}

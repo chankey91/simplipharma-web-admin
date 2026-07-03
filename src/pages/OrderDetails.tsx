@@ -104,7 +104,11 @@ import {
   formatSchemeQty,
   splitSchemeAcrossAllocationPhysical,
 } from '../utils/schemeFulfillment';
-import { orderLineInvoiceEconomics, orderLineTaxableBeforeDiscount } from '../utils/orderLineInvoiceEconomics';
+import {
+  orderLineInvoiceEconomics,
+  orderLineAmountAfterDiscount,
+  orderLineTaxableBeforeDiscount,
+} from '../utils/orderLineInvoiceEconomics';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import {
   applyDefaultDiscountToFulfillmentLine,
@@ -171,7 +175,8 @@ type PurchaseDiscountLookup = ReturnType<typeof buildPurchaseBatchDiscountLookup
 function mapRepairedLineToFulfillment(
   line: OrderMedicine,
   medicines: Medicine[],
-  purchaseDiscountLookup: PurchaseDiscountLookup
+  purchaseDiscountLookup: PurchaseDiscountLookup,
+  orderStatus?: string
 ) {
   if ((line as { lineType?: string }).lineType === 'product_demand') {
     return {
@@ -241,17 +246,26 @@ function mapRepairedLineToFulfillment(
         })()
       : lineSchemeFreeQty(line.batchNumber, toNumber(line.quantity));
 
-  const withDefaults = applyDefaultDiscountToFulfillmentLine(
-    {
-      ...line,
-      batchAllocations,
-      discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
-    },
-    purchaseDiscountLookup,
-    (batchNumber) => findStockBatch(medicine, batchNumber),
-    medicine?.gstRate || line.gstRate || 5
-  );
-  discountPct = withDefaults.discountPercentage;
+  const shouldRefreshDiscount =
+    orderStatus === 'Pending' || orderStatus === 'Order Fulfillment';
+
+  const withDefaults = shouldRefreshDiscount
+    ? applyDefaultDiscountToFulfillmentLine(
+        {
+          ...line,
+          batchAllocations,
+          discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
+        },
+        purchaseDiscountLookup,
+        (batchNumber) => findStockBatch(medicine, batchNumber),
+        medicine?.gstRate || line.gstRate || 5
+      )
+    : {
+        ...line,
+        batchAllocations,
+        discountPercentage: line.discountPercentage,
+      };
+  discountPct = withDefaults.discountPercentage ?? toNumber(line.discountPercentage);
 
   return {
     ...withDefaults,
@@ -568,7 +582,7 @@ export const OrderDetailsPage: React.FC = () => {
         : null;
 
     const mappedFromServer = rawMedicines.map((line) =>
-      mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+      mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup, order.status)
     );
 
     const initialMedicines = savedDraft
@@ -628,7 +642,7 @@ export const OrderDetailsPage: React.FC = () => {
 
       setFulfillmentData((prev) => {
         const repairedMapped = repaired.map((line) =>
-          mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+          mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup, order.status)
         );
 
         if (
@@ -848,7 +862,7 @@ export const OrderDetailsPage: React.FC = () => {
       setFulfillmentData((prev) => ({
         ...prev,
         medicines: repaired.map((line) =>
-          mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+          mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup, order.status)
         ),
       }));
 
@@ -910,7 +924,7 @@ export const OrderDetailsPage: React.FC = () => {
         setFulfillmentData((prev) => ({
           ...prev,
           medicines: result.medicines.map((line) =>
-            mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup)
+            mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup, order.status)
           ),
         }));
         const warn =
@@ -2842,7 +2856,7 @@ export const OrderDetailsPage: React.FC = () => {
                         </TableCell>
                         <TableCell align="right">
                           {canShowPricingColumns && (item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) || hasLinePricing)
-                            ? `₹${orderLineTaxableBeforeDiscount(item, medSingle, taxPercentage).toFixed(2)}`
+                            ? `₹${orderLineAmountAfterDiscount(item, medSingle, taxPercentage, purchaseDiscountLookup).toFixed(2)}`
                             : <Typography variant="caption" color="textSecondary">-</Typography>}
                         </TableCell>
                         {order.status === 'Pending' && (

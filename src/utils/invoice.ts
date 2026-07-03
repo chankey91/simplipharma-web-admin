@@ -174,12 +174,14 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
    * Legacy rows still marked product_demand: rebuild with the same PI + inventory rules as
    * fulfillProductDemand / prepareFulfilledDemandOrderMedicines (no separate "pick any batch" path).
    */
-  const invoiceMedicines: Order['medicines'] = order.medicines.map((item) => {
-    if (item.lineType !== 'product_demand') return item;
-    const demand = item.productDemandId ? demandById.get(item.productDemandId) : undefined;
-    if (!demand || demand.status !== 'fulfilled' || medicineList.length === 0) return item;
-    return tryPromoteFulfilledDemandLine(item, relevantDemands, medicineList, mergedInvoices, order.id);
-  });
+  const invoiceMedicines: Order['medicines'] = order.medicines
+    .map((item) => {
+      if (item.lineType !== 'product_demand') return item;
+      const demand = item.productDemandId ? demandById.get(item.productDemandId) : undefined;
+      if (!demand || demand.status !== 'fulfilled' || medicineList.length === 0) return item;
+      return tryPromoteFulfilledDemandLine(item, relevantDemands, medicineList, mergedInvoices, order.id);
+    })
+    .filter((item) => item.lineType !== 'product_demand');
 
   // Fetch all medicines to get packaging info
   const medicineMap = new Map<string, string>();
@@ -234,32 +236,6 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
   let totalProductDiscount = 0;
   
   const items = invoiceMedicines.map((item, index) => {
-    if (item.lineType === 'product_demand') {
-      const gstRate =
-        (item as any).gstRate !== undefined ? (item as any).gstRate : order.taxPercentage || 5;
-      const demand = item.productDemandId ? demandById.get(item.productDemandId) : undefined;
-      const isRejected = demand?.status === 'rejected';
-      const qty = toNumber(item.quantity);
-      const nameBase = formatInvoiceProductName(item.name || 'Product request');
-      return {
-        sn: index + 1,
-        name: isRejected ? `${nameBase} — not supplied` : `${nameBase} (product request)`,
-        pack: '—',
-        hsn: '—',
-        batch: '—',
-        exp: '—',
-        qty: qty.toFixed(2),
-        free: '0.00',
-        totalQty: qty.toFixed(2),
-        mrp: '-',
-        rate: '0.00',
-        disc: '0.00',
-        gst: formatInvoiceLineGst(gstRate),
-        amount: '0.00',
-        rowClass: isRejected ? 'line-rejected' : '',
-      };
-    }
-
     const medicineDetails = item.medicineId ? medicineDetailsMap.get(item.medicineId) : undefined;
 
     /** Resolve P/F from batch allocations + inventory (same as fulfillment). */
