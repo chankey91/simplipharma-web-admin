@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   getAllCreditNotes,
+  getCreditNotesInRange,
   getCreditNoteById,
   issueCreditNoteForReturnRequestId,
   backfillAllCreditNotes,
@@ -16,6 +17,7 @@ import {
   DebitNoteRow,
 } from '../services/creditNoteSearch';
 import { TypesenseSearchParams, TypesenseSearchResult } from '../services/typesenseSearch';
+import { marginPeriodRange, type MarginPeriodFilter } from '../utils/marginPeriod';
 
 export const useDebitNotes = (options?: { enabled?: boolean }) => {
   return useQuery({
@@ -77,6 +79,16 @@ export const useCreditNotes = (options?: { enabled?: boolean }) => {
     queryKey: ['creditNotes'],
     queryFn: getAllCreditNotes,
     enabled: options?.enabled ?? true,
+  });
+};
+
+/** Credit notes scoped to a margin-report period (avoids full collection for this/last month). */
+export const useCreditNotesInPeriod = (period: MarginPeriodFilter) => {
+  const range = marginPeriodRange(period);
+  return useQuery({
+    queryKey: ['creditNotesInPeriod', period, range?.startMs ?? null, range?.endMs ?? null],
+    queryFn: () =>
+      range ? getCreditNotesInRange(range.startMs, range.endMs) : getAllCreditNotes(),
   });
 };
 

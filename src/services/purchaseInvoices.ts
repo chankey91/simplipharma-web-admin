@@ -57,6 +57,49 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
   }
 };
 
+/** Unpaid / partial purchase bills only — for vendor ledger (not the full collection). */
+export const getPayablePurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
+  const invoicesCol = collection(db, 'purchaseInvoices');
+  const mapDoc = (docSnap: { id: string; data: () => Record<string, unknown> }): PurchaseInvoice => {
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      ...data,
+      invoiceDate: (data.invoiceDate as { toDate?: () => Date })?.toDate?.() || new Date(),
+      createdAt: (data.createdAt as { toDate?: () => Date })?.toDate?.() || new Date(),
+      items:
+        (data.items as unknown[])?.map((item: unknown) => {
+          const it = item as Record<string, unknown>;
+          return {
+            ...it,
+            mfgDate: (it.mfgDate as { toDate?: () => Date })?.toDate?.() || undefined,
+            expiryDate: (it.expiryDate as { toDate?: () => Date })?.toDate?.() || undefined,
+          };
+        }) || [],
+    } as PurchaseInvoice;
+  };
+
+  try {
+    const [unpaidSnap, partialSnap] = await Promise.all([
+      getDocs(query(invoicesCol, where('paymentStatus', '==', 'Unpaid'))),
+      getDocs(query(invoicesCol, where('paymentStatus', '==', 'Partial'))),
+    ]);
+    const byId = new Map<string, PurchaseInvoice>();
+    for (const docSnap of [...unpaidSnap.docs, ...partialSnap.docs]) {
+      byId.set(docSnap.id, mapDoc(docSnap));
+    }
+    return [...byId.values()].sort((a, b) => {
+      const dateA = a.invoiceDate instanceof Date ? a.invoiceDate : new Date(a.invoiceDate);
+      const dateB = b.invoiceDate instanceof Date ? b.invoiceDate : new Date(b.invoiceDate);
+      return dateB.getTime() - dateA.getTime();
+    });
+  } catch (error) {
+    console.warn('getPayablePurchaseInvoices query failed, falling back to full scan:', error);
+    const all = await getAllPurchaseInvoices();
+    return all.filter((inv) => inv.paymentStatus === 'Unpaid' || inv.paymentStatus === 'Partial' || !inv.paymentStatus);
+  }
+};
+
 export const getPurchaseInvoiceById = async (invoiceId: string): Promise<PurchaseInvoice | null> => {
   const invoiceRef = doc(db, 'purchaseInvoices', invoiceId);
   const invoiceDoc = await getDoc(invoiceRef);

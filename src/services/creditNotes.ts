@@ -221,6 +221,37 @@ export const getAllCreditNotes = async (): Promise<CreditNote[]> => {
   }
 };
 
+/** Credit notes in a reporting window (for margin report — avoids full collection when period ≠ all). */
+export const getCreditNotesInRange = async (
+  startMs: number,
+  endMs?: number
+): Promise<CreditNote[]> => {
+  const col = collection(db, 'credit_notes');
+  const start = Timestamp.fromMillis(startMs);
+  try {
+    const q =
+      endMs != null
+        ? query(
+            col,
+            where('creditNoteDate', '>=', start),
+            where('creditNoteDate', '<', Timestamp.fromMillis(endMs)),
+            orderBy('creditNoteDate', 'desc')
+          )
+        : query(col, where('creditNoteDate', '>=', start), orderBy('creditNoteDate', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => parseCreditNoteDoc(d.id, d.data() as Record<string, unknown>));
+  } catch (error) {
+    console.warn('getCreditNotesInRange fallback:', error);
+    const all = await getAllCreditNotes();
+    return all.filter((note) => {
+      const d = toDate(note.creditNoteDate ?? note.createdAt);
+      const t = d.getTime();
+      if (endMs != null) return t >= startMs && t < endMs;
+      return t >= startMs;
+    });
+  }
+};
+
 export const getCreditNoteById = async (creditNoteId: string): Promise<CreditNote | null> => {
   const snap = await getDoc(doc(db, 'credit_notes', creditNoteId));
   if (!snap.exists()) return null;

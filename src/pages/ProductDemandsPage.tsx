@@ -31,7 +31,6 @@ import { getTodayDateStringIST } from '../utils/dateTime';
 import * as XLSX from 'xlsx';
 import { CloudSync, FileDownload, PostAdd, Search } from '@mui/icons-material';
 import {
-  useProductDemands,
   useProductDemandsSearch,
   useProductDemandsPage,
   useProductDemand,
@@ -173,14 +172,11 @@ export const ProductDemandsPage: React.FC = () => {
   const fallbackPage = useProductDemandsPage(
     {
       status: filter === 'pending' ? 'pending' : 'all',
-      page,
-      perPage: ROWS_PER_PAGE,
+      page: fallbackSearchActive ? 1 : page,
+      perPage: fallbackSearchActive ? 250 : ROWS_PER_PAGE,
     },
-    { enabled: typesenseDisabled && !fallbackSearchActive }
+    { enabled: typesenseDisabled }
   );
-  const { data: fallbackAllDemands, isLoading: fallbackAllLoading } = useProductDemands({
-    enabled: fallbackSearchActive,
-  });
 
   useEffect(() => {
     if (demandSearch.isError) setTypesenseDisabled(true);
@@ -194,11 +190,9 @@ export const ProductDemandsPage: React.FC = () => {
   const { data: detailsMap } = useProductDemandDetailsByIds(pageIds);
 
   const fallbackFiltered = useMemo(() => {
-    if (!fallbackSearchActive || !fallbackAllDemands) return [];
+    if (!typesenseDisabled || !fallbackSearchActive) return [];
     const term = debouncedTerm.toLowerCase();
-    let list = filter === 'pending'
-      ? fallbackAllDemands.filter((d) => d.status === 'pending')
-      : fallbackAllDemands;
+    let list = fallbackPage.data?.rows ?? [];
     if (term) {
       list = list.filter(
         (d) =>
@@ -208,7 +202,7 @@ export const ProductDemandsPage: React.FC = () => {
           (d.retailerEmail || '').toLowerCase().includes(term)
       );
     }
-    list.sort((a, b) => {
+    list = [...list].sort((a, b) => {
       switch (sortKey) {
         case 'productName':
           return applyDirection(compareAsc(a.productName, b.productName), sortDirection);
@@ -232,7 +226,7 @@ export const ProductDemandsPage: React.FC = () => {
       }
     });
     return list;
-  }, [fallbackSearchActive, fallbackAllDemands, filter, debouncedTerm, sortKey, sortDirection]);
+  }, [typesenseDisabled, fallbackSearchActive, fallbackPage.data?.rows, debouncedTerm, sortKey, sortDirection]);
 
   const sortedDemands: ProductDemand[] = useMemo(() => {
     if (typesenseDisabled) {
@@ -263,7 +257,7 @@ export const ProductDemandsPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(totalCount / ROWS_PER_PAGE));
 
   const pendingCount = typesenseDisabled
-    ? (fallbackAllDemands ?? fallbackPage.data?.rows ?? []).filter((d) => d.status === 'pending').length
+    ? (fallbackPage.data?.rows ?? []).filter((d) => d.status === 'pending').length
     : demandSearch.data?.facetCounts?.pending ?? 0;
 
   const demandIdFromUrl = searchParams.get('demandId');
@@ -502,16 +496,16 @@ export const ProductDemandsPage: React.FC = () => {
 
   const handleMigrateToCatalog = async () => {
     const fulfilledCount = typesenseDisabled
-      ? (fallbackAllDemands ?? []).filter((d) => d.status === 'fulfilled').length
+      ? undefined
       : demandSearch.data?.facetCounts?.fulfilled ?? 0;
-    if (fulfilledCount === 0) {
+    if (!typesenseDisabled && fulfilledCount === 0) {
       await alert('No fulfilled demands to migrate. Fulfill demands first, or use Fulfill on each row.', {
         severity: 'info',
       });
       return;
     }
     const ok = await confirm(
-      `Sync ${fulfilledCount} fulfilled demand(s) into the medicines catalog?\n\n` +
+      `Sync fulfilled demand(s) into the medicines catalog?\n\n` +
         `• Creates missing medicines documents (matched by product name)\n` +
         `• Updates fulfilledMedicineId on product_demands\n` +
         `• Repairs order lines still marked as product requests\n\n` +
@@ -581,11 +575,7 @@ export const ProductDemandsPage: React.FC = () => {
     setPage(1);
   };
 
-  const initialLoading = typesenseDisabled
-    ? fallbackSearchActive
-      ? fallbackAllLoading
-      : fallbackPage.isLoading
-    : demandSearch.isLoading || (demandSearch.isError && !typesenseDisabled);
+  const initialLoading = typesenseDisabled ? fallbackPage.isLoading : demandSearch.isLoading;
   if (initialLoading) return <Loading message="Loading product demands..." />;
 
   const isBusy = !typesenseDisabled && demandSearch.isFetching;

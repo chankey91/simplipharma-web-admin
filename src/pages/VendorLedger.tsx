@@ -26,7 +26,7 @@ import {
 import { Search, Visibility, Receipt } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
-import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
+import { usePayablePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useVendors } from '../hooks/useVendors';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
@@ -49,7 +49,7 @@ const paymentChipColor = (status?: string): 'success' | 'warning' | 'error' | 'd
 };
 
 export const VendorLedgerPage: React.FC = () => {
-  const { data: invoices, isLoading: invoicesLoading } = usePurchaseInvoices();
+  const { data: invoices, isLoading: invoicesLoading } = usePayablePurchaseInvoices();
   const { data: vendors, isLoading: vendorsLoading } = useVendors();
   const navigate = useNavigate();
 

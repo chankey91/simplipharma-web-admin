@@ -33,8 +33,8 @@ import { alpha, useTheme } from '@mui/material/styles';
 import { useOrdersInPeriod } from '../hooks/useOrders';
 import { useMedicines } from '../hooks/useInventory';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
-import { useCreditNotes } from '../hooks/useCreditNotes';
-import { useExpiryReturns } from '../hooks/useExpiryReturns';
+import { useCreditNotesInPeriod } from '../hooks/useCreditNotes';
+import { useExpiryReturnsInPeriod } from '../hooks/useExpiryReturns';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
@@ -92,8 +92,8 @@ export const MarginReportPage: React.FC = () => {
   const { data: orders, isLoading: ordersLoading } = useOrdersInPeriod(periodFilter);
   const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const { data: purchaseInvoices } = usePurchaseInvoices();
-  const { data: creditNotes } = useCreditNotes();
-  const { data: expiryReturns } = useExpiryReturns();
+  const { data: creditNotes } = useCreditNotesInPeriod(periodFilter);
+  const { data: expiryReturns } = useExpiryReturnsInPeriod(periodFilter);
 
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(15);

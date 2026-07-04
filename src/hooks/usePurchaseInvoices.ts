@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { 
-  getAllPurchaseInvoices, 
+  getAllPurchaseInvoices,
+  getPayablePurchaseInvoices,
   getPurchaseInvoiceById, 
   createPurchaseInvoice, 
   updatePurchaseInvoice,
@@ -21,6 +22,16 @@ export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
     queryKey: ['purchaseInvoices'],
     queryFn: getAllPurchaseInvoices,
     enabled: options?.enabled ?? true,
+  });
+};
+
+/** Payable purchase bills only (Unpaid/Partial) — vendor ledger. */
+export const usePayablePurchaseInvoices = (options?: { enabled?: boolean }) => {
+  return useQuery({
+    queryKey: ['payablePurchaseInvoices'],
+    queryFn: getPayablePurchaseInvoices,
+    enabled: options?.enabled ?? true,
+    staleTime: 2 * 60 * 1000,
   });
 };
 
@@ -66,6 +77,7 @@ export const useCreatePurchaseInvoice = () => {
     onSuccess: async () => {
       // Invalidate queries to refresh data
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       // Force refetch medicines to get updated stock
@@ -86,6 +98,7 @@ export const useUpdatePurchaseInvoice = () => {
     }) => updatePurchaseInvoice(invoiceId, invoiceData),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
@@ -110,6 +123,7 @@ export const useUpdatePurchaseInvoicePayment = () => {
     }) => updatePurchaseInvoicePayment(invoiceId, paymentStatus, paymentMethod, paidAmount),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
@@ -126,6 +140,7 @@ export const useUpdateStockForInvoice = () => {
       await queryClient.invalidateQueries({ queryKey: ['medicines'] });
       await queryClient.invalidateQueries({ queryKey: ['medicine'] });
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
     }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -20,8 +20,11 @@ import ArrowUpward from '@mui/icons-material/ArrowUpward';
 import ArrowDownward from '@mui/icons-material/ArrowDownward';
 import Close from '@mui/icons-material/Close';
 import Stars from '@mui/icons-material/Stars';
-import { useMedicines } from '../hooks/useInventory';
+import { useQuery } from '@tanstack/react-query';
+import { getMedicineById } from '../services/inventory';
 import type { Medicine } from '../types';
+import { searchMedicinesTypesenseAdmin } from '../services/medicineSearch';
+import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
 import { auth } from '../services/firebase';
 import {
   subscribeHomeFeedConfig,
@@ -31,10 +34,6 @@ import {
   HOME_FEED_SLOT_CAP,
   type HomeFeedConfigState,
 } from '../services/homeFeedConfig';
-
-function isMedicineDeleted(m: Medicine & { deleted?: boolean }): boolean {
-  return m.deleted === true;
-}
 
 function medicineOptionLabel(m: Medicine): string {
   const bits = [m.name, m.manufacturer?.trim() || '', m.category ? `(${m.category})` : ''].filter(Boolean);
@@ -54,17 +53,59 @@ function moveIndex<T>(arr: T[], index: number, delta: number): T[] {
 const ProductPickList: React.FC<{
   title: string;
   ids: string[];
-  options: Medicine[];
   onIdsChange: (ids: string[]) => void;
   disabled?: boolean;
-}> = ({ title, ids, options, onIdsChange, disabled }) => {
+}> = ({ title, ids, onIdsChange, disabled }) => {
+  const [searchInput, setSearchInput] = useState('');
+  const [searchHits, setSearchHits] = useState<Medicine[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchSeq = useRef(0);
+
+  const idsKey = useMemo(() => [...new Set(ids.filter(Boolean))].sort().join(','), [ids]);
+  const { data: selectedMedicines = [] } = useQuery({
+    queryKey: ['homeFeedMedicines', idsKey],
+    queryFn: async () => {
+      const rows = await Promise.all(idsKey.split(',').map((id) => getMedicineById(id)));
+      return rows.filter((m): m is Medicine => m != null);
+    },
+    enabled: idsKey.length > 0,
+  });
+
   const optionById = useMemo(() => {
     const m = new Map<string, Medicine>();
-    for (const o of options) m.set(o.id, o);
+    for (const o of selectedMedicines) m.set(o.id, o);
+    for (const o of searchHits) m.set(o.id, o);
     return m;
-  }, [options]);
+  }, [selectedMedicines, searchHits]);
 
-  const selectableOptions = useMemo(() => options.filter((m) => !ids.includes(m.id)), [options, ids]);
+  useEffect(() => {
+    const trimmed = searchInput.trim();
+    if (trimmed.length < 2) {
+      searchSeq.current += 1;
+      setSearchHits([]);
+      setSearchLoading(false);
+      return;
+    }
+    const seq = ++searchSeq.current;
+    setSearchLoading(true);
+    const t = setTimeout(() => {
+      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
+        .then((rows) => {
+          if (searchSeq.current !== seq) return;
+          setSearchHits(rows.filter((m) => !ids.includes(m.id)));
+        })
+        .finally(() => {
+          if (searchSeq.current === seq) setSearchLoading(false);
+        });
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchInput, ids]);
+
+  const autocompleteOptions = useMemo(() => {
+    const q = searchInput.trim();
+    if (q.length < 2) return [];
+    return searchHits;
+  }, [searchInput, searchHits]);
 
   return (
     <Box sx={{ mt: 3 }}>
@@ -74,22 +115,24 @@ const ProductPickList: React.FC<{
       <Autocomplete
         disablePortal
         disabled={disabled || ids.length >= HOME_FEED_SLOT_CAP}
-        options={selectableOptions}
+        options={autocompleteOptions}
+        loading={searchLoading}
+        inputValue={searchInput}
+        onInputChange={(_, value) => setSearchInput(value)}
         getOptionLabel={(o) => medicineOptionLabel(o)}
-        renderInput={(params) => <TextField {...params} label="Add from inventory" placeholder="Search by name…" />}
-        filterOptions={(opts, params) => {
-          const q = params.inputValue.trim().toLowerCase();
-          if (q.length < 1) return opts.slice(0, 80);
-          return opts
-            .filter((m) => {
-              const nm = `${m.name} ${m.manufacturer ?? ''} ${m.code ?? ''}`.toLowerCase();
-              return nm.includes(q);
-            })
-            .slice(0, 120);
-        }}
+        renderInput={(params) => (
+          <TextField
+            {...params}
+            label="Search inventory"
+            placeholder="Type at least 2 characters…"
+          />
+        )}
+        noOptionsText={searchInput.trim().length < 2 ? 'Type to search medicines' : 'No matches'}
         onChange={(_, v) => {
           if (!v || ids.includes(v.id) || ids.length >= HOME_FEED_SLOT_CAP) return;
           onIdsChange([...ids, v.id]);
+          setSearchInput('');
+          setSearchHits([]);
         }}
         sx={{ mb: 2 }}
       />
@@ -158,12 +201,6 @@ const ProductPickList: React.FC<{
 };
 
 export const HomeFeedPage: React.FC = () => {
-  const { data: medicines, isLoading: medicinesLoading } = useMedicines();
-  const activeMedicines = useMemo(
-    () => (medicines || []).filter((m) => !isMedicineDeleted(m as Medicine & { deleted?: boolean })),
-    [medicines]
-  );
-
   const [cfg, setCfg] = useState<HomeFeedConfigState>(() => emptyHomeFeedConfig());
   const [firestoreLoaded, setFirestoreLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -264,28 +301,18 @@ export const HomeFeedPage: React.FC = () => {
           </Paper>
 
           <Paper sx={{ p: 2, mt: 2 }}>
-            {medicinesLoading ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CircularProgress size={22} /> <Typography variant="body2">Loading inventory…</Typography>
-              </Box>
-            ) : (
-              <>
-                <ProductPickList
-                  title="Recommended products order"
-                  ids={cfg.recommendedMedicineIds}
-                  options={activeMedicines}
-                  onIdsChange={(recommendedMedicineIds) => setCfg((c) => ({ ...c, recommendedMedicineIds }))}
-                  disabled={saving}
-                />
-                <ProductPickList
-                  title="Featured products order"
-                  ids={cfg.featuredMedicineIds}
-                  options={activeMedicines}
-                  onIdsChange={(featuredMedicineIds) => setCfg((c) => ({ ...c, featuredMedicineIds }))}
-                  disabled={saving}
-                />
-              </>
-            )}
+            <ProductPickList
+              title="Recommended products order"
+              ids={cfg.recommendedMedicineIds}
+              onIdsChange={(recommendedMedicineIds) => setCfg((c) => ({ ...c, recommendedMedicineIds }))}
+              disabled={saving}
+            />
+            <ProductPickList
+              title="Featured products order"
+              ids={cfg.featuredMedicineIds}
+              onIdsChange={(featuredMedicineIds) => setCfg((c) => ({ ...c, featuredMedicineIds }))}
+              disabled={saving}
+            />
           </Paper>
 
           <Box sx={{ mt: 2 }}>

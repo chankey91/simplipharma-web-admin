@@ -99,6 +99,36 @@ export const getExpiryReturnRequests = async (
   return snapshot.docs.map((d) => parseDoc(d));
 };
 
+/** Approved/paid expiry returns in a reporting window (margin report). */
+export const getExpiryReturnsInRange = async (
+  startMs: number,
+  endMs?: number
+): Promise<ExpiryReturnRequest[]> => {
+  const inRange = (req: ExpiryReturnRequest): boolean => {
+    const raw = req.approvedAt ?? req.paidAt ?? req.createdAt;
+    const d = raw instanceof Date ? raw : new Date(raw as string | number);
+    const t = d.getTime();
+    if (Number.isNaN(t)) return false;
+    if (endMs != null) return t >= startMs && t < endMs;
+    return t >= startMs;
+  };
+
+  try {
+    const [approved, paid] = await Promise.all([
+      getExpiryReturnRequests('approved'),
+      getExpiryReturnRequests('paid'),
+    ]);
+    return [...approved, ...paid].filter(inRange);
+  } catch (error) {
+    console.warn('getExpiryReturnsInRange fallback:', error);
+    const all = await getExpiryReturnRequests();
+    return all.filter(
+      (req) =>
+        (req.status === 'approved' || req.status === 'paid') && inRange(req)
+    );
+  }
+};
+
 export const approveExpiryReturnRequest = async (requestId: string): Promise<void> => {
   const reqRef = doc(db, 'expiry_return_requests', requestId);
 

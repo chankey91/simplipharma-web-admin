@@ -40,6 +40,8 @@ const SORTABLE_FIELDS = new Set([
 const ORDERS_COLLECTION_FIELDS = [
   // `docId` mirrors the Firestore document id as a sortable string.
   { name: 'docId', type: 'string' as const, sort: true },
+  { name: 'retailerId', type: 'string' as const, optional: true, facet: true },
+  { name: 'salesOfficerId', type: 'string' as const, optional: true, facet: true },
   { name: 'retailerEmail', type: 'string' as const, optional: true, sort: true },
   { name: 'retailerName', type: 'string' as const, optional: true },
   { name: 'medicineNames', type: 'string' as const, optional: true },
@@ -122,6 +124,8 @@ function firestoreDataToOrderDoc(
   return {
     id: orderId,
     docId: orderId,
+    retailerId: String(data.retailerId || ''),
+    salesOfficerId: String(data.salesOfficerId || ''),
     retailerEmail: String(data.retailerEmail || ''),
     retailerName: String(data.retailerName || ''),
     medicineNames,
@@ -195,16 +199,21 @@ function orderRowFromHit(document: Record<string, unknown>): Record<string, unkn
   };
 }
 
-async function getStatusCounts(client: TypesenseClient): Promise<Record<string, number>> {
+async function getStatusCounts(
+  client: TypesenseClient,
+  scopeFilter?: string
+): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};
   for (const s of ORDER_STATUSES) counts[s] = 0;
   try {
-    const res = await client.collections(TYPESENSE_ORDERS_COLLECTION).documents().search({
+    const searchParams: Record<string, unknown> = {
       q: '*',
       query_by: 'search_blob',
       per_page: 0,
       facet_by: 'status',
-    });
+    };
+    if (scopeFilter) searchParams.filter_by = scopeFilter;
+    const res = await client.collections(TYPESENSE_ORDERS_COLLECTION).documents().search(searchParams);
     const facet = (res.facet_counts || []).find((f: { field_name?: string }) => f.field_name === 'status');
     for (const c of facet?.counts || []) {
       counts[String(c.value)] = Number(c.count) || 0;
@@ -213,6 +222,37 @@ async function getStatusCounts(client: TypesenseClient): Promise<Record<string, 
     console.warn('getStatusCounts failed', e);
   }
   return counts;
+}
+
+type OrderSearchScope =
+  | { kind: 'all' }
+  | { kind: 'retailer'; retailerId: string }
+  | { kind: 'salesOfficer'; salesOfficerId: string };
+
+async function resolveOrderSearchScope(uid: string): Promise<OrderSearchScope | null> {
+  const userDoc = await admin.firestore().collection('users').doc(uid).get();
+  if (!userDoc.exists) return null;
+  const role = String(userDoc.data()?.role || '');
+  if (role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations') {
+    return { kind: 'all' };
+  }
+  if (role === 'retailer') {
+    return { kind: 'retailer', retailerId: uid };
+  }
+  if (role === 'salesOfficer' || role === 'SalesOfficer') {
+    return { kind: 'salesOfficer', salesOfficerId: uid };
+  }
+  return null;
+}
+
+function scopeFilterForSearch(scope: OrderSearchScope): string | undefined {
+  if (scope.kind === 'retailer') {
+    return `retailerId:=\`${scope.retailerId}\``;
+  }
+  if (scope.kind === 'salesOfficer') {
+    return `salesOfficerId:=\`${scope.salesOfficerId}\``;
+  }
+  return undefined;
 }
 
 /**
@@ -238,6 +278,7 @@ export const searchOrdersTypesense = functions.https.onCall(async (data, context
   const status = String(data?.status || '').trim();
   const paymentStatus = String(data?.paymentStatus || '').trim();
   const invoicedOnly = data?.invoicedOnly === true;
+  const paymentDueOnly = data?.paymentDueOnly === true;
   const page = Math.max(1, Number(data?.page) || 1);
   const perPage = Math.min(Math.max(Number(data?.perPage) || 10, 1), 100);
   const sortFieldRaw = String(data?.sortField || 'orderDate');
@@ -247,12 +288,21 @@ export const searchOrdersTypesense = functions.https.onCall(async (data, context
   try {
     await ensureOrdersCollection(client);
 
+    const scope = await resolveOrderSearchScope(context.auth.uid);
+    if (!scope) {
+      throw new functions.https.HttpsError('permission-denied', 'Order search not allowed for this account');
+    }
+    const scopeFilter = scopeFilterForSearch(scope);
+
     // Combine optional filters: order status, "invoiced only" (excludes Pending
     // and Cancelled), and payment status. Used by the Orders and Invoices pages.
     const filters: string[] = [];
+    if (scopeFilter) filters.push(scopeFilter);
     if (status && status !== 'All') filters.push(`status:=\`${status}\``);
     if (invoicedOnly) filters.push('status:!=[`Pending`, `Cancelled`]');
-    if (paymentStatus && paymentStatus !== 'All') {
+    if (paymentDueOnly) {
+      filters.push('paymentStatus:=[`Unpaid`, `Partial`]');
+    } else if (paymentStatus && paymentStatus !== 'All') {
       filters.push(`paymentStatus:=\`${paymentStatus}\``);
     }
     const filterBy = filters.length > 0 ? filters.join(' && ') : undefined;
@@ -277,7 +327,7 @@ export const searchOrdersTypesense = functions.https.onCall(async (data, context
       orderRowFromHit((h.document && typeof h.document === 'object' ? h.document : {}) as Record<string, unknown>)
     );
 
-    const statusCounts = await getStatusCounts(client);
+    const statusCounts = await getStatusCounts(client, scopeFilter);
 
     return {
       orders: hits,

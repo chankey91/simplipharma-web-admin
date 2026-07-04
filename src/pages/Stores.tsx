@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -46,8 +46,8 @@ import {
   MenuItem,
 } from '@mui/material';
 import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore, useSendRetailerPasswordResetEmail } from '../hooks/useStores';
-import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
-import { getSalesOfficers } from '../services/salesOfficers';
+import { useSalesOfficers } from '../hooks/useSalesOfficers';
+import { useStoreNoteStats } from '../hooks/useStoreNoteStats';
 import { User } from '../types';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
@@ -86,8 +86,12 @@ const generatePassword = () => {
 
 export const StoresPage: React.FC = () => {
   const { data: stores, isLoading, error } = useStores();
-  const { data: creditNotes } = useCreditNotes();
-  const { data: debitNotes } = useDebitNotes();
+  const { data: salesOfficers = [] } = useSalesOfficers();
+  const {
+    creditNoteStatsByRetailerId,
+    debitNoteStatsByRetailerId,
+    isLoading: noteStatsLoading,
+  } = useStoreNoteStats();
   const updateStoreMutation = useUpdateStore();
   const createStoreMutation = useCreateStore();
   const toggleStatusMutation = useToggleStoreStatus();
@@ -101,7 +105,6 @@ export const StoresPage: React.FC = () => {
   const [openDialog, setOpenDialog] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState('');
   
-  const [salesOfficers, setSalesOfficers] = useState<User[]>([]);
   const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
 
@@ -113,29 +116,6 @@ export const StoresPage: React.FC = () => {
     return m;
   }, [salesOfficers]);
 
-  const creditNoteStatsByRetailerId = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
-    for (const note of creditNotes ?? []) {
-      const prev = map.get(note.retailerId) ?? { total: 0, count: 0 };
-      map.set(note.retailerId, {
-        total: prev.total + (note.totalAmount ?? 0),
-        count: prev.count + 1,
-      });
-    }
-    return map;
-  }, [creditNotes]);
-
-  const debitNoteStatsByRetailerId = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
-    for (const note of debitNotes ?? []) {
-      const prev = map.get(note.retailerId) ?? { total: 0, count: 0 };
-      map.set(note.retailerId, {
-        total: prev.total + (note.totalAmount ?? 0),
-        count: prev.count + 1,
-      });
-    }
-    return map;
-  }, [debitNotes]);
   const [formData, setFormData] = useState({
     displayName: '',
     shopName: '',
@@ -223,12 +203,6 @@ export const StoresPage: React.FC = () => {
     setPage(value);
   };
 
-  useEffect(() => {
-    getSalesOfficers()
-      .then(setSalesOfficers)
-      .catch(() => setSalesOfficers([]));
-  }, []);
-
   const handleOpenVisitLog = (store: User) => {
     setVisitLogStore(store);
   };
@@ -254,12 +228,6 @@ export const StoresPage: React.FC = () => {
       shopImage: '',
       salesOfficerId: '',
     });
-    try {
-      const so = await getSalesOfficers();
-      setSalesOfficers(so);
-    } catch {
-      setSalesOfficers([]);
-    }
     setOpenDialog(true);
   };
 
@@ -283,12 +251,6 @@ export const StoresPage: React.FC = () => {
       shopImage: store.shopImage || '',
       salesOfficerId: store.salesOfficerId || '',
     });
-    try {
-      const so = await getSalesOfficers();
-      setSalesOfficers(so);
-    } catch {
-      setSalesOfficers([]);
-    }
     setOpenDialog(true);
   };
 
