@@ -12,6 +12,9 @@ import {
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { 
   getFirestore, 
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   collection, 
   getDocs, 
   addDoc, 
@@ -21,6 +24,7 @@ import {
   where, 
   orderBy,
   limit,
+  getCountFromServer,
   Timestamp,
   serverTimestamp,
   setDoc,
@@ -46,7 +50,21 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+// Enable a persistent IndexedDB cache so real-time listeners can re-attach and
+// repeat/offline reads can be served locally instead of always round-tripping to
+// Firestore. Falls back to the default in-memory cache when IndexedDB is
+// unavailable (e.g. private browsing or unsupported environments).
+let firestoreDb: ReturnType<typeof getFirestore>;
+try {
+  firestoreDb = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  });
+} catch (err) {
+  console.warn('Firestore persistent cache unavailable; using default cache:', err);
+  firestoreDb = getFirestore(app);
+}
+export const db = firestoreDb;
 export const storage = getStorage(app);
 // Initialize Functions with region (us-central1 is default, but explicit is better)
 export const functions = getFunctions(app, 'us-central1');
@@ -192,6 +210,7 @@ export {
   where, 
   orderBy,
   limit,
+  getCountFromServer,
   setDoc, 
   getDoc, 
   onSnapshot, 

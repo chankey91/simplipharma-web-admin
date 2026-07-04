@@ -5,7 +5,10 @@ import { Vendor } from '../types';
 export const useVendors = () => {
   return useQuery({
     queryKey: ['vendors'],
-    queryFn: getAllVendors
+    queryFn: getAllVendors,
+    // Reference data — cache longer; mutations invalidate ['vendors'].
+    staleTime: 45 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
   });
 };
 

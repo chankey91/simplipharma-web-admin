@@ -6,12 +6,19 @@ import {
   getDocs,
   orderBy,
   query,
-  Timestamp,
   serverTimestamp,
   updateDoc,
   where,
+  getCountFromServer,
 } from './firebase';
-import type { Order, PaymentRequest } from '../types';
+import type { Order, PaymentRequest, PaymentRequestStatus } from '../types';
+
+const PAYMENT_REQUEST_STATUSES: PaymentRequestStatus[] = [
+  'pending_admin_review',
+  'approved',
+  'rejected',
+  'cancelled',
+];
 
 function toReadableQueryError(error: unknown, fallback: string): Error {
   const code = (error as { code?: string })?.code;
@@ -144,6 +151,58 @@ export const getAllPaymentRequests = async (): Promise<PaymentRequest[]> => {
         'Unable to read payment requests.'
       );
     }
+  }
+};
+
+/**
+ * Payment requests for a single status (newest first). Used by the Payment
+ * Requests page so each tab doesn't download the entire collection.
+ */
+export const getPaymentRequestsByStatus = async (
+  status: PaymentRequestStatus
+): Promise<PaymentRequest[]> => {
+  const col = collection(db, 'payment_requests');
+  try {
+    const q = query(
+      col,
+      where('status', '==', status),
+      orderBy('createdAt', 'desc')
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => parsePaymentRequestDoc(d.id, d.data() as Record<string, unknown>));
+  } catch (error) {
+    console.warn('getPaymentRequestsByStatus query failed, filtering in memory:', error);
+    const list = await getAllPaymentRequests();
+    return list.filter((r) => r.status === status);
+  }
+};
+
+/** Per-status counts for tab labels without loading every payment request doc. */
+export const getPaymentRequestStatusCounts = async (): Promise<
+  Record<PaymentRequestStatus, number>
+> => {
+  const col = collection(db, 'payment_requests');
+  const counts = PAYMENT_REQUEST_STATUSES.reduce((acc, s) => {
+    acc[s] = 0;
+    return acc;
+  }, {} as Record<PaymentRequestStatus, number>);
+  try {
+    const snaps = await Promise.all(
+      PAYMENT_REQUEST_STATUSES.map((s) =>
+        getCountFromServer(query(col, where('status', '==', s)))
+      )
+    );
+    PAYMENT_REQUEST_STATUSES.forEach((s, i) => {
+      counts[s] = snaps[i].data().count ?? 0;
+    });
+    return counts;
+  } catch (error) {
+    console.warn('getPaymentRequestStatusCounts failed, falling back to full scan:', error);
+    const list = await getAllPaymentRequests();
+    for (const r of list) {
+      if (counts[r.status] != null) counts[r.status]++;
+    }
+    return counts;
   }
 };
 

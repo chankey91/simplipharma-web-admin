@@ -1538,3 +1538,30 @@ export {
   searchMedicinesTypesense,
   adminReindexMedicinesTypesense,
 } from './typesenseMedicines';
+
+export {
+  onOrderWriteTypesense,
+  searchOrdersTypesense,
+  adminReindexOrdersTypesense,
+} from './typesenseOrders';
+
+export {
+  onPurchaseInvoiceWriteTypesense,
+  searchPurchaseInvoicesTypesense,
+  adminReindexPurchaseInvoicesTypesense,
+} from './typesensePurchaseInvoices';
+
+export {
+  onCreditNoteWriteTypesense,
+  searchCreditNotesTypesense,
+  adminReindexCreditNotesTypesense,
+  onDebitNoteWriteTypesense,
+  searchDebitNotesTypesense,
+  adminReindexDebitNotesTypesense,
+} from './typesenseCreditNotes';
+
+export {
+  onProductDemandWriteTypesense,
+  searchProductDemandsTypesense,
+  adminReindexProductDemandsTypesense,
+} from './typesenseProductDemands';

@@ -14,6 +14,10 @@ export const useStores = (enabled = true) => {
     queryKey: ['stores'],
     queryFn: getAllStores,
     enabled,
+    // Reference data that changes rarely — cache longer so navigation/refetch
+    // doesn't re-read the whole collection. Mutations invalidate ['stores'].
+    staleTime: 45 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
   });
 };
 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -21,19 +21,20 @@ import {
   Card,
   CardContent,
   Pagination,
-  Button,
   Tabs,
   Tab,
+  LinearProgress,
 } from '@mui/material';
+import { Search, Download, Receipt, ShoppingCart } from '@mui/icons-material';
 import {
-  Search,
-  Download,
-  Receipt,
-  ShoppingCart,
-} from '@mui/icons-material';
-import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
-import { useOrders } from '../hooks/useOrders';
-import { PurchaseInvoice, Order } from '../types';
+  usePurchaseInvoices,
+  usePurchaseInvoicesSearch,
+  usePurchaseInvoiceAmountTotal,
+} from '../hooks/usePurchaseInvoices';
+import { useOrders, useOrdersSearch, useOrderInvoicedAmountTotal } from '../hooks/useOrders';
+import { OrderSearchParams } from '../services/orderSearch';
+import { getOrderById } from '../services/orders';
+import { getPurchaseInvoiceById } from '../services/purchaseInvoices';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { generatePurchaseInvoice, generateOrderInvoice } from '../utils/invoice';
@@ -43,101 +44,146 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
 import { useAppDialog } from '../context/AppDialogProvider';
 
-interface InvoiceItem {
+type InvoiceTab = 'order' | 'purchase';
+
+const ROWS_PER_PAGE = 10;
+
+interface InvoiceRow {
   id: string;
-  type: 'purchase' | 'order';
   invoiceNumber: string;
   date: Date;
   vendorOrStore: string;
   amount: number;
   status: string;
-  purchaseInvoice?: PurchaseInvoice;
-  order?: Order;
 }
 
+const orderSortField = (key: string): NonNullable<OrderSearchParams['sortField']> => {
+  switch (key) {
+    case 'invoiceNumber':
+      return 'invoiceNumber';
+    case 'vendorOrStore':
+      return 'retailerEmail';
+    case 'amount':
+      return 'amountSortable';
+    case 'status':
+      return 'paymentStatus';
+    case 'date':
+    default:
+      return 'orderDate';
+  }
+};
+
+const purchaseSortField = (key: string): string => {
+  switch (key) {
+    case 'invoiceNumber':
+      return 'invoiceNumber';
+    case 'vendorOrStore':
+      return 'vendorName';
+    case 'amount':
+      return 'totalAmount';
+    case 'status':
+      return 'paymentStatus';
+    case 'date':
+    default:
+      return 'invoiceDate';
+  }
+};
+
 export const InvoicesPage: React.FC = () => {
-  const { data: purchaseInvoices, isLoading: purchaseLoading } = usePurchaseInvoices();
-  const { data: orders, isLoading: ordersLoading } = useOrders();
-  const { alert, confirm, prompt } = useAppDialog();
+  const { alert } = useAppDialog();
+  const [tab, setTab] = useState<InvoiceTab>('order');
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'purchase' | 'order'>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [debouncedTerm, setDebouncedTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid' | 'Partial'>('All');
   const [page, setPage] = useState(1);
-  const [rowsPerPage] = useState(10);
-  const [tabValue, setTabValue] = useState(0);
-
-  // Combine purchase invoices and orders into a single list
-  const allInvoices: InvoiceItem[] = useMemo(() => {
-    const items: InvoiceItem[] = [];
-
-    // Add purchase invoices
-    if (purchaseInvoices) {
-      purchaseInvoices.forEach((inv) => {
-        items.push({
-          id: inv.id,
-          type: 'purchase',
-          invoiceNumber: inv.invoiceNumber,
-          date: inv.invoiceDate,
-          vendorOrStore: inv.vendorName || 'N/A',
-          amount: inv.totalAmount || 0,
-          status: inv.paymentStatus || 'Unpaid',
-          purchaseInvoice: inv,
-        });
-      });
-    }
-
-    // Add orders (only fulfilled orders have invoices)
-    if (orders) {
-      orders
-        .filter((order) => order.status !== 'Pending' && order.status !== 'Cancelled')
-        .forEach((order) => {
-          items.push({
-            id: order.id,
-            type: 'order',
-            invoiceNumber: order.invoiceNumber || orderReferenceWithoutInvoice(order.id),
-            date: order.orderDate,
-            vendorOrStore: order.retailerEmail || 'N/A',
-            amount: order.totalAmount || 0,
-            status: order.paymentStatus || 'Unpaid',
-            order: order,
-          });
-        });
-    }
-
-    return items;
-  }, [purchaseInvoices, orders]);
+  const [typesenseDisabled, setTypesenseDisabled] = useState(false);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('date', 'desc');
 
-  const filteredInvoices = useMemo(
-    () =>
-      allInvoices.filter((invoice) => {
-    const matchesSearch =
-      invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      invoice.vendorOrStore.toLowerCase().includes(searchTerm.toLowerCase());
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedTerm(searchTerm.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
-    const matchesType = typeFilter === 'all' || invoice.type === typeFilter;
+  const isOrder = tab === 'order';
 
-    const matchesStatus = statusFilter === 'All' || invoice.status === statusFilter;
-
-        return matchesSearch && matchesType && matchesStatus;
-      }),
-    [allInvoices, searchTerm, typeFilter, statusFilter]
+  const orderSearch = useOrdersSearch(
+    {
+      query: debouncedTerm,
+      invoicedOnly: true,
+      paymentStatus: statusFilter,
+      sortField: orderSortField(sortKey),
+      sortOrder: sortDirection,
+      page,
+      perPage: ROWS_PER_PAGE,
+    },
+    { enabled: !typesenseDisabled }
   );
 
-  const sortedInvoices = useMemo(() => {
-    const list = [...filteredInvoices];
-    list.sort((a, b) => {
+  const purchaseSearch = usePurchaseInvoicesSearch(
+    {
+      query: debouncedTerm,
+      filter: statusFilter,
+      sortField: purchaseSortField(sortKey),
+      sortOrder: sortDirection,
+      page,
+      perPage: ROWS_PER_PAGE,
+    },
+    { enabled: !typesenseDisabled }
+  );
+
+  useEffect(() => {
+    if (orderSearch.isError || purchaseSearch.isError) setTypesenseDisabled(true);
+  }, [orderSearch.isError, purchaseSearch.isError]);
+
+  // KPI amount cards via Firestore aggregation (independent of Typesense).
+  const { data: orderAmount } = useOrderInvoicedAmountTotal();
+  const { data: purchaseAmount } = usePurchaseInvoiceAmountTotal();
+
+  // Fallback: full-load client-side (only when Typesense unavailable).
+  const { data: allOrders, isLoading: ordersLoading } = useOrders({ enabled: typesenseDisabled });
+  const { data: allPurchases, isLoading: purchaseLoading } = usePurchaseInvoices({
+    enabled: typesenseDisabled,
+  });
+
+  const fallbackRows = useMemo(() => {
+    if (!typesenseDisabled) return [] as InvoiceRow[];
+    const term = debouncedTerm.toLowerCase();
+    let list: InvoiceRow[] = [];
+    if (isOrder) {
+      list = (allOrders ?? [])
+        .filter((o) => o.status !== 'Pending' && o.status !== 'Cancelled')
+        .map((o) => ({
+          id: o.id,
+          invoiceNumber: o.invoiceNumber || orderReferenceWithoutInvoice(o.id),
+          date: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
+          vendorOrStore: o.retailerEmail || 'N/A',
+          amount: o.totalAmount || 0,
+          status: o.paymentStatus || 'Unpaid',
+        }));
+    } else {
+      list = (allPurchases ?? []).map((inv) => ({
+        id: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        date: inv.invoiceDate instanceof Date ? inv.invoiceDate : new Date(inv.invoiceDate),
+        vendorOrStore: inv.vendorName || 'N/A',
+        amount: inv.totalAmount || 0,
+        status: inv.paymentStatus || 'Unpaid',
+      }));
+    }
+    const filtered = list.filter((r) => {
+      const matchesSearch =
+        !term ||
+        r.invoiceNumber.toLowerCase().includes(term) ||
+        r.vendorOrStore.toLowerCase().includes(term);
+      const matchesStatus = statusFilter === 'All' || r.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+    filtered.sort((a, b) => {
       let cmp = 0;
       switch (sortKey) {
-        case 'type':
-          cmp = compareAsc(a.type, b.type);
-          break;
         case 'invoiceNumber':
           cmp = compareAsc(a.invoiceNumber, b.invoiceNumber);
-          break;
-        case 'date':
-          cmp = compareAsc(toTimeMs(a.date), toTimeMs(b.date));
           break;
         case 'vendorOrStore':
           cmp = compareAsc(a.vendorOrStore, b.vendorOrStore);
@@ -148,47 +194,101 @@ export const InvoicesPage: React.FC = () => {
         case 'status':
           cmp = compareAsc(a.status, b.status);
           break;
+        case 'date':
         default:
           cmp = compareAsc(toTimeMs(a.date), toTimeMs(b.date));
       }
       if (cmp !== 0) return applyDirection(cmp, sortDirection);
       return applyDirection(compareAsc(a.invoiceNumber, b.invoiceNumber), sortDirection);
     });
-    return list;
-  }, [filteredInvoices, sortKey, sortDirection]);
+    return filtered;
+  }, [typesenseDisabled, isOrder, allOrders, allPurchases, debouncedTerm, statusFilter, sortKey, sortDirection]);
+
+  const rows: InvoiceRow[] = useMemo(() => {
+    if (typesenseDisabled) {
+      return fallbackRows.slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE);
+    }
+    if (isOrder) {
+      return (orderSearch.data?.orders ?? []).map((o) => ({
+        id: o.id,
+        invoiceNumber: o.invoiceNumber || orderReferenceWithoutInvoice(o.id),
+        date: new Date(o.orderDate),
+        vendorOrStore: o.retailerEmail || 'N/A',
+        amount: o.totalAmount || 0,
+        status: o.paymentStatus || 'Unpaid',
+      }));
+    }
+    return (purchaseSearch.data?.rows ?? []).map((inv) => ({
+      id: inv.id,
+      invoiceNumber: inv.invoiceNumber,
+      date: new Date(inv.invoiceDate),
+      vendorOrStore: inv.vendorName || 'N/A',
+      amount: inv.totalAmount || 0,
+      status: inv.paymentStatus || 'Unpaid',
+    }));
+  }, [typesenseDisabled, isOrder, fallbackRows, page, orderSearch.data, purchaseSearch.data]);
+
+  // Global counts (independent of search/filter) for the KPI cards.
+  const orderStatusCounts = orderSearch.data?.statusCounts;
+  const orderInvoicedCount = typesenseDisabled
+    ? (allOrders ?? []).filter((o) => o.status !== 'Pending' && o.status !== 'Cancelled').length
+    : (orderStatusCounts?.['Order Fulfillment'] ?? 0) +
+      (orderStatusCounts?.['In Transit'] ?? 0) +
+      (orderStatusCounts?.['Delivered'] ?? 0);
+  const purchaseCount = typesenseDisabled
+    ? (allPurchases?.length ?? 0)
+    : purchaseSearch.data?.totalAll ?? 0;
+  const totalInvoices = orderInvoicedCount + purchaseCount;
+  const totalAmount = typesenseDisabled
+    ? (allOrders ?? [])
+        .filter((o) => o.status !== 'Pending' && o.status !== 'Cancelled')
+        .reduce((s, o) => s + (o.totalAmount || 0), 0) +
+      (allPurchases ?? []).reduce((s, inv) => s + (inv.totalAmount || 0), 0)
+    : (orderAmount ?? 0) + (purchaseAmount ?? 0);
+
+  const activeTotal = typesenseDisabled
+    ? fallbackRows.length
+    : isOrder
+    ? orderSearch.data?.found ?? 0
+    : purchaseSearch.data?.found ?? 0;
+  const totalPages = Math.max(1, Math.ceil(activeTotal / ROWS_PER_PAGE));
 
   const requestSortResetPage = (key: string) => {
     requestSort(key);
     setPage(1);
   };
 
-  // Pagination
-  const totalPages = Math.ceil(sortedInvoices.length / rowsPerPage);
-  const paginatedInvoices = sortedInvoices.slice((page - 1) * rowsPerPage, page * rowsPerPage);
-
-  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
-    setPage(value);
+  const handleTabChange = (_: React.SyntheticEvent, value: InvoiceTab) => {
+    setTab(value);
+    setPage(1);
   };
 
-  const handleDownload = async (invoice: InvoiceItem) => {
+  const handleDownload = async (row: InvoiceRow) => {
     try {
-      if (invoice.type === 'purchase' && invoice.purchaseInvoice) {
-        await generatePurchaseInvoice(invoice.purchaseInvoice);
-      } else if (invoice.type === 'order' && invoice.order) {
-        await generateOrderInvoice(invoice.order, { emailPdfToRetailer: true });
+      if (isOrder) {
+        const order = await getOrderById(row.id);
+        if (order) await generateOrderInvoice(order, { emailPdfToRetailer: true });
+      } else {
+        const inv = await getPurchaseInvoiceById(row.id);
+        if (inv) await generatePurchaseInvoice(inv);
       }
     } catch (error: any) {
-      await alert(`Failed to download invoice: ${error.message || 'Unknown error'}`, { severity: 'error' });
+      await alert(`Failed to download invoice: ${error?.message || 'Unknown error'}`, {
+        severity: 'error',
+      });
     }
   };
 
-  const totalAmount = allInvoices.reduce((sum, inv) => sum + inv.amount, 0);
-  const purchaseCount = allInvoices.filter((inv) => inv.type === 'purchase').length;
-  const orderCount = allInvoices.filter((inv) => inv.type === 'order').length;
-  const paidCount = allInvoices.filter((inv) => inv.status === 'Paid').length;
-  const unpaidCount = allInvoices.filter((inv) => inv.status === 'Unpaid').length;
+  const initialLoading = typesenseDisabled
+    ? isOrder
+      ? ordersLoading
+      : purchaseLoading
+    : isOrder
+    ? orderSearch.isLoading || orderSearch.isError
+    : purchaseSearch.isLoading || purchaseSearch.isError;
+  if (initialLoading) return <Loading message="Loading invoices..." />;
 
-  if (purchaseLoading || ordersLoading) return <Loading message="Loading invoices..." />;
+  const isBusy = !typesenseDisabled && (isOrder ? orderSearch.isFetching : purchaseSearch.isFetching);
 
   return (
     <Box>
@@ -204,7 +304,7 @@ export const InvoicesPage: React.FC = () => {
               <Typography color="textSecondary" variant="subtitle2" gutterBottom>
                 Total Invoices
               </Typography>
-              <Typography variant="h4">{allInvoices.length}</Typography>
+              <Typography variant="h4">{totalInvoices}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -224,7 +324,7 @@ export const InvoicesPage: React.FC = () => {
               <Typography color="textSecondary" variant="subtitle2" gutterBottom>
                 Order Invoices
               </Typography>
-              <Typography variant="h4">{orderCount}</Typography>
+              <Typography variant="h4">{orderInvoicedCount}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -234,16 +334,37 @@ export const InvoicesPage: React.FC = () => {
               <Typography color="textSecondary" variant="subtitle2" gutterBottom>
                 Total Amount
               </Typography>
-              <Typography variant="h4">₹{totalAmount.toLocaleString()}</Typography>
+              <Typography variant="h4">₹{Math.round(totalAmount).toLocaleString()}</Typography>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
 
+      <Tabs value={tab} onChange={handleTabChange} sx={{ mb: 2 }}>
+        <Tab
+          value="order"
+          label={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ShoppingCart fontSize="small" /> Order invoices
+              <Chip label={orderInvoicedCount} size="small" />
+            </Box>
+          }
+        />
+        <Tab
+          value="purchase"
+          label={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Receipt fontSize="small" /> Purchase invoices
+              <Chip label={purchaseCount} size="small" />
+            </Box>
+          }
+        />
+      </Tabs>
+
       {/* Filters */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={8}>
             <TextField
               fullWidth
               placeholder="Search by invoice number or vendor/store..."
@@ -263,29 +384,12 @@ export const InvoicesPage: React.FC = () => {
           </Grid>
           <Grid item xs={12} md={4}>
             <FormControl fullWidth>
-              <InputLabel>Type</InputLabel>
-              <Select
-                value={typeFilter}
-                label="Type"
-                onChange={(e) => {
-                  setTypeFilter(e.target.value as 'all' | 'purchase' | 'order');
-                  setPage(1);
-                }}
-              >
-                <MenuItem value="all">All Types</MenuItem>
-                <MenuItem value="purchase">Purchase Invoices</MenuItem>
-                <MenuItem value="order">Order Invoices</MenuItem>
-              </Select>
-            </FormControl>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth>
               <InputLabel>Payment Status</InputLabel>
               <Select
                 value={statusFilter}
                 label="Payment Status"
                 onChange={(e) => {
-                  setStatusFilter(e.target.value);
+                  setStatusFilter(e.target.value as 'All' | 'Paid' | 'Unpaid' | 'Partial');
                   setPage(1);
                 }}
               >
@@ -301,39 +405,30 @@ export const InvoicesPage: React.FC = () => {
 
       {/* Table */}
       <TableContainer component={Paper}>
+        {isBusy && <LinearProgress />}
         <Table>
           <TableHead>
             <TableRow>
-              <SortableTableHeadCell columnId="type" label="Type" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="invoiceNumber" label="Invoice Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="date" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="vendorOrStore" label="Vendor/Store" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="vendorOrStore" label={isOrder ? 'Store' : 'Vendor'} sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="center">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {paginatedInvoices.length === 0 ? (
+            {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={6} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>
                     No invoices found
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              paginatedInvoices.map((invoice) => (
-                <TableRow key={`${invoice.type}-${invoice.id}`} hover>
-                  <TableCell>
-                    <Chip
-                      icon={invoice.type === 'purchase' ? <Receipt /> : <ShoppingCart />}
-                      label={invoice.type === 'purchase' ? 'Purchase' : 'Order'}
-                      size="small"
-                      color={invoice.type === 'purchase' ? 'primary' : 'secondary'}
-                      variant="outlined"
-                    />
-                  </TableCell>
+              rows.map((invoice) => (
+                <TableRow key={`${tab}-${invoice.id}`} hover>
                   <TableCell>
                     <Typography variant="body2" fontWeight="medium">
                       {invoice.invoiceNumber}
@@ -362,7 +457,7 @@ export const InvoicesPage: React.FC = () => {
                       color="primary"
                       onClick={() => handleDownload(invoice)}
                       title={
-                        invoice.type === 'order'
+                        isOrder
                           ? 'Download PDF; email to retailer (PDF + CSV) sends in the background.'
                           : 'Download invoice'
                       }
@@ -378,24 +473,22 @@ export const InvoicesPage: React.FC = () => {
       </TableContainer>
 
       {/* Pagination */}
-      {sortedInvoices.length > 0 && (
+      {activeTotal > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
             page={page}
-            onChange={handlePageChange}
+            onChange={(_, value) => setPage(value)}
             color="primary"
             showFirstButton
             showLastButton
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * rowsPerPage + 1} to{' '}
-            {Math.min(page * rowsPerPage, sortedInvoices.length)} of{' '}
-            {sortedInvoices.length} invoices
+            Showing {(page - 1) * ROWS_PER_PAGE + 1} to{' '}
+            {Math.min(page * ROWS_PER_PAGE, activeTotal)} of {activeTotal} invoices
           </Typography>
         </Box>
       )}
     </Box>
   );
 };
-

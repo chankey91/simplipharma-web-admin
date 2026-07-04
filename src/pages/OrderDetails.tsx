@@ -53,7 +53,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useOrder,
-  useOrders,
+  useOrdersByStatuses,
   useUpdateOrderStatus,
   useFulfillOrder,
   useUnfulfillOrder,
@@ -67,7 +67,7 @@ import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
-import { useProductDemands } from '../hooks/useProductDemands';
+import { useProductDemandsForOrder } from '../hooks/useProductDemands';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
 import { format } from 'date-fns';
@@ -296,9 +296,18 @@ export const OrderDetailsPage: React.FC = () => {
   const { setGuardActive, allowNextNavigation, guardedNavigate, confirmLeaveIfNeeded } =
     useFulfillmentLeaveGuard();
   const { data: order, isLoading } = useOrder(orderId || '');
-  const { data: allOrders } = useOrders();
+  // Only Pending orders hold soft batch reservations (via their fulfillment
+  // drafts), so scope this instead of downloading the whole orders collection.
+  const { data: allOrders } = useOrdersByStatuses(['Pending']);
   const { data: medicines, isLoading: medicinesLoading } = useMedicines();
-  const { data: productDemands } = useProductDemands();
+  const lineDemandIds = useMemo(
+    () =>
+      (order?.medicines ?? [])
+        .map((m) => m.productDemandId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    [order?.medicines]
+  );
+  const { data: productDemands } = useProductDemandsForOrder(orderId || '', lineDemandIds);
   const demandById = useMemo(() => {
     const m = new Map<string, ProductDemand>();
     for (const d of productDemands || []) {

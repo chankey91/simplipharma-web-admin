@@ -23,10 +23,11 @@ import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import {
   useApprovePaymentRequest,
-  usePaymentRequests,
+  usePaymentRequestsByStatus,
+  usePaymentRequestStatusCounts,
+  useOrderPaymentStatuses,
   useRejectPaymentRequest,
 } from '../hooks/usePaymentRequests';
-import { useOrders } from '../hooks/useOrders';
 import { useAppDialog } from '../context/AppDialogProvider';
 
 type RequestTab = 'pending_admin_review' | 'approved' | 'rejected';
@@ -37,26 +38,15 @@ const formatCurrency = (n: number) =>
 const methodLabel = (method: string) => (method === 'online' ? 'Online' : 'Cash');
 
 export const PaymentRequestsPage: React.FC = () => {
-  const { data, isLoading, error, refetch } = usePaymentRequests();
-  const { data: orders } = useOrders();
+  const [tab, setTab] = useState<RequestTab>('pending_admin_review');
+  const { data: rows, isLoading, error, refetch } = usePaymentRequestsByStatus(tab);
+  const { data: statusCounts } = usePaymentRequestStatusCounts();
+  const orderIds = useMemo(() => [...new Set((rows ?? []).map((r) => r.orderId))], [rows]);
+  const { data: orderPaymentByIdMap } = useOrderPaymentStatuses(orderIds);
   const approveMutation = useApprovePaymentRequest();
   const rejectMutation = useRejectPaymentRequest();
-  const { alert, confirm, prompt } = useAppDialog();
-  const [tab, setTab] = useState<RequestTab>('pending_admin_review');
+  const { alert } = useAppDialog();
   const [rejectReasonById, setRejectReasonById] = useState<Record<string, string>>({});
-
-  const orderPaymentById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const o of orders ?? []) {
-      map.set(o.id, o.paymentStatus || 'Unpaid');
-    }
-    return map;
-  }, [orders]);
-
-  const filtered = useMemo(
-    () => (data ?? []).filter((r) => r.status === tab),
-    [data, tab]
-  );
 
   const handleApprove = async (requestId: string) => {
     try {
@@ -90,22 +80,26 @@ export const PaymentRequestsPage: React.FC = () => {
     }
   };
 
+  const handleRefresh = () => {
+    refetch();
+  };
+
   if (isLoading) return <Typography>Loading payment requests...</Typography>;
   if (error) {
     const msg =
       (error as { message?: string })?.message || 'Failed to load payment requests.';
-    return (
-      <Alert severity="error">
-        {msg}
-      </Alert>
-    );
+    return <Alert severity="error">{msg}</Alert>;
   }
+
+  const pendingCount = statusCounts?.pending_admin_review ?? 0;
+  const approvedCount = statusCounts?.approved ?? 0;
+  const rejectedCount = statusCounts?.rejected ?? 0;
 
   return (
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Typography variant="h4">Payment requests</Typography>
-        <Button variant="outlined" startIcon={<Refresh />} onClick={() => refetch()}>
+        <Button variant="outlined" startIcon={<Refresh />} onClick={handleRefresh}>
           Refresh
         </Button>
       </Box>
@@ -116,9 +110,9 @@ export const PaymentRequestsPage: React.FC = () => {
       </Typography>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab value="pending_admin_review" label={`Pending (${(data ?? []).filter((r) => r.status === 'pending_admin_review').length})`} />
-        <Tab value="approved" label={`Approved (${(data ?? []).filter((r) => r.status === 'approved').length})`} />
-        <Tab value="rejected" label={`Rejected (${(data ?? []).filter((r) => r.status === 'rejected').length})`} />
+        <Tab value="pending_admin_review" label={`Pending (${pendingCount})`} />
+        <Tab value="approved" label={`Approved (${approvedCount})`} />
+        <Tab value="rejected" label={`Rejected (${rejectedCount})`} />
       </Tabs>
 
       <TableContainer component={Paper}>
@@ -139,16 +133,16 @@ export const PaymentRequestsPage: React.FC = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {filtered.length === 0 ? (
+            {(rows ?? []).length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} align="center">
+                <TableCell colSpan={11} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
                     No requests in this status.
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((r) => (
+              (rows ?? []).map((r) => (
                 <TableRow key={r.id} hover>
                   <TableCell>
                     <Link component={RouterLink} to={`/orders/${r.orderId}`} underline="hover">
@@ -175,7 +169,12 @@ export const PaymentRequestsPage: React.FC = () => {
                     )}
                   </TableCell>
                   <TableCell>
-                    {r.createdAt ? format(r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt), 'dd MMM yyyy, HH:mm') : '—'}
+                    {r.createdAt
+                      ? format(
+                          r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt),
+                          'dd MMM yyyy, HH:mm'
+                        )
+                      : '—'}
                   </TableCell>
                   <TableCell>
                     <Chip
@@ -193,11 +192,11 @@ export const PaymentRequestsPage: React.FC = () => {
                   <TableCell>
                     <Chip
                       size="small"
-                      label={orderPaymentById.get(r.orderId) || '—'}
+                      label={orderPaymentByIdMap?.get(r.orderId) || '—'}
                       color={
-                        orderPaymentById.get(r.orderId) === 'Paid'
+                        orderPaymentByIdMap?.get(r.orderId) === 'Paid'
                           ? 'success'
-                          : orderPaymentById.get(r.orderId) === 'Partial'
+                          : orderPaymentByIdMap?.get(r.orderId) === 'Partial'
                             ? 'warning'
                             : 'default'
                       }

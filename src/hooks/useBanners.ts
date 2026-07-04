@@ -11,6 +11,9 @@ export const useBanners = () => {
   return useQuery({
     queryKey: ['banners'],
     queryFn: getAllBanners,
+    // Reference data — cache longer; mutations invalidate ['banners'].
+    staleTime: 45 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
   });
 };
 

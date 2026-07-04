@@ -30,7 +30,7 @@ import {
 } from '@mui/material';
 import { Search, Visibility, TrendingUp, InfoOutlined } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
-import { useOrders } from '../hooks/useOrders';
+import { useOrdersInPeriod } from '../hooks/useOrders';
 import { useMedicines } from '../hooks/useInventory';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useCreditNotes } from '../hooks/useCreditNotes';
@@ -83,15 +83,18 @@ const inPeriod = (date: Date, period: PeriodFilter): boolean =>
 export const MarginReportPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { data: orders, isLoading: ordersLoading } = useOrders();
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('Delivered');
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('this_month');
+
+  // Scope the orders query to the selected period so "this month"/"last month"
+  // don't download the entire orders history.
+  const { data: orders, isLoading: ordersLoading } = useOrdersInPeriod(periodFilter);
   const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const { data: purchaseInvoices } = usePurchaseInvoices();
   const { data: creditNotes } = useCreditNotes();
   const { data: expiryReturns } = useExpiryReturns();
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('Delivered');
-  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('this_month');
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(15);
   const [detailOrder, setDetailOrder] = useState<MarginOrderRow | null>(null);

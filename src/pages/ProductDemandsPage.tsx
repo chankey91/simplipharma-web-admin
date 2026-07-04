@@ -22,17 +22,26 @@ import {
   Link as MuiLink,
   ToggleButtonGroup,
   ToggleButton,
+  InputAdornment,
+  Pagination,
+  LinearProgress,
 } from '@mui/material';
 import { format } from 'date-fns';
 import { getTodayDateStringIST } from '../utils/dateTime';
 import * as XLSX from 'xlsx';
-import { FileDownload, PostAdd, Search } from '@mui/icons-material';
+import { CloudSync, FileDownload, PostAdd, Search } from '@mui/icons-material';
 import {
   useProductDemands,
+  useProductDemandsSearch,
+  useProductDemandsPage,
+  useProductDemand,
+  useProductDemandDetailsByIds,
   useFulfillProductDemand,
   useRejectProductDemand,
   useMigrateProductDemandsToMedicines,
 } from '../hooks/useProductDemands';
+import { getProductDemandsByIds, getProductDemandsPage } from '../services/productDemands';
+import { reindexProductDemandsTypesense, searchProductDemandsTypesense } from '../services/productDemandSearch';
 import { useMedicines } from '../hooks/useInventory';
 import { ProductDemand, Medicine } from '../types';
 import { Loading } from '../components/Loading';
@@ -52,6 +61,51 @@ import { useAppDialog } from '../context/AppDialogProvider';
 
 type Filter = 'pending' | 'all';
 
+const ROWS_PER_PAGE = 15;
+
+const sortKeyToField = (key: string): string => {
+  switch (key) {
+    case 'productName':
+      return 'productName';
+    case 'manufacturerName':
+      return 'manufacturerName';
+    case 'requestedQuantity':
+      return 'requestedQuantity';
+    case 'retailer':
+      return 'retailerSort';
+    case 'status':
+      return 'status';
+    case 'createdAt':
+    default:
+      return 'createdAt';
+  }
+};
+
+function rowToMinimalDemand(row: {
+  id: string;
+  productName: string;
+  manufacturerName: string;
+  retailerName: string;
+  retailerEmail: string;
+  requestedQuantity: number;
+  requestedUnit: string;
+  status: ProductDemand['status'];
+  createdAt: number;
+}): ProductDemand {
+  return {
+    id: row.id,
+    retailerId: '',
+    productName: row.productName,
+    manufacturerName: row.manufacturerName,
+    requestedQuantity: row.requestedQuantity,
+    requestedUnit: row.requestedUnit,
+    status: row.status,
+    retailerName: row.retailerName,
+    retailerEmail: row.retailerEmail,
+    createdAt: new Date(row.createdAt),
+  };
+}
+
 function isSafeOrderReturnPath(path: string | null): path is string {
   return Boolean(path && path.startsWith('/orders/') && !path.includes('//'));
 }
@@ -67,14 +121,19 @@ function navigateToReturnPath(navigate: NavigateFunction, returnToRef: React.Mut
 export const ProductDemandsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: demands, isLoading, error } = useProductDemands();
   const { data: medicines } = useMedicines();
   const fulfillMutation = useFulfillProductDemand();
   const rejectMutation = useRejectProductDemand();
   const migrateMutation = useMigrateProductDemandsToMedicines();
-  const { alert, confirm, prompt } = useAppDialog();
+  const { alert, confirm } = useAppDialog();
 
   const [filter, setFilter] = useState<Filter>('pending');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedTerm, setDebouncedTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [typesenseDisabled, setTypesenseDisabled] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMessage, setReindexMessage] = useState<string | null>(null);
   const [fulfillOpen, setFulfillOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [selectedDemand, setSelectedDemand] = useState<ProductDemand | null>(null);
@@ -91,16 +150,64 @@ export const ProductDemandsPage: React.FC = () => {
   const fulfillMedicineSearchInputRef = useRef(fulfillMedicineSearchInput);
   fulfillMedicineSearchInputRef.current = fulfillMedicineSearchInput;
 
-  const filtered = useMemo(() => {
-    if (!demands) return [];
-    if (filter === 'pending') return demands.filter((d) => d.status === 'pending');
-    return demands;
-  }, [demands, filter]);
-
   const { sortKey, sortDirection, requestSort } = useTableSort('createdAt', 'desc');
 
-  const sortedDemands = useMemo(() => {
-    const list = [...filtered];
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedTerm(searchTerm.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  const demandSearch = useProductDemandsSearch(
+    {
+      query: debouncedTerm,
+      filter: filter === 'pending' ? 'pending' : 'All',
+      sortField: sortKeyToField(sortKey),
+      sortOrder: sortDirection,
+      page,
+      perPage: ROWS_PER_PAGE,
+    },
+    { enabled: !typesenseDisabled }
+  );
+
+  const fallbackSearchActive = typesenseDisabled && debouncedTerm.length > 0;
+  const fallbackPage = useProductDemandsPage(
+    {
+      status: filter === 'pending' ? 'pending' : 'all',
+      page,
+      perPage: ROWS_PER_PAGE,
+    },
+    { enabled: typesenseDisabled && !fallbackSearchActive }
+  );
+  const { data: fallbackAllDemands, isLoading: fallbackAllLoading } = useProductDemands({
+    enabled: fallbackSearchActive,
+  });
+
+  useEffect(() => {
+    if (demandSearch.isError) setTypesenseDisabled(true);
+  }, [demandSearch.isError]);
+
+  const pageIds = useMemo(() => {
+    if (typesenseDisabled) return [];
+    return (demandSearch.data?.rows ?? []).map((r) => r.id);
+  }, [typesenseDisabled, demandSearch.data?.rows]);
+
+  const { data: detailsMap } = useProductDemandDetailsByIds(pageIds);
+
+  const fallbackFiltered = useMemo(() => {
+    if (!fallbackSearchActive || !fallbackAllDemands) return [];
+    const term = debouncedTerm.toLowerCase();
+    let list = filter === 'pending'
+      ? fallbackAllDemands.filter((d) => d.status === 'pending')
+      : fallbackAllDemands;
+    if (term) {
+      list = list.filter(
+        (d) =>
+          d.productName.toLowerCase().includes(term) ||
+          d.manufacturerName.toLowerCase().includes(term) ||
+          (d.retailerName || '').toLowerCase().includes(term) ||
+          (d.retailerEmail || '').toLowerCase().includes(term)
+      );
+    }
     list.sort((a, b) => {
       switch (sortKey) {
         case 'productName':
@@ -120,13 +227,47 @@ export const ProductDemandsPage: React.FC = () => {
         case 'status':
           return applyDirection(compareAsc(a.status, b.status), sortDirection);
         case 'createdAt':
-          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), sortDirection);
         default:
-          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), 'desc');
+          return applyDirection(compareAsc(toTimeMs(a.createdAt), toTimeMs(b.createdAt)), sortDirection);
       }
     });
     return list;
-  }, [filtered, sortKey, sortDirection]);
+  }, [fallbackSearchActive, fallbackAllDemands, filter, debouncedTerm, sortKey, sortDirection]);
+
+  const sortedDemands: ProductDemand[] = useMemo(() => {
+    if (typesenseDisabled) {
+      if (fallbackSearchActive) {
+        return fallbackFiltered.slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE);
+      }
+      return fallbackPage.data?.rows ?? [];
+    }
+    return (demandSearch.data?.rows ?? []).map((row) => {
+      const full = detailsMap?.get(row.id);
+      return full ?? rowToMinimalDemand(row);
+    });
+  }, [
+    typesenseDisabled,
+    fallbackSearchActive,
+    fallbackFiltered,
+    page,
+    fallbackPage.data?.rows,
+    demandSearch.data?.rows,
+    detailsMap,
+  ]);
+
+  const totalCount = typesenseDisabled
+    ? fallbackSearchActive
+      ? fallbackFiltered.length
+      : fallbackPage.data?.total ?? 0
+    : demandSearch.data?.found ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / ROWS_PER_PAGE));
+
+  const pendingCount = typesenseDisabled
+    ? (fallbackAllDemands ?? fallbackPage.data?.rows ?? []).filter((d) => d.status === 'pending').length
+    : demandSearch.data?.facetCounts?.pending ?? 0;
+
+  const demandIdFromUrl = searchParams.get('demandId');
+  const { data: deepLinkDemand, isLoading: deepLinkLoading } = useProductDemand(demandIdFromUrl || '');
 
   useEffect(() => {
     if (!fulfillOpen) {
@@ -223,7 +364,7 @@ export const ProductDemandsPage: React.FC = () => {
       consumedDemandQueryIdRef.current = null;
       return;
     }
-    if (isLoading || !demands) return;
+    if (deepLinkLoading) return;
     if (consumedDemandQueryIdRef.current === id) return;
     consumedDemandQueryIdRef.current = id;
 
@@ -232,7 +373,6 @@ export const ProductDemandsPage: React.FC = () => {
       returnToRef.current = returnTo;
     }
 
-    const d = demands.find((x) => x.id === id);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -243,13 +383,14 @@ export const ProductDemandsPage: React.FC = () => {
       { replace: true }
     );
 
+    const d = deepLinkDemand;
     if (d?.status === 'pending') {
       setFilter('pending');
       openFulfill(d);
     } else if (returnToRef.current) {
       navigateToReturnPath(navigate, returnToRef);
     }
-  }, [isLoading, demands, searchParams, setSearchParams, openFulfill, navigate]);
+  }, [deepLinkLoading, deepLinkDemand, searchParams, setSearchParams, openFulfill, navigate]);
 
   const openReject = (d: ProductDemand) => {
     setSelectedDemand(d);
@@ -298,11 +439,40 @@ export const ProductDemandsPage: React.FC = () => {
   };
 
   const downloadDemandsExcel = async () => {
-    if (sortedDemands.length === 0) {
+    let exportRows: ProductDemand[] = sortedDemands;
+    try {
+      if (!typesenseDisabled) {
+        const res = await searchProductDemandsTypesense({
+          query: debouncedTerm,
+          filter: filter === 'pending' ? 'pending' : 'All',
+          sortField: sortKeyToField(sortKey),
+          sortOrder: sortDirection,
+          page: 1,
+          perPage: 500,
+        });
+        const map = await getProductDemandsByIds(res.rows.map((r) => r.id));
+        exportRows = res.rows
+          .map((r) => map.get(r.id) ?? rowToMinimalDemand(r))
+          .filter(Boolean) as ProductDemand[];
+      } else if (!fallbackSearchActive) {
+        const res = await getProductDemandsPage({
+          status: filter === 'pending' ? 'pending' : 'all',
+          page: 1,
+          perPage: 500,
+        });
+        exportRows = res.rows;
+      } else {
+        exportRows = fallbackFiltered;
+      }
+    } catch {
+      /* use current page rows */
+    }
+
+    if (exportRows.length === 0) {
       await alert('No demands in this view to export', { severity: 'warning' });
       return;
     }
-    const rows = sortedDemands.map((d) => ({
+    const rows = exportRows.map((d) => ({
       'Requested product': d.productName,
       Manufacturer: d.manufacturerName,
       Quantity: d.requestedQuantity,
@@ -331,7 +501,9 @@ export const ProductDemandsPage: React.FC = () => {
   };
 
   const handleMigrateToCatalog = async () => {
-    const fulfilledCount = demands?.filter((d) => d.status === 'fulfilled').length ?? 0;
+    const fulfilledCount = typesenseDisabled
+      ? (fallbackAllDemands ?? []).filter((d) => d.status === 'fulfilled').length
+      : demandSearch.data?.facetCounts?.fulfilled ?? 0;
     if (fulfilledCount === 0) {
       await alert('No fulfilled demands to migrate. Fulfill demands first, or use Fulfill on each row.', {
         severity: 'info',
@@ -388,8 +560,35 @@ export const ProductDemandsPage: React.FC = () => {
     }
   };
 
-  if (isLoading) return <Loading message="Loading product demands..." />;
-  if (error) return <Typography color="error">Failed to load demands</Typography>;
+  const handleReindex = async () => {
+    setReindexing(true);
+    setReindexMessage(null);
+    try {
+      const d = await reindexProductDemandsTypesense();
+      setReindexMessage(
+        `Search index updated: ${d.indexed ?? 0} documents indexed (${d.totalDocs ?? 0} Firestore docs scanned).`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setReindexMessage(`Search index rebuild failed: ${msg}.`);
+    } finally {
+      setReindexing(false);
+    }
+  };
+
+  const requestSortResetPage = (key: string) => {
+    requestSort(key);
+    setPage(1);
+  };
+
+  const initialLoading = typesenseDisabled
+    ? fallbackSearchActive
+      ? fallbackAllLoading
+      : fallbackPage.isLoading
+    : demandSearch.isLoading || (demandSearch.isError && !typesenseDisabled);
+  if (initialLoading) return <Loading message="Loading product demands..." />;
+
+  const isBusy = !typesenseDisabled && demandSearch.isFetching;
 
   return (
     <Box>
@@ -400,20 +599,35 @@ export const ProductDemandsPage: React.FC = () => {
           Product demands
         </Typography>
         <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <Button
+            variant="outlined"
+            color="secondary"
+            size="small"
+            startIcon={<CloudSync />}
+            onClick={() => void handleReindex()}
+            disabled={reindexing}
+          >
+            {reindexing ? 'Indexing…' : 'Rebuild search index'}
+          </Button>
           <ToggleButtonGroup
             value={filter}
             exclusive
-            onChange={(_, v) => v && setFilter(v)}
+            onChange={(_, v) => {
+              if (v) {
+                setFilter(v);
+                setPage(1);
+              }
+            }}
             size="small"
           >
-            <ToggleButton value="pending">Pending</ToggleButton>
+            <ToggleButton value="pending">Pending ({pendingCount})</ToggleButton>
             <ToggleButton value="all">All</ToggleButton>
           </ToggleButtonGroup>
           <Button
             variant="outlined"
             size="small"
             onClick={() => void handleMigrateToCatalog()}
-            disabled={!demands?.length || migrateMutation.isPending}
+            disabled={migrateMutation.isPending}
           >
             {migrateMutation.isPending ? 'Migrating…' : 'Sync to medicines catalog'}
           </Button>
@@ -421,13 +635,42 @@ export const ProductDemandsPage: React.FC = () => {
             variant="outlined"
             size="small"
             startIcon={<FileDownload />}
-            onClick={downloadDemandsExcel}
-            disabled={!demands?.length || sortedDemands.length === 0}
+            onClick={() => void downloadDemandsExcel()}
+            disabled={sortedDemands.length === 0}
           >
             Download Excel
           </Button>
         </Box>
       </Box>
+
+      {reindexMessage && (
+        <Alert
+          severity={reindexMessage.startsWith('Search index updated') ? 'success' : 'error'}
+          onClose={() => setReindexMessage(null)}
+          sx={{ mb: 2 }}
+        >
+          {reindexMessage}
+        </Alert>
+      )}
+
+      <TextField
+        fullWidth
+        size="small"
+        placeholder="Search product, manufacturer, retailer…"
+        value={searchTerm}
+        onChange={(e) => {
+          setSearchTerm(e.target.value);
+          setPage(1);
+        }}
+        sx={{ mb: 2 }}
+        InputProps={{
+          startAdornment: (
+            <InputAdornment position="start">
+              <Search />
+            </InputAdornment>
+          ),
+        }}
+      />
 
       <Alert severity="info" sx={{ mb: 2 }}>
         Fulfill creates or links a row in the <strong>medicines</strong> catalog (matched by product name if it
@@ -441,16 +684,17 @@ export const ProductDemandsPage: React.FC = () => {
       </Alert>
 
       <TableContainer component={Paper}>
+        {isBusy && <LinearProgress />}
         <Table size="small">
           <TableHead>
             <TableRow>
               <TableCell>Photo</TableCell>
-              <SortableTableHeadCell columnId="productName" label="Requested product" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
-              <SortableTableHeadCell columnId="manufacturerName" label="Manufacturer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
-              <SortableTableHeadCell columnId="requestedQuantity" label="Qty" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} align="right" />
-              <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
-              <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
-              <SortableTableHeadCell columnId="createdAt" label="Created" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSort} />
+              <SortableTableHeadCell columnId="productName" label="Requested product" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="manufacturerName" label="Manufacturer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="requestedQuantity" label="Qty" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="createdAt" label="Created" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -549,6 +793,23 @@ export const ProductDemandsPage: React.FC = () => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {totalCount > 0 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+          <Pagination
+            count={totalPages}
+            page={page}
+            onChange={(_, value) => setPage(value)}
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
+            Showing {(page - 1) * ROWS_PER_PAGE + 1} to{' '}
+            {Math.min(page * ROWS_PER_PAGE, totalCount)} of {totalCount} demands
+          </Typography>
+        </Box>
+      )}
 
       <Dialog
         open={fulfillOpen}

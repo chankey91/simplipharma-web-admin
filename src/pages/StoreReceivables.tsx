@@ -26,7 +26,7 @@ import {
 import { Search, Visibility, Receipt } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
-import { useOrders } from '../hooks/useOrders';
+import { useReceivableOrders } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
@@ -50,7 +50,7 @@ const paymentChipColor = (status?: string): 'success' | 'warning' | 'error' | 'd
 };
 
 export const StoreReceivablesPage: React.FC = () => {
-  const { data: orders, isLoading: ordersLoading } = useOrders();
+  const { data: orders, isLoading: ordersLoading } = useReceivableOrders();
   const { data: stores, isLoading: storesLoading } = useStores();
   const navigate = useNavigate();
 
