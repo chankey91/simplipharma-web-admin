@@ -174,6 +174,16 @@ export interface Payment {
   transactionId?: string; // For online payments
 }
 
+/** Payment recorded against a purchase invoice (vendor payable). */
+export interface VendorInvoicePayment {
+  id: string;
+  amount: number;
+  paymentDate: Date | any;
+  paymentMethod?: PaymentMethod;
+  transactionId?: string;
+  notes?: string;
+}
+
 export type PaymentRequestStatus =
   | 'pending_admin_review'
   | 'approved'
@@ -306,6 +316,10 @@ export interface PurchaseInvoice {
   paymentStatus: PaymentStatus;
   paymentMethod?: PaymentMethod;
   paidAmount?: number;
+  /** Last / latest payment date (when marked paid or partial). */
+  paidAt?: Date | any;
+  /** Individual payment vouchers for vendor ledger credits. */
+  payments?: VendorInvoicePayment[];
   notes?: string;
   createdAt: Date | any;
   createdBy: string;

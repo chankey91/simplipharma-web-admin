@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tansta
 import { 
   getAllPurchaseInvoices,
   getPayablePurchaseInvoices,
+  getPurchaseInvoicesByVendor,
   getPurchaseInvoiceById, 
   createPurchaseInvoice, 
   updatePurchaseInvoice,
@@ -22,6 +23,15 @@ export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
     queryKey: ['purchaseInvoices'],
     queryFn: getAllPurchaseInvoices,
     enabled: options?.enabled ?? true,
+  });
+};
+
+export const useVendorPurchaseInvoices = (vendorId: string, options?: { enabled?: boolean }) => {
+  return useQuery({
+    queryKey: ['vendorPurchaseInvoices', vendorId],
+    queryFn: () => getPurchaseInvoicesByVendor(vendorId),
+    enabled: (options?.enabled ?? true) && !!vendorId,
+    staleTime: 2 * 60 * 1000,
   });
 };
 
