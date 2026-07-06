@@ -250,6 +250,9 @@ export interface User {
   pan?: string;
   gst?: string;
   shopImage?: string;
+  shopImageUrl?: string;
+  licenceImageUrl?: string;
+  aadharImageUrl?: string;
   storeCode?: string; // Unique code for medical store (e.g., MS001, MS002)
   location?: {
     latitude: number;

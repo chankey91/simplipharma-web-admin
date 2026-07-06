@@ -14,17 +14,56 @@ export const getAllStores = async (): Promise<User[]> => {
   } as User));
 };
 
-export const updateStore = async (storeId: string, data: Partial<User>) => {
+/**
+ * Admin only: change retailer login email in Firebase Auth + Firestore.
+ * Requires the `updateRetailerEmail` Cloud Function to be deployed.
+ */
+export const updateRetailerEmail = async (
+  retailerUserId: string,
+  newEmail: string
+): Promise<{ email: string }> => {
+  const fn = httpsCallable<
+    { retailerUserId: string; newEmail: string },
+    { success?: boolean; email?: string; unchanged?: boolean }
+  >(functions, 'updateRetailerEmail');
+  const result = await fn({ retailerUserId, newEmail: newEmail.trim() });
+  const data = result.data;
+  if (!data?.success) {
+    throw new Error('Failed to update retailer email');
+  }
+  return { email: data.email || newEmail.trim() };
+};
+
+export const updateStore = async (
+  storeId: string,
+  data: Partial<User>,
+  options?: { previousEmail?: string }
+) => {
   const storeRef = doc(db, 'users', storeId);
-  
+
   // Remove undefined values from data
   const cleanData: any = { ...data };
-  Object.keys(cleanData).forEach(key => {
+  Object.keys(cleanData).forEach((key) => {
     if (cleanData[key] === undefined) {
       delete cleanData[key];
     }
   });
-  
+
+  const newEmail = typeof cleanData.email === 'string' ? cleanData.email.trim() : '';
+  const previousEmail = options?.previousEmail?.trim() || '';
+  if (
+    newEmail &&
+    previousEmail &&
+    newEmail.toLowerCase() !== previousEmail.toLowerCase()
+  ) {
+    await updateRetailerEmail(storeId, newEmail);
+    cleanData.email = newEmail;
+  }
+
+  if (Object.keys(cleanData).length === 0) {
+    return;
+  }
+
   await updateDoc(storeRef, cleanData);
 };
 

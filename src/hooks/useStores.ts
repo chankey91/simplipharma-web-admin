@@ -25,8 +25,15 @@ export const useUpdateStore = () => {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ storeId, data }: { storeId: string; data: Partial<User> }) =>
-      updateStore(storeId, data),
+    mutationFn: ({
+      storeId,
+      data,
+      previousEmail,
+    }: {
+      storeId: string;
+      data: Partial<User>;
+      previousEmail?: string;
+    }) => updateStore(storeId, data, { previousEmail }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] });
     }

@@ -20,7 +20,6 @@ import {
   DialogActions,
   Switch,
   FormControlLabel,
-  Alert,
   Grid,
   Divider,
   Pagination,
@@ -32,7 +31,6 @@ import {
   CheckCircle,
   Cancel,
   Save,
-  VpnKey,
   MyLocation,
   PhotoCamera,
   History,
@@ -54,6 +52,10 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
+import {
+  checkLicenseAndAadharUnique,
+  resolveRetailerImageUrl,
+} from '../services/retailerDocuments';
 
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -104,7 +106,11 @@ export const StoresPage: React.FC = () => {
   const [editingStore, setEditingStore] = useState<User | null>(null);
   const [openDialog, setOpenDialog] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState('');
-  
+  const [shopImageFile, setShopImageFile] = useState<File | null>(null);
+  const [licenceImageFile, setLicenceImageFile] = useState<File | null>(null);
+  const [aadharImageFile, setAadharImageFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
 
@@ -116,23 +122,35 @@ export const StoresPage: React.FC = () => {
     return m;
   }, [salesOfficers]);
 
-  const [formData, setFormData] = useState({
+  const emptyFormData = () => ({
     displayName: '',
     shopName: '',
     phoneNumber: '',
     address: '',
     email: '',
     licenceNumber: '',
+    aadharNumber: '',
     ownerName: '',
     licenceHolderName: '',
     pan: '',
     gst: '',
+    storeCode: '',
     isActive: true,
     latitude: '',
     longitude: '',
     shopImage: '',
+    licenceImageUrl: '',
+    aadharImageUrl: '',
     salesOfficerId: '',
   });
+
+  const [formData, setFormData] = useState(emptyFormData());
+
+  const resetImageFiles = () => {
+    setShopImageFile(null);
+    setLicenceImageFile(null);
+    setAadharImageFile(null);
+  };
 
   const filteredStores = stores?.filter(store =>
     store.shopName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -211,23 +229,8 @@ export const StoresPage: React.FC = () => {
     setEditingStore(null);
     const newPassword = generatePassword();
     setGeneratedPassword(newPassword);
-    setFormData({
-      displayName: '',
-      shopName: '',
-      phoneNumber: '',
-      address: '',
-      email: '',
-      licenceNumber: '',
-      ownerName: '',
-      licenceHolderName: '',
-      pan: '',
-      gst: '',
-      isActive: true,
-      latitude: '',
-      longitude: '',
-      shopImage: '',
-      salesOfficerId: '',
-    });
+    setFormData(emptyFormData());
+    resetImageFiles();
     setOpenDialog(true);
   };
 
@@ -241,16 +244,21 @@ export const StoresPage: React.FC = () => {
       address: store.address || '',
       email: store.email || '',
       licenceNumber: store.licenceNumber || '',
+      aadharNumber: store.aadharNumber || '',
       ownerName: store.ownerName || '',
       licenceHolderName: store.licenceHolderName || '',
       pan: store.pan || '',
       gst: store.gst || '',
+      storeCode: store.storeCode || '',
       isActive: store.isActive !== false,
       latitude: store.location?.latitude?.toString() || '',
       longitude: store.location?.longitude?.toString() || '',
-      shopImage: store.shopImage || '',
+      shopImage: store.shopImage || store.shopImageUrl || '',
+      licenceImageUrl: store.licenceImageUrl || '',
+      aadharImageUrl: store.aadharImageUrl || '',
       salesOfficerId: store.salesOfficerId || '',
     });
+    resetImageFiles();
     setOpenDialog(true);
   };
 
@@ -284,120 +292,194 @@ export const StoresPage: React.FC = () => {
     }
   };
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const pickImageFile = (
+    kind: 'shop' | 'licence' | 'aadhar',
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = event.target.files?.[0];
-    if (file) {
-      // Validate file size (max 2MB)
-      if (file.size > 2 * 1024 * 1024) {
-        void alert('Image size should be less than 2MB', { severity: 'warning' });
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        setFormData({ ...formData, shopImage: base64String });
-      };
-      reader.onerror = () => {
-        void alert('Error reading image file', { severity: 'error' });
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      void alert('Image must be 5 MB or smaller', { severity: 'warning' });
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    if (kind === 'shop') {
+      setShopImageFile(file);
+      setFormData((prev) => ({ ...prev, shopImage: previewUrl }));
+    } else if (kind === 'licence') {
+      setLicenceImageFile(file);
+      setFormData((prev) => ({ ...prev, licenceImageUrl: previewUrl }));
+    } else {
+      setAadharImageFile(file);
+      setFormData((prev) => ({ ...prev, aadharImageUrl: previewUrl }));
+    }
+    event.target.value = '';
+  };
+
+  const clearImage = (kind: 'shop' | 'licence' | 'aadhar') => {
+    if (kind === 'shop') {
+      setShopImageFile(null);
+      setFormData((prev) => ({ ...prev, shopImage: '' }));
+    } else if (kind === 'licence') {
+      setLicenceImageFile(null);
+      setFormData((prev) => ({ ...prev, licenceImageUrl: '' }));
+    } else {
+      setAadharImageFile(null);
+      setFormData((prev) => ({ ...prev, aadharImageUrl: '' }));
     }
   };
 
   const handleSave = async () => {
     const email = formData.email.trim();
+    const lic = formData.licenceNumber.trim();
+    const aad = formData.aadharNumber.trim();
 
-    if (!editingStore) {
-      if (!formData.shopName.trim()) {
-        await alert('Store name is required', { severity: 'warning' });
-        return;
-      }
-      if (!email) {
-        await alert('Email address is required', { severity: 'warning' });
-        return;
-      }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        await alert('Please enter a valid email address', { severity: 'warning' });
+    if (!formData.shopName.trim()) {
+      await alert('Shop name is required', { severity: 'warning' });
+      return;
+    }
+    if (!lic || !aad) {
+      await alert('Licence and Aadhar numbers are required', { severity: 'warning' });
+      return;
+    }
+
+    if (!email) {
+      await alert('Email address is required', { severity: 'warning' });
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      await alert('Please enter a valid email address', { severity: 'warning' });
+      return;
+    }
+
+    if (editingStore) {
+      const emailChanged =
+        email.toLowerCase() !== (editingStore.email || '').trim().toLowerCase();
+      if (
+        emailChanged &&
+        !(await confirm(
+          `Change login email from ${editingStore.email} to ${email}?\n\nThe retailer will sign in with the new email. Password reset links will also go to the new address.`
+        ))
+      ) {
         return;
       }
     }
 
-    const storeData: any = {
-      displayName: formData.displayName,
-      shopName: formData.shopName,
-      phoneNumber: formData.phoneNumber,
-      address: formData.address,
-      email,
-      licenceNumber: formData.licenceNumber,
-      ownerName: formData.ownerName,
-      licenceHolderName: formData.licenceHolderName,
-      pan: formData.pan,
-      gst: formData.gst,
-      isActive: formData.isActive,
-      shopImage: formData.shopImage,
-      salesOfficerId: formData.salesOfficerId || undefined,
-      location: formData.latitude && formData.longitude ? {
-        latitude: parseFloat(formData.latitude),
-        longitude: parseFloat(formData.longitude)
-      } : undefined
-    };
+    const { licenceTaken, aadharTaken } = await checkLicenseAndAadharUnique(
+      lic,
+      aad,
+      editingStore?.id
+    );
+    if (licenceTaken) {
+      await alert('This licence is already registered or pending', { severity: 'warning' });
+      return;
+    }
+    if (aadharTaken) {
+      await alert('This Aadhar is already registered or pending', { severity: 'warning' });
+      return;
+    }
 
+    setSaving(true);
     try {
+      const previousShop = editingStore?.shopImage || editingStore?.shopImageUrl;
+      const shopImage = await resolveRetailerImageUrl(
+        formData.shopImage,
+        'shop',
+        'shop.jpg',
+        shopImageFile,
+        previousShop
+      );
+      const licenceImageUrl = await resolveRetailerImageUrl(
+        formData.licenceImageUrl,
+        'licence',
+        'licence.jpg',
+        licenceImageFile,
+        editingStore?.licenceImageUrl
+      );
+      const aadharImageUrl = await resolveRetailerImageUrl(
+        formData.aadharImageUrl,
+        'aadhar',
+        'aadhar.jpg',
+        aadharImageFile,
+        editingStore?.aadharImageUrl
+      );
+
+      const storeData: any = {
+        displayName: formData.displayName.trim() || undefined,
+        shopName: formData.shopName.trim(),
+        phoneNumber: formData.phoneNumber.trim() || undefined,
+        address: formData.address.trim() || undefined,
+        email,
+        licenceNumber: lic,
+        aadharNumber: aad,
+        ownerName: formData.ownerName.trim() || undefined,
+        licenceHolderName: formData.licenceHolderName.trim() || undefined,
+        pan: formData.pan.trim() || undefined,
+        gst: formData.gst.trim() || undefined,
+        storeCode: formData.storeCode.trim() || undefined,
+        isActive: formData.isActive,
+        shopImage: shopImage,
+        shopImageUrl: shopImage,
+        licenceImageUrl,
+        aadharImageUrl,
+        salesOfficerId: formData.salesOfficerId || undefined,
+        location:
+          formData.latitude && formData.longitude
+            ? {
+                latitude: parseFloat(formData.latitude),
+                longitude: parseFloat(formData.longitude),
+              }
+            : undefined,
+      };
+
       if (editingStore) {
         await updateStoreMutation.mutateAsync({
           storeId: editingStore.id,
-          data: storeData
+          data: storeData,
+          previousEmail: editingStore.email,
         });
         await alert('Store updated successfully!', { severity: 'success' });
       } else {
-        // In creation, we'd also include the password to be sent to email
         console.log('Creating store with email:', formData.email, 'Password:', generatedPassword);
         try {
           const result = await createStoreMutation.mutateAsync({
             ...storeData,
-            initialPassword: generatedPassword // This would be used by a Cloud Function
+            initialPassword: generatedPassword,
           });
-          
-          const emailSent = result && typeof result === 'object' && 'emailSent' in result && result.emailSent;
+
+          const emailSent =
+            result && typeof result === 'object' && 'emailSent' in result && result.emailSent;
           if (emailSent) {
-            await alert(`Store created successfully!\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nAn email with the password has been sent to ${formData.email}.`, { severity: 'success' });
+            await alert(
+              `Store created successfully!\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nAn email with the password has been sent to ${formData.email}.`,
+              { severity: 'success' }
+            );
           } else {
-            await alert(`Store created successfully!\n\n⚠️ Email could not be sent (SMTP authentication failed). Please share these credentials with the store owner:\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nTo fix email sending: Generate a new Gmail App Password and run:\nfirebase functions:config:set smtp.password="NEW_APP_PASSWORD"\nfirebase deploy --only functions`, { severity: 'warning' });
+            await alert(
+              `Store created successfully!\n\n⚠️ Email could not be sent (SMTP authentication failed). Please share these credentials with the store owner:\n\nEmail: ${formData.email}\nPassword: ${generatedPassword}\n\nTo fix email sending: Generate a new Gmail App Password and run:\nfirebase functions:config:set smtp.password="NEW_APP_PASSWORD"\nfirebase deploy --only functions`,
+              { severity: 'warning' }
+            );
           }
         } catch (createError: any) {
-          // Check if store was created but email failed
           if (createError.storeCreated) {
-            // Store was created but email failed
-            await alert(`Store created successfully, but email could not be sent.\n\nPlease share these credentials with the store owner:\n\nEmail: ${createError.email || formData.email}\nPassword: ${createError.password || generatedPassword}\n\nNote: Cloud Function for email sending is not configured or failed. Please set up Firebase Cloud Functions with SMTP to enable email notifications.\n\nError: ${createError.message}`, { severity: 'warning' });
+            await alert(
+              `Store created successfully, but email could not be sent.\n\nPlease share these credentials with the store owner:\n\nEmail: ${createError.email || formData.email}\nPassword: ${createError.password || generatedPassword}\n\nNote: Cloud Function for email sending is not configured or failed. Please set up Firebase Cloud Functions with SMTP to enable email notifications.\n\nError: ${createError.message}`,
+              { severity: 'warning' }
+            );
           } else {
-            // Complete failure
-            throw createError; // Re-throw to be caught by outer catch
+            throw createError;
           }
         }
       }
       setOpenDialog(false);
-      // Reset form
-      setFormData({
-        displayName: '',
-        shopName: '',
-        phoneNumber: '',
-        address: '',
-        email: '',
-        licenceNumber: '',
-        ownerName: '',
-        licenceHolderName: '',
-        pan: '',
-        gst: '',
-        isActive: true,
-        latitude: '',
-        longitude: '',
-        shopImage: '',
-        salesOfficerId: '',
-      });
+      setFormData(emptyFormData());
+      resetImageFiles();
       setGeneratedPassword('');
     } catch (error: any) {
       console.error('Error saving store:', error);
       await alert(`Failed to save store: ${error.message || 'Unknown error'}`, { severity: 'error' });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -546,33 +628,54 @@ export const StoresPage: React.FC = () => {
         <DialogTitle>{editingStore ? 'Edit Store' : 'Add New Store'}</DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
-            {!editingStore && (
-              <Alert severity="info" sx={{ mb: 3 }} icon={<VpnKey />}>
-                A default password will be generated automatically: <strong>{generatedPassword}</strong>
-              </Alert>
-            )}
-            
-            <Typography variant="subtitle2" gutterBottom>Basic Information</Typography>
+            <Typography variant="subtitle2" gutterBottom>Account</Typography>
             <Grid container spacing={2} mb={3}>
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Store Name"
-                  required
-                  value={formData.shopName}
-                  onChange={(e) => setFormData({ ...formData, shopName: e.target.value })}
-                />
-              </Grid>
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
                   label="Email Address"
                   type="email"
                   required
-                  disabled={!!editingStore}
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  helperText={editingStore ? 'Email cannot be changed after creation' : 'Required — login credentials are sent to this address'}
+                  helperText={
+                    editingStore
+                      ? 'Updates the retailer login email in Firebase Auth'
+                      : 'Required — login credentials are sent to this address'
+                  }
+                />
+              </Grid>
+              {!editingStore && (
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Password"
+                    value={generatedPassword}
+                    disabled
+                    helperText="Auto-generated; sent to the retailer by email when SMTP is configured"
+                  />
+                </Grid>
+              )}
+            </Grid>
+
+            <Divider sx={{ mb: 3 }} />
+            <Typography variant="subtitle2" gutterBottom>Basic Information</Typography>
+            <Grid container spacing={2} mb={3}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Display Name"
+                  value={formData.displayName}
+                  onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Shop Name"
+                  required
+                  value={formData.shopName}
+                  onChange={(e) => setFormData({ ...formData, shopName: e.target.value })}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -583,45 +686,136 @@ export const StoresPage: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
                 />
               </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Shop Address"
+                  multiline
+                  rows={2}
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                />
+              </Grid>
+            </Grid>
+
+            <Divider sx={{ mb: 3 }} />
+            <Typography variant="subtitle2" gutterBottom>Identity Documents</Typography>
+            <Grid container spacing={2} mb={3}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Licence Number"
+                  required
+                  value={formData.licenceNumber}
+                  onChange={(e) => setFormData({ ...formData, licenceNumber: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Aadhar Number"
+                  required
+                  value={formData.aadharNumber}
+                  onChange={(e) => setFormData({ ...formData, aadharNumber: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth>
+                  Shop Photo
+                  <input type="file" hidden accept="image/*" onChange={(e) => pickImageFile('shop', e)} />
+                </Button>
+                {formData.shopImage && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={formData.shopImage}
+                      alt="Shop preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearImage('shop')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth>
+                  Licence Photo
+                  <input type="file" hidden accept="image/*" onChange={(e) => pickImageFile('licence', e)} />
+                </Button>
+                {formData.licenceImageUrl && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={formData.licenceImageUrl}
+                      alt="Licence preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearImage('licence')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth>
+                  Aadhar Photo
+                  <input type="file" hidden accept="image/*" onChange={(e) => pickImageFile('aadhar', e)} />
+                </Button>
+                {formData.aadharImageUrl && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={formData.aadharImageUrl}
+                      alt="Aadhar preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearImage('aadhar')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
+            </Grid>
+
+            <Divider sx={{ mb: 3 }} />
+            <Typography variant="subtitle2" gutterBottom>Location</Typography>
+            <Grid container spacing={2} mb={3}>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Latitude"
+                  value={formData.latitude}
+                  onChange={(e) => setFormData({ ...formData, latitude: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Longitude"
+                  value={formData.longitude}
+                  onChange={(e) => setFormData({ ...formData, longitude: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  startIcon={<MyLocation />}
+                  onClick={handleGetCurrentLocation}
+                  sx={{ height: '56px' }}
+                >
+                  Capture Shop Location
+                </Button>
+              </Grid>
+            </Grid>
+
+            <Divider sx={{ mb: 3 }} />
+            <Typography variant="subtitle2" gutterBottom>Owner & Tax</Typography>
+            <Grid container spacing={2} mb={3}>
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
                   label="Owner Name"
                   value={formData.ownerName}
                   onChange={(e) => setFormData({ ...formData, ownerName: e.target.value })}
-                />
-              </Grid>
-            </Grid>
-
-            <Grid container spacing={2} mb={3}>
-              <Grid item xs={12}>
-                <FormControl fullWidth>
-                  <InputLabel>Assign to Sales Officer</InputLabel>
-                  <Select
-                    value={formData.salesOfficerId}
-                    label="Assign to Sales Officer"
-                    onChange={(e) => setFormData({ ...formData, salesOfficerId: e.target.value })}
-                  >
-                    <MenuItem value="">Unassigned</MenuItem>
-                    {salesOfficers.map((so: User) => (
-                      <MenuItem key={so.id} value={so.id}>
-                        {so.displayName || so.shopName || so.email}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-            </Grid>
-
-            <Divider sx={{ mb: 3 }} />
-            <Typography variant="subtitle2" gutterBottom>Licence & Tax Information</Typography>
-            <Grid container spacing={2} mb={3}>
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Licence Number"
-                  value={formData.licenceNumber}
-                  onChange={(e) => setFormData({ ...formData, licenceNumber: e.target.value })}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -651,82 +845,34 @@ export const StoresPage: React.FC = () => {
             </Grid>
 
             <Divider sx={{ mb: 3 }} />
-            <Typography variant="subtitle2" gutterBottom>Location & Media</Typography>
+            <Typography variant="subtitle2" gutterBottom>Other</Typography>
             <Grid container spacing={2}>
-              <Grid item xs={12}>
+              <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="Shop Address"
-                  multiline
-                  rows={2}
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  label="Store Code"
+                  value={formData.storeCode}
+                  onChange={(e) => setFormData({ ...formData, storeCode: e.target.value })}
+                  helperText="Leave blank to auto-generate (e.g. MS001)"
+                  disabled={!!editingStore}
                 />
               </Grid>
-              <Grid item xs={12} md={4}>
-                <TextField
-                  fullWidth
-                  label="Latitude"
-                  value={formData.latitude}
-                  onChange={(e) => setFormData({ ...formData, latitude: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <TextField
-                  fullWidth
-                  label="Longitude"
-                  value={formData.longitude}
-                  onChange={(e) => setFormData({ ...formData, longitude: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  startIcon={<MyLocation />}
-                  onClick={handleGetCurrentLocation}
-                  sx={{ height: '56px' }}
-                >
-                  Get Current Location
-                </Button>
-              </Grid>
-              <Grid item xs={12}>
-                <Button
-                  variant="outlined"
-                  component="label"
-                  startIcon={<PhotoCamera />}
-                  fullWidth
-                >
-                  Upload Shop Image
-                  <input 
-                    type="file" 
-                    hidden 
-                    accept="image/*" 
-                    onChange={handleImageUpload}
-                  />
-                </Button>
-                {formData.shopImage && (
-                  <Box sx={{ mt: 2, textAlign: 'center' }}>
-                    <img 
-                      src={formData.shopImage} 
-                      alt="Shop preview" 
-                      style={{ 
-                        maxWidth: '100%', 
-                        maxHeight: 200, 
-                        borderRadius: 8,
-                        border: '1px solid #ddd'
-                      }} 
-                    />
-                    <Button
-                      size="small"
-                      color="error"
-                      onClick={() => setFormData({ ...formData, shopImage: '' })}
-                      sx={{ mt: 1 }}
-                    >
-                      Remove Image
-                    </Button>
-                  </Box>
-                )}
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Assign to Sales Officer</InputLabel>
+                  <Select
+                    value={formData.salesOfficerId}
+                    label="Assign to Sales Officer"
+                    onChange={(e) => setFormData({ ...formData, salesOfficerId: e.target.value })}
+                  >
+                    <MenuItem value="">Unassigned</MenuItem>
+                    {salesOfficers.map((so: User) => (
+                      <MenuItem key={so.id} value={so.id}>
+                        {so.displayName || so.shopName || so.email}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
               </Grid>
             </Grid>
           </Box>
@@ -749,12 +895,17 @@ export const StoresPage: React.FC = () => {
             startIcon={<Save />}
             onClick={handleSave}
             disabled={
+              saving ||
               createStoreMutation.isPending ||
               updateStoreMutation.isPending ||
               (!editingStore && !formData.email.trim())
             }
           >
-            {editingStore ? 'Update Store' : 'Create Store'}
+            {saving || createStoreMutation.isPending || updateStoreMutation.isPending
+              ? 'Saving…'
+              : editingStore
+                ? 'Update Store'
+                : 'Create Store'}
           </Button>
         </DialogActions>
       </Dialog>
