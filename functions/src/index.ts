@@ -443,6 +443,66 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
 });
 
 /**
+ * Admin only: update a retailer's login email in Firebase Auth and Firestore.
+ */
+export const updateRetailerEmail = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  try {
+    await assertAdmin(context.auth.uid);
+  } catch {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+  }
+
+  const retailerUserId = String(data?.retailerUserId || '').trim();
+  const newEmail = String(data?.newEmail || '').trim();
+  if (!retailerUserId) {
+    throw new functions.https.HttpsError('invalid-argument', 'retailerUserId is required');
+  }
+  if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid new email is required');
+  }
+
+  const userDoc = await admin.firestore().collection('users').doc(retailerUserId).get();
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Retailer not found');
+  }
+
+  const userData = userDoc.data() as Record<string, unknown>;
+  if (!isRetailerRole(String(userData.role || ''))) {
+    throw new functions.https.HttpsError('failed-precondition', 'User is not a retailer account');
+  }
+
+  const currentEmail = String(userData.email || '').trim().toLowerCase();
+  if (currentEmail === newEmail.toLowerCase()) {
+    return { success: true, email: newEmail, unchanged: true };
+  }
+
+  try {
+    await admin.auth().updateUser(retailerUserId, { email: newEmail });
+  } catch (error: any) {
+    const code = String(error?.code || '');
+    if (code === 'auth/email-already-exists') {
+      throw new functions.https.HttpsError('already-exists', 'This email is already in use');
+    }
+    if (code === 'auth/invalid-email') {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid email address');
+    }
+    console.error('updateRetailerEmail auth error:', error);
+    throw new functions.https.HttpsError('internal', error?.message || 'Failed to update login email');
+  }
+
+  await admin.firestore().collection('users').doc(retailerUserId).update({
+    email: newEmail,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { success: true, email: newEmail };
+});
+
+/**
  * Approve retailer registration request: create user account from pending request
  */
 export const approveRetailerRequest = functions.https.onCall(async (data, context) => {
