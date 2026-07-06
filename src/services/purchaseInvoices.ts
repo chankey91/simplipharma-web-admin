@@ -59,45 +59,11 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
   try {
     const q = query(invoicesCol, orderBy('invoiceDate', 'desc'));
     const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        ...data,
-        invoiceDate: data.invoiceDate?.toDate() || new Date(),
-        createdAt: data.createdAt?.toDate() || new Date(),
-        items: data.items?.map((item: any) => ({
-          ...item,
-          mfgDate: item.mfgDate?.toDate() || undefined,
-          expiryDate: item.expiryDate?.toDate() || undefined,
-          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp)) : undefined,
-          standardDiscount: item.standardDiscount !== undefined && item.standardDiscount !== null ? (typeof item.standardDiscount === 'number' ? item.standardDiscount : parseFloat(String(item.standardDiscount))) : undefined,
-        })) || []
-      } as PurchaseInvoice;
-    });
+    return snapshot.docs.map((docSnap) => mapPurchaseInvoiceDoc(docSnap));
   } catch (error) {
     console.warn('OrderBy query failed, sorting in memory:', error);
     const snapshot = await getDocs(invoicesCol);
-    const invoices = snapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        ...data,
-        invoiceDate: data.invoiceDate?.toDate() || new Date(),
-        createdAt: data.createdAt?.toDate() || new Date(),
-        items: data.items?.map((item: any) => ({
-          ...item,
-          mfgDate: item.mfgDate?.toDate() || undefined,
-          expiryDate: item.expiryDate?.toDate() || undefined,
-          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(String(item.mrp))) : undefined,
-          standardDiscount: item.standardDiscount !== undefined && item.standardDiscount !== null ? (typeof item.standardDiscount === 'number' ? item.standardDiscount : parseFloat(String(item.standardDiscount))) : undefined,
-          freeQuantity: item.freeQuantity !== undefined && item.freeQuantity !== null ? (typeof item.freeQuantity === 'number' ? item.freeQuantity : parseFloat(String(item.freeQuantity))) : undefined,
-          gstRate: item.gstRate !== undefined && item.gstRate !== null ? (typeof item.gstRate === 'number' ? item.gstRate : parseFloat(String(item.gstRate))) : undefined,
-          discountPercentage: item.discountPercentage !== undefined && item.discountPercentage !== null ? (typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage))) : undefined,
-          qrCode: item.qrCode || undefined,
-        })) || []
-      } as PurchaseInvoice;
-    });
+    const invoices = snapshot.docs.map((docSnap) => mapPurchaseInvoiceDoc(docSnap));
     
     return invoices.sort((a, b) => {
       const dateA = a.invoiceDate instanceof Date ? a.invoiceDate : new Date(a.invoiceDate);
@@ -110,24 +76,6 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
 /** Unpaid / partial purchase bills only — for vendor ledger (not the full collection). */
 export const getPayablePurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
   const invoicesCol = collection(db, 'purchaseInvoices');
-  const mapDoc = (docSnap: { id: string; data: () => Record<string, unknown> }): PurchaseInvoice => {
-    const data = docSnap.data();
-    return {
-      id: docSnap.id,
-      ...data,
-      invoiceDate: (data.invoiceDate as { toDate?: () => Date })?.toDate?.() || new Date(),
-      createdAt: (data.createdAt as { toDate?: () => Date })?.toDate?.() || new Date(),
-      items:
-        (data.items as unknown[])?.map((item: unknown) => {
-          const it = item as Record<string, unknown>;
-          return {
-            ...it,
-            mfgDate: (it.mfgDate as { toDate?: () => Date })?.toDate?.() || undefined,
-            expiryDate: (it.expiryDate as { toDate?: () => Date })?.toDate?.() || undefined,
-          };
-        }) || [],
-    } as PurchaseInvoice;
-  };
 
   try {
     const [unpaidSnap, partialSnap] = await Promise.all([
@@ -136,7 +84,7 @@ export const getPayablePurchaseInvoices = async (): Promise<PurchaseInvoice[]> =
     ]);
     const byId = new Map<string, PurchaseInvoice>();
     for (const docSnap of [...unpaidSnap.docs, ...partialSnap.docs]) {
-      byId.set(docSnap.id, mapDoc(docSnap));
+      byId.set(docSnap.id, mapPurchaseInvoiceDoc(docSnap));
     }
     return [...byId.values()].sort((a, b) => {
       const dateA = a.invoiceDate instanceof Date ? a.invoiceDate : new Date(a.invoiceDate);
@@ -173,27 +121,10 @@ export const getPurchaseInvoicesByVendor = async (vendorId: string): Promise<Pur
 export const getPurchaseInvoiceById = async (invoiceId: string): Promise<PurchaseInvoice | null> => {
   const invoiceRef = doc(db, 'purchaseInvoices', invoiceId);
   const invoiceDoc = await getDoc(invoiceRef);
-  
+
   if (!invoiceDoc.exists()) return null;
-  
-  const data = invoiceDoc.data();
-  return {
-    id: invoiceDoc.id,
-    ...data,
-    invoiceDate: data.invoiceDate?.toDate() || new Date(),
-    createdAt: data.createdAt?.toDate() || new Date(),
-        items: data.items?.map((item: any) => ({
-          ...item,
-          mfgDate: item.mfgDate?.toDate() || undefined,
-          expiryDate: item.expiryDate?.toDate() || undefined,
-          mrp: item.mrp !== undefined && item.mrp !== null ? (typeof item.mrp === 'number' ? item.mrp : parseFloat(String(item.mrp))) : undefined,
-          standardDiscount: item.standardDiscount !== undefined && item.standardDiscount !== null ? (typeof item.standardDiscount === 'number' ? item.standardDiscount : parseFloat(String(item.standardDiscount))) : undefined,
-          freeQuantity: item.freeQuantity !== undefined && item.freeQuantity !== null ? (typeof item.freeQuantity === 'number' ? item.freeQuantity : parseFloat(String(item.freeQuantity))) : undefined,
-          gstRate: item.gstRate !== undefined && item.gstRate !== null ? (typeof item.gstRate === 'number' ? item.gstRate : parseFloat(String(item.gstRate))) : undefined,
-          discountPercentage: item.discountPercentage !== undefined && item.discountPercentage !== null ? (typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage))) : undefined,
-          qrCode: item.qrCode || undefined,
-        })) || []
-  } as PurchaseInvoice;
+
+  return mapPurchaseInvoiceDoc(invoiceDoc);
 };
 
 /** Resolve PI by Firestore id or human-readable invoice number (as stored on product demands). */
@@ -513,7 +444,8 @@ export const updatePurchaseInvoicePayment = async (
   paymentStatus: 'Paid' | 'Unpaid' | 'Partial',
   paymentMethod?: 'Cash' | 'Online',
   paidAmount?: number,
-  paymentDate?: Date
+  paymentDate?: Date,
+  transactionId?: string
 ) => {
   const invoiceRef = doc(db, 'purchaseInvoices', invoiceId);
   const snap = await getDoc(invoiceRef);
@@ -536,7 +468,11 @@ export const updatePurchaseInvoicePayment = async (
     updateData.paidAmount = 0;
     updateData.paidAt = deleteField();
     updateData.payments = deleteField();
+    updateData.transactionId = deleteField();
   } else {
+    if (transactionId !== undefined) {
+      updateData.transactionId = transactionId || null;
+    }
     const nextPaid =
       paymentStatus === 'Paid'
         ? paidAmount ?? total
@@ -550,6 +486,7 @@ export const updatePurchaseInvoicePayment = async (
         amount: creditAmount,
         paymentDate: when,
         paymentMethod: paymentMethod || (existing?.paymentMethod as VendorInvoicePayment['paymentMethod']),
+        transactionId: transactionId || undefined,
       };
       updateData.payments = [
         ...existingPayments,

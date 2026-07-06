@@ -31,7 +31,7 @@ export const useVendorPurchaseInvoices = (vendorId: string, options?: { enabled?
     queryKey: ['vendorPurchaseInvoices', vendorId],
     queryFn: () => getPurchaseInvoicesByVendor(vendorId),
     enabled: (options?.enabled ?? true) && !!vendorId,
-    staleTime: 2 * 60 * 1000,
+    staleTime: 0,
   });
 };
 
@@ -122,20 +122,37 @@ export const useUpdatePurchaseInvoicePayment = () => {
   return useMutation({
     mutationFn: ({
       invoiceId,
+      vendorId,
       paymentStatus,
       paymentMethod,
       paidAmount,
+      transactionId,
     }: {
       invoiceId: string;
+      vendorId?: string;
       paymentStatus: 'Paid' | 'Unpaid' | 'Partial';
       paymentMethod?: 'Cash' | 'Online';
       paidAmount?: number;
-    }) => updatePurchaseInvoicePayment(invoiceId, paymentStatus, paymentMethod, paidAmount),
+      transactionId?: string;
+    }) =>
+      updatePurchaseInvoicePayment(
+        invoiceId,
+        paymentStatus,
+        paymentMethod,
+        paidAmount,
+        undefined,
+        transactionId
+      ),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
       queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
+      if (variables.vendorId) {
+        queryClient.invalidateQueries({ queryKey: ['vendorPurchaseInvoices', variables.vendorId] });
+      } else {
+        queryClient.invalidateQueries({ queryKey: ['vendorPurchaseInvoices'] });
+      }
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
     },
   });

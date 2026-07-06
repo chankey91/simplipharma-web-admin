@@ -1,7 +1,7 @@
 import { endOfDay, startOfDay } from 'date-fns';
 import { PurchaseInvoice, Vendor, VendorInvoicePayment } from '../types';
 
-export type VendorLedgerVchType = 'Purchase' | 'Receipt' | 'Opening';
+export type VendorLedgerVchType = 'Purchase' | 'Payment' | 'Opening';
 
 export type VendorLedgerEntry = {
   date: Date;
@@ -19,6 +19,7 @@ export type VendorLedgerResult = {
   vendor: Vendor | null;
   vendorName: string;
   vendorAddress: string;
+  vendorGstNumber: string;
   fromDate: Date;
   toDate: Date;
   openingBalance: number;
@@ -81,6 +82,20 @@ export function isPayablePurchaseInvoice(inv: PurchaseInvoice): boolean {
   return ps === 'Unpaid' || ps === 'Partial' || !ps;
 }
 
+function isCashPayment(method?: string): boolean {
+  const m = (method || 'Cash').toUpperCase();
+  return m === 'CASH';
+}
+
+/** Payment ledger Vch No.: online → transaction id; cash → — */
+export function resolvePaymentVchNo(
+  pay: VendorInvoicePayment,
+  invoice?: Pick<PurchaseInvoice, 'transactionId' | 'invoiceNumber' | 'id'>
+): string {
+  if (isCashPayment(pay.paymentMethod)) return '-';
+  return pay.transactionId || invoice?.transactionId || '-';
+}
+
 /** Resolve credit lines from stored payments or synthesize from paidAmount for legacy data. */
 export function extractVendorPaymentCredits(inv: PurchaseInvoice): VendorInvoicePayment[] {
   if (Array.isArray(inv.payments) && inv.payments.length > 0) {
@@ -101,6 +116,7 @@ export function extractVendorPaymentCredits(inv: PurchaseInvoice): VendorInvoice
       amount: paid,
       paymentDate,
       paymentMethod: inv.paymentMethod,
+      transactionId: inv.transactionId,
     },
   ];
 }
@@ -164,12 +180,13 @@ export function buildVendorLedger(
         openingCredits += amt;
       } else if (inRange(payDate, from, to)) {
         const { text, bold } = paymentParticulars(pay.paymentMethod);
+        const invoiceRef = inv.invoiceNumber || inv.id;
         periodLines.push({
           date: payDate,
           particulars: text,
-          particularsBold: bold,
-          vchType: 'Receipt',
-          vchNo: pay.transactionId || pay.id || inv.invoiceNumber,
+          particularsBold: `${bold} (${invoiceRef})`,
+          vchType: 'Payment',
+          vchNo: resolvePaymentVchNo(pay, inv),
           debit: 0,
           credit: amt,
         });
@@ -219,6 +236,7 @@ export function buildVendorLedger(
     vendor,
     vendorName,
     vendorAddress: vendor?.address?.trim() || '—',
+    vendorGstNumber: vendor?.gstNumber?.trim() || '—',
     fromDate: from,
     toDate: to,
     openingBalance,

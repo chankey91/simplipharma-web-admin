@@ -53,6 +53,7 @@ function buildLedgerHtml(ledger: VendorLedgerResult): string {
     <div class="center subtitle">${ledger.vendorName}</div>
     <div class="center">Ledger Account</div>
     <div class="center" style="margin-top:4px;">${ledger.vendorAddress}</div>
+    ${ledger.vendorGstNumber !== '—' ? `<div class="center" style="margin-top:4px;">GSTIN: ${ledger.vendorGstNumber}</div>` : ''}
     <div class="center period">${periodFmt(ledger.fromDate)} to ${periodFmt(ledger.toDate)}</div>
     <table>
       <thead>
@@ -115,6 +116,7 @@ export function downloadVendorLedgerExcel(ledger: VendorLedgerResult): void {
     [ledger.vendorName],
     ['Ledger Account'],
     [ledger.vendorAddress],
+    ...(ledger.vendorGstNumber !== '—' ? [[`GSTIN: ${ledger.vendorGstNumber}`]] : []),
     [`${periodFmt(ledger.fromDate)} to ${periodFmt(ledger.toDate)}`],
     [],
     ['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Debit', 'Credit', 'Balance'],
