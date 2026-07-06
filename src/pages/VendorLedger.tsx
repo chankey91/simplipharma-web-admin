@@ -53,7 +53,7 @@ export const VendorLedgerPage: React.FC = () => {
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
 
-  const { data: invoices, isLoading: invoicesLoading, isFetching } = useVendorPurchaseInvoices(
+  const { data: invoices, isLoading: invoicesLoading, isFetching, refetch } = useVendorPurchaseInvoices(
     vendorId,
     { enabled: !!vendorId && generated }
   );
@@ -96,6 +96,9 @@ export const VendorLedgerPage: React.FC = () => {
       return;
     }
     setGenerated(true);
+    if (generated) {
+      void refetch();
+    }
   };
 
   const handlePdf = async () => {
@@ -245,6 +248,11 @@ export const VendorLedgerPage: React.FC = () => {
             {ledger.vendorAddress !== '—' && (
               <Typography variant="caption" align="center" display="block" color="text.secondary">
                 {ledger.vendorAddress}
+              </Typography>
+            )}
+            {ledger.vendorGstNumber !== '—' && (
+              <Typography variant="caption" align="center" display="block" color="text.secondary">
+                GSTIN: {ledger.vendorGstNumber}
               </Typography>
             )}
             <Grid container spacing={2} sx={{ mt: 2 }}>

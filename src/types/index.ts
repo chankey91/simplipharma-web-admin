@@ -316,6 +316,7 @@ export interface PurchaseInvoice {
   paymentStatus: PaymentStatus;
   paymentMethod?: PaymentMethod;
   paidAmount?: number;
+  transactionId?: string;
   /** Last / latest payment date (when marked paid or partial). */
   paidAt?: Date | any;
   /** Individual payment vouchers for vendor ledger credits. */

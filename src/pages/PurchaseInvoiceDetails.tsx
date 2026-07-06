@@ -25,6 +25,7 @@ import {
   CircularProgress,
   ToggleButtonGroup,
   ToggleButton,
+  InputAdornment,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -53,7 +54,9 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { alert, confirm, prompt } = useAppDialog();
   const [paymentDialog, setPaymentDialog] = useState({
     open: false,
+    amount: '',
     method: 'Cash' as 'Cash' | 'Online',
+    transactionId: '',
   });
   const [items, setItems] = useState<PurchaseInvoiceItem[]>([]);
   const [itemDialog, setItemDialog] = useState<{ open: boolean; itemIndex: number | null }>({
@@ -265,6 +268,9 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const displayDiscount = recalculatedDiscount > 0 ? recalculatedDiscount : (invoice.discount || 0);
   const displayTaxAmount = recalculatedTaxAmount > 0 ? recalculatedTaxAmount : invoice.taxAmount;
   const calculatedTotal = displaySubTotal - displayDiscount + displayTaxAmount;
+  const invoiceTotal = invoice.totalAmount ?? grandTotal;
+  const paidAmount = invoice.paidAmount ?? 0;
+  const dueAmount = Math.max(0, invoiceTotal - paidAmount);
 
   return (
     <Box>
@@ -470,23 +476,61 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                   <Typography variant="subtitle1" fontWeight="600">Payment</Typography>
                   <Chip
                     size="small"
-                    label={`${invoice.paymentStatus || 'Unpaid'}${invoice.paymentMethod ? ` · ${invoice.paymentMethod}` : ''}`}
+                    label={invoice.paymentStatus || 'Unpaid'}
                     color={
                       invoice.paymentStatus === 'Paid' ? 'success' :
                       invoice.paymentStatus === 'Partial' ? 'warning' : 'error'
                     }
                   />
                 </Box>
-                {invoice.paymentStatus !== 'Paid' ? (
+
+                <Box sx={{ bgcolor: 'action.hover', borderRadius: 1, p: 1.5, mb: 2 }}>
+                  <Box display="flex" justifyContent="space-between" mb={0.5}>
+                    <Typography variant="body2" color="textSecondary">Invoice Total</Typography>
+                    <Typography variant="body2" fontWeight="bold">₹{invoiceTotal.toFixed(2)}</Typography>
+                  </Box>
+                  <Box display="flex" justifyContent="space-between" mb={0.5}>
+                    <Typography variant="body2" color="textSecondary">Paid</Typography>
+                    <Typography variant="body2" color="success.main">₹{paidAmount.toFixed(2)}</Typography>
+                  </Box>
+                  <Box display="flex" justifyContent="space-between">
+                    <Typography variant="body2" color="textSecondary">Due</Typography>
+                    <Typography variant="body2" fontWeight="bold" color={dueAmount > 0 ? 'error.main' : 'success.main'}>
+                      ₹{dueAmount.toFixed(2)}
+                    </Typography>
+                  </Box>
+                  {invoice.paymentMethod && (
+                    <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+                      Method: {invoice.paymentMethod}
+                    </Typography>
+                  )}
+                  {invoice.transactionId && (
+                    <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+                      Txn ID: {invoice.transactionId}
+                    </Typography>
+                  )}
+                </Box>
+
+                {(invoice.paymentStatus === 'Unpaid' || !invoice.paymentStatus || invoice.paymentStatus === 'Partial') ? (
                   <Button
                     fullWidth
                     variant="contained"
                     color="primary"
                     startIcon={<Payment />}
-                    onClick={() => setPaymentDialog({ open: true, method: 'Cash' })}
+                    onClick={() => {
+                      setPaymentDialog({
+                        open: true,
+                        amount: String(dueAmount > 0 ? dueAmount : invoiceTotal),
+                        method: (invoice.paymentMethod === 'Cash' || invoice.paymentMethod === 'Online'
+                          ? invoice.paymentMethod
+                          : 'Cash') as 'Cash' | 'Online',
+                        transactionId: invoice.transactionId || '',
+                      });
+                    }}
                     disabled={updatePaymentMutation.isPending}
+                    sx={{ mb: 1 }}
                   >
-                    Mark as Paid
+                    Record Payment
                   </Button>
                 ) : (
                   <Button
@@ -496,6 +540,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                     color="inherit"
                     onClick={() => updatePaymentMutation.mutate({
                       invoiceId: invoice.id,
+                      vendorId: invoice.vendorId,
                       paymentStatus: 'Unpaid',
                     })}
                     disabled={updatePaymentMutation.isPending}
@@ -647,54 +692,123 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
 
       <Dialog
         open={paymentDialog.open}
-        onClose={() => setPaymentDialog({ ...paymentDialog, open: false })}
+        onClose={() => setPaymentDialog({ ...paymentDialog, open: false, transactionId: '' })}
         maxWidth="xs"
         fullWidth
+        PaperProps={{ sx: { borderRadius: 2 } }}
       >
-        <DialogTitle>Mark purchase invoice as paid</DialogTitle>
+        <DialogTitle sx={{ pb: 0 }}>Record Payment</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Total: ₹{grandTotal.toFixed(2)}
-          </Typography>
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            value={paymentDialog.method}
-            onChange={(_, value) => {
-              if (value) setPaymentDialog({ ...paymentDialog, method: value });
-            }}
-          >
-            <ToggleButton value="Cash" sx={{ py: 1.25 }}>
-              <AttachMoney sx={{ mr: 0.5, fontSize: 18 }} /> Cash
-            </ToggleButton>
-            <ToggleButton value="Online" sx={{ py: 1.25 }}>
-              <Payment sx={{ mr: 0.5, fontSize: 18 }} /> Online
-            </ToggleButton>
-          </ToggleButtonGroup>
+          <Box sx={{ pt: 2 }}>
+            <TextField
+              fullWidth
+              label="Amount"
+              type="number"
+              value={paymentDialog.amount}
+              onChange={(e) => setPaymentDialog({ ...paymentDialog, amount: e.target.value })}
+              InputProps={{
+                startAdornment: <InputAdornment position="start">₹</InputAdornment>,
+                inputProps: { min: 0, max: dueAmount, step: 0.01 },
+              }}
+              helperText={`Due: ₹${dueAmount.toFixed(2)} · Invoice total: ₹${invoiceTotal.toFixed(2)}`}
+              sx={{ mb: 2 }}
+            />
+            <Typography variant="subtitle2" color="textSecondary" gutterBottom sx={{ mb: 1 }}>
+              Payment method
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              fullWidth
+              value={paymentDialog.method}
+              onChange={(_, value) => {
+                if (value) setPaymentDialog({ ...paymentDialog, method: value });
+              }}
+              sx={{ mb: 1 }}
+            >
+              <ToggleButton value="Cash" sx={{ py: 1.25 }}>
+                <AttachMoney sx={{ mr: 0.5, fontSize: 18 }} /> Cash
+              </ToggleButton>
+              <ToggleButton value="Online" sx={{ py: 1.25 }}>
+                <Payment sx={{ mr: 0.5, fontSize: 18 }} /> Online
+              </ToggleButton>
+            </ToggleButtonGroup>
+            {paymentDialog.method === 'Online' && (
+              <TextField
+                fullWidth
+                label="Transaction ID"
+                placeholder="e.g. UPI ref, bank transfer ref"
+                value={paymentDialog.transactionId}
+                onChange={(e) => setPaymentDialog({ ...paymentDialog, transactionId: e.target.value })}
+                helperText="Optional - for UPI, bank transfer, or card payment reference"
+                sx={{ mb: 2 }}
+              />
+            )}
+            <Box display="flex" gap={1} mt={2}>
+              <Button
+                fullWidth
+                variant="outlined"
+                size="small"
+                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String(dueAmount) })}
+              >
+                Pay full due
+              </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                size="small"
+                onClick={() =>
+                  setPaymentDialog({
+                    ...paymentDialog,
+                    amount: String(Math.min(dueAmount, invoiceTotal * 0.5)),
+                  })
+                }
+              >
+                50%
+              </Button>
+            </Box>
+          </Box>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setPaymentDialog({ ...paymentDialog, open: false })}>Cancel</Button>
+          <Button
+            onClick={() =>
+              setPaymentDialog({ open: false, amount: '', method: 'Cash', transactionId: '' })
+            }
+          >
+            Cancel
+          </Button>
           <Button
             variant="contained"
-            disabled={updatePaymentMutation.isPending}
+            color="primary"
+            disabled={
+              !paymentDialog.amount ||
+              parseFloat(paymentDialog.amount) <= 0 ||
+              parseFloat(paymentDialog.amount) > dueAmount + 0.01 ||
+              updatePaymentMutation.isPending
+            }
             onClick={async () => {
               if (!invoice) return;
+              const paymentNow = parseFloat(paymentDialog.amount) || 0;
+              const nextPaid = Math.min(invoiceTotal, paidAmount + paymentNow);
+              const isPaid = nextPaid >= invoiceTotal - 0.01;
               try {
                 await updatePaymentMutation.mutateAsync({
                   invoiceId: invoice.id,
-                  paymentStatus: 'Paid',
+                  vendorId: invoice.vendorId,
+                  paymentStatus: isPaid ? 'Paid' : 'Partial',
                   paymentMethod: paymentDialog.method,
-                  paidAmount: grandTotal,
+                  paidAmount: nextPaid,
+                  transactionId:
+                    paymentDialog.method === 'Online' ? paymentDialog.transactionId : undefined,
                 });
-                setPaymentDialog({ ...paymentDialog, open: false });
-                await alert('Payment marked as paid.', { severity: 'success' });
+                setPaymentDialog({ open: false, amount: '', method: 'Cash', transactionId: '' });
+                await alert('Payment recorded.', { severity: 'success' });
               } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : 'Unknown error';
-                await alert(`Failed to update payment: ${message}`, { severity: 'error' });
+                await alert(`Failed to record payment: ${message}`, { severity: 'error' });
               }
             }}
           >
-            {updatePaymentMutation.isPending ? <CircularProgress size={24} /> : 'Confirm Paid'}
+            {updatePaymentMutation.isPending ? <CircularProgress size={24} /> : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>
