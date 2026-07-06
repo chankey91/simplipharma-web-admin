@@ -1,8 +1,58 @@
 import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where, deleteField } from './firebase';
-import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem } from '../types';
+import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem, VendorInvoicePayment } from '../types';
 import { addStockBatch } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 import { attachStandardDiscountToBatchData } from '../utils/orderFulfillmentDiscount';
+
+function mapVendorPayments(raw: unknown): VendorInvoicePayment[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.map((p, i) => {
+    const row = p as Record<string, unknown>;
+    return {
+      id: String(row.id ?? `pay-${i}`),
+      amount: Number(row.amount ?? 0),
+      paymentDate:
+        (row.paymentDate as { toDate?: () => Date })?.toDate?.() ||
+        (row.paymentDate ? new Date(row.paymentDate as string | number | Date) : new Date()),
+      paymentMethod: row.paymentMethod as VendorInvoicePayment['paymentMethod'],
+      transactionId: row.transactionId ? String(row.transactionId) : undefined,
+      notes: row.notes ? String(row.notes) : undefined,
+    };
+  });
+}
+
+function mapPurchaseInvoiceDoc(docSnap: { id: string; data: () => Record<string, unknown> }): PurchaseInvoice {
+  const data = docSnap.data();
+  return {
+    id: docSnap.id,
+    ...data,
+    invoiceDate: (data.invoiceDate as { toDate?: () => Date })?.toDate?.() || new Date(),
+    createdAt: (data.createdAt as { toDate?: () => Date })?.toDate?.() || new Date(),
+    paidAt: (data.paidAt as { toDate?: () => Date })?.toDate?.() || undefined,
+    payments: mapVendorPayments(data.payments),
+    items:
+      (data.items as unknown[])?.map((item: unknown) => {
+        const it = item as Record<string, unknown>;
+        return {
+          ...it,
+          mfgDate: (it.mfgDate as { toDate?: () => Date })?.toDate?.() || undefined,
+          expiryDate: (it.expiryDate as { toDate?: () => Date })?.toDate?.() || undefined,
+          mrp:
+            it.mrp !== undefined && it.mrp !== null
+              ? typeof it.mrp === 'number'
+                ? it.mrp
+                : parseFloat(String(it.mrp))
+              : undefined,
+          standardDiscount:
+            it.standardDiscount !== undefined && it.standardDiscount !== null
+              ? typeof it.standardDiscount === 'number'
+                ? it.standardDiscount
+                : parseFloat(String(it.standardDiscount))
+              : undefined,
+        };
+      }) || [],
+  } as PurchaseInvoice;
+}
 
 export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
   const invoicesCol = collection(db, 'purchaseInvoices');
@@ -97,6 +147,26 @@ export const getPayablePurchaseInvoices = async (): Promise<PurchaseInvoice[]> =
     console.warn('getPayablePurchaseInvoices query failed, falling back to full scan:', error);
     const all = await getAllPurchaseInvoices();
     return all.filter((inv) => inv.paymentStatus === 'Unpaid' || inv.paymentStatus === 'Partial' || !inv.paymentStatus);
+  }
+};
+
+/** All purchase invoices for one vendor (for vendor ledger). */
+export const getPurchaseInvoicesByVendor = async (vendorId: string): Promise<PurchaseInvoice[]> => {
+  const invoicesCol = collection(db, 'purchaseInvoices');
+  try {
+    const q = query(invoicesCol, where('vendorId', '==', vendorId), orderBy('invoiceDate', 'asc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((docSnap) => mapPurchaseInvoiceDoc(docSnap));
+  } catch (error) {
+    console.warn('getPurchaseInvoicesByVendor query failed, falling back to full scan:', error);
+    const all = await getAllPurchaseInvoices();
+    return all
+      .filter((inv) => inv.vendorId === vendorId)
+      .sort((a, b) => {
+        const dateA = a.invoiceDate instanceof Date ? a.invoiceDate : new Date(a.invoiceDate);
+        const dateB = b.invoiceDate instanceof Date ? b.invoiceDate : new Date(b.invoiceDate);
+        return dateA.getTime() - dateB.getTime();
+      });
   }
 };
 
@@ -442,9 +512,15 @@ export const updatePurchaseInvoicePayment = async (
   invoiceId: string,
   paymentStatus: 'Paid' | 'Unpaid' | 'Partial',
   paymentMethod?: 'Cash' | 'Online',
-  paidAmount?: number
+  paidAmount?: number,
+  paymentDate?: Date
 ) => {
   const invoiceRef = doc(db, 'purchaseInvoices', invoiceId);
+  const snap = await getDoc(invoiceRef);
+  const existing = snap.exists() ? snap.data() : null;
+  const total = typeof existing?.totalAmount === 'number' ? existing.totalAmount : 0;
+  const prevPaid = typeof existing?.paidAmount === 'number' ? existing.paidAmount : 0;
+
   const updateData: Record<string, unknown> = { paymentStatus };
   if (paymentMethod) {
     updateData.paymentMethod = paymentMethod;
@@ -453,17 +529,37 @@ export const updatePurchaseInvoicePayment = async (
     updateData.paidAmount = paidAmount;
   }
   if (paymentStatus === 'Paid' && paidAmount === undefined) {
-    const snap = await getDoc(invoiceRef);
-    if (snap.exists()) {
-      const total = snap.data().totalAmount;
-      if (typeof total === 'number') {
-        updateData.paidAmount = total;
-      }
-    }
+    updateData.paidAmount = total;
   }
   if (paymentStatus === 'Unpaid') {
     updateData.paymentMethod = deleteField();
     updateData.paidAmount = 0;
+    updateData.paidAt = deleteField();
+    updateData.payments = deleteField();
+  } else {
+    const nextPaid =
+      paymentStatus === 'Paid'
+        ? paidAmount ?? total
+        : paidAmount ?? prevPaid;
+    const creditAmount = Math.max(0, nextPaid - prevPaid);
+    if (creditAmount > 0) {
+      const when = paymentDate ?? new Date();
+      const existingPayments = mapVendorPayments(existing?.payments) ?? [];
+      const voucher: VendorInvoicePayment = {
+        id: `vip-${Date.now()}`,
+        amount: creditAmount,
+        paymentDate: when,
+        paymentMethod: paymentMethod || (existing?.paymentMethod as VendorInvoicePayment['paymentMethod']),
+      };
+      updateData.payments = [
+        ...existingPayments,
+        {
+          ...voucher,
+          paymentDate: Timestamp.fromDate(when),
+        },
+      ];
+      updateData.paidAt = Timestamp.fromDate(when);
+    }
   }
   await updateDoc(invoiceRef, updateData);
 };
