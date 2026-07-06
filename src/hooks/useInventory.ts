@@ -14,7 +14,11 @@ import { Medicine, StockBatch } from '../types';
 export const useMedicines = () => {
   return useQuery({
     queryKey: ['medicines'],
-    queryFn: getAllMedicines
+    queryFn: getAllMedicines,
+    // Reference data: rarely changes and every mutation invalidates ['medicines'],
+    // so we can safely keep it fresh for longer to avoid re-reading the whole
+    // inventory collection on each navigation.
+    staleTime: 15 * 60 * 1000,
   });
 };
 

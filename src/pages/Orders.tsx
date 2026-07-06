@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -26,15 +26,19 @@ import {
   DialogContent,
   DialogActions,
   Pagination,
+  LinearProgress,
+  Alert,
 } from '@mui/material';
 import {
   Search,
   Visibility,
   Cancel,
   Download,
+  CloudSync,
 } from '@mui/icons-material';
-import { useOrders, useCancelOrder } from '../hooks/useOrders';
+import { useOrders, useOrdersSearch, useCancelOrder } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
+import { getOrdersByStatus } from '../services/orders';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
@@ -46,24 +50,62 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { useAppDialog } from '../context/AppDialogProvider';
+import type { OrderSearchParams } from '../services/orderSearch';
+import { reindexOrdersTypesense } from '../services/orderSearch';
+
+const ROWS_PER_PAGE = 10;
+
+/** Normalized row shape rendered by the table, sourced from either Typesense or the fallback full list. */
+interface OrderRow {
+  id: string;
+  orderDate: Date;
+  storeName: string;
+  retailerEmail: string;
+  itemCount: number;
+  totalAmount: number;
+  status: OrderStatus;
+}
+
+/** Map the table's sort column id to the Typesense-indexed field name. */
+const sortKeyToField = (key: string): OrderSearchParams['sortField'] => {
+  switch (key) {
+    case 'id':
+      return 'docId';
+    case 'retailer':
+      return 'retailerEmail';
+    case 'storeName':
+      return 'retailerName';
+    case 'items':
+      return 'itemCount';
+    case 'amount':
+      return 'amountSortable';
+    case 'status':
+      return 'status';
+    case 'orderDate':
+    default:
+      return 'orderDate';
+  }
+};
 
 export const OrdersPage: React.FC = () => {
-  const { data: orders, isLoading } = useOrders();
-  const { data: stores } = useStores();
   const cancelOrderMutation = useCancelOrder();
   const navigate = useNavigate();
-  const { alert, confirm, prompt } = useAppDialog();
+  const { alert } = useAppDialog();
+  const { data: stores } = useStores();
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
   const [page, setPage] = useState(1);
-  const [rowsPerPage] = useState(10);
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingProductSummary, setIsExportingProductSummary] = useState(false);
+  const [typesenseDisabled, setTypesenseDisabled] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMessage, setReindexMessage] = useState<string | null>(null);
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
-    reason: ''
+    reason: '',
   });
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
@@ -79,40 +121,71 @@ export const OrdersPage: React.FC = () => {
     return map;
   }, [stores]);
 
-  const getOrderStoreName = (order: Order) =>
-    order.retailerName?.trim() ||
-    storeNameByRetailerId.get(order.retailerId) ||
+  const resolveStoreName = (retailerName?: string, retailerId?: string) =>
+    retailerName?.trim() ||
+    (retailerId ? storeNameByRetailerId.get(retailerId) : undefined) ||
     'N/A';
 
-  const filteredOrders = orders?.filter(order => {
-    const storeName = getOrderStoreName(order);
-    const matchesSearch = 
-      order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      storeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.retailerEmail?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.medicines.some(m => m.name.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const matchesStatus = statusFilter === 'All' || order.status === statusFilter;
-    
-    return matchesSearch && matchesStatus;
-  }) || [];
+  // Debounce the search term so we don't fire a Typesense query on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedTerm(searchTerm.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
-  const sortedOrders = useMemo(() => {
-    const list = [...filteredOrders];
-    list.sort((a, b) => {
+  // Primary path: server-side search/filter/sort/pagination via Typesense.
+  const searchParams: OrderSearchParams = {
+    query: debouncedTerm,
+    status: statusFilter,
+    sortField: sortKeyToField(sortKey),
+    sortOrder: sortDirection,
+    page,
+    perPage: ROWS_PER_PAGE,
+  };
+  const {
+    data: searchData,
+    isError: searchErrored,
+    isLoading: searchLoading,
+    isFetching: searchFetching,
+  } = useOrdersSearch(searchParams, { enabled: !typesenseDisabled });
+
+  // If Typesense is unreachable/misconfigured, permanently fall back for this session.
+  useEffect(() => {
+    if (searchErrored) setTypesenseDisabled(true);
+  }, [searchErrored]);
+
+  // Fallback path: load the full collection and filter/sort/paginate in memory
+  // (only fetched when Typesense is unavailable).
+  const { data: allOrders, isLoading: allLoading } = useOrders({ enabled: typesenseDisabled });
+
+  const fallbackSorted = useMemo(() => {
+    if (!typesenseDisabled) return [];
+    const term = debouncedTerm.toLowerCase();
+    const filtered = (allOrders ?? []).filter((order) => {
+      const matchesSearch =
+        !term ||
+        order.id.toLowerCase().includes(term) ||
+        resolveStoreName(order.retailerName, order.retailerId).toLowerCase().includes(term) ||
+        order.retailerEmail?.toLowerCase().includes(term) ||
+        order.medicines.some((m) => m.name.toLowerCase().includes(term));
+      const matchesStatus = statusFilter === 'All' || order.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
       switch (sortKey) {
         case 'id':
           return applyDirection(compareAsc(a.id, b.id), sortDirection);
-        case 'orderDate':
-          return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), sortDirection);
-        case 'storeName':
-          return applyDirection(
-            compareAsc(getOrderStoreName(a).toLowerCase(), getOrderStoreName(b).toLowerCase()),
-            sortDirection
-          );
         case 'retailer':
           return applyDirection(
             compareAsc((a.retailerEmail || '').toLowerCase(), (b.retailerEmail || '').toLowerCase()),
+            sortDirection
+          );
+        case 'storeName':
+          return applyDirection(
+            compareAsc(
+              resolveStoreName(a.retailerName, a.retailerId).toLowerCase(),
+              resolveStoreName(b.retailerName, b.retailerId).toLowerCase()
+            ),
             sortDirection
           );
         case 'items':
@@ -124,32 +197,68 @@ export const OrdersPage: React.FC = () => {
         }
         case 'status':
           return applyDirection(compareAsc(a.status, b.status), sortDirection);
+        case 'orderDate':
         default:
-          return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), 'desc');
+          return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), sortDirection);
       }
     });
-    return list;
-  }, [filteredOrders, sortKey, sortDirection, storeNameByRetailerId]);
+    return sorted;
+  }, [typesenseDisabled, allOrders, debouncedTerm, statusFilter, sortKey, sortDirection, storeNameByRetailerId]);
+
+  const fallbackStatusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const o of allOrders ?? []) {
+      counts[o.status] = (counts[o.status] ?? 0) + 1;
+    }
+    return counts;
+  }, [allOrders]);
+
+  // Normalized view model shared by both paths.
+  const rows: OrderRow[] = useMemo(() => {
+    if (typesenseDisabled) {
+      return fallbackSorted
+        .slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE)
+        .map((o) => ({
+          id: o.id,
+          orderDate: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
+          storeName: resolveStoreName(o.retailerName, o.retailerId),
+          retailerEmail: o.retailerEmail || '',
+          itemCount: o.medicines.length,
+          totalAmount: o.totalAmount,
+          status: o.status,
+        }));
+    }
+    return (searchData?.orders ?? []).map((o) => ({
+      id: o.id,
+      orderDate: new Date(o.orderDate),
+      storeName: o.retailerName?.trim() || 'N/A',
+      retailerEmail: o.retailerEmail || '',
+      itemCount: o.itemCount,
+      totalAmount: o.totalAmount,
+      status: o.status,
+    }));
+  }, [typesenseDisabled, fallbackSorted, page, searchData, storeNameByRetailerId]);
+
+  const statusCounts = typesenseDisabled ? fallbackStatusCounts : searchData?.statusCounts ?? {};
+  const totalCount = typesenseDisabled ? fallbackSorted.length : searchData?.found ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / ROWS_PER_PAGE));
+
+  const ordersByStatus = {
+    Pending: statusCounts['Pending'] ?? 0,
+    Fulfillment: statusCounts['Order Fulfillment'] ?? 0,
+    Transit: statusCounts['In Transit'] ?? 0,
+    Delivered: statusCounts['Delivered'] ?? 0,
+    Cancelled: statusCounts['Cancelled'] ?? 0,
+  };
+  const pendingOrderCount = ordersByStatus.Pending;
 
   const requestSortResetPage = (key: string) => {
     requestSort(key);
     setPage(1);
   };
 
-  // Pagination
-  const totalPages = Math.ceil(sortedOrders.length / rowsPerPage);
-  const paginatedOrders = sortedOrders.slice((page - 1) * rowsPerPage, page * rowsPerPage);
-
-  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
+  const handlePageChange = (_event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
-  };
-
-  const ordersByStatus = {
-    Pending: orders?.filter(o => o.status === 'Pending').length || 0,
-    Fulfillment: orders?.filter(o => o.status === 'Order Fulfillment').length || 0,
-    Transit: orders?.filter(o => o.status === 'In Transit').length || 0,
-    Delivered: orders?.filter(o => o.status === 'Delivered').length || 0,
-    Cancelled: orders?.filter(o => o.status === 'Cancelled').length || 0,
   };
 
   const handleCancelOrder = async () => {
@@ -160,7 +269,7 @@ export const OrdersPage: React.FC = () => {
       await cancelOrderMutation.mutateAsync({
         orderId: cancelDialog.orderId,
         cancelledBy: user.uid,
-        reason: cancelDialog.reason
+        reason: cancelDialog.reason,
       });
       setCancelDialog({ open: false, orderId: '', reason: '' });
     } catch (error) {
@@ -179,18 +288,14 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
-  const pendingOrderCount = orders?.filter((o) => o.status === 'Pending').length ?? 0;
-
   const handleExportPendingOrders = async () => {
-    const pendingOrders = orders?.filter(o => o.status === 'Pending') || [];
-    
-    if (pendingOrders.length === 0) {
-      await alert('No pending orders to export', { severity: 'warning' });
-      return;
-    }
-
     setIsExporting(true);
     try {
+      const pendingOrders = await getOrdersByStatus('Pending');
+      if (pendingOrders.length === 0) {
+        await alert('No pending orders to export', { severity: 'warning' });
+        return;
+      }
       await exportPendingOrdersByStore(pendingOrders, stores || []);
       await alert('Excel file generated successfully!', { severity: 'success' });
     } catch (error: any) {
@@ -202,14 +307,14 @@ export const OrdersPage: React.FC = () => {
   };
 
   const handleExportPendingProductSummary = async () => {
-    if (pendingOrderCount === 0) {
-      await alert('No pending orders to export', { severity: 'warning' });
-      return;
-    }
-
     setIsExportingProductSummary(true);
     try {
-      await exportPendingOrdersProductSummary(orders || []);
+      const pendingOrders = await getOrdersByStatus('Pending');
+      if (pendingOrders.length === 0) {
+        await alert('No pending orders to export', { severity: 'warning' });
+        return;
+      }
+      await exportPendingOrdersProductSummary(pendingOrders);
       await alert('Product summary Excel file generated successfully!', { severity: 'success' });
     } catch (error: unknown) {
       console.error('Error exporting product summary:', error);
@@ -220,15 +325,55 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
-  if (isLoading) {
+  const handleReindex = async () => {
+    setReindexing(true);
+    setReindexMessage(null);
+    try {
+      const d = await reindexOrdersTypesense();
+      setReindexMessage(
+        `Search index updated: ${d.indexed ?? 0} documents indexed (${d.totalDocs ?? 0} Firestore docs scanned).`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setReindexMessage(`Search index rebuild failed: ${msg}.`);
+    } finally {
+      setReindexing(false);
+    }
+  };
+
+  // While Typesense is erroring but before the fallback has engaged, keep showing
+  // the loader instead of a flash of "No orders found".
+  const initialLoading = typesenseDisabled ? allLoading : searchLoading || searchErrored;
+  if (initialLoading) {
     return <Loading message="Loading orders..." />;
   }
+
+  const isBusy = !typesenseDisabled && searchFetching;
 
   return (
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Orders Management</Typography>
+        <Button
+          variant="outlined"
+          color="secondary"
+          startIcon={<CloudSync />}
+          onClick={() => void handleReindex()}
+          disabled={reindexing}
+        >
+          {reindexing ? 'Indexing…' : 'Rebuild search index'}
+        </Button>
       </Box>
+
+      {reindexMessage && (
+        <Alert
+          severity={reindexMessage.startsWith('Search index updated') ? 'success' : 'error'}
+          onClose={() => setReindexMessage(null)}
+          sx={{ mb: 2 }}
+        >
+          {reindexMessage}
+        </Alert>
+      )}
 
       {/* Statistics Cards */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
@@ -257,7 +402,7 @@ export const OrdersPage: React.FC = () => {
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value);
-            setPage(1); // Reset to first page when search changes
+            setPage(1);
           }}
           sx={{ flexGrow: 1 }}
           InputProps={{
@@ -275,7 +420,7 @@ export const OrdersPage: React.FC = () => {
             label="Status"
             onChange={(e) => {
               setStatusFilter(e.target.value as any);
-              setPage(1); // Reset to first page when filter changes
+              setPage(1);
             }}
           >
             <MenuItem value="All">All Statuses</MenuItem>
@@ -308,6 +453,7 @@ export const OrdersPage: React.FC = () => {
 
       {/* Orders Table */}
       <TableContainer component={Paper}>
+        {isBusy && <LinearProgress />}
         <Table>
           <TableHead>
             <TableRow>
@@ -322,24 +468,20 @@ export const OrdersPage: React.FC = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {sortedOrders.length === 0 ? (
+            {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={8} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              paginatedOrders.map((order) => (
+              rows.map((order) => (
                 <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
                   <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
-                  <TableCell>
-                    {order.orderDate instanceof Date
-                      ? format(order.orderDate, 'MMM dd, yyyy')
-                      : format(new Date(order.orderDate), 'MMM dd, yyyy')}
-                  </TableCell>
-                  <TableCell>{getOrderStoreName(order)}</TableCell>
+                  <TableCell>{format(order.orderDate, 'MMM dd, yyyy')}</TableCell>
+                  <TableCell>{order.storeName}</TableCell>
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
-                  <TableCell>{order.medicines.length} items</TableCell>
+                  <TableCell>{order.itemCount} items</TableCell>
                   <TableCell>
                     {order.status === 'Pending' ? (
                       <Typography variant="caption" color="textSecondary">-</Typography>
@@ -387,7 +529,7 @@ export const OrdersPage: React.FC = () => {
       </TableContainer>
 
       {/* Pagination */}
-      {sortedOrders.length > 0 && (
+      {totalCount > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
@@ -398,7 +540,7 @@ export const OrdersPage: React.FC = () => {
             showLastButton
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, sortedOrders.length)} of {sortedOrders.length} orders
+            Showing {(page - 1) * ROWS_PER_PAGE + 1} to {Math.min(page * ROWS_PER_PAGE, totalCount)} of {totalCount} orders
           </Typography>
         </Box>
       )}

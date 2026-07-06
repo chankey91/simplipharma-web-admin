@@ -6,6 +6,9 @@ export const useSalesOfficers = () => {
   return useQuery({
     queryKey: ['salesOfficers'],
     queryFn: getSalesOfficers,
+    // Reference data — cache longer; mutations invalidate ['salesOfficers'].
+    staleTime: 45 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
   });
 };
 

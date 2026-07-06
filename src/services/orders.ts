@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, query, orderBy, Timestamp, db, getDoc, where } from './firebase';
+import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where } from './firebase';
 import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent, Medicine, PurchaseInvoice } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
@@ -84,6 +84,24 @@ export const getOrderById = async (orderId: string): Promise<Order | null> => {
   } as Order;
 };
 
+/** Lightweight payment-status lookup for a set of order ids (e.g. payment request rows). */
+export const getOrderPaymentStatuses = async (
+  orderIds: string[]
+): Promise<Map<string, string>> => {
+  const unique = [...new Set(orderIds.filter(Boolean))];
+  const map = new Map<string, string>();
+  await Promise.all(
+    unique.map(async (id) => {
+      const snap = await getDoc(doc(db, 'orders', id));
+      if (snap.exists()) {
+        const ps = snap.data().paymentStatus;
+        map.set(id, ps ? String(ps) : 'Unpaid');
+      }
+    })
+  );
+  return map;
+};
+
 export const getAllOrders = async (): Promise<Order[]> => {
   const ordersCol = collection(db, 'orders');
   try {
@@ -122,6 +140,151 @@ export const getAllOrders = async (): Promise<Order[]> => {
       const dateB = b.orderDate instanceof Date ? b.orderDate : new Date(b.orderDate);
       return dateB.getTime() - dateA.getTime();
     });
+  }
+};
+
+/**
+ * Fetch full order documents for a single status. Used by on-demand actions
+ * (e.g. exports) so we can avoid loading the entire `orders` collection just to
+ * filter it in memory. The `status` field is single-field indexed by default.
+ */
+export const getOrdersByStatus = async (status: OrderStatus): Promise<Order[]> => {
+  const ordersCol = collection(db, 'orders');
+  const mapDoc = (docSnap: any): Order => {
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      ...data,
+      orderDate: data.orderDate?.toDate() || new Date(),
+      timeline:
+        data.timeline?.map((t: any) => ({
+          ...t,
+          timestamp: t.timestamp?.toDate() || new Date(),
+        })) || [],
+    } as Order;
+  };
+  try {
+    const snapshot = await getDocs(query(ordersCol, where('status', '==', status)));
+    return snapshot.docs.map(mapDoc);
+  } catch (error) {
+    console.warn('getOrdersByStatus query failed, falling back to full scan:', error);
+    const snapshot = await getDocs(ordersCol);
+    return snapshot.docs.map(mapDoc).filter((o) => o.status === status);
+  }
+};
+
+/**
+ * Fetch orders for the given statuses (default: those that still hold stock
+ * reservations before dispatch). Used to compute batch reservations without
+ * loading the entire `orders` collection.
+ */
+export const getOrdersByStatuses = async (statuses: OrderStatus[]): Promise<Order[]> => {
+  const results = await Promise.all(statuses.map((s) => getOrdersByStatus(s)));
+  return results.flat();
+};
+
+/**
+ * Orders with money still owed (payment status Unpaid or Partial). Used by the
+ * Store Receivables page so it doesn't download the whole collection just to
+ * find outstanding bills. Cancelled/Pending are filtered out client-side.
+ */
+export const getReceivableOrders = async (): Promise<Order[]> => {
+  const ordersCol = collection(db, 'orders');
+  const mapDoc = (docSnap: any): Order => {
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      ...data,
+      orderDate: data.orderDate?.toDate() || new Date(),
+      timeline:
+        data.timeline?.map((t: any) => ({
+          ...t,
+          timestamp: t.timestamp?.toDate() || new Date(),
+        })) || [],
+    } as Order;
+  };
+  const keep = (o: Order) => o.status !== 'Cancelled' && o.status !== 'Pending';
+  try {
+    const snapshot = await getDocs(
+      query(ordersCol, where('paymentStatus', 'in', ['Unpaid', 'Partial']))
+    );
+    return snapshot.docs.map(mapDoc).filter(keep);
+  } catch (error) {
+    console.warn('getReceivableOrders query failed, falling back to full scan:', error);
+    const snapshot = await getDocs(ordersCol);
+    return snapshot.docs.map(mapDoc).filter(keep);
+  }
+};
+
+/**
+ * Orders whose orderDate falls in [startMs, endMs). Used by the Margin report so
+ * a "this month" / "last month" view doesn't scan the entire orders history.
+ */
+export const getOrdersInRange = async (startMs: number, endMs?: number): Promise<Order[]> => {
+  const ordersCol = collection(db, 'orders');
+  const mapDoc = (docSnap: any): Order => {
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      ...data,
+      orderDate: data.orderDate?.toDate() || new Date(),
+      timeline:
+        data.timeline?.map((t: any) => ({
+          ...t,
+          timestamp: t.timestamp?.toDate() || new Date(),
+        })) || [],
+    } as Order;
+  };
+  const constraints = [where('orderDate', '>=', Timestamp.fromMillis(startMs))];
+  if (endMs != null) constraints.push(where('orderDate', '<', Timestamp.fromMillis(endMs)));
+  try {
+    const snapshot = await getDocs(query(ordersCol, ...constraints, orderBy('orderDate', 'desc')));
+    return snapshot.docs.map(mapDoc);
+  } catch (error) {
+    console.warn('getOrdersInRange query failed, falling back to full scan:', error);
+    const snapshot = await getDocs(ordersCol);
+    return snapshot.docs
+      .map(mapDoc)
+      .filter((o) => {
+        const t = (o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate)).getTime();
+        return t >= startMs && (endMs == null || t < endMs);
+      });
+  }
+};
+
+/**
+ * The N most recent orders (by orderDate). Used by the Dashboard's "Recent
+ * orders" panel so it doesn't download the whole collection just to show a few.
+ */
+export const getRecentOrders = async (max = 6): Promise<Order[]> => {
+  const ordersCol = collection(db, 'orders');
+  const mapDoc = (docSnap: any): Order => {
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      ...data,
+      orderDate: data.orderDate?.toDate() || new Date(),
+      timeline:
+        data.timeline?.map((t: any) => ({
+          ...t,
+          timestamp: t.timestamp?.toDate() || new Date(),
+        })) || [],
+    } as Order;
+  };
+  try {
+    const snapshot = await getDocs(query(ordersCol, orderBy('orderDate', 'desc'), limit(max)));
+    return snapshot.docs.map(mapDoc);
+  } catch (error) {
+    console.warn('getRecentOrders query failed, falling back to full scan:', error);
+    const snapshot = await getDocs(ordersCol);
+    return snapshot.docs
+      .map(mapDoc)
+      .sort((a, b) => {
+        const da = a.orderDate instanceof Date ? a.orderDate : new Date(a.orderDate);
+        const db2 = b.orderDate instanceof Date ? b.orderDate : new Date(b.orderDate);
+        return db2.getTime() - da.getTime();
+      })
+      .slice(0, max);
   }
 };
 
@@ -306,6 +469,19 @@ export const fulfillOrder = async (
   // This ensures each batch gets its own line item in the invoice
   const expandedMedicines: any[] = [];
 
+  // Dedupe medicine reads within this fulfill call: the same medicine can appear
+  // across many lines/allocations, so cache each doc read for the duration of the
+  // call instead of re-reading it once per line (N+1 -> 1 per unique medicine).
+  const medicineFetchCache = new Map<string, Medicine | null>();
+  const getMedicineCached = async (medicineId: string): Promise<Medicine | null> => {
+    if (medicineFetchCache.has(medicineId)) {
+      return medicineFetchCache.get(medicineId) ?? null;
+    }
+    const fetched = await getMedicineById(medicineId);
+    medicineFetchCache.set(medicineId, fetched);
+    return fetched;
+  };
+
   let purchaseDiscountLookup = buildPurchaseBatchDiscountLookup([]);
   try {
     purchaseDiscountLookup = buildPurchaseBatchDiscountLookup(await getAllPurchaseInvoices());
@@ -378,7 +554,7 @@ export const fulfillOrder = async (
       let medicineData = null;
       if (line.medicineId) {
         try {
-          medicineData = await getMedicineById(line.medicineId);
+          medicineData = await getMedicineCached(line.medicineId);
         } catch (error) {
           console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
         }
@@ -498,7 +674,7 @@ export const fulfillOrder = async (
           | undefined;
         if (line.medicineId) {
           try {
-            const medicineData = await getMedicineById(line.medicineId);
+            const medicineData = await getMedicineCached(line.medicineId);
             invBatch = medicineData?.stockBatches?.find(
               (b) => b.batchNumber === allocation.batchNumber
             );
@@ -559,7 +735,7 @@ export const fulfillOrder = async (
         if (line.gstRate !== undefined && line.gstRate !== null) cleanItem.gstRate = line.gstRate;
         if (line.batchNumber && line.medicineId) {
           try {
-            const medicineData = await getMedicineById(line.medicineId);
+            const medicineData = await getMedicineCached(line.medicineId);
             const invBatch = medicineData?.stockBatches?.find(
               (b) => b.batchNumber === line.batchNumber
             );

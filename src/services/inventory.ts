@@ -757,32 +757,48 @@ export const findMedicineByBarcode = async (barcode: string): Promise<Medicine |
   return null;
 };
 
-export const getExpiringMedicines = async (days: number = 30): Promise<Medicine[]> => {
-  const medicines = await getAllMedicines();
+/**
+ * Pure filters that operate on an already-loaded medicines array. Prefer these
+ * (fed from the cached `useMedicines()` result) over the async variants below to
+ * avoid re-reading the whole medicines collection just to compute expiry counts.
+ */
+export const filterExpiringMedicines = (
+  medicines: Medicine[],
+  days: number = 30
+): Medicine[] => {
   const today = new Date();
   const expiryThreshold = new Date();
   expiryThreshold.setDate(today.getDate() + days);
-  
+
   return medicines.filter(medicine => {
     if (!medicine.expiryDate) return false;
-    const expiry = medicine.expiryDate instanceof Date 
-      ? medicine.expiryDate 
+    const expiry = medicine.expiryDate instanceof Date
+      ? medicine.expiryDate
       : medicine.expiryDate.toDate();
     return expiry <= expiryThreshold && expiry >= today;
   });
 };
 
-export const getExpiredMedicines = async (): Promise<Medicine[]> => {
-  const medicines = await getAllMedicines();
+export const filterExpiredMedicines = (medicines: Medicine[]): Medicine[] => {
   const today = new Date();
-  
+
   return medicines.filter(medicine => {
     if (!medicine.expiryDate) return false;
-    const expiry = medicine.expiryDate instanceof Date 
-      ? medicine.expiryDate 
+    const expiry = medicine.expiryDate instanceof Date
+      ? medicine.expiryDate
       : medicine.expiryDate.toDate();
     return expiry < today;
   });
+};
+
+export const getExpiringMedicines = async (days: number = 30): Promise<Medicine[]> => {
+  const medicines = await getAllMedicines();
+  return filterExpiringMedicines(medicines, days);
+};
+
+export const getExpiredMedicines = async (): Promise<Medicine[]> => {
+  const medicines = await getAllMedicines();
+  return filterExpiredMedicines(medicines);
 };
 
 export const updateMedicine = async (medicineId: string, updates: Partial<Medicine>): Promise<void> => {

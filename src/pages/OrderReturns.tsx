@@ -85,6 +85,8 @@ export const OrderReturnsPage: React.FC = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orderReturns'] });
       queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNoteTotals'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNotesSearch'] });
       setSelectedRequest(null);
     },
   });

@@ -47,6 +47,11 @@ const queryClient = new QueryClient({
     queries: {
       retry: 1,
       refetchOnWindowFocus: false,
+      // Reuse cached data across navigation instead of re-reading whole Firestore
+      // collections on every mount. Mutations still invalidate their query keys,
+      // so writes always show fresh data.
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      gcTime: 30 * 60 * 1000, // keep unused data cached for 30 minutes
     },
   },
 });

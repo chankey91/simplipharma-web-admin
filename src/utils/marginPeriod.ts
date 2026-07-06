@@ -2,6 +2,20 @@ import { startOfMonth, isBefore, endOfMonth, subMonths, isWithinInterval } from 
 
 export type MarginPeriodFilter = 'this_month' | 'last_month' | 'all';
 
+export function marginPeriodRange(
+  period: MarginPeriodFilter
+): { startMs: number; endMs: number | undefined } | null {
+  const now = new Date();
+  if (period === 'all') return null;
+  if (period === 'this_month') {
+    return { startMs: startOfMonth(now).getTime(), endMs: undefined };
+  }
+  return {
+    startMs: startOfMonth(subMonths(now, 1)).getTime(),
+    endMs: startOfMonth(now).getTime(),
+  };
+}
+
 export function coerceToDate(value: unknown): Date {
   if (value instanceof Date) return value;
   const d = new Date(value as string | number);

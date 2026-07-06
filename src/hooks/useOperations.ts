@@ -14,6 +14,9 @@ export const useTrays = () => {
     queryKey: ['trays'],
     queryFn: getTrays,
     retry: 2,
+    // Operational config — changes rarely; mutations invalidate ['trays'].
+    staleTime: 45 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
   });
 };
 
@@ -22,6 +25,9 @@ export const useOperators = () => {
     queryKey: ['operators'],
     queryFn: getOperators,
     retry: 2,
+    // Operational config — changes rarely; mutations invalidate ['operators'].
+    staleTime: 45 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
   });
 };
 

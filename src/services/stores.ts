@@ -165,6 +165,29 @@ export const resetStorePassword = async (storeId: string) => {
   await updateStore(storeId, { mustResetPassword: true });
 };
 
+/**
+ * Admin/operations: email a password reset link to a retailer's mobile app account.
+ * Backed by the `sendRetailerPasswordResetEmail` Cloud Function (Firebase Auth reset link).
+ */
+export const sendRetailerPasswordResetEmail = async (
+  email: string
+): Promise<{ message: string }> => {
+  const fn = httpsCallable<
+    { email: string },
+    { success?: boolean; message?: string; emailSent?: boolean }
+  >(functions, 'sendRetailerPasswordResetEmail');
+  const result = await fn({ email: email.trim() });
+  const data = result.data;
+  if (!data?.success) {
+    throw new Error(data?.message || 'Failed to send password reset email');
+  }
+  return {
+    message:
+      data.message ||
+      'Password reset link has been sent if SMTP is configured.',
+  };
+};
+
 /** Set or clear which Sales Officer manages this retailer (`users` doc, role retailer). */
 export const assignRetailerToSalesOfficer = async (
   retailerUserId: string,

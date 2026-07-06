@@ -1,6 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { 
-  getAllPurchaseInvoices, 
+  getAllPurchaseInvoices,
+  getPayablePurchaseInvoices,
   getPurchaseInvoiceById, 
   createPurchaseInvoice, 
   updatePurchaseInvoice,
@@ -8,12 +9,52 @@ import {
   updateStockForExistingInvoice,
   updateStockForAllExistingInvoices
 } from '../services/purchaseInvoices';
+import {
+  searchPurchaseInvoicesTypesense,
+  PurchaseInvoiceRow,
+} from '../services/purchaseInvoiceSearch';
+import { TypesenseSearchParams, TypesenseSearchResult } from '../services/typesenseSearch';
+import { getPurchaseInvoiceAmountTotal } from '../services/dashboardAggregations';
 import { PurchaseInvoice } from '../types';
 
-export const usePurchaseInvoices = () => {
+export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
   return useQuery({
     queryKey: ['purchaseInvoices'],
-    queryFn: getAllPurchaseInvoices
+    queryFn: getAllPurchaseInvoices,
+    enabled: options?.enabled ?? true,
+  });
+};
+
+/** Payable purchase bills only (Unpaid/Partial) — vendor ledger. */
+export const usePayablePurchaseInvoices = (options?: { enabled?: boolean }) => {
+  return useQuery({
+    queryKey: ['payablePurchaseInvoices'],
+    queryFn: getPayablePurchaseInvoices,
+    enabled: options?.enabled ?? true,
+    staleTime: 2 * 60 * 1000,
+  });
+};
+
+/** Server-side purchase invoice search via Typesense (search + filter + sort + pagination). */
+export const usePurchaseInvoicesSearch = (
+  params: TypesenseSearchParams,
+  options?: { enabled?: boolean }
+) => {
+  return useQuery<TypesenseSearchResult<PurchaseInvoiceRow>>({
+    queryKey: ['purchaseInvoicesSearch', params],
+    queryFn: () => searchPurchaseInvoicesTypesense(params),
+    enabled: options?.enabled ?? true,
+    placeholderData: keepPreviousData,
+    retry: 1,
+  });
+};
+
+/** Server-side sum of all purchase invoice amounts (Firestore aggregation). */
+export const usePurchaseInvoiceAmountTotal = (options?: { enabled?: boolean }) => {
+  return useQuery<number>({
+    queryKey: ['purchaseInvoiceAmountTotal'],
+    queryFn: getPurchaseInvoiceAmountTotal,
+    enabled: options?.enabled ?? true,
   });
 };
 
@@ -36,6 +77,9 @@ export const useCreatePurchaseInvoice = () => {
     onSuccess: async () => {
       // Invalidate queries to refresh data
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       // Force refetch medicines to get updated stock
       await queryClient.invalidateQueries({ queryKey: ['medicines'] });
       // Also refetch any medicine detail pages
@@ -54,6 +98,9 @@ export const useUpdatePurchaseInvoice = () => {
     }) => updatePurchaseInvoice(invoiceId, invoiceData),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
+      queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
     }
   });
@@ -76,6 +123,9 @@ export const useUpdatePurchaseInvoicePayment = () => {
     }) => updatePurchaseInvoicePayment(invoiceId, paymentStatus, paymentMethod, paidAmount),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
+      queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
     },
   });
@@ -90,6 +140,9 @@ export const useUpdateStockForInvoice = () => {
       await queryClient.invalidateQueries({ queryKey: ['medicines'] });
       await queryClient.invalidateQueries({ queryKey: ['medicine'] });
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
     }
   });
 };

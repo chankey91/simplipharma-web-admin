@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -36,6 +36,7 @@ import {
   MyLocation,
   PhotoCamera,
   History,
+  LockReset,
 } from '@mui/icons-material';
 import { RetailerVisitLogDialog } from '../components/RetailerVisitLogDialog';
 import {
@@ -44,9 +45,9 @@ import {
   Select,
   MenuItem,
 } from '@mui/material';
-import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore } from '../hooks/useStores';
-import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
-import { getSalesOfficers } from '../services/salesOfficers';
+import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore, useSendRetailerPasswordResetEmail } from '../hooks/useStores';
+import { useSalesOfficers } from '../hooks/useSalesOfficers';
+import { useStoreNoteStats } from '../hooks/useStoreNoteStats';
 import { User } from '../types';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
@@ -85,11 +86,16 @@ const generatePassword = () => {
 
 export const StoresPage: React.FC = () => {
   const { data: stores, isLoading, error } = useStores();
-  const { data: creditNotes } = useCreditNotes();
-  const { data: debitNotes } = useDebitNotes();
+  const { data: salesOfficers = [] } = useSalesOfficers();
+  const {
+    creditNoteStatsByRetailerId,
+    debitNoteStatsByRetailerId,
+    isLoading: noteStatsLoading,
+  } = useStoreNoteStats();
   const updateStoreMutation = useUpdateStore();
   const createStoreMutation = useCreateStore();
   const toggleStatusMutation = useToggleStoreStatus();
+  const resetPasswordMutation = useSendRetailerPasswordResetEmail();
   const { alert, confirm, prompt } = useAppDialog();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -99,7 +105,6 @@ export const StoresPage: React.FC = () => {
   const [openDialog, setOpenDialog] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState('');
   
-  const [salesOfficers, setSalesOfficers] = useState<User[]>([]);
   const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
 
@@ -111,29 +116,6 @@ export const StoresPage: React.FC = () => {
     return m;
   }, [salesOfficers]);
 
-  const creditNoteStatsByRetailerId = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
-    for (const note of creditNotes ?? []) {
-      const prev = map.get(note.retailerId) ?? { total: 0, count: 0 };
-      map.set(note.retailerId, {
-        total: prev.total + (note.totalAmount ?? 0),
-        count: prev.count + 1,
-      });
-    }
-    return map;
-  }, [creditNotes]);
-
-  const debitNoteStatsByRetailerId = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
-    for (const note of debitNotes ?? []) {
-      const prev = map.get(note.retailerId) ?? { total: 0, count: 0 };
-      map.set(note.retailerId, {
-        total: prev.total + (note.totalAmount ?? 0),
-        count: prev.count + 1,
-      });
-    }
-    return map;
-  }, [debitNotes]);
   const [formData, setFormData] = useState({
     displayName: '',
     shopName: '',
@@ -221,12 +203,6 @@ export const StoresPage: React.FC = () => {
     setPage(value);
   };
 
-  useEffect(() => {
-    getSalesOfficers()
-      .then(setSalesOfficers)
-      .catch(() => setSalesOfficers([]));
-  }, []);
-
   const handleOpenVisitLog = (store: User) => {
     setVisitLogStore(store);
   };
@@ -252,12 +228,6 @@ export const StoresPage: React.FC = () => {
       shopImage: '',
       salesOfficerId: '',
     });
-    try {
-      const so = await getSalesOfficers();
-      setSalesOfficers(so);
-    } catch {
-      setSalesOfficers([]);
-    }
     setOpenDialog(true);
   };
 
@@ -281,13 +251,25 @@ export const StoresPage: React.FC = () => {
       shopImage: store.shopImage || '',
       salesOfficerId: store.salesOfficerId || '',
     });
-    try {
-      const so = await getSalesOfficers();
-      setSalesOfficers(so);
-    } catch {
-      setSalesOfficers([]);
-    }
     setOpenDialog(true);
+  };
+
+  const handleSendPasswordReset = async () => {
+    const email = (editingStore?.email || '').trim();
+    if (!email) return;
+    if (
+      !(await confirm(
+        `Send a password reset link to ${email}? The retailer will use it to set a new password for the SimpliPharma mobile app.`
+      ))
+    ) {
+      return;
+    }
+    try {
+      const res = await resetPasswordMutation.mutateAsync(email);
+      await alert(res.message, { severity: 'success' });
+    } catch (err: any) {
+      await alert(err.message || 'Failed to send reset email', { severity: 'error' });
+    }
   };
 
   const handleGetCurrentLocation = () => {
@@ -749,8 +731,19 @@ export const StoresPage: React.FC = () => {
             </Grid>
           </Box>
         </DialogContent>
-        <DialogActions sx={{ p: 3 }}>
+        <DialogActions sx={{ p: 3, flexWrap: 'wrap', gap: 1 }}>
           <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
+          {editingStore && (
+            <Button
+              variant="outlined"
+              startIcon={<LockReset />}
+              onClick={handleSendPasswordReset}
+              disabled={resetPasswordMutation.isPending || !editingStore?.email}
+            >
+              {resetPasswordMutation.isPending ? 'Sending…' : 'Send password reset link'}
+            </Button>
+          )}
+          <Box sx={{ flexGrow: 1 }} />
           <Button
             variant="contained"
             startIcon={<Save />}

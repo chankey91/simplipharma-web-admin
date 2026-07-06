@@ -9,8 +9,13 @@ import {
   Timestamp,
   serverTimestamp,
   writeBatch,
+  query,
+  where,
+  orderBy,
+  limit,
+  getCountFromServer,
 } from './firebase';
-import { OrderMedicine, ProductDemand, PurchaseInvoice } from '../types';
+import { OrderMedicine, ProductDemand, ProductDemandStatus, PurchaseInvoice } from '../types';
 import { createMedicine, getAllMedicines, getMedicineById } from './inventory';
 import { getAllPurchaseInvoices, getPurchaseInvoiceByReference } from './purchaseInvoices';
 import {
@@ -297,6 +302,99 @@ export const getAllProductDemands = async (): Promise<ProductDemand[]> => {
     const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : new Date(b.createdAt).getTime();
     return tb - ta;
   });
+};
+
+export const getProductDemandById = async (id: string): Promise<ProductDemand | null> => {
+  const snap = await getDoc(doc(db, 'product_demands', id));
+  if (!snap.exists()) return null;
+  return parseDemandDoc(snap.id, snap.data() as Record<string, unknown>);
+};
+
+/** Demands linked to a single order (scoped read for OrderDetails). */
+export const getProductDemandsByOrderId = async (orderId: string): Promise<ProductDemand[]> => {
+  if (!orderId) return [];
+  const col = collection(db, 'product_demands');
+  try {
+    const snap = await getDocs(query(col, where('orderId', '==', orderId)));
+    return snap.docs.map((d) => parseDemandDoc(d.id, d.data() as Record<string, unknown>));
+  } catch (error) {
+    console.warn('getProductDemandsByOrderId failed:', error);
+    return [];
+  }
+};
+
+/** Order-scoped demands plus any extra ids referenced on order lines. */
+export const getProductDemandsForOrder = async (
+  orderId: string,
+  lineDemandIds: string[] = []
+): Promise<ProductDemand[]> => {
+  const byOrder = orderId ? await getProductDemandsByOrderId(orderId) : [];
+  const have = new Set(byOrder.map((d) => d.id));
+  const extraIds = lineDemandIds.filter((id) => id && !have.has(id));
+  if (extraIds.length === 0) return byOrder;
+  const extraMap = await getProductDemandsByIds(extraIds);
+  return [...byOrder, ...extraMap.values()];
+};
+
+export interface ProductDemandsPageParams {
+  status?: ProductDemandStatus | 'all';
+  page?: number;
+  perPage?: number;
+}
+
+export interface ProductDemandsPageResult {
+  rows: ProductDemand[];
+  total: number;
+}
+
+/**
+ * Status-scoped, paginated product demands for the Typesense fallback path.
+ * Uses limit(page * perPage) + slice (acceptable for admin fallback volumes).
+ */
+export const getProductDemandsPage = async (
+  params: ProductDemandsPageParams
+): Promise<ProductDemandsPageResult> => {
+  const page = Math.max(1, params.page ?? 1);
+  const perPage = Math.min(Math.max(params.perPage ?? 15, 1), 100);
+  const col = collection(db, 'product_demands');
+  const status = params.status ?? 'all';
+
+  const countQuery =
+    status !== 'all' ? query(col, where('status', '==', status)) : query(col);
+  let total = 0;
+  try {
+    const countSnap = await getCountFromServer(countQuery);
+    total = countSnap.data().count;
+  } catch {
+    const all = await getAllProductDemands();
+    total =
+      status !== 'all' ? all.filter((d) => d.status === status).length : all.length;
+  }
+
+  const fetchLimit = page * perPage;
+  try {
+    const q =
+      status !== 'all'
+        ? query(
+            col,
+            where('status', '==', status),
+            orderBy('createdAt', 'desc'),
+            limit(fetchLimit)
+          )
+        : query(col, orderBy('createdAt', 'desc'), limit(fetchLimit));
+    const snap = await getDocs(q);
+    const fetched = snap.docs.map((d) => parseDemandDoc(d.id, d.data() as Record<string, unknown>));
+    const rows = fetched.slice((page - 1) * perPage, page * perPage);
+    return { rows, total };
+  } catch (error) {
+    console.warn('getProductDemandsPage query failed, falling back to full scan:', error);
+    const all = await getAllProductDemands();
+    const filtered = status !== 'all' ? all.filter((d) => d.status === status) : all;
+    return {
+      rows: filtered.slice((page - 1) * perPage, page * perPage),
+      total: filtered.length,
+    };
+  }
 };
 
 export const fulfillProductDemand = async (

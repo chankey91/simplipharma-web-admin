@@ -36,14 +36,15 @@ import {
   Article,
 } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
-import { useOrders } from '../hooks/useOrders';
+import { useOrderDashboardStats, useRecentOrders } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
-import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
+import { useMedicines } from '../hooks/useInventory';
+import { filterExpiringMedicines, filterExpiredMedicines } from '../services/inventory';
 import { usePendingRetailerRequests } from '../hooks/usePendingRetailers';
-import { useCreditNotes, useDebitNotes } from '../hooks/useCreditNotes';
+import { useCreditNoteTotals, useDebitNoteTotals } from '../hooks/useCreditNotes';
 import { useExpiryReturns } from '../hooks/useExpiryReturns';
 import { sumExpiryRefundsInPeriod } from '../utils/returnMargin';
-import { format, startOfMonth, isBefore } from 'date-fns';
+import { format, startOfMonth } from 'date-fns';
 import { formatDateLongIST } from '../utils/dateTime';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
@@ -55,12 +56,6 @@ import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { useAuth } from '../context/AuthContext';
 
 const formatInr = (amount: number) => `₹${Math.round(amount).toLocaleString('en-IN')}`;
-
-const isOnOrAfterMonthStart = (date: unknown, monthStart: Date): boolean => {
-  const d = date instanceof Date ? date : new Date(date as string);
-  if (isNaN(d.getTime())) return false;
-  return !isBefore(d, monthStart);
-};
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -150,39 +145,40 @@ export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { panelRole } = useAuth();
   const isOperations = panelRole === 'operations';
-  const { data: orders, isLoading: ordersLoading } = useOrders();
+  // Stable month-start (epoch ms) for the current session, used as the
+  // aggregation query key so order/notes totals are computed server-side
+  // instead of downloading entire collections.
+  const monthStartMs = useMemo(() => startOfMonth(new Date()).getTime(), []);
+  const { data: orderStats, isLoading: ordersLoading } = useOrderDashboardStats(monthStartMs);
+  const { data: recentOrders } = useRecentOrders(6);
   const { data: stores, isLoading: storesLoading } = useStores(!isOperations);
   const { data: medicines, isLoading: medicinesLoading } = useMedicines();
-  const { data: expiringMedicines } = useExpiringMedicines(30);
-  const { data: expiredMedicines } = useExpiredMedicines();
+  // Derive expiry buckets from the already-cached medicines list instead of
+  // issuing two more full-collection reads for the same data.
+  const expiringMedicines = useMemo(
+    () => (medicines ? filterExpiringMedicines(medicines, 30) : undefined),
+    [medicines]
+  );
+  const expiredMedicines = useMemo(
+    () => (medicines ? filterExpiredMedicines(medicines) : undefined),
+    [medicines]
+  );
   const { data: pendingRetailerRequests } = usePendingRetailerRequests(!isOperations);
-  const { data: creditNotes, isLoading: creditLoading } = useCreditNotes();
-  const { data: debitNotes, isLoading: debitLoading } = useDebitNotes();
+  const { data: creditTotals, isLoading: creditLoading } = useCreditNoteTotals(monthStartMs);
+  const { data: debitTotals, isLoading: debitLoading } = useDebitNoteTotals(monthStartMs);
   const { data: expiryReturns, isLoading: expiryReturnsLoading } = useExpiryReturns();
 
   const stats = useMemo(() => {
-    const list = orders ?? [];
-    const pending = list.filter((o) => o.status === 'Pending').length;
-    const inFulfillment = list.filter((o) => o.status === 'Order Fulfillment').length;
-    const inTransit = list.filter((o) => o.status === 'In Transit').length;
-    const delivered = list.filter((o) => o.status === 'Delivered').length;
-    const cancelled = list.filter((o) => o.status === 'Cancelled').length;
+    const statusCounts = orderStats?.statusCounts;
+    const pending = statusCounts?.['Pending'] ?? 0;
+    const inFulfillment = statusCounts?.['Order Fulfillment'] ?? 0;
+    const inTransit = statusCounts?.['In Transit'] ?? 0;
+    const delivered = statusCounts?.['Delivered'] ?? 0;
+    const cancelled = statusCounts?.['Cancelled'] ?? 0;
 
-    const activeOrders = list.filter((o) => o.status !== 'Cancelled');
-    const lifetimeGross = activeOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-
-    const monthStart = startOfMonth(new Date());
-    const thisMonthGross = activeOrders
-      .filter((o) => {
-        const d = o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate);
-        if (isNaN(d.getTime())) return false;
-        return !isBefore(d, monthStart);
-      })
-      .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-
-    const unpaid = list.filter(
-      (o) => o.status !== 'Cancelled' && (o.paymentStatus === 'Unpaid' || !o.paymentStatus)
-    ).length;
+    const lifetimeGross = orderStats?.lifetimeGross ?? 0;
+    const thisMonthGross = orderStats?.thisMonthGross ?? 0;
+    const unpaid = orderStats?.unpaidCount ?? 0;
 
     const lowStock =
       medicines?.filter((m) => {
@@ -192,29 +188,15 @@ export const DashboardPage: React.FC = () => {
 
     const activeStores = stores?.filter((s) => s.isActive !== false).length ?? 0;
 
-    const recent: Order[] = [...list]
-      .sort((a, b) => {
-        const da = a.orderDate instanceof Date ? a.orderDate : new Date(a.orderDate);
-        const db = b.orderDate instanceof Date ? b.orderDate : new Date(b.orderDate);
-        return db.getTime() - da.getTime();
-      })
-      .slice(0, 6);
+    const recent: Order[] = recentOrders ?? [];
 
     const pendingRetailers = pendingRetailerRequests?.length ?? 0;
 
-    const credits = creditNotes ?? [];
-    const debits = debitNotes ?? [];
-    const lifetimeCredits = credits.reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
-    const lifetimeDebits = debits.reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
-    const thisMonthCredits = credits
-      .filter((n) => isOnOrAfterMonthStart(n.creditNoteDate, monthStart))
-      .reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
-    const thisMonthDebits = debits
-      .filter((n) => isOnOrAfterMonthStart(n.debitNoteDate, monthStart))
-      .reduce((sum, n) => sum + (n.totalAmount ?? 0), 0);
-    const thisMonthCreditCount = credits.filter((n) =>
-      isOnOrAfterMonthStart(n.creditNoteDate, monthStart)
-    ).length;
+    const lifetimeCredits = creditTotals?.lifetimeSum ?? 0;
+    const lifetimeDebits = debitTotals?.lifetimeSum ?? 0;
+    const thisMonthCredits = creditTotals?.thisMonthSum ?? 0;
+    const thisMonthDebits = debitTotals?.thisMonthSum ?? 0;
+    const thisMonthCreditCount = creditTotals?.thisMonthCount ?? 0;
 
     const thisMonthExpiryRefunds = sumExpiryRefundsInPeriod(expiryReturns, 'this_month');
     const lifetimeExpiryRefunds = sumExpiryRefundsInPeriod(expiryReturns, 'all');
@@ -236,8 +218,8 @@ export const DashboardPage: React.FC = () => {
       netLifetime: lifetimeGross - lifetimeCredits - lifetimeExpiryRefunds + lifetimeDebits,
       netThisMonth:
         thisMonthGross - thisMonthCredits - thisMonthExpiryRefunds + thisMonthDebits,
-      creditNoteCount: credits.length,
-      debitNoteCount: debits.length,
+      creditNoteCount: creditTotals?.lifetimeCount ?? 0,
+      debitNoteCount: debitTotals?.lifetimeCount ?? 0,
       thisMonthCreditCount,
       unpaid,
       lowStock,
@@ -246,7 +228,7 @@ export const DashboardPage: React.FC = () => {
       recent,
       pendingRetailers,
     };
-  }, [orders, medicines, stores, pendingRetailerRequests, creditNotes, debitNotes, expiryReturns]);
+  }, [orderStats, recentOrders, medicines, stores, pendingRetailerRequests, creditTotals, debitTotals, expiryReturns]);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
   const sortedRecentOrders = useMemo(() => {
