@@ -37,6 +37,7 @@ export interface OrderSearchParams {
     | 'docId'
     | 'orderDate'
     | 'retailerEmail'
+    | 'retailerName'
     | 'itemCount'
     | 'amountSortable'
     | 'status'

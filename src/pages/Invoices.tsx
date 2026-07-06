@@ -32,6 +32,7 @@ import {
   usePurchaseInvoiceAmountTotal,
 } from '../hooks/usePurchaseInvoices';
 import { useOrders, useOrdersSearch, useOrderInvoicedAmountTotal } from '../hooks/useOrders';
+import { useStores } from '../hooks/useStores';
 import { OrderSearchParams } from '../services/orderSearch';
 import { getOrderById } from '../services/orders';
 import { getPurchaseInvoiceById } from '../services/purchaseInvoices';
@@ -52,6 +53,7 @@ interface InvoiceRow {
   id: string;
   invoiceNumber: string;
   date: Date;
+  storeName: string;
   vendorOrStore: string;
   amount: number;
   status: string;
@@ -61,6 +63,8 @@ const orderSortField = (key: string): NonNullable<OrderSearchParams['sortField']
   switch (key) {
     case 'invoiceNumber':
       return 'invoiceNumber';
+    case 'storeName':
+      return 'retailerName';
     case 'vendorOrStore':
       return 'retailerEmail';
     case 'amount':
@@ -91,6 +95,7 @@ const purchaseSortField = (key: string): string => {
 
 export const InvoicesPage: React.FC = () => {
   const { alert } = useAppDialog();
+  const { data: stores } = useStores();
   const [tab, setTab] = useState<InvoiceTab>('order');
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
@@ -99,6 +104,22 @@ export const InvoicesPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('date', 'desc');
+
+  const storeNameByRetailerId = useMemo(() => {
+    const map = new Map<string, string>();
+    stores?.forEach((store) => {
+      const name = store.shopName || store.displayName;
+      if (!name) return;
+      map.set(store.id, name);
+      if (store.uid) map.set(store.uid, name);
+    });
+    return map;
+  }, [stores]);
+
+  const resolveStoreName = (retailerName?: string, retailerId?: string) =>
+    retailerName?.trim() ||
+    (retailerId ? storeNameByRetailerId.get(retailerId) : undefined) ||
+    'N/A';
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedTerm(searchTerm.trim()), 350);
@@ -157,6 +178,7 @@ export const InvoicesPage: React.FC = () => {
           id: o.id,
           invoiceNumber: o.invoiceNumber || orderReferenceWithoutInvoice(o.id),
           date: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
+          storeName: resolveStoreName(o.retailerName, o.retailerId),
           vendorOrStore: o.retailerEmail || 'N/A',
           amount: o.totalAmount || 0,
           status: o.paymentStatus || 'Unpaid',
@@ -166,6 +188,7 @@ export const InvoicesPage: React.FC = () => {
         id: inv.id,
         invoiceNumber: inv.invoiceNumber,
         date: inv.invoiceDate instanceof Date ? inv.invoiceDate : new Date(inv.invoiceDate),
+        storeName: '—',
         vendorOrStore: inv.vendorName || 'N/A',
         amount: inv.totalAmount || 0,
         status: inv.paymentStatus || 'Unpaid',
@@ -175,6 +198,7 @@ export const InvoicesPage: React.FC = () => {
       const matchesSearch =
         !term ||
         r.invoiceNumber.toLowerCase().includes(term) ||
+        r.storeName.toLowerCase().includes(term) ||
         r.vendorOrStore.toLowerCase().includes(term);
       const matchesStatus = statusFilter === 'All' || r.status === statusFilter;
       return matchesSearch && matchesStatus;
@@ -184,6 +208,9 @@ export const InvoicesPage: React.FC = () => {
       switch (sortKey) {
         case 'invoiceNumber':
           cmp = compareAsc(a.invoiceNumber, b.invoiceNumber);
+          break;
+        case 'storeName':
+          cmp = compareAsc(a.storeName, b.storeName);
           break;
         case 'vendorOrStore':
           cmp = compareAsc(a.vendorOrStore, b.vendorOrStore);
@@ -202,7 +229,7 @@ export const InvoicesPage: React.FC = () => {
       return applyDirection(compareAsc(a.invoiceNumber, b.invoiceNumber), sortDirection);
     });
     return filtered;
-  }, [typesenseDisabled, isOrder, allOrders, allPurchases, debouncedTerm, statusFilter, sortKey, sortDirection]);
+  }, [typesenseDisabled, isOrder, allOrders, allPurchases, debouncedTerm, statusFilter, sortKey, sortDirection, storeNameByRetailerId]);
 
   const rows: InvoiceRow[] = useMemo(() => {
     if (typesenseDisabled) {
@@ -213,6 +240,7 @@ export const InvoicesPage: React.FC = () => {
         id: o.id,
         invoiceNumber: o.invoiceNumber || orderReferenceWithoutInvoice(o.id),
         date: new Date(o.orderDate),
+        storeName: o.retailerName?.trim() || 'N/A',
         vendorOrStore: o.retailerEmail || 'N/A',
         amount: o.totalAmount || 0,
         status: o.paymentStatus || 'Unpaid',
@@ -222,6 +250,7 @@ export const InvoicesPage: React.FC = () => {
       id: inv.id,
       invoiceNumber: inv.invoiceNumber,
       date: new Date(inv.invoiceDate),
+      storeName: '—',
       vendorOrStore: inv.vendorName || 'N/A',
       amount: inv.totalAmount || 0,
       status: inv.paymentStatus || 'Unpaid',
@@ -367,7 +396,7 @@ export const InvoicesPage: React.FC = () => {
           <Grid item xs={12} md={8}>
             <TextField
               fullWidth
-              placeholder="Search by invoice number or vendor/store..."
+              placeholder="Search by invoice number, store name, or vendor/email..."
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);
@@ -411,7 +440,10 @@ export const InvoicesPage: React.FC = () => {
             <TableRow>
               <SortableTableHeadCell columnId="invoiceNumber" label="Invoice Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="date" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="vendorOrStore" label={isOrder ? 'Store' : 'Vendor'} sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              {isOrder ? (
+                <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              ) : null}
+              <SortableTableHeadCell columnId="vendorOrStore" label={isOrder ? 'Email' : 'Vendor'} sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="center">Actions</TableCell>
@@ -420,7 +452,7 @@ export const InvoicesPage: React.FC = () => {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">
+                <TableCell colSpan={isOrder ? 7 : 6} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>
                     No invoices found
                   </Typography>
@@ -435,6 +467,7 @@ export const InvoicesPage: React.FC = () => {
                     </Typography>
                   </TableCell>
                   <TableCell>{format(invoice.date, 'MMM dd, yyyy')}</TableCell>
+                  {isOrder ? <TableCell>{invoice.storeName}</TableCell> : null}
                   <TableCell>{invoice.vendorOrStore}</TableCell>
                   <TableCell align="right">₹{invoice.amount.toFixed(2)}</TableCell>
                   <TableCell>

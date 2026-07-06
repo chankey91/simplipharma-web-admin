@@ -59,6 +59,7 @@ const ROWS_PER_PAGE = 10;
 interface OrderRow {
   id: string;
   orderDate: Date;
+  storeName: string;
   retailerEmail: string;
   itemCount: number;
   totalAmount: number;
@@ -72,6 +73,8 @@ const sortKeyToField = (key: string): OrderSearchParams['sortField'] => {
       return 'docId';
     case 'retailer':
       return 'retailerEmail';
+    case 'storeName':
+      return 'retailerName';
     case 'items':
       return 'itemCount';
     case 'amount':
@@ -106,6 +109,22 @@ export const OrdersPage: React.FC = () => {
   });
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
+
+  const storeNameByRetailerId = useMemo(() => {
+    const map = new Map<string, string>();
+    stores?.forEach((store) => {
+      const name = store.shopName || store.displayName;
+      if (!name) return;
+      map.set(store.id, name);
+      if (store.uid) map.set(store.uid, name);
+    });
+    return map;
+  }, [stores]);
+
+  const resolveStoreName = (retailerName?: string, retailerId?: string) =>
+    retailerName?.trim() ||
+    (retailerId ? storeNameByRetailerId.get(retailerId) : undefined) ||
+    'N/A';
 
   // Debounce the search term so we don't fire a Typesense query on every keystroke.
   useEffect(() => {
@@ -145,6 +164,7 @@ export const OrdersPage: React.FC = () => {
       const matchesSearch =
         !term ||
         order.id.toLowerCase().includes(term) ||
+        resolveStoreName(order.retailerName, order.retailerId).toLowerCase().includes(term) ||
         order.retailerEmail?.toLowerCase().includes(term) ||
         order.medicines.some((m) => m.name.toLowerCase().includes(term));
       const matchesStatus = statusFilter === 'All' || order.status === statusFilter;
@@ -158,6 +178,14 @@ export const OrdersPage: React.FC = () => {
         case 'retailer':
           return applyDirection(
             compareAsc((a.retailerEmail || '').toLowerCase(), (b.retailerEmail || '').toLowerCase()),
+            sortDirection
+          );
+        case 'storeName':
+          return applyDirection(
+            compareAsc(
+              resolveStoreName(a.retailerName, a.retailerId).toLowerCase(),
+              resolveStoreName(b.retailerName, b.retailerId).toLowerCase()
+            ),
             sortDirection
           );
         case 'items':
@@ -175,7 +203,7 @@ export const OrdersPage: React.FC = () => {
       }
     });
     return sorted;
-  }, [typesenseDisabled, allOrders, debouncedTerm, statusFilter, sortKey, sortDirection]);
+  }, [typesenseDisabled, allOrders, debouncedTerm, statusFilter, sortKey, sortDirection, storeNameByRetailerId]);
 
   const fallbackStatusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -193,6 +221,7 @@ export const OrdersPage: React.FC = () => {
         .map((o) => ({
           id: o.id,
           orderDate: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
+          storeName: resolveStoreName(o.retailerName, o.retailerId),
           retailerEmail: o.retailerEmail || '',
           itemCount: o.medicines.length,
           totalAmount: o.totalAmount,
@@ -202,12 +231,13 @@ export const OrdersPage: React.FC = () => {
     return (searchData?.orders ?? []).map((o) => ({
       id: o.id,
       orderDate: new Date(o.orderDate),
+      storeName: o.retailerName?.trim() || 'N/A',
       retailerEmail: o.retailerEmail || '',
       itemCount: o.itemCount,
       totalAmount: o.totalAmount,
       status: o.status,
     }));
-  }, [typesenseDisabled, fallbackSorted, page, searchData]);
+  }, [typesenseDisabled, fallbackSorted, page, searchData, storeNameByRetailerId]);
 
   const statusCounts = typesenseDisabled ? fallbackStatusCounts : searchData?.statusCounts ?? {};
   const totalCount = typesenseDisabled ? fallbackSorted.length : searchData?.found ?? 0;
@@ -429,8 +459,9 @@ export const OrdersPage: React.FC = () => {
             <TableRow>
               <SortableTableHeadCell columnId="id" label="Order ID" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="orderDate" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="retailer" label="Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
@@ -439,7 +470,7 @@ export const OrdersPage: React.FC = () => {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
                 </TableCell>
               </TableRow>
@@ -448,8 +479,9 @@ export const OrdersPage: React.FC = () => {
                 <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
                   <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
                   <TableCell>{format(order.orderDate, 'MMM dd, yyyy')}</TableCell>
+                  <TableCell>{order.storeName}</TableCell>
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
-                  <TableCell align="right">{order.itemCount} items</TableCell>
+                  <TableCell>{order.itemCount} items</TableCell>
                   <TableCell>
                     {order.status === 'Pending' ? (
                       <Typography variant="caption" color="textSecondary">-</Typography>
