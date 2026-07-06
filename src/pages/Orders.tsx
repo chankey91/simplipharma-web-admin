@@ -68,9 +68,27 @@ export const OrdersPage: React.FC = () => {
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
 
+  const storeNameByRetailerId = useMemo(() => {
+    const map = new Map<string, string>();
+    stores?.forEach((store) => {
+      const name = store.shopName || store.displayName;
+      if (!name) return;
+      map.set(store.id, name);
+      if (store.uid) map.set(store.uid, name);
+    });
+    return map;
+  }, [stores]);
+
+  const getOrderStoreName = (order: Order) =>
+    order.retailerName?.trim() ||
+    storeNameByRetailerId.get(order.retailerId) ||
+    'N/A';
+
   const filteredOrders = orders?.filter(order => {
+    const storeName = getOrderStoreName(order);
     const matchesSearch = 
       order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      storeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.retailerEmail?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.medicines.some(m => m.name.toLowerCase().includes(searchTerm.toLowerCase()));
     
@@ -87,6 +105,11 @@ export const OrdersPage: React.FC = () => {
           return applyDirection(compareAsc(a.id, b.id), sortDirection);
         case 'orderDate':
           return applyDirection(compareAsc(toTimeMs(a.orderDate), toTimeMs(b.orderDate)), sortDirection);
+        case 'storeName':
+          return applyDirection(
+            compareAsc(getOrderStoreName(a).toLowerCase(), getOrderStoreName(b).toLowerCase()),
+            sortDirection
+          );
         case 'retailer':
           return applyDirection(
             compareAsc((a.retailerEmail || '').toLowerCase(), (b.retailerEmail || '').toLowerCase()),
@@ -106,7 +129,7 @@ export const OrdersPage: React.FC = () => {
       }
     });
     return list;
-  }, [filteredOrders, sortKey, sortDirection]);
+  }, [filteredOrders, sortKey, sortDirection, storeNameByRetailerId]);
 
   const requestSortResetPage = (key: string) => {
     requestSort(key);
@@ -290,8 +313,9 @@ export const OrdersPage: React.FC = () => {
             <TableRow>
               <SortableTableHeadCell columnId="id" label="Order ID" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="orderDate" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="retailer" label="Retailer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
+              <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="retailer" label="Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
@@ -300,7 +324,7 @@ export const OrdersPage: React.FC = () => {
           <TableBody>
             {sortedOrders.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
                 </TableCell>
               </TableRow>
@@ -313,6 +337,7 @@ export const OrdersPage: React.FC = () => {
                       ? format(order.orderDate, 'MMM dd, yyyy')
                       : format(new Date(order.orderDate), 'MMM dd, yyyy')}
                   </TableCell>
+                  <TableCell>{getOrderStoreName(order)}</TableCell>
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
                   <TableCell>{order.medicines.length} items</TableCell>
                   <TableCell>

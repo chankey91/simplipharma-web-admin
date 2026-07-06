@@ -33,6 +33,7 @@ import {
 } from '@mui/icons-material';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useOrders } from '../hooks/useOrders';
+import { useStores } from '../hooks/useStores';
 import { PurchaseInvoice, Order } from '../types';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
@@ -48,6 +49,7 @@ interface InvoiceItem {
   type: 'purchase' | 'order';
   invoiceNumber: string;
   date: Date;
+  storeName: string;
   vendorOrStore: string;
   amount: number;
   status: string;
@@ -58,6 +60,7 @@ interface InvoiceItem {
 export const InvoicesPage: React.FC = () => {
   const { data: purchaseInvoices, isLoading: purchaseLoading } = usePurchaseInvoices();
   const { data: orders, isLoading: ordersLoading } = useOrders();
+  const { data: stores } = useStores();
   const { alert, confirm, prompt } = useAppDialog();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'purchase' | 'order'>('all');
@@ -65,6 +68,22 @@ export const InvoicesPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [tabValue, setTabValue] = useState(0);
+
+  const storeNameByRetailerId = useMemo(() => {
+    const map = new Map<string, string>();
+    stores?.forEach((store) => {
+      const name = store.shopName || store.displayName;
+      if (!name) return;
+      map.set(store.id, name);
+      if (store.uid) map.set(store.uid, name);
+    });
+    return map;
+  }, [stores]);
+
+  const getOrderStoreName = (order: Order) =>
+    order.retailerName?.trim() ||
+    storeNameByRetailerId.get(order.retailerId) ||
+    'N/A';
 
   // Combine purchase invoices and orders into a single list
   const allInvoices: InvoiceItem[] = useMemo(() => {
@@ -78,6 +97,7 @@ export const InvoicesPage: React.FC = () => {
           type: 'purchase',
           invoiceNumber: inv.invoiceNumber,
           date: inv.invoiceDate,
+          storeName: '—',
           vendorOrStore: inv.vendorName || 'N/A',
           amount: inv.totalAmount || 0,
           status: inv.paymentStatus || 'Unpaid',
@@ -96,6 +116,7 @@ export const InvoicesPage: React.FC = () => {
             type: 'order',
             invoiceNumber: order.invoiceNumber || orderReferenceWithoutInvoice(order.id),
             date: order.orderDate,
+            storeName: getOrderStoreName(order),
             vendorOrStore: order.retailerEmail || 'N/A',
             amount: order.totalAmount || 0,
             status: order.paymentStatus || 'Unpaid',
@@ -105,7 +126,7 @@ export const InvoicesPage: React.FC = () => {
     }
 
     return items;
-  }, [purchaseInvoices, orders]);
+  }, [purchaseInvoices, orders, storeNameByRetailerId]);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('date', 'desc');
 
@@ -114,6 +135,7 @@ export const InvoicesPage: React.FC = () => {
       allInvoices.filter((invoice) => {
     const matchesSearch =
       invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      invoice.storeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       invoice.vendorOrStore.toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesType = typeFilter === 'all' || invoice.type === typeFilter;
@@ -138,6 +160,9 @@ export const InvoicesPage: React.FC = () => {
           break;
         case 'date':
           cmp = compareAsc(toTimeMs(a.date), toTimeMs(b.date));
+          break;
+        case 'storeName':
+          cmp = compareAsc(a.storeName, b.storeName);
           break;
         case 'vendorOrStore':
           cmp = compareAsc(a.vendorOrStore, b.vendorOrStore);
@@ -246,7 +271,7 @@ export const InvoicesPage: React.FC = () => {
           <Grid item xs={12} md={4}>
             <TextField
               fullWidth
-              placeholder="Search by invoice number or vendor/store..."
+              placeholder="Search by invoice number, store name, or vendor/email..."
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);
@@ -307,7 +332,8 @@ export const InvoicesPage: React.FC = () => {
               <SortableTableHeadCell columnId="type" label="Type" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="invoiceNumber" label="Invoice Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="date" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="vendorOrStore" label="Vendor/Store" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="vendorOrStore" label="Vendor / Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <SortableTableHeadCell columnId="status" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="center">Actions</TableCell>
@@ -316,7 +342,7 @@ export const InvoicesPage: React.FC = () => {
           <TableBody>
             {paginatedInvoices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>
                     No invoices found
                   </Typography>
@@ -340,6 +366,7 @@ export const InvoicesPage: React.FC = () => {
                     </Typography>
                   </TableCell>
                   <TableCell>{format(invoice.date, 'MMM dd, yyyy')}</TableCell>
+                  <TableCell>{invoice.storeName}</TableCell>
                   <TableCell>{invoice.vendorOrStore}</TableCell>
                   <TableCell align="right">₹{invoice.amount.toFixed(2)}</TableCell>
                   <TableCell>
