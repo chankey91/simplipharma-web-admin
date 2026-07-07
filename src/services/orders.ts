@@ -1,6 +1,6 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where } from './firebase';
 import { deleteField } from 'firebase/firestore';
-import { Order, OrderStatus, OrderTimelineEvent, Medicine, PurchaseInvoice } from '../types';
+import { Order, OrderStatus, OrderTimelineEvent, Medicine, PurchaseInvoice, Payment } from '../types';
 import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
@@ -65,6 +65,72 @@ function toNum(value: unknown): number {
   const n = typeof value === 'number' ? value : parseFloat(String(value));
   return Number.isFinite(n) ? n : 0;
 }
+
+import type { LedgerOrder } from '../utils/storeLedger';
+
+function mapOrderDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Order {
+  const data = docSnap.data();
+  return {
+    id: docSnap.id,
+    ...data,
+    orderDate: (data.orderDate as { toDate?: () => Date })?.toDate?.() || new Date(),
+    timeline:
+      (data.timeline as Array<Record<string, unknown>> | undefined)?.map((t) => ({
+        ...t,
+        timestamp: (t.timestamp as { toDate?: () => Date })?.toDate?.() || new Date(),
+      })) || [],
+  } as Order;
+}
+
+/** Payments recorded under orders/{orderId}/payments (mobile / SO collection flow). */
+export const getOrderPayments = async (orderId: string): Promise<Payment[]> => {
+  const snapshot = await getDocs(collection(db, 'orders', orderId, 'payments'));
+  return snapshot.docs.map((docSnap) => {
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      orderId,
+      ...data,
+      paymentDate: data.paymentDate?.toDate?.() || new Date(),
+    } as Payment;
+  });
+};
+
+async function enrichOrdersWithPayments(orders: Order[]): Promise<LedgerOrder[]> {
+  return Promise.all(
+    orders.map(async (order) => {
+      const subPayments = await getOrderPayments(order.id);
+      const docPayments =
+        Array.isArray(order.payments) && order.payments.length > 0 ? order.payments : [];
+      const ledgerPayments = subPayments.length > 0 ? subPayments : docPayments;
+      return { ...order, ledgerPayments };
+    })
+  );
+}
+
+/** All orders for a retailer, with payment lines attached for ledger generation. */
+export const getOrdersByRetailer = async (retailerId: string): Promise<LedgerOrder[]> => {
+  const ordersCol = collection(db, 'orders');
+  try {
+    const snapshot = await getDocs(
+      query(ordersCol, where('retailerId', '==', retailerId), orderBy('orderDate', 'asc'))
+    );
+    const orders = snapshot.docs.map((docSnap) => mapOrderDoc(docSnap));
+    return enrichOrdersWithPayments(orders);
+  } catch (error) {
+    console.warn('getOrdersByRetailer query failed, falling back to full scan:', error);
+    const snapshot = await getDocs(ordersCol);
+    const orders = snapshot.docs
+      .map((docSnap) => mapOrderDoc(docSnap))
+      .filter((o) => o.retailerId === retailerId)
+      .sort((a, b) => {
+        const dateA = a.orderDate instanceof Date ? a.orderDate : new Date(a.orderDate);
+        const dateB = b.orderDate instanceof Date ? b.orderDate : new Date(b.orderDate);
+        return dateA.getTime() - dateB.getTime();
+      });
+    return enrichOrdersWithPayments(orders);
+  }
+};
 
 export const getOrderById = async (orderId: string): Promise<Order | null> => {
   const orderRef = doc(db, 'orders', orderId);

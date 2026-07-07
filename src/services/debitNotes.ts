@@ -1,4 +1,4 @@
-import { collection, getDocs, query, orderBy, doc, getDoc, db } from './firebase';
+import { collection, getDocs, query, orderBy, where, doc, getDoc, db } from './firebase';
 import { DebitNote, TaxNoteLine } from '../types';
 
 function toDate(value: unknown): Date {
@@ -37,6 +37,26 @@ export const getAllDebitNotes = async (): Promise<DebitNote[]> => {
     const snap = await getDocs(col);
     const list = snap.docs.map((d) => parseDebitNoteDoc(d.id, d.data() as Record<string, unknown>));
     return list.sort((a, b) => toDate(b.createdAt).getTime() - toDate(a.createdAt).getTime());
+  }
+};
+
+/** Debit notes for a retailer (store ledger). */
+export const getDebitNotesByRetailer = async (retailerId: string): Promise<DebitNote[]> => {
+  const col = collection(db, 'debit_notes');
+  try {
+    const snap = await getDocs(
+      query(col, where('retailerId', '==', retailerId), orderBy('debitNoteDate', 'asc'))
+    );
+    return snap.docs.map((d) => parseDebitNoteDoc(d.id, d.data() as Record<string, unknown>));
+  } catch (error) {
+    console.warn('getDebitNotesByRetailer query failed, falling back to full scan:', error);
+    const all = await getAllDebitNotes();
+    return all
+      .filter((n) => n.retailerId === retailerId)
+      .sort(
+        (a, b) =>
+          toDate(a.debitNoteDate).getTime() - toDate(b.debitNoteDate).getTime()
+      );
   }
 };
 

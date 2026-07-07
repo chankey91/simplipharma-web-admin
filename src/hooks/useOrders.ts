@@ -21,8 +21,11 @@ import {
   unfulfillOrder,
   recalculateOrderPricing,
   getOrderById,
+  getOrdersByRetailer,
   updatePaymentStatus
 } from '../services/orders';
+import { getCreditNotesByRetailer } from '../services/creditNotes';
+import { getDebitNotesByRetailer } from '../services/debitNotes';
 import { getOrderDashboardStats, getOrderInvoicedAmountTotal } from '../services/orderAggregations';
 import { OrderStatus } from '../types';
 
@@ -81,6 +84,26 @@ export const useReceivableOrders = (options?: { enabled?: boolean }) => {
     queryKey: ['receivableOrders'],
     queryFn: getReceivableOrders,
     enabled: options?.enabled ?? true,
+  });
+};
+
+/** Orders, credit notes, and debit notes for a retailer ledger. */
+export const useRetailerLedgerData = (
+  retailerId: string,
+  options?: { enabled?: boolean }
+) => {
+  return useQuery({
+    queryKey: ['retailerLedgerData', retailerId],
+    queryFn: async () => {
+      const [orders, creditNotes, debitNotes] = await Promise.all([
+        getOrdersByRetailer(retailerId),
+        getCreditNotesByRetailer(retailerId),
+        getDebitNotesByRetailer(retailerId),
+      ]);
+      return { orders, creditNotes, debitNotes };
+    },
+    enabled: (options?.enabled ?? true) && !!retailerId,
+    staleTime: 0,
   });
 };
 
@@ -357,6 +380,7 @@ export const useUpdatePaymentStatus = () => {
       queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
       queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
       queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
       queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
     }
