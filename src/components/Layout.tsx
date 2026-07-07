@@ -84,6 +84,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Purchase invoices', icon: <Receipt />, path: '/purchases' },
       { text: 'Vendors', icon: <Business />, path: '/vendors' },
       { text: 'Vendor ledger', icon: <AccountBalanceWallet />, path: '/vendor-ledger' },
+      { text: 'Store ledger', icon: <AccountBalance />, path: '/store-ledger' },
     ],
   },
   {

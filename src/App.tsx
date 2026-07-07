@@ -36,6 +36,7 @@ import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { CreditNotesPage } from './pages/CreditNotes';
 import { MarginReportPage } from './pages/MarginReport';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
+import { StoreLedgerPage } from './pages/StoreLedger';
 import { VendorLedgerPage } from './pages/VendorLedger';
 import { PaymentRequestsPage } from './pages/PaymentRequests';
 import { SupportTicketsPage } from './pages/SupportTickets';
@@ -124,6 +125,7 @@ const router = createBrowserRouter([
   { path: '/support', element: withLayout(<SupportTicketsPage />) },
   { path: '/stores', element: withLayout(<StoresPage />) },
   { path: '/store-receivables', element: withLayout(<StoreReceivablesPage />) },
+  { path: '/store-ledger', element: withLayout(<StoreLedgerPage />) },
   { path: '/vendor-ledger', element: withLayout(<VendorLedgerPage />) },
   { path: '/payment-requests', element: withLayout(<PaymentRequestsPage />) },
   { path: '/vendors', element: withLayout(<VendorsPage />) },

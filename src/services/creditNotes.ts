@@ -221,6 +221,26 @@ export const getAllCreditNotes = async (): Promise<CreditNote[]> => {
   }
 };
 
+/** Credit notes for a retailer (store ledger). */
+export const getCreditNotesByRetailer = async (retailerId: string): Promise<CreditNote[]> => {
+  const col = collection(db, 'credit_notes');
+  try {
+    const snap = await getDocs(
+      query(col, where('retailerId', '==', retailerId), orderBy('creditNoteDate', 'asc'))
+    );
+    return snap.docs.map((d) => parseCreditNoteDoc(d.id, d.data() as Record<string, unknown>));
+  } catch (error) {
+    console.warn('getCreditNotesByRetailer query failed, falling back to full scan:', error);
+    const all = await getAllCreditNotes();
+    return all
+      .filter((n) => n.retailerId === retailerId)
+      .sort(
+        (a, b) =>
+          toDate(a.creditNoteDate).getTime() - toDate(b.creditNoteDate).getTime()
+      );
+  }
+};
+
 /** Credit notes in a reporting window (for margin report — avoids full collection when period ≠ all). */
 export const getCreditNotesInRange = async (
   startMs: number,
