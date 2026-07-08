@@ -748,8 +748,7 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ],
     ['SUB TOTAL', summary.subTotal],
     ['PRODUCT DISCOUNT', summary.discount],
-    ['SGST', summary.sgst],
-    ['CGST', summary.cgst],
+    ['GST', (parseFloat(summary.sgst) + parseFloat(summary.cgst)).toFixed(2)],
     ['ROUND OFF', summary.roundOff],
     ['GRAND TOTAL', summary.grandTotal],
   ];

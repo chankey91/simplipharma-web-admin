@@ -2,6 +2,7 @@ export const GST_INVOICE_STYLES = `
   body {
     font-family: Arial, Helvetica, sans-serif;
     font-size: 11px;
+    line-height: 1.15;
     background: #fff;
   }
   .invoice-box {
@@ -18,7 +19,7 @@ export const GST_INVOICE_STYLES = `
   }
   td, th {
     border: 1px solid #000;
-    padding: 2px 3px;
+    padding: 1px 3px;
     vertical-align: top;
     word-wrap: break-word;
   }
@@ -91,25 +92,31 @@ export const GST_INVOICE_STYLES = `
   .center { text-align: center; }
   .right  { text-align: right; }
   .bold   { font-weight: bold; }
-  .title-cell { padding: 2px 3px; vertical-align: top; }
+  .title-cell { padding: 2px 3px; vertical-align: middle; }
+  .title-cell .title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
   .title-cell .title {
     font-size: 16px;
     font-weight: bold;
-    text-align: center;
-    margin-bottom: 4px;
+    text-align: left;
   }
   .title-cell .title-licenses {
-    text-align: center;
+    text-align: right;
     font-size: 11px;
     font-weight: normal;
-    line-height: 1.35;
+    line-height: 1.2;
+    white-space: nowrap;
   }
   .title  { font-size: 16px; font-weight: bold; text-align: center; }
   .line-rejected td {
     text-decoration: line-through;
     color: #666;
   }
-  .footer-terms { font-size: 10px; line-height: 1.35; }
+  .footer-terms { font-size: 10px; line-height: 1.2; }
   .signatory { vertical-align: bottom; }
   .pay-qr { text-align: center; vertical-align: top; }
   .pay-qr img { width: 90px; height: 90px; display: block; margin: 0 auto 2px; }
@@ -136,12 +143,14 @@ export function buildGstCompanyLicenseHtml(dl: string, gstin: string): string {
       <b>GSTIN:</b> ${gstin}`;
 }
 
-/** Title cell with D.L. No + GSTIN directly below the heading. */
+/** Title cell with heading on the left and D.L. No + GSTIN on the right. */
 export function buildGstInvoiceTitleCell(title: string, dl: string, gstin: string): string {
   return `
     <td colspan="2" class="title-cell">
-      <div class="title">${title}</div>
-      <div class="title-licenses">${buildGstCompanyLicenseHtml(dl, gstin)}</div>
+      <div class="title-row">
+        <div class="title">${title}</div>
+        <div class="title-licenses">${buildGstCompanyLicenseHtml(dl, gstin)}</div>
+      </div>
     </td>`;
 }
 
@@ -235,6 +244,7 @@ export function buildGstInvoiceTotalsSection(
   totalLabel = 'GRAND TOTAL'
 ): string {
   const roundOffSign = parseFloat(summary.roundOff) >= 0 ? '+' : '';
+  const totalGst = (parseFloat(summary.sgst) + parseFloat(summary.cgst)).toFixed(2);
   return `
 <table>
   <tr>
@@ -247,8 +257,7 @@ export function buildGstInvoiceTotalsSection(
     <td width="30%" class="totals-panel">
       <div class="totals-row"><span>SUB TOTAL</span><span>${summary.subTotal}</span></div>
       <div class="totals-row"><span>PRODUCT DISCOUNT</span><span>-${summary.discount}</span></div>
-      <div class="totals-row"><span>SGST</span><span>${summary.sgst}</span></div>
-      <div class="totals-row"><span>CGST</span><span>${summary.cgst}</span></div>
+      <div class="totals-row"><span>GST</span><span>${totalGst}</span></div>
       <div class="totals-row"><span>Round Off</span><span>${roundOffSign}${summary.roundOff}</span></div>
       <div class="totals-row grand-total"><span>${totalLabel}</span><span>${summary.grandTotal}</span></div>
     </td>
