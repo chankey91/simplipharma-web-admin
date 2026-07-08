@@ -20,7 +20,7 @@ import {
   Chip,
   LinearProgress,
 } from '@mui/material';
-import { Search, Download, Refresh, Build, CloudSync } from '@mui/icons-material';
+import { Search, Download, Refresh, Build, CloudSync, Add } from '@mui/icons-material';
 import { format } from 'date-fns';
 import {
   useCreditNotes,
@@ -43,6 +43,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { CreateLedgerNoteDialog } from '../components/CreateLedgerNoteDialog';
 
 type NoteTab = 'credit' | 'debit';
 
@@ -85,6 +86,7 @@ export const CreditNotesPage: React.FC = () => {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
+  const [createLedgerOpen, setCreateLedgerOpen] = useState(false);
   const backfillMutation = useBackfillCreditNotes();
   const { alert, confirm } = useAppDialog();
 
@@ -144,7 +146,8 @@ export const CreditNotesPage: React.FC = () => {
         (n.retailerName || '').toLowerCase().includes(term) ||
         (n.retailerEmail || '').toLowerCase().includes(term) ||
         (n.originalInvoiceNumber || '').toLowerCase().includes(term) ||
-        n.orderId.toLowerCase().includes(term)
+        (n.orderId || '').toLowerCase().includes(term) ||
+        (n.reason || '').toLowerCase().includes(term)
     );
     const sorted = [...list];
     sorted.sort((a, b) => {
@@ -235,7 +238,7 @@ export const CreditNotesPage: React.FC = () => {
           : new Date(isCredit ? n.creditNoteDate : n.debitNoteDate),
         retailer: n.retailerName || n.retailerEmail || n.retailerId,
         originalInvoiceNumber: n.originalInvoiceNumber || (isCredit ? '' : n.orderId) || '',
-        reason: isCredit ? '' : n.reason || n.sourceType || '',
+        reason: isCredit ? n.reason || (n.type === 'ledger_adjustment' ? 'Ledger adjustment' : '') : n.reason || n.sourceType || '',
         totalAmount: n.totalAmount ?? 0,
       }));
     }
@@ -383,10 +386,17 @@ export const CreditNotesPage: React.FC = () => {
             Credit & debit notes
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Credit notes from order returns; debit notes for future billing adjustments
+            Credit notes from returns and direct ledger adjustments; debit notes for store ledger charges
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button
+            startIcon={<Add />}
+            variant="contained"
+            onClick={() => setCreateLedgerOpen(true)}
+          >
+            {isCredit ? 'Create ledger credit note' : 'Create ledger debit note'}
+          </Button>
           {isCredit && (
             <Button
               startIcon={<Build />}
@@ -435,13 +445,14 @@ export const CreditNotesPage: React.FC = () => {
 
       {isCredit ? (
         <Alert severity="info" sx={{ mb: 2 }}>
-          Credit notes are created automatically when order returns are approved. Use &quot;Repair batch/MRP&quot; once
-          to fix older notes that were saved before batch and MRP were stored on line items.
+          Return credit notes are created when order returns are approved. Use{' '}
+          <strong>Create ledger credit note</strong> to add wallet credit directly (also on store ledger).
+          Use &quot;Repair batch/MRP&quot; once to fix older return notes missing batch/MRP on lines.
         </Alert>
       ) : (
         <Alert severity="info" sx={{ mb: 2 }}>
-          Debit notes are not issued yet. This tab is ready for future use when additional charges or billing corrections
-          are recorded against retailers (collection: <code>debit_notes</code>).
+          Use <strong>Create ledger debit note</strong> to post a charge to the retailer&apos;s wallet and store
+          ledger (no approval request).
         </Alert>
       )}
 
@@ -511,7 +522,7 @@ export const CreditNotesPage: React.FC = () => {
                   sortDirection={sortDirection}
                   onRequestSort={requestSort}
                 />
-                {!isCredit ? <TableCell>Reason</TableCell> : null}
+                <TableCell>Reason / source</TableCell>
                 <SortableTableHeadCell
                   columnId="amount"
                   label="Amount"
@@ -526,7 +537,7 @@ export const CreditNotesPage: React.FC = () => {
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={!isCredit ? 7 : 6} align="center" sx={{ py: 4 }}>
+                  <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
                     <Typography color="text.secondary">
                       {isCredit ? 'No credit notes yet' : 'No debit notes yet'}
                     </Typography>
@@ -539,7 +550,7 @@ export const CreditNotesPage: React.FC = () => {
                     <TableCell>{format(note.date, 'dd MMM yyyy')}</TableCell>
                     <TableCell>{note.retailer}</TableCell>
                     <TableCell>{note.originalInvoiceNumber || '—'}</TableCell>
-                    {!isCredit ? <TableCell>{note.reason || '—'}</TableCell> : null}
+                    <TableCell>{note.reason || '—'}</TableCell>
                     <TableCell align="right">{formatAmount(note.totalAmount)}</TableCell>
                     <TableCell align="right">
                       <IconButton
@@ -564,6 +575,19 @@ export const CreditNotesPage: React.FC = () => {
           <Pagination count={totalPages} page={page} onChange={(_, p) => setPage(p)} color="primary" />
         </Box>
       ) : null}
+
+      <CreateLedgerNoteDialog
+        open={createLedgerOpen}
+        kind={tab}
+        onClose={() => setCreateLedgerOpen(false)}
+        onCreated={async ({ documentNumber }) => {
+          handleRefresh();
+          await alert(
+            `${tab === 'credit' ? 'Credit' : 'Debit'} note ${documentNumber} created. It is reflected in the store ledger and retailer wallet.`,
+            { severity: 'success' }
+          );
+        }}
+      />
     </Box>
   );
 };

@@ -379,17 +379,25 @@ export interface CreditNoteLine {
 /** Shared line shape for credit/debit tax notes. */
 export type TaxNoteLine = CreditNoteLine;
 
-export type CreditNoteType = 'order_return';
+export type CreditNoteType = 'order_return' | 'ledger_adjustment';
 
-export type DebitNoteSourceType = 'manual' | 'order_adjustment' | 'billing_correction' | 'other';
+export type DebitNoteSourceType =
+  | 'manual'
+  | 'ledger_adjustment'
+  | 'order_adjustment'
+  | 'billing_correction'
+  | 'other';
 
 export interface CreditNote {
   id: string;
   creditNoteNumber: string;
   creditNoteDate: Date | any;
   type: CreditNoteType;
-  orderReturnRequestId: string;
-  orderId: string;
+  /** When false/omitted, note is included in retailer wallet. */
+  ledgerOnly?: boolean;
+  orderReturnRequestId?: string;
+  orderId?: string;
+  reason?: string;
   originalInvoiceNumber?: string;
   retailerId: string;
   retailerName?: string;
@@ -403,6 +411,9 @@ export interface CreditNote {
   taxAmount: number;
   totalAmount: number;
   taxPercentage: number;
+  /** Wallet balance (mobile app); mirrors totalAmount when issued. */
+  amount?: number;
+  amountUsed?: number;
   status: 'issued';
   createdBy?: string;
   createdAt: Date | any;
@@ -413,6 +424,8 @@ export interface DebitNote {
   debitNoteNumber: string;
   debitNoteDate: Date | any;
   sourceType?: DebitNoteSourceType;
+  /** When false/omitted, note is included in retailer wallet. */
+  ledgerOnly?: boolean;
   retailerId: string;
   retailerName?: string;
   retailerEmail?: string;

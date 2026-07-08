@@ -7,6 +7,10 @@ import {
   backfillAllCreditNotes,
   backfillCreditNoteById,
 } from '../services/creditNotes';
+import {
+  createDirectLedgerCreditNote,
+  createDirectLedgerDebitNote,
+} from '../services/ledgerNotes';
 
 import { getAllDebitNotes } from '../services/debitNotes';
 import { getCreditNoteTotals, getDebitNoteTotals, NoteTotals } from '../services/dashboardAggregations';
@@ -134,5 +138,32 @@ export const useBackfillCreditNote = () => {
       queryClient.invalidateQueries({ queryKey: ['creditNoteTotals'] });
       queryClient.invalidateQueries({ queryKey: ['creditNotesSearch'] });
     },
+  });
+};
+
+function invalidateLedgerNoteQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
+  queryClient.invalidateQueries({ queryKey: ['debitNotes'] });
+  queryClient.invalidateQueries({ queryKey: ['creditNotesSearch'] });
+  queryClient.invalidateQueries({ queryKey: ['debitNotesSearch'] });
+  queryClient.invalidateQueries({ queryKey: ['creditNoteTotals'] });
+  queryClient.invalidateQueries({ queryKey: ['debitNoteTotals'] });
+  queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
+  queryClient.invalidateQueries({ queryKey: ['storeNoteStats'] });
+}
+
+export const useCreateDirectLedgerCreditNote = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: createDirectLedgerCreditNote,
+    onSuccess: () => invalidateLedgerNoteQueries(queryClient),
+  });
+};
+
+export const useCreateDirectLedgerDebitNote = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: createDirectLedgerDebitNote,
+    onSuccess: () => invalidateLedgerNoteQueries(queryClient),
   });
 };
