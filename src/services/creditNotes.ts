@@ -353,6 +353,8 @@ export async function issueCreditNoteForOrderReturn(
     subTotal: Math.round(subTotal * 100) / 100,
     taxAmount: Math.round(taxAmount * 100) / 100,
     totalAmount: returnRequest.totalRefundAmount,
+    amount: returnRequest.totalRefundAmount,
+    amountUsed: 0,
     taxPercentage,
     status: 'issued',
     createdBy: returnRequest.approvedBy || auth.currentUser?.uid,
