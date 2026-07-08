@@ -111,6 +111,9 @@ export const GST_INVOICE_STYLES = `
   }
   .footer-terms { font-size: 10px; line-height: 1.35; }
   .signatory { vertical-align: bottom; }
+  .pay-qr { text-align: center; vertical-align: top; }
+  .pay-qr img { width: 90px; height: 90px; display: block; margin: 0 auto 2px; }
+  .pay-qr .pay-qr-label { font-size: 9px; font-weight: bold; }
   @media print {
     body { margin: 0; }
   }
@@ -262,17 +265,26 @@ export function buildGstInvoiceFooter(
   remarks: string,
   amountInWords: string,
   signatoryFor: string,
-  termsHtml = DEFAULT_SALES_TERMS
+  termsHtml = DEFAULT_SALES_TERMS,
+  paymentQrDataUri?: string
 ): string {
+  const qrCell = paymentQrDataUri
+    ? `
+    <td width="18%" class="pay-qr">
+      <img src="${paymentQrDataUri}" alt="Scan to Pay">
+      <div class="pay-qr-label">Scan to Pay</div>
+    </td>`
+    : '';
+  const termsWidth = paymentQrDataUri ? '42%' : '60%';
   return `
 <table>
   <tr>
-    <td width="60%" class="footer-terms">
+    <td width="${termsWidth}" class="footer-terms">
       <b>Terms & Conditions</b><br>
       ${termsHtml}<br><br>
       <b>Remarks:</b> ${remarks}<br>
       <b>Rs.</b> ${amountInWords}
-    </td>
+    </td>${qrCell}
     <td width="40%" class="center signatory">
       For ${signatoryFor}<br><br><br>
       <b>Authorised Signatory</b>

@@ -26,6 +26,7 @@ import {
   resolveSellDiscountPct,
   unitPriceFromMrp,
 } from './orderFulfillmentDiscount';
+import { PAYMENT_QR_DATA_URI } from '../assets/paymentQr';
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
@@ -677,7 +678,7 @@ ${buildGstInvoiceItemTableHtml(items)}
 <!-- TOTAL SECTION -->
 ${buildGstInvoiceTotalsSection(tax, summary, gstRatePercent / 2)}
 <!-- FOOTER -->
-${buildGstInvoiceFooter(order.dispatchNotes || '', summary.amountInWords, company.name)}
+${buildGstInvoiceFooter(order.dispatchNotes || '', summary.amountInWords, company.name, undefined, PAYMENT_QR_DATA_URI)}
 </div>
 </body>
 </html>
