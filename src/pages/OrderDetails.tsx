@@ -3025,12 +3025,27 @@ export const OrderDetailsPage: React.FC = () => {
                 {/* Actions - only when dispatched */}
                 {(order.status === 'In Transit' || order.status === 'Delivered') && (
                   <>
+                    {order.paymentReviewStatus === 'pending_admin_review' ? (
+                      <Alert severity="warning" sx={{ mb: 1 }}>
+                        Retailer payment is pending approval. Open{' '}
+                        <Button
+                          size="small"
+                          color="inherit"
+                          sx={{ textTransform: 'none', p: 0, minWidth: 0, verticalAlign: 'baseline' }}
+                          onClick={() => navigate('/payment-requests')}
+                        >
+                          Payment requests
+                        </Button>{' '}
+                        to approve or reject — payment is applied only after approval.
+                      </Alert>
+                    ) : null}
                     {(order.paymentStatus === 'Unpaid' || !order.paymentStatus || order.paymentStatus === 'Partial') ? (
                       <Button
                         fullWidth
                         variant="contained"
                         color="primary"
                         startIcon={<Payment />}
+                        disabled={order.paymentReviewStatus === 'pending_admin_review'}
                         onClick={() => {
                           const total = effectiveOrderTotal;
                           const paid = order.paidAmount ?? 0;

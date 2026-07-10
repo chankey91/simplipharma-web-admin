@@ -10,6 +10,8 @@ import {
   updateDoc,
   where,
   getCountFromServer,
+  addDoc,
+  Timestamp,
 } from './firebase';
 import type { Order, PaymentRequest, PaymentRequestStatus } from '../types';
 
@@ -257,9 +259,6 @@ export const approvePaymentRequest = async (
   const order = { id: orderSnap.id, ...(orderSnap.data() as Record<string, unknown>) } as Order;
   const totalAmount = Number(order.totalAmount ?? request.orderTotalSnapshot ?? 0);
   const currentPaid = Number(order.paidAmount ?? 0);
-  const currentDue = Number(
-    order.dueAmount ?? Math.max(0, totalAmount - currentPaid)
-  );
   const requestedAmount = Number(request.requestedAmount ?? 0);
   const approvedAmount = Math.max(0, Number(payload.approvedAmount ?? requestedAmount));
   const approvedCredit = await applyCreditApplications(request.creditApplications);
@@ -268,15 +267,31 @@ export const approvePaymentRequest = async (
   const nextDue = Math.max(0, totalAmount - nextPaid);
   const nextStatus: 'Paid' | 'Partial' | 'Unpaid' =
     nextDue <= 0.01 ? 'Paid' : nextPaid > 0.01 ? 'Partial' : 'Unpaid';
+  const paymentMethod = request.method === 'online' ? 'Online' : 'Cash';
+
+  // Cash/online portion only — credit applications are tracked separately on credit notes
+  if (approvedAmount > 0.01) {
+    await addDoc(collection(db, 'orders', request.orderId, 'payments'), {
+      orderId: request.orderId,
+      amount: approvedAmount,
+      paymentDate: Timestamp.now(),
+      paymentMethod,
+      transactionId: request.transactionId || request.cashReference || null,
+      notes: `Approved payment request ${requestId}`,
+      paymentRequestId: requestId,
+      createdAt: serverTimestamp(),
+    });
+  }
 
   await updateDoc(orderRef, {
     paidAmount: nextPaid,
     dueAmount: nextDue,
     paymentStatus: nextStatus,
-    paymentMethod: request.method === 'online' ? 'Online' : 'Cash',
+    paymentMethod,
     transactionId: request.transactionId || null,
     paymentReviewStatus: nextStatus === 'Paid' ? 'none' : 'approved',
     paymentRejectedReason: null,
+    lastPaymentRequestId: requestId,
     ...(approvedCredit > 0.01
       ? {
           creditApplied: approvedCredit,
@@ -290,6 +305,7 @@ export const approvePaymentRequest = async (
     reviewedBy: payload.reviewedBy,
     reviewedAt: serverTimestamp(),
     reviewNote: payload.reviewNote || null,
+    approvedAmount,
     approvedCreditAmount: approvedCredit,
     updatedAt: serverTimestamp(),
   });
