@@ -250,9 +250,10 @@ export const getOrdersByStatuses = async (statuses: OrderStatus[]): Promise<Orde
 };
 
 /**
- * Orders with money still owed (payment status Unpaid or Partial). Used by the
- * Store Receivables page so it doesn't download the whole collection just to
- * find outstanding bills. Cancelled/Pending are filtered out client-side.
+ * Orders with money still owed (Unpaid / Partial, or paymentStatus unset).
+ * Order Details treats a missing paymentStatus as Unpaid, so receivables must
+ * include those docs too — Firestore `in` queries skip missing fields.
+ * Cancelled / Pending are excluded client-side.
  */
 export const getReceivableOrders = async (): Promise<Order[]> => {
   const ordersCol = collection(db, 'orders');
@@ -269,16 +270,31 @@ export const getReceivableOrders = async (): Promise<Order[]> => {
         })) || [],
     } as Order;
   };
-  const keep = (o: Order) => o.status !== 'Cancelled' && o.status !== 'Pending';
+  const isCandidate = (o: Order) => {
+    if (o.status === 'Cancelled' || o.status === 'Pending') return false;
+    const ps = o.paymentStatus;
+    return ps === 'Unpaid' || ps === 'Partial' || !ps;
+  };
   try {
-    const snapshot = await getDocs(
+    // Explicit Unpaid / Partial
+    const unpaidPartialSnap = await getDocs(
       query(ordersCol, where('paymentStatus', 'in', ['Unpaid', 'Partial']))
     );
-    return snapshot.docs.map(mapDoc).filter(keep);
+    // Orders with no paymentStatus still show as Unpaid in the UI; Firestore
+    // cannot query "field missing", so load billable statuses and keep those.
+    const billableSnap = await getDocs(
+      query(ordersCol, where('status', 'in', ['Order Fulfillment', 'In Transit', 'Delivered']))
+    );
+    const byId = new Map<string, Order>();
+    for (const docSnap of [...unpaidPartialSnap.docs, ...billableSnap.docs]) {
+      const o = mapDoc(docSnap);
+      if (isCandidate(o)) byId.set(o.id, o);
+    }
+    return [...byId.values()];
   } catch (error) {
     console.warn('getReceivableOrders query failed, falling back to full scan:', error);
     const snapshot = await getDocs(ordersCol);
-    return snapshot.docs.map(mapDoc).filter(keep);
+    return snapshot.docs.map(mapDoc).filter(isCandidate);
   }
 };
 
@@ -894,6 +910,17 @@ export const fulfillOrder = async (
     fulfillmentDraft: deleteField(),
     timeline: [...currentTimeline, createTimelineEvent('Order Fulfillment', fulfilledBy, 'Order items verified and tax added')]
   };
+
+  // Default payment fields so Store Receivables can query Unpaid bills
+  const existingPaymentStatus = orderDoc.data()?.paymentStatus;
+  if (!existingPaymentStatus || existingPaymentStatus === 'Unpaid') {
+    updateData.paymentStatus = 'Unpaid';
+    updateData.paidAmount = 0;
+    updateData.dueAmount = cleanFulfillmentData.totalAmount || 0;
+  } else if (existingPaymentStatus === 'Partial') {
+    const paid = Number(orderDoc.data()?.paidAmount) || 0;
+    updateData.dueAmount = Math.max(0, (cleanFulfillmentData.totalAmount || 0) - paid);
+  }
   
   // Add invoice number if generated
   if (invoiceNumber) {

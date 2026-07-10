@@ -28,7 +28,9 @@ export function orderOutstanding(o: Order): number {
     if (o.dueAmount != null && o.dueAmount > 0) return o.dueAmount;
     return Math.max(0, (o.totalAmount ?? 0) - (o.paidAmount ?? 0));
   }
-  return o.totalAmount ?? 0;
+  // Unpaid or unset paymentStatus — prefer dueAmount when present
+  if (o.dueAmount != null && o.dueAmount > 0) return o.dueAmount;
+  return Math.max(0, (o.totalAmount ?? 0) - (o.paidAmount ?? 0));
 }
 
 export function buildStoreReceivableSummaries(

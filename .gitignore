@@ -9,9 +9,12 @@ dist-ssr
 
 # Environment variables (IMPORTANT: Never commit these!)
 .env
+.env.dev
+.env.prod
 .env.local
 .env.production
 .env.development
+.env.*.local
 
 # Firebase credentials
 firebase-service-account.json
