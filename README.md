@@ -65,16 +65,23 @@ The build output will be in the `dist/` directory.
 
 ## 🚀 Deployment
 
-This project includes complete deployment automation for server deployment.
+Branch maps to environment (same pattern as simplipharma-web-app):
+
+| Env | Branch | URL | Deploy path |
+|-----|--------|-----|-------------|
+| **dev** | `develop` | http://103.230.227.5:8086 | `/var/www/simplipharma-admin-dev/current` |
+| **prod** | `main` | http://103.230.227.5:8085 | `/var/www/simplipharma-admin/current` |
+
+Merge to **`develop`** → auto-deploy **dev**. Merge to **`main`** → auto-deploy **prod**.
 
 ### Documentation
 
 | Document | Purpose |
 |----------|---------|
 | **[START_HERE.md](documentation/START_HERE.md)** | 🎯 Quick start deployment guide |
+| **[SERVER_DEPLOYMENT_STEPS.md](documentation/SERVER_DEPLOYMENT_STEPS.md)** | ⚡ Env-based deploy + webhook steps |
 | **[DEPLOYMENT_GUIDE.md](documentation/DEPLOYMENT_GUIDE.md)** | 📖 Complete deployment reference |
 | **[JENKINS_CREDENTIALS_SETUP.md](documentation/JENKINS_CREDENTIALS_SETUP.md)** | 🔐 Jenkins credentials configuration |
-| **[SERVER_DEPLOYMENT_STEPS.md](documentation/SERVER_DEPLOYMENT_STEPS.md)** | ⚡ Quick command reference |
 | **[README_DEPLOYMENT.md](documentation/README_DEPLOYMENT.md)** | 📦 Deployment package overview |
 
 ### Quick Deployment Options

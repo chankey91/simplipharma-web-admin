@@ -2,7 +2,14 @@
 
 ## Welcome!
 
-This guide will help you deploy SimpliPharma Admin Panel to your server **103.230.227.5** on port **8085**.
+This guide will help you deploy SimpliPharma Admin Panel to your server **103.230.227.5**.
+
+| Env | Branch | Port | URL |
+|-----|--------|------|-----|
+| **dev** | `develop` | **8086** | http://103.230.227.5:8086 |
+| **prod** | `main` | **8085** | http://103.230.227.5:8085 |
+
+See **[SERVER_DEPLOYMENT_STEPS.md](SERVER_DEPLOYMENT_STEPS.md)** for env-based Jenkins + webhook setup.
 
 ---
 
