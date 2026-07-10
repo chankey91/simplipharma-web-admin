@@ -31,15 +31,17 @@ const getTransporter = () => {
     if (!config || !config.user || !config.password) {
         throw new Error('SMTP configuration not found. Please set smtp.user and smtp.password using firebase functions:config:set');
     }
+    const host = config.host || 'smtp.zoho.in';
+    const port = Number(config.port) || 587;
     console.log('Creating SMTP transporter with config:', {
-        host: 'smtp.gmail.com',
-        port: 587,
+        host,
+        port,
         user: config.user,
         hasPassword: !!config.password
     });
     return nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 587,
+        host,
+        port,
         secure: false, // true for 465, false for other ports
         auth: {
             user: config.user,

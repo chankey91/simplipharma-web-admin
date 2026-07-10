@@ -36,16 +36,7 @@ import {
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { canAccessPanel, type PanelRole } from '../auth/permissions';
-
-// Firebase configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyCFtUVHKtADWllccdnlbougsnsntEUHQDA",
-  authDomain: "simplipharma.firebaseapp.com",
-  projectId: "simplipharma",
-  storageBucket: "simplipharma.firebasestorage.app",
-  messagingSenderId: "343720215451",
-  appId: "1:343720215451:android:d2576ba41a99a5681e973e"
-};
+import { firebaseConfig, firebaseFunctionsRegion } from '../config/env';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -67,7 +58,7 @@ try {
 export const db = firestoreDb;
 export const storage = getStorage(app);
 // Initialize Functions with region (us-central1 is default, but explicit is better)
-export const functions = getFunctions(app, 'us-central1');
+export const functions = getFunctions(app, firebaseFunctionsRegion);
 
 // Auth helpers
 export const login = async (email: string, password: string) => {

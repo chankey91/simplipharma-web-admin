@@ -18,11 +18,11 @@ const nodemailer = require('nodemailer');
 
 // SMTP Credentials
 const SMTP_CONFIG = {
-  user: 'simplipharma.2025@gmail.com',
-  password: 'rvpljxxeeygrlfov'.replace(/\s/g, ''), // Remove any spaces from App Password
-  host: 'smtp.gmail.com',
+  user: 'support.simplipharma@sanchet.in',
+  password: 'Sanchet@18',
+  host: 'smtp.zoho.in',
   port: 587,
-  secure: false, // true for 465, false for other ports
+  secure: false,
 };
 
 // Test email configuration
@@ -60,13 +60,15 @@ async function testSMTP() {
 
   // Create transporter with enhanced options
   const transporter = nodemailer.createTransport({
-    service: 'gmail', // Use Gmail service instead of manual config
+    host: SMTP_CONFIG.host,
+    port: SMTP_CONFIG.port,
+    secure: SMTP_CONFIG.secure,
     auth: {
       user: SMTP_CONFIG.user,
       pass: SMTP_CONFIG.password,
     },
-    debug: true, // Enable debug output
-    logger: true // Enable logging
+    debug: true,
+    logger: true,
   });
 
   try {

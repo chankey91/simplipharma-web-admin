@@ -20,6 +20,9 @@ firebase-service-account.json
 .runtimeconfig.json
 functions/.runtimeconfig.json
 
+# Migration exports (may contain user data)
+scripts/migrations/*.json
+
 # IDE
 .vscode/*
 !.vscode/extensions.json

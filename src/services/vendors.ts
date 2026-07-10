@@ -3,6 +3,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Vendor } from '../types';
 import { functions } from './firebase';
 import { auth } from './firebase';
+import { getCloudFunctionUrl } from '../config/env';
 
 export const getAllVendors = async (): Promise<Vendor[]> => {
   const vendorsCol = collection(db, 'vendors');
@@ -173,7 +174,7 @@ export const createVendor = async (vendorData: Omit<Vendor, 'id'> & { password?:
         const authToken = await currentUser.getIdToken();
         
         // Try HTTP function first (has explicit CORS)
-        const httpFunctionUrl = `https://us-central1-simplipharma.cloudfunctions.net/sendVendorPasswordEmailHttp`;
+        const httpFunctionUrl = getCloudFunctionUrl('sendVendorPasswordEmailHttp');
         
         console.log('Calling HTTP function with CORS:', httpFunctionUrl);
         
