@@ -1,8 +1,13 @@
 # SimpliPharma Admin - Quick Deployment Steps
 
-## 🚀 Quick Reference for Server Administrator
+**Server:** 103.230.227.5 | **SSH Port:** 2022 | **User:** sanchet_ftpuser
 
-**Server:** 103.230.227.5 | **SSH Port:** 2022 | **User:** sanchet_ftpuser | **App Port:** 8085
+Environment-based deploys: **`develop` → dev**, **`main` → prod**.
+
+| Env | Branch | Port | Deploy path | URL |
+|-----|--------|------|-------------|-----|
+| **dev** | `develop` | **8083** | `/var/www/simplipharma-admin-dev` | http://103.230.227.5:8083 |
+| **prod** | `main` | **8085** | `/var/www/simplipharma-admin` | http://103.230.227.5:8085 |
 
 ---
 
@@ -10,236 +15,156 @@
 
 ### Initial Setup (One-time)
 
-1. **Access Jenkins**
-   ```
-   URL: http://103.230.227.5:8080
-   ```
+1. **Access Jenkins:** http://103.230.227.5:8080
 
-2. **Install NodeJS Plugin**
-   - Manage Jenkins → Manage Plugins → Available
-   - Search "NodeJS" → Install
+2. **Node.js** — Manage Jenkins → Global Tool Configuration → NodeJS `nodejs` 18.x+
 
-3. **Configure Node.js**
-   - Manage Jenkins → Global Tool Configuration
-   - Add NodeJS → Name: `nodejs`, Version: 18.x+
+3. **Firebase credentials** — both `develop` and `main` currently use the same secrets:
+   - `simplipharma-firebase-api-key`
+   - `simplipharma-firebase-auth-domain`
+   - `simplipharma-firebase-project-id`
+   - `simplipharma-firebase-storage-bucket`
+   - `simplipharma-firebase-messaging-sender-id`
+   - `simplipharma-firebase-app-id`
 
-4. **Add Firebase Credentials**
-   - Manage Jenkins → Manage Credentials → (global)
-   - Add 6 **Secret Text** credentials:
-   
-   | ID | Value |
-   |---|---|
-   | `simplipharma-firebase-api-key` | AIzaSyCFtUVHKtADWllccdnlbougsnsntEUHQDA |
-   | `simplipharma-firebase-auth-domain` | simplipharma.firebaseapp.com |
-   | `simplipharma-firebase-project-id` | simplipharma |
-   | `simplipharma-firebase-storage-bucket` | simplipharma.firebasestorage.app |
-   | `simplipharma-firebase-messaging-sender-id` | 343720215451 |
-   | `simplipharma-firebase-app-id` | 1:343720215451:android:d2576ba41a99a5681e973e |
+   When you add a separate Firebase project for admin dev, change `FB_CRED_PREFIX` for `develop` in `Jenkinsfile` to `simplipharma-dev-firebase` and create matching credentials.
 
-5. **Create Pipeline Job**
-   - New Item → Name: `simplipharma-admin-deployment`
-   - Type: **Pipeline**
-   - Pipeline from SCM → Git
-   - Repository: `https://github.com/chankey91/simplipharma-web-admin.git`
-   - Branch: `*/main`
+4. **Create / update Pipeline jobs**
+
+   **Recommended: Multibranch Pipeline**
+   - New Item → Name: `simplipharma-admin`
+   - Type: **Multibranch Pipeline**
+   - Branch Sources → Git → `https://github.com/chankey91/simplipharma-web-admin.git`
+   - Filter / discover `develop` and `main`
    - Script Path: `Jenkinsfile`
+   - Save → Scan Repository
 
-6. **Grant Jenkins Sudo Access**
+   **Alternative: two classic Pipeline jobs**
+   | Job | Branch | Deploys |
+   |-----|--------|---------|
+   | `simplipharma-admin-dev` | `*/develop` | port 8083 |
+   | `simplipharma-admin-deployment` | `*/main` | port 8085 |
+
+   Important: use **Pipeline script from SCM** (do not hardcode `git branch: 'main'` in the job). The `Jenkinsfile` no longer re-checkouts a fixed branch.
+
+5. **Auto-deploy on merge (webhook)**
+   - Job → **Configure** → **Build Triggers** → **GitHub hook trigger for GITScm polling**
+   - GitHub → repo **Settings → Webhooks → Add webhook**
+     - Payload URL: `http://103.230.227.5:8080/github-webhook/`
+     - Content type: `application/json`
+     - Events: **Just the push event**
+
+6. **Jenkins sudo** (if not already configured):
    ```bash
-   ssh -p 2022 sanchet_ftpuser@103.230.227.5
-   
    sudo tee /etc/sudoers.d/jenkins << EOF
    jenkins ALL=(ALL) NOPASSWD: /bin/mkdir, /bin/cp, /bin/mv, /bin/rm, /bin/chown, /bin/chmod, /usr/bin/tee, /usr/sbin/nginx, /bin/systemctl
    EOF
-   
    sudo chmod 0440 /etc/sudoers.d/jenkins
    ```
 
-### Deploy Application
+7. **Firewall:**
+   ```bash
+   sudo ufw allow 8085/tcp
+   sudo ufw allow 8083/tcp
+   ```
 
-1. Go to Jenkins → `simplipharma-admin-deployment`
-2. Click **"Build Now"**
-3. Wait for SUCCESS ✅
-4. Access: http://103.230.227.5:8085
+### Deploy
+
+| Action | Result |
+|--------|--------|
+| Merge / push to **`develop`** | Auto-deploy **dev** → http://103.230.227.5:8083 |
+| Merge / push to **`main`** | Auto-deploy **prod** → http://103.230.227.5:8085 |
+| Manual | Jenkins → job → **Build Now** |
 
 ---
 
 ## Option 2: Manual Deployment
 
-### First Time Setup
+Use env-specific files: `.env.dev` or `.env.prod`.
 
 ```bash
-# 1. SSH to server
 ssh -p 2022 sanchet_ftpuser@103.230.227.5
 
-# 2. Clone repository
 cd ~
 git clone https://github.com/chankey91/simplipharma-web-admin.git
 cd simplipharma-web-admin
 
-# 3. Create .env file
-cat > .env << 'EOF'
+cat > .env.dev << 'EOF'
 VITE_FIREBASE_API_KEY=AIzaSyCFtUVHKtADWllccdnlbougsnsntEUHQDA
 VITE_FIREBASE_AUTH_DOMAIN=simplipharma.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=simplipharma
 VITE_FIREBASE_STORAGE_BUCKET=simplipharma.firebasestorage.app
 VITE_FIREBASE_MESSAGING_SENDER_ID=343720215451
 VITE_FIREBASE_APP_ID=1:343720215451:android:d2576ba41a99a5681e973e
-VITE_APP_NAME="SimpliPharma Admin Panel"
+VITE_APP_NAME="SimpliPharma Admin Panel (Dev)"
 VITE_APP_VERSION=1.0.0
 EOF
 
-# 4. Run deployment script
+cp .env.dev .env.prod
+# edit .env.prod name if needed
+
 chmod +x deploy.sh
-./deploy.sh
+./deploy.sh prod   # or: ./deploy.sh dev
 ```
 
-### Subsequent Deployments
+Subsequent deploys:
 
 ```bash
 cd ~/simplipharma-web-admin
-git pull origin main
-./deploy.sh
+git pull origin develop   # or main
+./deploy.sh dev           # or: ./deploy.sh prod
 ```
 
 ---
 
-## ✅ Verify Deployment
+## Verify
 
 ```bash
-# Health check
+# Dev
+curl http://103.230.227.5:8083/health
+
+# Prod
 curl http://103.230.227.5:8085/health
-
-# Should return: healthy
-
-# Open in browser
-# http://103.230.227.5:8085
 ```
 
 ---
 
-## 🔧 Useful Commands
+## Ports on this server
 
-### View Logs
-```bash
-# Access logs
-sudo tail -f /var/log/nginx/simplipharma-admin-access.log
-
-# Error logs
-sudo tail -f /var/log/nginx/simplipharma-admin-error.log
-```
-
-### Nginx Control
-```bash
-# Reload (graceful, no downtime)
-sudo systemctl reload nginx
-
-# Restart (brief downtime)
-sudo systemctl restart nginx
-
-# Check status
-sudo systemctl status nginx
-
-# Test configuration
-sudo nginx -t
-```
-
-### Application Files
-```bash
-# View deployed files
-ls -la /var/www/simplipharma-admin/current/
-
-# Check permissions
-ls -la /var/www/simplipharma-admin/
-
-# View backups
-ls -lt /var/www/simplipharma-admin/
-```
-
-### Rollback to Previous Version
-```bash
-# List available backups
-ls -lt /var/www/simplipharma-admin/ | grep backup
-
-# Rollback (replace with actual backup name)
-sudo rm -rf /var/www/simplipharma-admin/current
-sudo mv /var/www/simplipharma-admin/backup-20241127-143022 /var/www/simplipharma-admin/current
-sudo systemctl reload nginx
-```
+| App | Port |
+|-----|------|
+| Blood Bank | 8081 |
+| **SimpliPharma Admin (prod)** | **8085** |
+| **SimpliPharma Admin (dev)** | **8083** |
+| SimpliPharma Web App (prod) | 8087 |
+| SimpliPharma Web App (dev) | 8084 |
+| Jenkins | 8080 |
 
 ---
 
-## 🐛 Troubleshooting
-
-### Port 8085 Not Responding
-```bash
-# Check if Nginx is listening
-sudo netstat -tulpn | grep 8085
-
-# Check Nginx is running
-sudo systemctl status nginx
-
-# Restart if needed
-sudo systemctl restart nginx
-```
-
-### 403 Forbidden Error
-```bash
-# Fix permissions
-sudo chown -R www-data:www-data /var/www/simplipharma-admin/current
-sudo chmod -R 755 /var/www/simplipharma-admin/current
-sudo systemctl reload nginx
-```
-
-### Blank/White Page
-- Check browser console (F12) for errors
-- Verify Firebase credentials in `.env`
-- Check Nginx error log:
-  ```bash
-  sudo tail -50 /var/log/nginx/simplipharma-admin-error.log
-  ```
-
-### Jenkins Build Fails
-```bash
-# Check Jenkins console output for errors
-# Common issues:
-# 1. Node.js not configured → See "Configure Node.js" above
-# 2. Permission denied → See "Grant Jenkins Sudo Access" above
-# 3. Firebase credentials missing → See "Add Firebase Credentials" above
-```
-
----
-
-## 📂 File Locations
+## File locations
 
 | Item | Location |
 |------|----------|
-| Application Files | `/var/www/simplipharma-admin/current/` |
-| Nginx Config | `/etc/nginx/sites-available/simplipharma-admin` |
-| Access Logs | `/var/log/nginx/simplipharma-admin-access.log` |
-| Error Logs | `/var/log/nginx/simplipharma-admin-error.log` |
-| Source Code (if cloned) | `~/simplipharma-web-admin/` |
+| Prod files | `/var/www/simplipharma-admin/current/` |
+| Dev files | `/var/www/simplipharma-admin-dev/current/` |
+| Prod nginx | `/etc/nginx/sites-available/simplipharma-admin` |
+| Dev nginx | `/etc/nginx/sites-available/simplipharma-admin-dev` |
 
 ---
 
-## 🔗 URLs
+## Rollback
 
-| Service | URL |
-|---------|-----|
-| SimpliPharma Admin | http://103.230.227.5:8085 |
-| Health Check | http://103.230.227.5:8085/health |
-| Jenkins | http://103.230.227.5:8080 |
-| Blood Bank App | http://103.230.227.5:8081 |
+**Prod:**
+```bash
+sudo rm -rf /var/www/simplipharma-admin/current
+sudo mv /var/www/simplipharma-admin/backup-YYYYMMDD-HHMMSS /var/www/simplipharma-admin/current
+sudo systemctl reload nginx
+```
 
----
-
-## 📞 Support
-
-- **Repository:** https://github.com/chankey91/simplipharma-web-admin
-- **Full Documentation:** See `DEPLOYMENT_GUIDE.md`
-- **Firebase Console:** https://console.firebase.google.com
-
----
-
-**Last Updated:** November 27, 2024
-
+**Dev:**
+```bash
+sudo rm -rf /var/www/simplipharma-admin-dev/current
+sudo mv /var/www/simplipharma-admin-dev/backup-YYYYMMDD-HHMMSS /var/www/simplipharma-admin-dev/current
+sudo systemctl reload nginx
+```
