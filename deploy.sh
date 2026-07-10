@@ -8,7 +8,7 @@
 # Usage:
 #   ./deploy.sh          # prod (default) → port 8085
 #   ./deploy.sh prod     # production
-#   ./deploy.sh dev      # development → port 8086
+#   ./deploy.sh dev      # development → port 8083
 ################################################################################
 
 set -e
@@ -27,7 +27,7 @@ case "$APP_ENV" in
     dev|development)
         APP_ENV="dev"
         DEPLOY_PATH="/var/www/${APP_NAME}-dev"
-        NGINX_PORT="8086"
+        NGINX_PORT="8083"
         NGINX_SITE="${APP_NAME}-dev"
         ;;
     prod|production|main)

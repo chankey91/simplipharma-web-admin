@@ -69,7 +69,7 @@ Branch maps to environment (same pattern as simplipharma-web-app):
 
 | Env | Branch | URL | Deploy path |
 |-----|--------|-----|-------------|
-| **dev** | `develop` | http://103.230.227.5:8086 | `/var/www/simplipharma-admin-dev/current` |
+| **dev** | `develop` | http://103.230.227.5:8083 | `/var/www/simplipharma-admin-dev/current` |
 | **prod** | `main` | http://103.230.227.5:8085 | `/var/www/simplipharma-admin/current` |
 
 Merge to **`develop`** → auto-deploy **dev**. Merge to **`main`** → auto-deploy **prod**.

@@ -6,7 +6,7 @@ Environment-based deploys: **`develop` → dev**, **`main` → prod**.
 
 | Env | Branch | Port | Deploy path | URL |
 |-----|--------|------|-------------|-----|
-| **dev** | `develop` | **8086** | `/var/www/simplipharma-admin-dev` | http://103.230.227.5:8086 |
+| **dev** | `develop` | **8083** | `/var/www/simplipharma-admin-dev` | http://103.230.227.5:8083 |
 | **prod** | `main` | **8085** | `/var/www/simplipharma-admin` | http://103.230.227.5:8085 |
 
 ---
@@ -42,7 +42,7 @@ Environment-based deploys: **`develop` → dev**, **`main` → prod**.
    **Alternative: two classic Pipeline jobs**
    | Job | Branch | Deploys |
    |-----|--------|---------|
-   | `simplipharma-admin-dev` | `*/develop` | port 8086 |
+   | `simplipharma-admin-dev` | `*/develop` | port 8083 |
    | `simplipharma-admin-deployment` | `*/main` | port 8085 |
 
    Important: use **Pipeline script from SCM** (do not hardcode `git branch: 'main'` in the job). The `Jenkinsfile` no longer re-checkouts a fixed branch.
@@ -65,14 +65,14 @@ Environment-based deploys: **`develop` → dev**, **`main` → prod**.
 7. **Firewall:**
    ```bash
    sudo ufw allow 8085/tcp
-   sudo ufw allow 8086/tcp
+   sudo ufw allow 8083/tcp
    ```
 
 ### Deploy
 
 | Action | Result |
 |--------|--------|
-| Merge / push to **`develop`** | Auto-deploy **dev** → http://103.230.227.5:8086 |
+| Merge / push to **`develop`** | Auto-deploy **dev** → http://103.230.227.5:8083 |
 | Merge / push to **`main`** | Auto-deploy **prod** → http://103.230.227.5:8085 |
 | Manual | Jenkins → job → **Build Now** |
 
@@ -121,7 +121,7 @@ git pull origin develop   # or main
 
 ```bash
 # Dev
-curl http://103.230.227.5:8086/health
+curl http://103.230.227.5:8083/health
 
 # Prod
 curl http://103.230.227.5:8085/health
@@ -135,7 +135,7 @@ curl http://103.230.227.5:8085/health
 |-----|------|
 | Blood Bank | 8081 |
 | **SimpliPharma Admin (prod)** | **8085** |
-| **SimpliPharma Admin (dev)** | **8086** |
+| **SimpliPharma Admin (dev)** | **8083** |
 | SimpliPharma Web App (prod) | 8087 |
 | SimpliPharma Web App (dev) | 8084 |
 | Jenkins | 8080 |
