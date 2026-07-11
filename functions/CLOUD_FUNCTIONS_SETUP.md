@@ -11,11 +11,11 @@
  * SMTP CONFIGURATION:
  * 
  * Current SMTP Credentials:
- * Email: simplipharma.2025@gmail.com
- * Password: rvpljxxeeygrlfov (App Password)
+ * Email: YOUR_EMAIL@gmail.com
+ * Password: YOUR_APP_PASSWORD (App Password)
  * 
  * To set/update SMTP credentials:
- * firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"
+ * firebase functions:config:set smtp.user="YOUR_EMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
  * 
  * Note: For Gmail, you may need to use an App Password instead of the regular password.
  * To generate an App Password:

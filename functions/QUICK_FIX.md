@@ -18,7 +18,7 @@ If empty or no `smtp` section, continue to Step 2.
 
 ### Step 2: Set SMTP Config
 ```bash
-firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"
+firebase functions:config:set smtp.user="YOUR_EMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
 ```
 
 ### Step 3: Build Function

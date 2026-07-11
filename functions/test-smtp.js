@@ -1,27 +1,21 @@
 /**
  * SMTP Credentials Test Script
- * 
- * This script tests the SMTP credentials configured in Firebase Functions
- * 
- * Usage:
- * 1. Make sure you have nodemailer installed: npm install nodemailer
- * 2. Run: node test-smtp.js
- * 
- * Or test with Firebase Functions config:
- * 1. Install Firebase CLI: npm install -g firebase-tools
- * 2. Login: firebase login
- * 3. Run: firebase functions:config:get
- * 4. Then use this script with the credentials
+ *
+ * Usage (set credentials via env — never commit real passwords):
+ *   SMTP_USER=your@email.com SMTP_PASSWORD=your-app-password node test-smtp.js
+ *
+ * Or read from Firebase Functions config:
+ *   firebase functions:config:get
+ *   then export SMTP_USER / SMTP_PASSWORD from the smtp section.
  */
 
 const nodemailer = require('nodemailer');
 
-// SMTP Credentials
 const SMTP_CONFIG = {
-  user: 'support.simplipharma@sanchet.in',
-  password: 'Sanchet@18',
-  host: 'smtp.zoho.in',
-  port: 587,
+  user: process.env.SMTP_USER || '',
+  password: process.env.SMTP_PASSWORD || '',
+  host: process.env.SMTP_HOST || 'smtp.zoho.in',
+  port: Number(process.env.SMTP_PORT) || 587,
   secure: false,
 };
 
@@ -49,6 +43,13 @@ const TEST_EMAIL = {
 };
 
 async function testSMTP() {
+  if (!SMTP_CONFIG.user || !SMTP_CONFIG.password) {
+    console.error('❌ Missing SMTP credentials.');
+    console.error('Set SMTP_USER and SMTP_PASSWORD environment variables, e.g.:');
+    console.error('  SMTP_USER=your@email.com SMTP_PASSWORD=your-app-password node test-smtp.js');
+    process.exit(1);
+  }
+
   console.log('🔍 Testing SMTP Credentials...\n');
   console.log('Configuration:');
   console.log(`  Host: ${SMTP_CONFIG.host}`);
@@ -80,14 +81,14 @@ async function testSMTP() {
     // Send test email
     console.log(`📧 Sending test email to ${TEST_EMAIL.to}...`);
     const info = await transporter.sendMail(TEST_EMAIL);
-    
+
     console.log('✅ Test email sent successfully!');
     console.log(`   Message ID: ${info.messageId}`);
     console.log(`   Response: ${info.response}`);
     console.log('');
     console.log('🎉 SMTP credentials are working correctly!');
     console.log(`   Please check your inbox at ${TEST_EMAIL.to} for the test email.`);
-    
+
     return { success: true, messageId: info.messageId };
   } catch (error) {
     console.error('❌ SMTP test failed!');
@@ -97,7 +98,7 @@ async function testSMTP() {
     console.error(`  Command: ${error.command || 'N/A'}`);
     console.error(`  Message: ${error.message}`);
     console.error('');
-    
+
     if (error.code === 'EAUTH') {
       console.error('🔐 Authentication Error:');
       console.error('   - Check if email and password are correct');
@@ -115,7 +116,7 @@ async function testSMTP() {
       console.error('   - Check if email account has 2-Step Verification enabled');
       console.error('   - For Gmail, use App Password instead of regular password');
     }
-    
+
     return { success: false, error: error.message };
   }
 }
@@ -133,4 +134,3 @@ testSMTP()
     console.error('Unexpected error:', error);
     process.exit(1);
   });
-

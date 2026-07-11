@@ -14,8 +14,8 @@ You should see something like:
 ```json
 {
   "smtp": {
-    "user": "simplipharma.2025@gmail.com",
-    "password": "rvpljxxeeygrlfov"
+    "user": "YOUR_EMAIL@gmail.com",
+    "password": "YOUR_APP_PASSWORD"
   }
 }
 ```
@@ -25,7 +25,7 @@ You should see something like:
 ### Set SMTP Configuration
 
 ```bash
-firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"
+firebase functions:config:set smtp.user="YOUR_EMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
 ```
 
 ### After Setting Config

@@ -36,7 +36,7 @@ This will install:
 Set the SMTP credentials for email sending:
 
 ```bash
-firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"
+firebase functions:config:set smtp.user="YOUR_EMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
 ```
 
 **Note:** The password should be a Gmail App Password, not the regular account password.

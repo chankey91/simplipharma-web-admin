@@ -54,7 +54,7 @@ If no `smtp` section, that's your problem!
 
 ```bash
 # Set config
-firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"
+firebase functions:config:set smtp.user="YOUR_EMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
 
 # Build
 cd functions
