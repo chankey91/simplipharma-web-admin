@@ -19,8 +19,8 @@ async function sendBulkJobMail(to, subject, html) {
             return { ok: false, error: 'SMTP not configured' };
         }
         const transporter = nodemailer.createTransport({
-            host: 'smtp.gmail.com',
-            port: 587,
+            host: smtpConfig.host || 'smtp.zoho.in',
+            port: Number(smtpConfig.port) || 587,
             secure: false,
             auth: { user: smtpConfig.user, pass: smtpConfig.password },
         });

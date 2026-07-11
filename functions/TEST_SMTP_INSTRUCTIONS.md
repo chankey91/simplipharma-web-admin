@@ -16,14 +16,19 @@ To test if your SMTP credentials are working correctly, follow these steps:
    npm install nodemailer
    ```
 
-3. **Run the test script:**
+3. **Set credentials via environment variables (never commit real passwords):**
    ```bash
-   node test-smtp.js
+   SMTP_USER=your@email.com SMTP_PASSWORD=your-app-password node test-smtp.js
+   ```
+
+   For Zoho (default host `smtp.zoho.in`):
+   ```bash
+   SMTP_USER=your@email.com SMTP_PASSWORD=your-password SMTP_HOST=smtp.zoho.in SMTP_PORT=587 node test-smtp.js
    ```
 
 4. **Check the output:**
    - ✅ If successful, you'll see "SMTP credentials are working correctly!"
-   - Check your email inbox (`simplipharma.2025@gmail.com`) for the test email
+   - Check your inbox at the address you set in `SMTP_USER`
    - ❌ If failed, the script will show specific error messages
 
 ### Option 2: Using Firebase Functions Config
@@ -35,29 +40,20 @@ If you've already set the credentials in Firebase Functions:
    firebase functions:config:get
    ```
 
-2. **Update the test script** (`functions/test-smtp.js`) with the credentials from Firebase config
-
-3. **Run the test:**
+2. **Export values from the `smtp` section and run the test:**
    ```bash
    cd functions
-   node test-smtp.js
+   SMTP_USER="your@email.com" SMTP_PASSWORD="your-app-password" node test-smtp.js
    ```
-
-### Current SMTP Credentials
-
-- **Email:** simplipharma.2025@gmail.com
-- **Password:** Nitin@2406
-- **Host:** smtp.gmail.com
-- **Port:** 587
 
 ### Common Issues
 
 #### 1. Authentication Error (EAUTH)
 
-**Problem:** Gmail authentication failed
+**Problem:** SMTP authentication failed
 
 **Solution:**
-- Use an App Password instead of regular password
+- Use an App Password instead of regular password (Gmail)
 - Generate App Password: https://myaccount.google.com/apppasswords
 - Select "Mail" and device type
 - Use the generated 16-character password
@@ -86,21 +82,21 @@ If you've already set the credentials in Firebase Functions:
 🔍 Testing SMTP Credentials...
 
 Configuration:
-  Host: smtp.gmail.com
+  Host: smtp.zoho.in
   Port: 587
-  User: simplipharma.2025@gmail.com
-  Password: Nit***
+  User: your@email.com
+  Password: you***
 
 📡 Verifying SMTP connection...
 ✅ SMTP connection verified successfully!
 
-📧 Sending test email to simplipharma.2025@gmail.com...
+📧 Sending test email to your@email.com...
 ✅ Test email sent successfully!
    Message ID: <...>
    Response: 250 2.0.0 OK
 
 🎉 SMTP credentials are working correctly!
-   Please check your inbox at simplipharma.2025@gmail.com for the test email.
+   Please check your inbox at your@email.com for the test email.
 ```
 
 ### Expected Output (Failure)
@@ -121,5 +117,4 @@ Error details:
 
 ---
 
-**Note:** This test sends an email to the same address (simplipharma.2025@gmail.com) to verify the credentials work.
-
+**Note:** The test script sends an email to the same address as `SMTP_USER` to verify credentials work.

@@ -21,8 +21,7 @@ pipeline {
                         env.DEPLOY_PATH = "/var/www/${env.APP_NAME}-dev"
                         env.NGINX_PORT = '8083'
                         env.NGINX_SITE = "${env.APP_NAME}-dev"
-                        // Temporarily reuse prod Firebase secrets until a separate dev project is ready
-                        env.FB_CRED_PREFIX = 'simplipharma-firebase'
+                        env.FB_CRED_PREFIX = 'simplipharma-dev-firebase'
                     } else if (branch == 'main' || branch == 'master') {
                         env.APP_ENV = 'prod'
                         env.DEPLOY_PATH = "/var/www/${env.APP_NAME}"
