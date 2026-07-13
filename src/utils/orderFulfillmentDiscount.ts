@@ -223,26 +223,20 @@ const parseDiscountPct = (value: unknown): number | undefined => {
   return n;
 };
 
-/** Order invoice Disc % — trade discount only (0% or 2%; legacy 1.5% still recognized). */
+/** Order invoice Disc % — trade discount only (0% or 2%). */
 export function isOrderTradeDiscountPct(n: number): boolean {
-  return (
-    n === 0 ||
-    Math.abs(n - 2) < 0.001 ||
-    Math.abs(n - 1.5) < 0.001 // legacy saved orders
-  );
+  return n === 0 || Math.abs(n - 2) < 0.001;
 }
 
 /**
- * Saved order trade discount (0%, 2%, or legacy 1.5%).
- * Trusted once present so Disc does not flip on reload.
+ * Saved order trade discount (0% or 2%).
+ * Legacy 1.5% is intentionally NOT trusted so Disc re-derives under the current rule (PI > 4% → 2%).
  */
 function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
   for (const value of values) {
     const n = parseDiscountPct(value);
     if (n === undefined || !isOrderTradeDiscountPct(n)) continue;
-    if (n === 0) return 0;
-    if (Math.abs(n - 2) < 0.001) return 2;
-    if (Math.abs(n - 1.5) < 0.001) return 1.5;
+    return Math.abs(n - 2) < 0.001 ? 2 : 0;
   }
   return undefined;
 }
