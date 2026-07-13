@@ -151,9 +151,6 @@ export const MedicineDetailsPage: React.FC = () => {
     }
   }, [medicine, editDialogOpen]);
 
-  if (isLoading) return <Loading message="Loading medicine details..." />;
-  if (!medicine) return <Alert severity="error">Medicine not found</Alert>;
-
   // Debug: Log batch data to console (especially for specific medicine)
   React.useEffect(() => {
     if (medicine?.id === '0IXu5mRZu10DpmnpSXSg') {
@@ -174,6 +171,9 @@ export const MedicineDetailsPage: React.FC = () => {
       }
     }
   }, [medicine?.id, medicine?.stockBatches]);
+
+  if (isLoading) return <Loading message="Loading medicine details..." />;
+  if (!medicine) return <Alert severity="error">Medicine not found</Alert>;
 
   // Helper function to get latest MRP from batches
   const getLatestMRP = (): string => {
