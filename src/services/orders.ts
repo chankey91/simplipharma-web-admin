@@ -425,7 +425,11 @@ export const updateOrderStatus = async (
   });
 };
 
-export const cancelOrder = async (orderId: string, cancelledBy: string, reason: string) => {
+export const cancelOrder = async (
+  orderId: string,
+  cancelledBy: string,
+  reason: string
+): Promise<{ stockRestoreErrors: string[] }> => {
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
   
@@ -436,13 +440,18 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
   const orderData = orderDoc.data();
   const currentTimeline = orderData?.timeline || [];
   const currentStatus = orderData?.status;
+
+  let stockRestoreErrors: string[] = [];
+  // Pending never deducted inventory; mark restored so repair UI does not double-add.
+  let stockRestoredOnCancel = currentStatus === 'Pending';
   
-  // If order has been fulfilled (has batch assignments), restore stock
+  // If order has been fulfilled (stock deducted), restore inventory batches
   if (currentStatus && currentStatus !== 'Pending' && currentStatus !== 'Cancelled' && orderData.medicines) {
     console.log(`Order ${orderId} has status ${currentStatus}, restoring stock from batches...`);
-    const restoreErrors = await restoreStockForOrderMedicines(orderData.medicines);
-    if (restoreErrors.length > 0) {
-      console.warn('Some stock restorations failed during cancel:', restoreErrors);
+    stockRestoreErrors = await restoreStockForOrderMedicines(orderData.medicines);
+    stockRestoredOnCancel = stockRestoreErrors.length === 0;
+    if (stockRestoreErrors.length > 0) {
+      console.warn('Some stock restorations failed during cancel:', stockRestoreErrors);
     } else {
       console.log(`✓ All stock restored for order ${orderId}`);
     }
@@ -452,8 +461,41 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
     status: 'Cancelled',
     cancelReason: reason,
     cancelledAt: serverTimestamp(),
+    stockRestoredOnCancel,
     timeline: [...currentTimeline, createTimelineEvent('Cancelled', cancelledBy, reason)]
   });
+
+  return { stockRestoreErrors };
+};
+
+/**
+ * Repair path: restore inventory for a cancelled order that never got stock back
+ * (e.g. cancelled from retailer app while in Order Fulfillment).
+ */
+export const restoreStockForCancelledOrder = async (
+  orderId: string
+): Promise<{ stockRestoreErrors: string[] }> => {
+  const orderRef = doc(db, 'orders', orderId);
+  const orderDoc = await getDoc(orderRef);
+
+  if (!orderDoc.exists()) {
+    throw new Error('Order not found');
+  }
+
+  const data = orderDoc.data();
+  if (data?.status !== 'Cancelled') {
+    throw new Error('Order is not cancelled');
+  }
+  if (data?.stockRestoredOnCancel === true) {
+    throw new Error('Stock was already restored for this cancelled order');
+  }
+
+  const medicines = data?.medicines as Order['medicines'] | undefined;
+  const stockRestoreErrors = await restoreStockForOrderMedicines(medicines);
+  if (stockRestoreErrors.length === 0) {
+    await updateDoc(orderRef, { stockRestoredOnCancel: true });
+  }
+  return { stockRestoreErrors };
 };
 
 export const fulfillOrder = async (

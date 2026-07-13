@@ -61,6 +61,7 @@ import {
   useUpdateOrderDispatch,
   useMarkOrderDelivered,
   useCancelOrder,
+  useRestoreCancelledOrderStock,
   useUpdatePaymentStatus,
 } from '../hooks/useOrders';
 import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
@@ -404,6 +405,7 @@ export const OrderDetailsPage: React.FC = () => {
   const dispatchOrderMutation = useUpdateOrderDispatch();
   const deliverOrderMutation = useMarkOrderDelivered();
   const cancelOrderMutation = useCancelOrder();
+  const restoreCancelledOrderStockMutation = useRestoreCancelledOrderStock();
   const updatePaymentStatusMutation = useUpdatePaymentStatus();
   
   const [activeStep, setActiveStep] = useState(0);
@@ -812,6 +814,53 @@ export const OrderDetailsPage: React.FC = () => {
     [order, fulfillmentData.medicines, medicines, taxPctForTotals, purchaseDiscountLookup]
   );
   const orderTotalSyncRef = useRef<number | null>(null);
+  const autoStockRestoreRef = useRef<string | null>(null);
+
+  // Cancel restores stock in Firestore, but Inventory used a 15-minute cache and
+  // cancel never invalidated it — refresh medicines whenever a cancelled order is opened.
+  useEffect(() => {
+    if (!order?.id || order.status !== 'Cancelled') return;
+    void queryClient.invalidateQueries({ queryKey: ['medicines'] });
+    void queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
+    void queryClient.invalidateQueries({ queryKey: ['expiredMedicines'] });
+  }, [order?.id, order?.status, queryClient]);
+
+  // Auto-restore when cancel never put stock back (failed restore, or retailer/SO cancel after fulfill).
+  useEffect(() => {
+    if (!order?.id || order.status !== 'Cancelled') return;
+    if (order.stockRestoredOnCancel === true) return;
+    if (autoStockRestoreRef.current === order.id) return;
+
+    const hasFulfilledBatches = (order.medicines || []).some(
+      (m) =>
+        Boolean(m.batchNumber) ||
+        (Array.isArray(m.batchAllocations) && m.batchAllocations.length > 0)
+    );
+    if (!hasFulfilledBatches) return;
+
+    const cancelNote = String(order.cancelReason || '');
+    const needsRestore =
+      order.stockRestoredOnCancel === false ||
+      /cancelled by retailer|cancelled by sales officer/i.test(cancelNote);
+    if (!needsRestore) return;
+
+    autoStockRestoreRef.current = order.id;
+    void restoreCancelledOrderStockMutation
+      .mutateAsync(order.id)
+      .then(async (res) => {
+        if (res.stockRestoreErrors.length > 0) {
+          await alert(
+            `Inventory restore incomplete:\n${res.stockRestoreErrors.slice(0, 3).join('\n')}`,
+            { severity: 'warning' }
+          );
+        }
+      })
+      .catch((e: unknown) => {
+        console.warn('Auto stock restore on cancelled order failed:', e);
+      });
+    // Intentionally omit mutation object from deps — run once per order id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order?.id, order?.status, order?.stockRestoredOnCancel, order?.cancelReason, alert]);
 
   useEffect(() => {
     if (!order?.id) return;
@@ -1125,12 +1174,19 @@ export const OrderDetailsPage: React.FC = () => {
           await alert('Please provide a cancellation reason', { severity: 'warning' });
           return;
         }
-        await cancelOrderMutation.mutateAsync({
+        const res = await cancelOrderMutation.mutateAsync({
           orderId: order.id,
           cancelledBy: user.uid,
           reason: cancelReason
         });
-        await alert('Order cancelled successfully!', { severity: 'success' });
+        if (res.stockRestoreErrors.length > 0) {
+          await alert(
+            `Order cancelled, but some stock could not be restored:\n${res.stockRestoreErrors.slice(0, 3).join('\n')}`,
+            { severity: 'warning' }
+          );
+        } else {
+          await alert('Order cancelled successfully!', { severity: 'success' });
+        }
       } else if (confirmDialog.action === 'unfulfill') {
         const res = await unfulfillOrderMutation.mutateAsync({
           orderId: order.id,
@@ -3172,6 +3228,11 @@ export const OrderDetailsPage: React.FC = () => {
             <Alert severity="error" sx={{ mb: 3 }}>
               <Typography variant="subtitle2">Order Cancelled</Typography>
               <Typography variant="body2">Reason: {order.cancelReason}</Typography>
+              {restoreCancelledOrderStockMutation.isPending && (
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Restoring inventory stock…
+                </Typography>
+              )}
             </Alert>
           )}
         </Grid>
