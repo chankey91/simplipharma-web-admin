@@ -36,7 +36,7 @@ firebase functions:config:get
 If you don't see `smtp` section, set it:
 
 ```bash
-firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"
+firebase functions:config:set smtp.user="YOUR_EMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
 ```
 
 ### Step 3: Rebuild and Redeploy

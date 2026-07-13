@@ -15,7 +15,7 @@ If you see `{}` or no `smtp` section, config is not set.
 ### Step 2: Set SMTP Configuration
 
 ```bash
-firebase functions:config:set smtp.user="simplipharma.2025@gmail.com" smtp.password="rvpljxxeeygrlfov"
+firebase functions:config:set smtp.user="YOUR_EMAIL@gmail.com" smtp.password="YOUR_APP_PASSWORD"
 ```
 
 ### Step 3: Rebuild and Redeploy Functions
@@ -39,8 +39,8 @@ You should see:
 ```json
 {
   "smtp": {
-    "user": "simplipharma.2025@gmail.com",
-    "password": "rvpljxxeeygrlfov"
+    "user": "YOUR_EMAIL@gmail.com",
+    "password": "YOUR_APP_PASSWORD"
   }
 }
 ```

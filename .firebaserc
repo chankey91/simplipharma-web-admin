@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "simplipharma"
+    "default": "simplipharma",
+    "dev": "simplipharma-dev",
+    "prod": "simplipharma"
   }
 }

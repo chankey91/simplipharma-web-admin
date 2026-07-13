@@ -36,16 +36,7 @@ import {
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { canAccessPanel, type PanelRole } from '../auth/permissions';
-
-// Firebase configuration (from Vite env — .env.dev for local, .env.prod / Jenkins .env for builds)
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-};
+import { firebaseConfig, firebaseFunctionsRegion } from '../config/env';
 
 if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
   throw new Error(
@@ -73,7 +64,7 @@ try {
 export const db = firestoreDb;
 export const storage = getStorage(app);
 // Initialize Functions with region (us-central1 is default, but explicit is better)
-export const functions = getFunctions(app, 'us-central1');
+export const functions = getFunctions(app, firebaseFunctionsRegion);
 
 // Auth helpers
 export const login = async (email: string, password: string) => {
