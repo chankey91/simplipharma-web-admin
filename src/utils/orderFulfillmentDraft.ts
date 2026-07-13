@@ -160,7 +160,10 @@ function applyWorkFields(serverLine: any, workLine: any): any {
   const merged = { ...serverLine };
   for (const key of WORK_FIELDS) {
     const val = workLine[key];
+    // Allow 0 and false (e.g. discountPercentage: 0, discountManuallySet: false)
     if (val !== undefined && val !== null && val !== '') {
+      merged[key] = val;
+    } else if (val === 0 || val === false) {
       merged[key] = val;
     }
   }
