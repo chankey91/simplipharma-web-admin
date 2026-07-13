@@ -37,15 +37,21 @@ import {
 import { getStorage } from 'firebase/storage';
 import { canAccessPanel, type PanelRole } from '../auth/permissions';
 
-// Firebase configuration
+// Firebase configuration (from Vite env — .env.dev for local, .env.prod / Jenkins .env for builds)
 const firebaseConfig = {
-  apiKey: "AIzaSyCFtUVHKtADWllccdnlbougsnsntEUHQDA",
-  authDomain: "simplipharma.firebaseapp.com",
-  projectId: "simplipharma",
-  storageBucket: "simplipharma.firebasestorage.app",
-  messagingSenderId: "343720215451",
-  appId: "1:343720215451:android:d2576ba41a99a5681e973e"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
+
+if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
+  throw new Error(
+    'Missing Firebase env config. For local: ensure .env.dev exists and run `npm run dev` (mode=dev).'
+  );
+}
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);

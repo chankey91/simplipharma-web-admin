@@ -246,8 +246,7 @@ function mapRepairedLineToFulfillment(
         })()
       : lineSchemeFreeQty(line.batchNumber, toNumber(line.quantity));
 
-  const shouldRefreshDiscount =
-    orderStatus === 'Pending' || orderStatus === 'Order Fulfillment';
+  const shouldRefreshDiscount = orderStatus === 'Pending';
 
   const withDefaults = shouldRefreshDiscount
     ? applyDefaultDiscountToFulfillmentLine(
@@ -687,9 +686,10 @@ export const OrderDetailsPage: React.FC = () => {
     queryClient,
   ]);
 
-  // Re-apply batch/PI standard discount when purchase invoices load or order is in fulfillment.
+  // Re-apply batch/PI trade discount only while Pending (before fulfill).
+  // After fulfill, saved Disc % (including 0%) must not be overwritten from PI.
   useEffect(() => {
-    if (!order || (order.status !== 'Pending' && order.status !== 'Order Fulfillment')) return;
+    if (!order || order.status !== 'Pending') return;
 
     setFulfillmentData((prev) => {
       if (!prev.medicines.length) return prev;
@@ -815,23 +815,24 @@ export const OrderDetailsPage: React.FC = () => {
 
   useEffect(() => {
     if (!order?.id) return;
-    if (
-      order.status === 'Delivered' ||
-      order.status === 'In Transit' ||
-      order.status === 'Cancelled'
-    ) {
-      return;
-    }
-    if (!allBatchesAssignedForTotals) return;
+    if (order.status === 'Cancelled') return;
+    // Pending: only sync once all batches are assigned
+    if (order.status === 'Pending' && !allBatchesAssignedForTotals) return;
+    // Don't rewrite total after full payment (settlement was against stored total)
+    if (order.paymentStatus === 'Paid') return;
+
     const liveTotal = orderTotals.grandTotal;
     if (liveTotal <= 0) return;
-    if (order.totalAmount === liveTotal) return;
+    if (Math.abs((order.totalAmount ?? 0) - liveTotal) < 0.005) return;
     if (orderTotalSyncRef.current === liveTotal) return;
 
     orderTotalSyncRef.current = liveTotal;
     void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0)
       .then(() => {
         queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
+        queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
+        queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
       })
       .catch((err) => {
         console.error('Failed to sync order total:', err);
@@ -842,6 +843,7 @@ export const OrderDetailsPage: React.FC = () => {
     order?.status,
     order?.totalAmount,
     order?.paidAmount,
+    order?.paymentStatus,
     orderTotals.grandTotal,
     allBatchesAssignedForTotals,
     queryClient,
@@ -1922,13 +1924,8 @@ export const OrderDetailsPage: React.FC = () => {
   const taxPercentage = taxPctForTotals;
   const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal } = orderTotals;
 
-  /** Use retailer order total until all batches assigned; then use calculated invoice total. */
-  const effectiveOrderTotal =
-    order.status === 'Delivered' || order.status === 'In Transit'
-      ? order.totalAmount ?? grandTotal
-      : allBatchesAssigned && grandTotal > 0
-        ? grandTotal
-        : Math.max(grandTotal, order.totalAmount ?? 0);
+  /** Keep Payment card aligned with Invoice Details (live grand total). */
+  const effectiveOrderTotal = grandTotal > 0 ? grandTotal : (order.totalAmount ?? 0);
   const effectiveDueAmount = Math.max(0, effectiveOrderTotal - (order.paidAmount ?? 0));
 
   return (

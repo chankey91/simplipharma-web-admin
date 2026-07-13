@@ -228,11 +228,13 @@ export function isOrderTradeDiscountPct(n: number): boolean {
   return n === 0 || Math.abs(n - 1.5) < 0.001;
 }
 
-/** Saved order trade discount we trust without re-lookup (1.5% only — not 0%, which is often a stale default). */
+/** Saved order trade discount (0% or 1.5%). Both values are trusted once present. */
 function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
   for (const value of values) {
     const n = parseDiscountPct(value);
-    if (n !== undefined && Math.abs(n - 1.5) < 0.001) return 1.5;
+    if (n !== undefined && isOrderTradeDiscountPct(n)) {
+      return Math.abs(n - 1.5) < 0.001 ? 1.5 : 0;
+    }
   }
   return undefined;
 }
