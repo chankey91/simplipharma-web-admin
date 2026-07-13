@@ -11,14 +11,14 @@ import {
 } from '../services/inventory';
 import { Medicine, StockBatch } from '../types';
 
-export const useMedicines = () => {
+export const useMedicines = (options?: { fresh?: boolean }) => {
   return useQuery({
     queryKey: ['medicines'],
     queryFn: getAllMedicines,
-    // Reference data: rarely changes and every mutation invalidates ['medicines'],
-    // so we can safely keep it fresh for longer to avoid re-reading the whole
-    // inventory collection on each navigation.
-    staleTime: 15 * 60 * 1000,
+    // Stock changes from retailer cancels / fulfillments outside this tab.
+    staleTime: options?.fresh ? 0 : 30 * 1000,
+    refetchOnMount: options?.fresh ? 'always' : true,
+    refetchOnWindowFocus: true,
   });
 };
 

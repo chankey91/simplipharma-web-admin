@@ -623,75 +623,95 @@ export const restoreStockToBatch = async (
   batchNumber: string,
   quantityToRestore: number
 ) => {
+  await restoreStockBatchesToMedicine(medicineId, [{ batchNumber, quantity: quantityToRestore }]);
+};
+
+/** Restore multiple batch quantities on one medicine in a single read/write. */
+export const restoreStockBatchesToMedicine = async (
+  medicineId: string,
+  restores: Array<{ batchNumber: string; quantity: number }>
+) => {
+  if (!restores.length) return;
+
   const medicineRef = doc(db, 'medicines', medicineId);
   const medicineDoc = await getDoc(medicineRef);
-  
+
   if (!medicineDoc.exists()) {
     throw new Error(`Medicine ${medicineId} not found`);
   }
-  
+
   const medicine = medicineDoc.data() as Medicine;
   const batches = medicine.stockBatches || [];
-  
-  // Match trimmed / case-insensitive (UI and order lines often trim batch numbers)
-  const batchKey = String(batchNumber ?? '').trim().toLowerCase();
-  const batchIndex = batches.findIndex(
-    (b) => String(b.batchNumber ?? '').trim().toLowerCase() === batchKey
-  );
-  
-  if (batchIndex === -1) {
-    throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
+
+  for (const restore of restores) {
+    if (!restore.batchNumber || restore.quantity <= 0) continue;
+    const batchKey = String(restore.batchNumber ?? '').trim().toLowerCase();
+    const batchIndex = batches.findIndex(
+      (b) => String(b.batchNumber ?? '').trim().toLowerCase() === batchKey
+    );
+    if (batchIndex === -1) {
+      throw new Error(`Batch ${restore.batchNumber} not found for medicine ${medicineId}`);
+    }
+    const currentQuantity = batches[batchIndex].quantity || 0;
+    batches[batchIndex].quantity = currentQuantity + restore.quantity;
+    console.log(
+      `Restoring stock for medicine ${medicineId}, batch ${restore.batchNumber}: ${currentQuantity} + ${restore.quantity} = ${batches[batchIndex].quantity}`
+    );
   }
-  
-  // Restore quantity
-  const currentQuantity = batches[batchIndex].quantity || 0;
-  batches[batchIndex].quantity = currentQuantity + quantityToRestore;
-  
-  console.log(`Restoring stock for medicine ${medicineId}, batch ${batchNumber}: ${currentQuantity} + ${quantityToRestore} = ${batches[batchIndex].quantity}`);
-  
-  // Calculate total stock
+
   const totalStock = batches.reduce((sum, b) => sum + (b.quantity || 0), 0);
-  
-  // Prepare batches for Firestore, preserving all fields including discountPercentage
-  const firestoreBatches = batches.map(b => {
+
+  const firestoreBatches = batches.map((b) => {
     const firestoreBatch: any = {
       id: b.id,
       batchNumber: b.batchNumber,
       quantity: b.quantity || 0,
     };
-    
+
     if (b.expiryDate) {
-      firestoreBatch.expiryDate = b.expiryDate instanceof Date 
-        ? Timestamp.fromDate(b.expiryDate)
-        : (b.expiryDate && typeof b.expiryDate.toDate === 'function' ? b.expiryDate : Timestamp.fromDate(new Date(b.expiryDate)));
+      firestoreBatch.expiryDate =
+        b.expiryDate instanceof Date
+          ? Timestamp.fromDate(b.expiryDate)
+          : b.expiryDate && typeof (b.expiryDate as { toDate?: () => Date }).toDate === 'function'
+            ? b.expiryDate
+            : Timestamp.fromDate(new Date(b.expiryDate as string | number | Date));
     }
-    
+
     if (b.mfgDate) {
-      firestoreBatch.mfgDate = b.mfgDate instanceof Date 
-        ? Timestamp.fromDate(b.mfgDate)
-        : (b.mfgDate && typeof b.mfgDate.toDate === 'function' ? b.mfgDate : Timestamp.fromDate(new Date(b.mfgDate)));
+      firestoreBatch.mfgDate =
+        b.mfgDate instanceof Date
+          ? Timestamp.fromDate(b.mfgDate)
+          : b.mfgDate && typeof (b.mfgDate as { toDate?: () => Date }).toDate === 'function'
+            ? b.mfgDate
+            : Timestamp.fromDate(new Date(b.mfgDate as string | number | Date));
     }
-    
+
     if (b.purchaseDate) {
-      firestoreBatch.purchaseDate = b.purchaseDate instanceof Date
-        ? Timestamp.fromDate(b.purchaseDate)
-        : (b.purchaseDate && typeof b.purchaseDate.toDate === 'function' ? b.purchaseDate : Timestamp.fromDate(new Date(b.purchaseDate)));
+      firestoreBatch.purchaseDate =
+        b.purchaseDate instanceof Date
+          ? Timestamp.fromDate(b.purchaseDate)
+          : b.purchaseDate && typeof (b.purchaseDate as { toDate?: () => Date }).toDate === 'function'
+            ? b.purchaseDate
+            : Timestamp.fromDate(new Date(b.purchaseDate as string | number | Date));
     }
-    
+
     if (b.purchasePrice !== undefined && b.purchasePrice !== null) {
-      firestoreBatch.purchasePrice = typeof b.purchasePrice === 'number' ? b.purchasePrice : parseFloat(b.purchasePrice);
+      firestoreBatch.purchasePrice =
+        typeof b.purchasePrice === 'number' ? b.purchasePrice : parseFloat(String(b.purchasePrice));
     }
-    
+
     if (b.mrp !== undefined && b.mrp !== null) {
       const mrpValue = typeof b.mrp === 'number' ? b.mrp : parseFloat(String(b.mrp));
       if (!isNaN(mrpValue)) {
         firestoreBatch.mrp = mrpValue;
       }
     }
-    
-    // Preserve discountPercentage
+
     if (b.discountPercentage !== undefined && b.discountPercentage !== null) {
-      const discountValue = typeof b.discountPercentage === 'number' ? b.discountPercentage : parseFloat(String(b.discountPercentage));
+      const discountValue =
+        typeof b.discountPercentage === 'number'
+          ? b.discountPercentage
+          : parseFloat(String(b.discountPercentage));
       if (!isNaN(discountValue)) {
         firestoreBatch.discountPercentage = discountValue;
       }
@@ -699,19 +719,19 @@ export const restoreStockToBatch = async (
 
     appendLandedCostToFirestoreBatch(firestoreBatch, b);
     appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
-    if ((b as any).nonReturnable === true) {
+    if ((b as { nonReturnable?: boolean }).nonReturnable === true) {
       firestoreBatch.nonReturnable = true;
     }
 
     return firestoreBatch;
   });
-  
+
   await updateDoc(medicineRef, {
     stockBatches: firestoreBatches,
     stock: totalStock,
-    currentStock: totalStock
+    currentStock: totalStock,
   });
-  
+
   console.log(`✓ Stock restored successfully. New stock: ${totalStock}`);
 };
 
