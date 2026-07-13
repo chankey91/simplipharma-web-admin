@@ -38,6 +38,12 @@ import { getStorage } from 'firebase/storage';
 import { canAccessPanel, type PanelRole } from '../auth/permissions';
 import { firebaseConfig, firebaseFunctionsRegion } from '../config/env';
 
+if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
+  throw new Error(
+    'Missing Firebase env config. For local: ensure .env.dev exists and run `npm run dev` (mode=dev).'
+  );
+}
+
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);

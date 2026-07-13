@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --mode dev",
     "build": "tsc && vite build",
+    "build:dev": "tsc && vite build --mode dev",
+    "build:prod": "tsc && vite build --mode prod",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
