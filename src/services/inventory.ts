@@ -523,8 +523,11 @@ export const reduceStockFromBatch = async (
   const medicine = medicineDoc.data() as Medicine;
   const batches = medicine.stockBatches || [];
   
-  // Find the batch
-  const batchIndex = batches.findIndex(b => b.batchNumber === batchNumber);
+  // Match trimmed / case-insensitive (UI and order lines often trim batch numbers)
+  const batchKey = String(batchNumber ?? '').trim().toLowerCase();
+  const batchIndex = batches.findIndex(
+    (b) => String(b.batchNumber ?? '').trim().toLowerCase() === batchKey
+  );
   
   if (batchIndex < 0) {
     throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
@@ -630,8 +633,11 @@ export const restoreStockToBatch = async (
   const medicine = medicineDoc.data() as Medicine;
   const batches = medicine.stockBatches || [];
   
-  // Find the batch
-  const batchIndex = batches.findIndex(b => b.batchNumber === batchNumber);
+  // Match trimmed / case-insensitive (UI and order lines often trim batch numbers)
+  const batchKey = String(batchNumber ?? '').trim().toLowerCase();
+  const batchIndex = batches.findIndex(
+    (b) => String(b.batchNumber ?? '').trim().toLowerCase() === batchKey
+  );
   
   if (batchIndex === -1) {
     throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
