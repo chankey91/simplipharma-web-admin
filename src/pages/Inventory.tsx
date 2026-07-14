@@ -53,7 +53,7 @@ import { httpsCallable } from 'firebase/functions';
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
-  const { data: medicines, isLoading } = useMedicines();
+  const { data: medicines, isLoading } = useMedicines({ fresh: true });
   const { data: expiringMedicines } = useExpiringMedicines(30);
   const { data: expiredMedicines } = useExpiredMedicines();
   const navigate = useNavigate();

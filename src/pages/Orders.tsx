@@ -266,12 +266,18 @@ export const OrdersPage: React.FC = () => {
     if (!user || !cancelDialog.orderId) return;
 
     try {
-      await cancelOrderMutation.mutateAsync({
+      const res = await cancelOrderMutation.mutateAsync({
         orderId: cancelDialog.orderId,
         cancelledBy: user.uid,
         reason: cancelDialog.reason,
       });
       setCancelDialog({ open: false, orderId: '', reason: '' });
+      if (res.stockRestoreErrors.length > 0) {
+        console.warn('Stock restore errors on cancel:', res.stockRestoreErrors);
+        window.alert(
+          `Order cancelled, but some stock could not be restored:\n${res.stockRestoreErrors.slice(0, 3).join('\n')}`
+        );
+      }
     } catch (error) {
       console.error('Error cancelling order:', error);
     }

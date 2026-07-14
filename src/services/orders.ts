@@ -1,7 +1,7 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where } from './firebase';
 import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent, Medicine, PurchaseInvoice, Payment } from '../types';
-import { reduceStockFromBatch, restoreStockToBatch, getMedicineById } from './inventory';
+import { reduceStockFromBatch, restoreStockToBatch, restoreStockBatchesToMedicine, getMedicineById } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
 import { nestedFirestoreTimestamp, serverTimestamp } from '../utils/firestoreTimestamps';
@@ -25,37 +25,62 @@ async function restoreStockForOrderMedicines(medicines: Order['medicines'] | und
   const errors: string[] = [];
   if (!medicines?.length) return errors;
 
+  // Aggregate qty per medicine+batch, then one read/write per medicine in parallel.
+  const byMedicine = new Map<
+    string,
+    { label: string; batches: Map<string, { batchNumber: string; quantity: number }> }
+  >();
+
+  const addRestore = (
+    medicineId: string,
+    label: string,
+    batchNumber: string,
+    quantity: number
+  ) => {
+    if (!medicineId || !batchNumber || quantity <= 0) return;
+    const batchKey = String(batchNumber).trim().toLowerCase();
+    let entry = byMedicine.get(medicineId);
+    if (!entry) {
+      entry = { label, batches: new Map() };
+      byMedicine.set(medicineId, entry);
+    }
+    const prev = entry.batches.get(batchKey);
+    if (prev) {
+      prev.quantity += quantity;
+    } else {
+      entry.batches.set(batchKey, { batchNumber: String(batchNumber).trim(), quantity });
+    }
+  };
+
   for (const item of medicines) {
     if (item.lineType === 'product_demand') continue;
     if (!item.medicineId) continue;
+    const label = String(item.name || item.medicineId);
 
     if (item.batchAllocations && Array.isArray(item.batchAllocations) && item.batchAllocations.length > 0) {
       for (const allocation of item.batchAllocations) {
         const qty = physicalQtyFromAllocation(allocation);
         if (!allocation.batchNumber || qty <= 0) continue;
-        try {
-          await restoreStockToBatch(item.medicineId, allocation.batchNumber, qty);
-        } catch (error: unknown) {
-          const msg = error instanceof Error ? error.message : String(error);
-          errors.push(
-            `Failed to restore stock for ${item.name || item.medicineId} (batch ${allocation.batchNumber}): ${msg}`
-          );
-        }
+        addRestore(item.medicineId, label, allocation.batchNumber, qty);
       }
     } else if (item.batchNumber) {
       const qty = toNum(item.quantity) + toNum(item.freeQuantity);
       const restoreQty = qty > 0 ? qty : toNum(item.quantity);
       if (restoreQty <= 0) continue;
-      try {
-        await restoreStockToBatch(item.medicineId, item.batchNumber, restoreQty);
-      } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
-        errors.push(
-          `Failed to restore stock for ${item.name || item.medicineId} (batch ${item.batchNumber}): ${msg}`
-        );
-      }
+      addRestore(item.medicineId, label, item.batchNumber, restoreQty);
     }
   }
+
+  await Promise.all(
+    [...byMedicine.entries()].map(async ([medicineId, { label, batches }]) => {
+      try {
+        await restoreStockBatchesToMedicine(medicineId, [...batches.values()]);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        errors.push(`Failed to restore stock for ${label}: ${msg}`);
+      }
+    })
+  );
 
   return errors;
 }
@@ -425,7 +450,11 @@ export const updateOrderStatus = async (
   });
 };
 
-export const cancelOrder = async (orderId: string, cancelledBy: string, reason: string) => {
+export const cancelOrder = async (
+  orderId: string,
+  cancelledBy: string,
+  reason: string
+): Promise<{ stockRestoreErrors: string[] }> => {
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
   
@@ -436,13 +465,18 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
   const orderData = orderDoc.data();
   const currentTimeline = orderData?.timeline || [];
   const currentStatus = orderData?.status;
+
+  let stockRestoreErrors: string[] = [];
+  // Pending never deducted inventory; mark restored so repair UI does not double-add.
+  let stockRestoredOnCancel = currentStatus === 'Pending';
   
-  // If order has been fulfilled (has batch assignments), restore stock
+  // If order has been fulfilled (stock deducted), restore inventory batches
   if (currentStatus && currentStatus !== 'Pending' && currentStatus !== 'Cancelled' && orderData.medicines) {
     console.log(`Order ${orderId} has status ${currentStatus}, restoring stock from batches...`);
-    const restoreErrors = await restoreStockForOrderMedicines(orderData.medicines);
-    if (restoreErrors.length > 0) {
-      console.warn('Some stock restorations failed during cancel:', restoreErrors);
+    stockRestoreErrors = await restoreStockForOrderMedicines(orderData.medicines);
+    stockRestoredOnCancel = stockRestoreErrors.length === 0;
+    if (stockRestoreErrors.length > 0) {
+      console.warn('Some stock restorations failed during cancel:', stockRestoreErrors);
     } else {
       console.log(`✓ All stock restored for order ${orderId}`);
     }
@@ -452,8 +486,41 @@ export const cancelOrder = async (orderId: string, cancelledBy: string, reason: 
     status: 'Cancelled',
     cancelReason: reason,
     cancelledAt: serverTimestamp(),
+    stockRestoredOnCancel,
     timeline: [...currentTimeline, createTimelineEvent('Cancelled', cancelledBy, reason)]
   });
+
+  return { stockRestoreErrors };
+};
+
+/**
+ * Repair path: restore inventory for a cancelled order that never got stock back
+ * (e.g. cancelled from retailer app while in Order Fulfillment).
+ */
+export const restoreStockForCancelledOrder = async (
+  orderId: string
+): Promise<{ stockRestoreErrors: string[] }> => {
+  const orderRef = doc(db, 'orders', orderId);
+  const orderDoc = await getDoc(orderRef);
+
+  if (!orderDoc.exists()) {
+    throw new Error('Order not found');
+  }
+
+  const data = orderDoc.data();
+  if (data?.status !== 'Cancelled') {
+    throw new Error('Order is not cancelled');
+  }
+  if (data?.stockRestoredOnCancel === true) {
+    throw new Error('Stock was already restored for this cancelled order');
+  }
+
+  const medicines = data?.medicines as Order['medicines'] | undefined;
+  const stockRestoreErrors = await restoreStockForOrderMedicines(medicines);
+  if (stockRestoreErrors.length === 0) {
+    await updateDoc(orderRef, { stockRestoredOnCancel: true });
+  }
+  return { stockRestoreErrors };
 };
 
 export const fulfillOrder = async (

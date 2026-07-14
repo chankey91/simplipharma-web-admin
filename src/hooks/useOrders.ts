@@ -20,6 +20,7 @@ import {
   fulfillOrder,
   unfulfillOrder,
   recalculateOrderPricing,
+  restoreStockForCancelledOrder,
   getOrderById,
   getOrdersByRetailer,
   updatePaymentStatus
@@ -221,7 +222,26 @@ export const useCancelOrder = () => {
       queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
       queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
+      queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
+      queryClient.invalidateQueries({ queryKey: ['expiredMedicines'] });
     }
+  });
+};
+
+export const useRestoreCancelledOrderStock = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (orderId: string) => restoreStockForCancelledOrder(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
+      queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+      queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
+      queryClient.invalidateQueries({ queryKey: ['expiredMedicines'] });
+    },
   });
 };
 

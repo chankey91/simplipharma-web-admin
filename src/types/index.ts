@@ -128,6 +128,8 @@ export interface Order {
   estimatedDelivery?: string;
   cancelReason?: string;
   cancelledAt?: Date | any;
+  /** Set when cancel/unfulfill successfully put deducted stock back on inventory batches. */
+  stockRestoredOnCancel?: boolean;
   paymentStatus?: PaymentStatus;
   paymentReviewStatus?: PaymentReviewStatus;
   paidAmount?: number;
