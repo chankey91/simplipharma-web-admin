@@ -191,22 +191,23 @@ function productAggregateKey(medicine: Order['medicines'][number]): string {
   return `name:${medicine.name.trim().toLowerCase()}`;
 }
 
-/** Pending orders: one row per product with total quantity across all orders (no store details). */
+/**
+ * One row per product with total quantity across the given orders (no store details).
+ * Caller should pass the already date-/status-filtered order list.
+ */
 export const exportPendingOrdersProductSummary = async (
   orders: Order[],
-  filename: string = 'pending-orders-product-summary'
+  filename: string = 'orders-product-summary'
 ) => {
-  const pendingOrders = orders.filter((order) => order.status === 'Pending');
-
-  if (pendingOrders.length === 0) {
-    await appAlert('No pending orders found', { severity: 'warning' });
+  if (orders.length === 0) {
+    await appAlert('No orders found for the selected date range', { severity: 'warning' });
     return;
   }
 
   const medicineMap = new Map<string, string>();
   const allMedicineIds = new Set<string>();
 
-  for (const order of pendingOrders) {
+  for (const order of orders) {
     for (const medicine of order.medicines) {
       if (medicine.medicineId) allMedicineIds.add(medicine.medicineId);
     }
@@ -233,7 +234,7 @@ export const exportPendingOrdersProductSummary = async (
     }
   >();
 
-  for (const order of pendingOrders) {
+  for (const order of orders) {
     const orderNumber = order.invoiceNumber || orderReferenceWithoutInvoice(order.id);
 
     for (const medicine of order.medicines) {
