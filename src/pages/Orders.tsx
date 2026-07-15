@@ -38,7 +38,7 @@ import {
 } from '@mui/icons-material';
 import { useOrders, useOrdersSearch, useCancelOrder } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
-import { getOrdersByStatus } from '../services/orders';
+import { getOrdersByStatus, getOrdersInRange } from '../services/orders';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
@@ -52,6 +52,7 @@ import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { useAppDialog } from '../context/AppDialogProvider';
 import type { OrderSearchParams } from '../services/orderSearch';
 import { reindexOrdersTypesense } from '../services/orderSearch';
+import { getTodayDateStringIST } from '../utils/dateTime';
 
 const ROWS_PER_PAGE = 10;
 
@@ -106,6 +107,11 @@ export const OrdersPage: React.FC = () => {
     open: false,
     orderId: '',
     reason: '',
+  });
+  const [productSummaryDialog, setProductSummaryDialog] = useState({
+    open: false,
+    fromDate: getTodayDateStringIST(),
+    toDate: getTodayDateStringIST(),
   });
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
@@ -313,15 +319,38 @@ export const OrdersPage: React.FC = () => {
   };
 
   const handleExportPendingProductSummary = async () => {
+    const { fromDate, toDate } = productSummaryDialog;
+    if (!fromDate || !toDate) {
+      await alert('Please select both From and To dates', { severity: 'warning' });
+      return;
+    }
+    if (fromDate > toDate) {
+      await alert('From date must be on or before To date', { severity: 'warning' });
+      return;
+    }
+
     setIsExportingProductSummary(true);
     try {
-      const pendingOrders = await getOrdersByStatus('Pending');
-      if (pendingOrders.length === 0) {
-        await alert('No pending orders to export', { severity: 'warning' });
+      // Inclusive IST calendar range: [from 00:00, day after to 00:00)
+      const startMs = new Date(`${fromDate}T00:00:00+05:30`).getTime();
+      const endMs =
+        new Date(`${toDate}T00:00:00+05:30`).getTime() + 24 * 60 * 60 * 1000;
+      const ordersInRange = await getOrdersInRange(startMs, endMs);
+      const pendingInRange = ordersInRange.filter((o) => o.status === 'Pending');
+
+      if (pendingInRange.length === 0) {
+        await alert('No pending orders found in the selected date range', {
+          severity: 'warning',
+        });
         return;
       }
-      await exportPendingOrdersProductSummary(pendingOrders);
-      await alert('Product summary Excel file generated successfully!', { severity: 'success' });
+
+      const filename = `pending-orders-product-summary-${fromDate.replace(/-/g, '')}-${toDate.replace(/-/g, '')}`;
+      await exportPendingOrdersProductSummary(pendingInRange, filename);
+      setProductSummaryDialog((prev) => ({ ...prev, open: false }));
+      await alert('Product summary Excel file generated successfully!', {
+        severity: 'success',
+      });
     } catch (error: unknown) {
       console.error('Error exporting product summary:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -449,8 +478,14 @@ export const OrdersPage: React.FC = () => {
         <Button
           variant="outlined"
           startIcon={<Download />}
-          onClick={handleExportPendingProductSummary}
-          disabled={pendingOrderCount === 0 || isExporting || isExportingProductSummary}
+          onClick={() =>
+            setProductSummaryDialog({
+              open: true,
+              fromDate: getTodayDateStringIST(),
+              toDate: getTodayDateStringIST(),
+            })
+          }
+          disabled={isExporting || isExportingProductSummary}
           sx={{ minWidth: 240 }}
         >
           {isExportingProductSummary ? 'Exporting...' : 'Export Product Summary (Excel)'}
@@ -575,6 +610,65 @@ export const OrdersPage: React.FC = () => {
             disabled={!cancelDialog.reason || cancelOrderMutation.isPending}
           >
             Cancel Order
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={productSummaryDialog.open}
+        onClose={() =>
+          !isExportingProductSummary &&
+          setProductSummaryDialog((prev) => ({ ...prev, open: false }))
+        }
+      >
+        <DialogTitle>Export Product Summary</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Choose the order date range. Pending orders in this range will be aggregated into the product summary Excel.
+          </Typography>
+          <Box display="flex" gap={2} flexWrap="wrap" sx={{ pt: 1 }}>
+            <TextField
+              label="From"
+              type="date"
+              value={productSummaryDialog.fromDate}
+              onChange={(e) =>
+                setProductSummaryDialog((prev) => ({ ...prev, fromDate: e.target.value }))
+              }
+              InputLabelProps={{ shrink: true }}
+              disabled={isExportingProductSummary}
+              sx={{ minWidth: 180 }}
+            />
+            <TextField
+              label="To"
+              type="date"
+              value={productSummaryDialog.toDate}
+              onChange={(e) =>
+                setProductSummaryDialog((prev) => ({ ...prev, toDate: e.target.value }))
+              }
+              InputLabelProps={{ shrink: true }}
+              disabled={isExportingProductSummary}
+              sx={{ minWidth: 180 }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setProductSummaryDialog((prev) => ({ ...prev, open: false }))}
+            disabled={isExportingProductSummary}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<Download />}
+            onClick={() => void handleExportPendingProductSummary()}
+            disabled={
+              isExportingProductSummary ||
+              !productSummaryDialog.fromDate ||
+              !productSummaryDialog.toDate
+            }
+          >
+            {isExportingProductSummary ? 'Exporting...' : 'Download Excel'}
           </Button>
         </DialogActions>
       </Dialog>
