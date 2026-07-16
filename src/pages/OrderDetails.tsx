@@ -810,10 +810,11 @@ export const OrderDetailsPage: React.FC = () => {
             calculatedTotal: 0,
             roundoff: 0,
             grandTotal: 0,
+            uniformTaxPercentage: null,
           },
     [order, fulfillmentData.medicines, medicines, taxPctForTotals, purchaseDiscountLookup]
   );
-  const orderTotalSyncRef = useRef<number | null>(null);
+  const orderTotalSyncRef = useRef<string | null>(null);
   const autoStockRestoreRef = useRef<string | null>(null);
 
   // Cancel restores stock in Firestore, but Inventory used a 15-minute cache and
@@ -865,18 +866,27 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!order?.id) return;
     if (order.status === 'Cancelled') return;
-    // Pending: only sync once all batches are assigned
-    if (order.status === 'Pending' && !allBatchesAssignedForTotals) return;
+    if (!allBatchesAssignedForTotals) return;
     // Don't rewrite total after full payment (settlement was against stored total)
     if (order.paymentStatus === 'Paid') return;
 
     const liveTotal = orderTotals.grandTotal;
     if (liveTotal <= 0) return;
     if (Math.abs((order.totalAmount ?? 0) - liveTotal) < 0.005) return;
-    if (orderTotalSyncRef.current === liveTotal) return;
 
-    orderTotalSyncRef.current = liveTotal;
-    void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0)
+    // Pending: keep stored total in sync while batches/disc are edited.
+    // After fulfill: heal totalAmount when Invoice Details (per-line GST) differs from the
+    // flat-tax total saved at fulfill — Orders list / Typesense still read Firestore.
+    // Disc % is not rewritten here (Pending-only re-apply effect handles that separately).
+    const syncKey = `${order.id}:${liveTotal}`;
+    if (orderTotalSyncRef.current === syncKey) return;
+
+    orderTotalSyncRef.current = syncKey;
+    void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0, {
+      taxAmount: orderTotals.taxAmount,
+      subTotal: orderTotals.subTotal,
+      totalDiscount: orderTotals.totalDiscount,
+    })
       .then(() => {
         queryClient.invalidateQueries({ queryKey: ['order', order.id] });
         queryClient.invalidateQueries({ queryKey: ['orders'] });
@@ -894,6 +904,9 @@ export const OrderDetailsPage: React.FC = () => {
     order?.paidAmount,
     order?.paymentStatus,
     orderTotals.grandTotal,
+    orderTotals.taxAmount,
+    orderTotals.subTotal,
+    orderTotals.totalDiscount,
     allBatchesAssignedForTotals,
     queryClient,
   ]);
@@ -1978,7 +1991,8 @@ export const OrderDetailsPage: React.FC = () => {
     );
   
   const taxPercentage = taxPctForTotals;
-  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal } = orderTotals;
+  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal, uniformTaxPercentage } =
+    orderTotals;
 
   /** Keep Payment card aligned with Invoice Details (live grand total). */
   const effectiveOrderTotal = grandTotal > 0 ? grandTotal : (order.totalAmount ?? 0);
@@ -1995,9 +2009,6 @@ export const OrderDetailsPage: React.FC = () => {
           <ArrowBack />
         </IconButton>
         <Typography variant="h4">Order #{formatOrderNumberForDisplay(order.id)}</Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ ml: 1, alignSelf: 'flex-end', pb: 0.5 }}>
-          {order.id}
-        </Typography>
         <Box sx={{ flexGrow: 1 }} />
         {hasFulfilledProductDemands && (
           <Button
@@ -2071,8 +2082,11 @@ export const OrderDetailsPage: React.FC = () => {
                 ? fulfillmentData.medicines
                     .filter(
                       (m) =>
-                        (m as any).lineType === 'product_demand' ||
-                        Boolean(m.medicineId)
+                        (m as any).lineType !== 'product_demand' &&
+                        Boolean(m.medicineId) &&
+                        (Boolean(m.batchNumber) ||
+                          (Array.isArray(m.batchAllocations) &&
+                            m.batchAllocations.some((a: any) => Boolean(a?.batchNumber))))
                     )
                     .map((m) => {
                       if ((m as any).lineType === 'product_demand') {
@@ -3017,7 +3031,11 @@ export const OrderDetailsPage: React.FC = () => {
               <Typography>-₹{totalDiscount.toFixed(2)}</Typography>
             </Box>
             <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Tax ({taxPercentage}%):</Typography>
+              <Typography color="textSecondary">
+                {uniformTaxPercentage != null
+                  ? `Tax (${uniformTaxPercentage}%):`
+                  : 'Tax (GST):'}
+              </Typography>
               <Typography>₹{taxAmount.toFixed(2)}</Typography>
             </Box>
             {Math.abs(roundoff) > 0.01 && (

@@ -425,12 +425,20 @@ export const clearOrderFulfillmentDraft = async (orderId: string): Promise<void>
 export const updateOrderTotalAmount = async (
   orderId: string,
   totalAmount: number,
-  paidAmount = 0
+  paidAmount = 0,
+  extras?: {
+    taxAmount?: number;
+    subTotal?: number;
+    totalDiscount?: number;
+  }
 ): Promise<void> => {
   const orderRef = doc(db, 'orders', orderId);
   await updateDoc(orderRef, {
     totalAmount,
     dueAmount: Math.max(0, totalAmount - paidAmount),
+    ...(extras?.taxAmount !== undefined ? { taxAmount: extras.taxAmount } : {}),
+    ...(extras?.subTotal !== undefined ? { subTotal: extras.subTotal } : {}),
+    ...(extras?.totalDiscount !== undefined ? { totalDiscount: extras.totalDiscount } : {}),
   });
 };
 

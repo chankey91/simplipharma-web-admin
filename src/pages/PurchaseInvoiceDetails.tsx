@@ -26,6 +26,8 @@ import {
   ToggleButtonGroup,
   ToggleButton,
   InputAdornment,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -44,6 +46,7 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
 import { PurchaseInvoiceItem } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { setStockBatchNonReturnable } from '../services/inventory';
 
 export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { invoiceId } = useParams<{ invoiceId: string }>();
@@ -76,6 +79,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     purchasePrice: string;
     gstRate: string;
     discountPercentage: string;
+    nonReturnable: boolean;
   }>({
     medicineName: '',
     batchNumber: '',
@@ -89,6 +93,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     purchasePrice: '',
     gstRate: '',
     discountPercentage: '',
+    nonReturnable: false,
   });
 
   useEffect(() => {
@@ -171,6 +176,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       purchasePrice: String(item.purchasePrice ?? ''),
       gstRate: item.gstRate !== undefined ? String(item.gstRate) : '',
       discountPercentage: item.discountPercentage !== undefined ? String(item.discountPercentage) : '',
+      nonReturnable: item.nonReturnable === true,
     });
     setItemDialog({ open: true, itemIndex: index });
   };
@@ -220,28 +226,35 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     const standardDiscount = currentItem.standardDiscount ? parseNumber(currentItem.standardDiscount) : undefined;
     const purchasePrice = parseNumber(currentItem.purchasePrice);
     const gstRate = currentItem.gstRate ? parseNumber(currentItem.gstRate) : undefined;
-    const discountPercentage = currentItem.discountPercentage ? parseNumber(currentItem.discountPercentage) : undefined;
-    const schemePaidQty = currentItem.schemePaidQty ? Math.floor(parseNumber(currentItem.schemePaidQty)) : undefined;
-    const schemeFreeQty = currentItem.schemeFreeQty ? Math.floor(parseNumber(currentItem.schemeFreeQty)) : undefined;
+    const discountPercentage = currentItem.discountPercentage
+      ? parseNumber(currentItem.discountPercentage)
+      : undefined;
+    const spRaw = currentItem.schemePaidQty ? Math.floor(parseNumber(currentItem.schemePaidQty)) : NaN;
+    const sfRaw = currentItem.schemeFreeQty ? Math.floor(parseNumber(currentItem.schemeFreeQty)) : NaN;
+    const schemePaidQty =
+      !isNaN(spRaw) && !isNaN(sfRaw) && spRaw > 0 && sfRaw > 0 ? spRaw : undefined;
+    const schemeFreeQty = schemePaidQty != null ? sfRaw : undefined;
     const expiryDate = parseDateFromMonthYearInput(currentItem.expiryDate);
 
     const totalAmount = purchasePrice * quantity;
     const updatedItem: PurchaseInvoiceItem = {
-      ...oldItem,
+      medicineId: oldItem.medicineId,
       medicineName: currentItem.medicineName || oldItem.medicineName,
       batchNumber: currentItem.batchNumber,
       quantity,
-      freeQuantity,
-      schemePaidQty,
-      schemeFreeQty,
-      expiryDate: expiryDate || oldItem.expiryDate,
-      mrp,
-      standardDiscount,
       purchasePrice,
       unitPrice: purchasePrice,
-      gstRate,
-      discountPercentage,
       totalAmount,
+      expiryDate: expiryDate || oldItem.expiryDate,
+      ...(oldItem.mfgDate ? { mfgDate: oldItem.mfgDate } : {}),
+      ...(freeQuantity !== undefined ? { freeQuantity } : {}),
+      ...(schemePaidQty != null && schemeFreeQty != null ? { schemePaidQty, schemeFreeQty } : {}),
+      ...(mrp !== undefined ? { mrp } : {}),
+      ...(standardDiscount !== undefined ? { standardDiscount } : {}),
+      ...(gstRate !== undefined ? { gstRate } : {}),
+      ...(discountPercentage !== undefined ? { discountPercentage } : {}),
+      ...(oldItem.qrCode ? { qrCode: oldItem.qrCode } : {}),
+      ...(currentItem.nonReturnable === true ? { nonReturnable: true } : {}),
     };
 
     const updatedItems = [...items];
@@ -249,6 +262,17 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
 
     try {
       await persistItems(updatedItems);
+      if (updatedItem.medicineId && updatedItem.batchNumber) {
+        try {
+          await setStockBatchNonReturnable(
+            updatedItem.medicineId,
+            updatedItem.batchNumber,
+            updatedItem.nonReturnable === true
+          );
+        } catch (syncErr) {
+          console.warn('Failed to sync non-returnable flag to inventory batch:', syncErr);
+        }
+      }
       setItemDialog({ open: false, itemIndex: null });
     } catch (error: any) {
       await alert(error?.message || 'Failed to update item', { severity: 'error' });
@@ -674,6 +698,19 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 type="number"
                 value={currentItem.schemeFreeQty}
                 onChange={(e) => setCurrentItem({ ...currentItem, schemeFreeQty: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={currentItem.nonReturnable === true}
+                    onChange={(e) =>
+                      setCurrentItem({ ...currentItem, nonReturnable: e.target.checked })
+                    }
+                  />
+                }
+                label="Non-returnable (retailer cannot return this batch)"
               />
             </Grid>
           </Grid>

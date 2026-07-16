@@ -229,8 +229,9 @@ export function isOrderTradeDiscountPct(n: number): boolean {
 }
 
 /**
- * Saved order trade discount (0% or 2%).
- * Legacy 1.5% is intentionally NOT trusted so Disc re-derives under the current rule (PI > 4% → 2%).
+ * Saved order trade discount (0% or 2% only).
+ * PI purchase Disc % (e.g. 13%) must NOT appear on the order — it maps to 0% or 2%.
+ * Legacy non-trade values (e.g. 1.5%, 13%) are ignored so Disc re-derives under the current rule.
  */
 function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
   for (const value of values) {
@@ -382,12 +383,14 @@ export function resolveOrderLineDiscountPct(params: {
   gstRate?: number;
   discountManuallySet?: boolean;
 }): number {
+  // Explicit admin override (any %). Do not remap through PI → 0/2.
   if (params.discountManuallySet) {
     const manual =
       parseDiscountPct(params.itemDiscount) ?? parseDiscountPct(params.allocationDiscount);
     if (manual !== undefined) return manual;
   }
 
+  // Only trust saved order trade Disc of 0% or 2%. Values like PI 13% are not order Disc %.
   const persisted = readPersistedOrderTradeDiscount(
     params.allocationDiscount,
     params.itemDiscount
