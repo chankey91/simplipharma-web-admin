@@ -419,23 +419,94 @@ export const updatePurchaseInvoice = async (
   invoiceData: Partial<PurchaseInvoice>
 ) => {
   const invoiceRef = doc(db, 'purchaseInvoices', invoiceId);
-  
-  const updateData: any = { ...invoiceData };
-  
+
+  const updateData: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(invoiceData)) {
+    if (key === 'items' || key === 'invoiceDate') continue;
+    if (value !== undefined) {
+      updateData[key] = value;
+    }
+  }
+
   if (invoiceData.invoiceDate) {
-    updateData.invoiceDate = invoiceData.invoiceDate instanceof Date 
-      ? Timestamp.fromDate(invoiceData.invoiceDate)
-      : invoiceData.invoiceDate;
+    updateData.invoiceDate =
+      invoiceData.invoiceDate instanceof Date
+        ? Timestamp.fromDate(invoiceData.invoiceDate)
+        : invoiceData.invoiceDate;
   }
-  
+
   if (invoiceData.items) {
-    updateData.items = invoiceData.items.map((item: PurchaseInvoiceItem) => ({
-      ...item,
-      mfgDate: item.mfgDate instanceof Date ? Timestamp.fromDate(item.mfgDate) : item.mfgDate,
-      expiryDate: item.expiryDate instanceof Date ? Timestamp.fromDate(item.expiryDate) : item.expiryDate,
-    }));
+    updateData.items = invoiceData.items.map((item: PurchaseInvoiceItem) => {
+      const cleanedItem: Record<string, unknown> = {
+        medicineId: item.medicineId,
+        medicineName: item.medicineName,
+        batchNumber: item.batchNumber,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        purchasePrice: item.purchasePrice,
+        totalAmount: item.totalAmount,
+      };
+
+      if (item.mfgDate) {
+        cleanedItem.mfgDate =
+          item.mfgDate instanceof Date ? Timestamp.fromDate(item.mfgDate) : item.mfgDate;
+      }
+      if (item.expiryDate) {
+        cleanedItem.expiryDate =
+          item.expiryDate instanceof Date ? Timestamp.fromDate(item.expiryDate) : item.expiryDate;
+      }
+      if (item.mrp !== undefined && item.mrp !== null) {
+        cleanedItem.mrp = item.mrp;
+      }
+      if (item.freeQuantity !== undefined && item.freeQuantity !== null) {
+        cleanedItem.freeQuantity = item.freeQuantity;
+      }
+      if (
+        item.schemePaidQty !== undefined &&
+        item.schemePaidQty !== null &&
+        item.schemeFreeQty !== undefined &&
+        item.schemeFreeQty !== null
+      ) {
+        const sp =
+          typeof item.schemePaidQty === 'number'
+            ? item.schemePaidQty
+            : parseFloat(String(item.schemePaidQty));
+        const sf =
+          typeof item.schemeFreeQty === 'number'
+            ? item.schemeFreeQty
+            : parseFloat(String(item.schemeFreeQty));
+        if (!isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0) {
+          cleanedItem.schemePaidQty = Math.floor(sp);
+          cleanedItem.schemeFreeQty = Math.floor(sf);
+        }
+      }
+      if (item.gstRate !== undefined && item.gstRate !== null) {
+        cleanedItem.gstRate = item.gstRate;
+      }
+      if (item.standardDiscount !== undefined && item.standardDiscount !== null) {
+        const sd =
+          typeof item.standardDiscount === 'number'
+            ? item.standardDiscount
+            : parseFloat(String(item.standardDiscount));
+        if (!isNaN(sd)) {
+          cleanedItem.standardDiscount = sd;
+        }
+      }
+      if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
+        cleanedItem.discountPercentage = item.discountPercentage;
+      }
+      if (item.qrCode) {
+        cleanedItem.qrCode = item.qrCode;
+      }
+      if (item.nonReturnable === true) {
+        cleanedItem.nonReturnable = true;
+      }
+
+      return cleanedItem;
+    });
   }
-  
+
   await updateDoc(invoiceRef, updateData);
 };
 

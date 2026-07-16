@@ -846,6 +846,34 @@ export const updateMedicine = async (medicineId: string, updates: Partial<Medici
   await updateDoc(medicineRef, cleanUpdates);
 };
 
+/** Toggle non-returnable on an existing inventory batch (used when editing PI lines). */
+export const setStockBatchNonReturnable = async (
+  medicineId: string,
+  batchNumber: string,
+  nonReturnable: boolean
+): Promise<void> => {
+  if (!medicineId || !batchNumber) return;
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  if (!medicineDoc.exists()) return;
+
+  const raw = medicineDoc.data() as { stockBatches?: Array<Record<string, unknown>> };
+  const batches = Array.isArray(raw.stockBatches) ? raw.stockBatches.map((b) => ({ ...b })) : [];
+  const batchKey = String(batchNumber).trim().toLowerCase();
+  const batchIndex = batches.findIndex(
+    (b) => String(b.batchNumber ?? '').trim().toLowerCase() === batchKey
+  );
+  if (batchIndex < 0) return;
+
+  if (nonReturnable) {
+    batches[batchIndex].nonReturnable = true;
+  } else {
+    delete batches[batchIndex].nonReturnable;
+  }
+
+  await updateDoc(medicineRef, { stockBatches: batches });
+};
+
 export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promise<string> => {
   const medicineRef = doc(collection(db, 'medicines'));
   const newMedicine: any = {
