@@ -65,6 +65,7 @@ import {
   useUpdatePaymentStatus,
 } from '../hooks/useOrders';
 import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
+import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
 import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
@@ -867,17 +868,19 @@ export const OrderDetailsPage: React.FC = () => {
     if (!order?.id) return;
     if (order.status === 'Cancelled') return;
     if (!allBatchesAssignedForTotals) return;
-    // Don't rewrite total after full payment (settlement was against stored total)
-    if (order.paymentStatus === 'Paid') return;
+    if (!medicines?.length) return;
 
     const liveTotal = orderTotals.grandTotal;
     if (liveTotal <= 0) return;
+
+    // Always keep Orders list aligned with Invoice Details for this session
+    // (Typesense often still has the pre-heal amount).
+    setOrderTotalOverride(order.id, liveTotal);
+
     if (Math.abs((order.totalAmount ?? 0) - liveTotal) < 0.005) return;
 
-    // Pending: keep stored total in sync while batches/disc are edited.
-    // After fulfill: heal totalAmount when Invoice Details (per-line GST) differs from the
-    // flat-tax total saved at fulfill — Orders list / Typesense still read Firestore.
-    // Disc % is not rewritten here (Pending-only re-apply effect handles that separately).
+    // Applies to every order (not a single order id): keep Firestore totalAmount aligned
+    // with per-line GST used in Invoice Details / fulfill.
     const syncKey = `${order.id}:${liveTotal}`;
     if (orderTotalSyncRef.current === syncKey) return;
 
@@ -885,13 +888,48 @@ export const OrderDetailsPage: React.FC = () => {
     void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0, {
       taxAmount: orderTotals.taxAmount,
       subTotal: orderTotals.subTotal,
-      totalDiscount: orderTotals.totalDiscount,
     })
       .then(() => {
-        queryClient.invalidateQueries({ queryKey: ['order', order.id] });
-        queryClient.invalidateQueries({ queryKey: ['orders'] });
-        queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
+        const paid = order.paidAmount ?? 0;
+        const dueAmount = Math.max(0, liveTotal - paid);
+        queryClient.setQueriesData({ queryKey: ['ordersSearch'] }, (old: unknown) => {
+          if (!old || typeof old !== 'object') return old;
+          const data = old as { orders?: Array<{ id: string; totalAmount: number }> };
+          if (!Array.isArray(data.orders)) return old;
+          return {
+            ...data,
+            orders: data.orders.map((row) =>
+              row.id === order.id ? { ...row, totalAmount: liveTotal } : row
+            ),
+          };
+        });
+        queryClient.setQueriesData({ queryKey: ['orders'] }, (old: unknown) => {
+          if (!Array.isArray(old)) return old;
+          return old.map((row: { id: string; totalAmount?: number; dueAmount?: number }) =>
+            row.id === order.id
+              ? {
+                  ...row,
+                  totalAmount: liveTotal,
+                  dueAmount,
+                  taxAmount: orderTotals.taxAmount,
+                  subTotal: orderTotals.subTotal,
+                }
+              : row
+          );
+        });
+        queryClient.setQueryData(['order', order.id], (old: unknown) => {
+          if (!old || typeof old !== 'object') return old;
+          return {
+            ...(old as object),
+            totalAmount: liveTotal,
+            dueAmount,
+            taxAmount: orderTotals.taxAmount,
+            subTotal: orderTotals.subTotal,
+          };
+        });
         queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
+        // Do not invalidate ordersSearch here — a Typesense refetch can overwrite
+        // the patched amount with the old indexed total.
       })
       .catch((err) => {
         console.error('Failed to sync order total:', err);
@@ -902,12 +940,11 @@ export const OrderDetailsPage: React.FC = () => {
     order?.status,
     order?.totalAmount,
     order?.paidAmount,
-    order?.paymentStatus,
     orderTotals.grandTotal,
     orderTotals.taxAmount,
     orderTotals.subTotal,
-    orderTotals.totalDiscount,
     allBatchesAssignedForTotals,
+    medicines,
     queryClient,
   ]);
 
@@ -1991,7 +2028,7 @@ export const OrderDetailsPage: React.FC = () => {
     );
   
   const taxPercentage = taxPctForTotals;
-  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal, uniformTaxPercentage } =
+  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal } =
     orderTotals;
 
   /** Keep Payment card aligned with Invoice Details (live grand total). */
@@ -3031,11 +3068,7 @@ export const OrderDetailsPage: React.FC = () => {
               <Typography>-₹{totalDiscount.toFixed(2)}</Typography>
             </Box>
             <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">
-                {uniformTaxPercentage != null
-                  ? `Tax (${uniformTaxPercentage}%):`
-                  : 'Tax (GST):'}
-              </Typography>
+              <Typography color="textSecondary">Tax (GST):</Typography>
               <Typography>₹{taxAmount.toFixed(2)}</Typography>
             </Box>
             {Math.abs(roundoff) > 0.01 && (
