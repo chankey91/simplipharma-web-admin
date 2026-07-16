@@ -1912,27 +1912,17 @@ export const OrderDetailsPage: React.FC = () => {
     const gstRateForDisc =
       toNumber(allocation?.gstRate) || toNumber(item.gstRate) || toNumber(med?.gstRate) || 5;
     const useManualOverride = item.discountManuallySet === true;
-    // After fulfill, show the saved Disc % as-is (avoid re-deriving from PI on every render).
-    const savedDisc =
-      allocation?.discountPercentage !== undefined && allocation?.discountPercentage !== null
-        ? toNumber(allocation.discountPercentage)
-        : item.discountPercentage !== undefined && item.discountPercentage !== null
-          ? toNumber(item.discountPercentage)
-          : undefined;
-    const discountPct =
-      order?.status !== 'Pending' && savedDisc !== undefined
-        ? savedDisc
-        : batchNumber
-          ? resolveFulfillmentDiscountPct(
-              item.medicineId,
-              batchNumber,
-              item.discountPercentage,
-              allocation?.discountPercentage,
-              batch,
-              useManualOverride,
-              gstRateForDisc
-            )
-          : 0;
+    const discountPct = batchNumber
+      ? resolveFulfillmentDiscountPct(
+          item.medicineId,
+          batchNumber,
+          item.discountPercentage,
+          allocation?.discountPercentage,
+          batch,
+          useManualOverride,
+          gstRateForDisc
+        )
+      : 0;
 
     if (order?.status === 'Pending') {
       return (
