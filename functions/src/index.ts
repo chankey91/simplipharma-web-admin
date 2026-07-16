@@ -837,6 +837,28 @@ function getSalesOfficerPasswordResetContinueUrl(): string {
   return getPanelLoginUrl();
 }
 
+async function generatePasswordResetLinkWithFallback(
+  email: string,
+  continueUrl: string,
+  logLabel: string
+): Promise<string> {
+  try {
+    return await admin.auth().generatePasswordResetLink(email, {
+      url: continueUrl,
+      handleCodeInApp: false,
+    });
+  } catch (err: any) {
+    const message = String(err?.message || '');
+    if (/allowlist|allow-list|authoriz|domain/i.test(message)) {
+      console.warn(
+        `${logLabel}: continue URL "${continueUrl}" not allowlisted; falling back to default action handler.`
+      );
+      return admin.auth().generatePasswordResetLink(email);
+    }
+    throw err;
+  }
+}
+
 /** Continue URL after Firebase password reset for a retailer (mobile app); configurable via `app.retailer_password_reset_continue_url`. */
 function getRetailerPasswordResetContinueUrl(): string {
   const cfg = functions.config().app as { retailer_password_reset_continue_url?: string } | undefined;
@@ -1019,10 +1041,11 @@ export const sendSalesOfficerPasswordResetEmail = functions.https.onCall(async (
 
   let resetLink: string;
   try {
-    resetLink = await admin.auth().generatePasswordResetLink(email, {
-      url: getSalesOfficerPasswordResetContinueUrl(),
-      handleCodeInApp: false,
-    });
+    resetLink = await generatePasswordResetLinkWithFallback(
+      email,
+      getSalesOfficerPasswordResetContinueUrl(),
+      'sendSalesOfficerPasswordResetEmail'
+    );
   } catch (err: any) {
     console.error('sendSalesOfficerPasswordResetEmail: generatePasswordResetLink failed:', err?.message);
     throw new functions.https.HttpsError('internal', 'Could not generate password reset link');
@@ -1108,25 +1131,11 @@ export const sendRetailerPasswordResetEmail = functions.https.onCall(async (data
   let resetLink: string;
   try {
     const continueUrl = getRetailerPasswordResetContinueUrl();
-    try {
-      resetLink = await admin.auth().generatePasswordResetLink(email, {
-        url: continueUrl,
-        handleCodeInApp: false,
-      });
-    } catch (err: any) {
-      // A continue URL whose domain is not in Firebase Auth "Authorized domains"
-      // throws "Domain not allowlisted by project". Fall back to the default
-      // Firebase-hosted action handler (always allowlisted) so the email still sends.
-      const message = String(err?.message || '');
-      if (/allowlist|allow-list|authoriz|domain/i.test(message)) {
-        console.warn(
-          `sendRetailerPasswordResetEmail: continue URL "${continueUrl}" not allowlisted; falling back to default action handler.`
-        );
-        resetLink = await admin.auth().generatePasswordResetLink(email);
-      } else {
-        throw err;
-      }
-    }
+    resetLink = await generatePasswordResetLinkWithFallback(
+      email,
+      continueUrl,
+      'sendRetailerPasswordResetEmail'
+    );
   } catch (err: any) {
     console.error('sendRetailerPasswordResetEmail: generatePasswordResetLink failed:', err?.message);
     throw new functions.https.HttpsError('internal', 'Could not generate password reset link');
