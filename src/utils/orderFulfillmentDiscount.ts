@@ -229,13 +229,15 @@ export function isOrderTradeDiscountPct(n: number): boolean {
 }
 
 /**
- * Saved order-line Disc % (any 0–100 value the user/fulfillment stored).
- * Prefer this over re-deriving from PI so custom discounts stay stable on the order details screen.
+ * Saved order trade discount (0% or 2% only).
+ * PI purchase Disc % (e.g. 13%) must NOT appear on the order — it maps to 0% or 2%.
+ * Legacy non-trade values (e.g. 1.5%, 13%) are ignored so Disc re-derives under the current rule.
  */
-function readPersistedOrderDiscount(...values: unknown[]): number | undefined {
+function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
   for (const value of values) {
     const n = parseDiscountPct(value);
-    if (n !== undefined) return n;
+    if (n === undefined || !isOrderTradeDiscountPct(n)) continue;
+    return Math.abs(n - 2) < 0.001 ? 2 : 0;
   }
   return undefined;
 }
@@ -381,15 +383,15 @@ export function resolveOrderLineDiscountPct(params: {
   gstRate?: number;
   discountManuallySet?: boolean;
 }): number {
+  // Explicit admin override (any %). Do not remap through PI → 0/2.
   if (params.discountManuallySet) {
     const manual =
       parseDiscountPct(params.itemDiscount) ?? parseDiscountPct(params.allocationDiscount);
     if (manual !== undefined) return manual;
   }
 
-  // Trust whatever Disc % is already saved on the order line (custom or default).
-  // Re-deriving from PI here caused Disc % / totals to flicker between custom and default.
-  const persisted = readPersistedOrderDiscount(
+  // Only trust saved order trade Disc of 0% or 2%. Values like PI 13% are not order Disc %.
+  const persisted = readPersistedOrderTradeDiscount(
     params.allocationDiscount,
     params.itemDiscount
   );
