@@ -88,7 +88,8 @@ export function orderLineInvoiceEconomics(
   item: any,
   medicine: { stockBatches?: any[]; gstRate?: number } | undefined,
   orderTaxPercentage?: number,
-  purchaseLookup?: PurchaseBatchDiscountLookup
+  purchaseLookup?: PurchaseBatchDiscountLookup,
+  options?: { lockPersistedDiscount?: boolean }
 ): OrderLineInvoiceEconomics {
   const allocs = item.batchAllocations as any[] | undefined;
 
@@ -160,6 +161,7 @@ export function orderLineInvoiceEconomics(
   );
 
   const discountManuallySet = (item as { discountManuallySet?: boolean }).discountManuallySet === true;
+  const lockPersistedDiscount = options?.lockPersistedDiscount === true;
   let discountPct = 0;
 
   if (allocs && allocs.length > 0) {
@@ -175,6 +177,7 @@ export function orderLineInvoiceEconomics(
         batch: toSellDiscountBatch(batch, a.batchNumber, toNum(a.mrp), gst),
         gstRate: gst,
         discountManuallySet,
+        lockPersistedDiscount,
       });
     });
     discountPct = resolved.reduce((best, pct) => Math.max(best, pct), 0);
@@ -188,8 +191,9 @@ export function orderLineInvoiceEconomics(
       batch: toSellDiscountBatch(batch, item.batchNumber, toNum(item.mrp), gstRate),
       gstRate,
       discountManuallySet,
+      lockPersistedDiscount,
     });
-  } else if (discountManuallySet) {
+  } else if (discountManuallySet || lockPersistedDiscount) {
     discountPct = toNum(item.discountPercentage);
   }
 
@@ -209,7 +213,8 @@ export function orderLineTaxableBeforeDiscount(
   item: any,
   medicine: any | undefined,
   orderTaxPercentage?: number,
-  purchaseLookup?: PurchaseBatchDiscountLookup
+  purchaseLookup?: PurchaseBatchDiscountLookup,
+  options?: { lockPersistedDiscount?: boolean }
 ): number {
   const allocs = item.batchAllocations as any[] | undefined;
   if (allocs && allocs.length > 1) {
@@ -220,7 +225,13 @@ export function orderLineTaxableBeforeDiscount(
     if (sumAmount > 0) return sumAmount;
   }
 
-  const e = orderLineInvoiceEconomics(item, medicine, orderTaxPercentage, purchaseLookup);
+  const e = orderLineInvoiceEconomics(
+    item,
+    medicine,
+    orderTaxPercentage,
+    purchaseLookup,
+    options
+  );
   return e.unitPrice * e.paidQty;
 }
 
@@ -229,9 +240,16 @@ export function orderLineAmountAfterDiscount(
   item: any,
   medicine: any | undefined,
   orderTaxPercentage?: number,
-  purchaseLookup?: PurchaseBatchDiscountLookup
+  purchaseLookup?: PurchaseBatchDiscountLookup,
+  options?: { lockPersistedDiscount?: boolean }
 ): number {
-  const e = orderLineInvoiceEconomics(item, medicine, orderTaxPercentage, purchaseLookup);
+  const e = orderLineInvoiceEconomics(
+    item,
+    medicine,
+    orderTaxPercentage,
+    purchaseLookup,
+    options
+  );
   const base = e.unitPrice * e.paidQty;
   return base * (1 - e.discountPct / 100);
 }

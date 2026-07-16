@@ -46,7 +46,8 @@ export function calculateOrderTotalsFromLines(
   lines: any[],
   medicines: Medicine[] | undefined,
   taxPercentage: number,
-  purchaseLookup?: PurchaseBatchDiscountLookup
+  purchaseLookup?: PurchaseBatchDiscountLookup,
+  options?: { lockPersistedDiscount?: boolean }
 ): OrderTotalsBreakdown {
   const billableLines = lines.filter(isBillableFulfillmentLine);
   const fallbackTaxPct = taxPercentage || 5;
@@ -58,7 +59,13 @@ export function calculateOrderTotalsFromLines(
 
   for (const item of billableLines) {
     const med = medicines?.find((m) => m.id === item.medicineId);
-    const e = orderLineInvoiceEconomics(item, med, fallbackTaxPct, purchaseLookup);
+    const e = orderLineInvoiceEconomics(
+      item,
+      med,
+      fallbackTaxPct,
+      purchaseLookup,
+      options
+    );
     const lineGross = e.unitPrice * e.paidQty;
     const lineDiscount = (lineGross * e.discountPct) / 100;
     const lineTaxable = lineGross - lineDiscount;
