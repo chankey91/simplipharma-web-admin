@@ -132,6 +132,15 @@ export type OrderInvoicePrepared = {
   gstRatePercent: number;
 };
 
+/** True when the line has a real batch assignment and should appear on the tax invoice. */
+function isAllocatedInvoiceMedicineLine(item: Order['medicines'][number]): boolean {
+  if ((item as { lineType?: string }).lineType === 'product_demand') return false;
+  if (String(item.batchNumber || '').trim()) return true;
+  const allocs = item.batchAllocations;
+  if (!Array.isArray(allocs) || allocs.length === 0) return false;
+  return allocs.some((a) => String(a?.batchNumber || '').trim().length > 0);
+}
+
 async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepared> {
   const invoiceDate = order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate);
 
@@ -174,6 +183,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
   /**
    * Legacy rows still marked product_demand: rebuild with the same PI + inventory rules as
    * fulfillProductDemand / prepareFulfilledDemandOrderMedicines (no separate "pick any batch" path).
+   * Then drop anything still unallocated (no batch) so it never appears on the tax invoice.
    */
   const invoiceMedicines: Order['medicines'] = order.medicines
     .map((item) => {
@@ -182,7 +192,8 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       if (!demand || demand.status !== 'fulfilled' || medicineList.length === 0) return item;
       return tryPromoteFulfilledDemandLine(item, relevantDemands, medicineList, mergedInvoices, order.id);
     })
-    .filter((item) => item.lineType !== 'product_demand');
+    .filter((item) => item.lineType !== 'product_demand')
+    .filter(isAllocatedInvoiceMedicineLine);
 
   // Fetch all medicines to get packaging info
   const medicineMap = new Map<string, string>();
