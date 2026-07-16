@@ -382,12 +382,24 @@ export function resolveOrderLineDiscountPct(params: {
   batch?: SellDiscountBatch;
   gstRate?: number;
   discountManuallySet?: boolean;
+  /**
+   * After fulfill, never re-derive from PI. Trust any saved Disc % on the order line
+   * (custom values like 1.5% stay stable on Order Details).
+   */
+  lockPersistedDiscount?: boolean;
 }): number {
   // Explicit admin override (any %). Do not remap through PI → 0/2.
   if (params.discountManuallySet) {
     const manual =
       parseDiscountPct(params.itemDiscount) ?? parseDiscountPct(params.allocationDiscount);
     if (manual !== undefined) return manual;
+  }
+
+  // Fulfilled / locked orders: saved Disc is source of truth (stops custom↔default flicker).
+  if (params.lockPersistedDiscount) {
+    const saved =
+      parseDiscountPct(params.allocationDiscount) ?? parseDiscountPct(params.itemDiscount);
+    if (saved !== undefined) return saved;
   }
 
   // Only trust saved order trade Disc of 0% or 2%. Values like PI 13% are not order Disc %.
@@ -416,6 +428,7 @@ export function resolveOrderLineDisplayDiscountPct(params: {
   batch?: SellDiscountBatch;
   gstRate?: number;
   discountManuallySet?: boolean;
+  lockPersistedDiscount?: boolean;
 }): number {
   return resolveOrderLineDiscountPct(params);
 }
