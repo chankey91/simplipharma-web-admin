@@ -2000,9 +2000,6 @@ export const OrderDetailsPage: React.FC = () => {
           <ArrowBack />
         </IconButton>
         <Typography variant="h4">Order #{formatOrderNumberForDisplay(order.id)}</Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ ml: 1, alignSelf: 'flex-end', pb: 0.5 }}>
-          {order.id}
-        </Typography>
         <Box sx={{ flexGrow: 1 }} />
         {hasFulfilledProductDemands && (
           <Button
