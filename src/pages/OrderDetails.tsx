@@ -814,7 +814,7 @@ export const OrderDetailsPage: React.FC = () => {
           },
     [order, fulfillmentData.medicines, medicines, taxPctForTotals, purchaseDiscountLookup]
   );
-  const orderTotalSyncRef = useRef<number | null>(null);
+  const orderTotalSyncRef = useRef<string | null>(null);
   const autoStockRestoreRef = useRef<string | null>(null);
 
   // Cancel restores stock in Firestore, but Inventory used a 15-minute cache and
@@ -866,10 +866,6 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!order?.id) return;
     if (order.status === 'Cancelled') return;
-    // Only auto-sync live totals while Pending (batches / disc still being edited).
-    // After fulfill, rewriting totalAmount + invalidating the order caused Disc % / payment
-    // totals to oscillate between saved custom discount and PI-derived default.
-    if (order.status !== 'Pending') return;
     if (!allBatchesAssignedForTotals) return;
     // Don't rewrite total after full payment (settlement was against stored total)
     if (order.paymentStatus === 'Paid') return;
@@ -877,10 +873,20 @@ export const OrderDetailsPage: React.FC = () => {
     const liveTotal = orderTotals.grandTotal;
     if (liveTotal <= 0) return;
     if (Math.abs((order.totalAmount ?? 0) - liveTotal) < 0.005) return;
-    if (orderTotalSyncRef.current === liveTotal) return;
 
-    orderTotalSyncRef.current = liveTotal;
-    void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0)
+    // Pending: keep stored total in sync while batches/disc are edited.
+    // After fulfill: heal totalAmount when Invoice Details (per-line GST) differs from the
+    // flat-tax total saved at fulfill — Orders list / Typesense still read Firestore.
+    // Disc % is not rewritten here (Pending-only re-apply effect handles that separately).
+    const syncKey = `${order.id}:${liveTotal}`;
+    if (orderTotalSyncRef.current === syncKey) return;
+
+    orderTotalSyncRef.current = syncKey;
+    void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0, {
+      taxAmount: orderTotals.taxAmount,
+      subTotal: orderTotals.subTotal,
+      totalDiscount: orderTotals.totalDiscount,
+    })
       .then(() => {
         queryClient.invalidateQueries({ queryKey: ['order', order.id] });
         queryClient.invalidateQueries({ queryKey: ['orders'] });
@@ -898,6 +904,9 @@ export const OrderDetailsPage: React.FC = () => {
     order?.paidAmount,
     order?.paymentStatus,
     orderTotals.grandTotal,
+    orderTotals.taxAmount,
+    orderTotals.subTotal,
+    orderTotals.totalDiscount,
     allBatchesAssignedForTotals,
     queryClient,
   ]);
