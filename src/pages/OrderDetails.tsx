@@ -865,8 +865,11 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!order?.id) return;
     if (order.status === 'Cancelled') return;
-    // Pending: only sync once all batches are assigned
-    if (order.status === 'Pending' && !allBatchesAssignedForTotals) return;
+    // Only auto-sync live totals while Pending (batches / disc still being edited).
+    // After fulfill, rewriting totalAmount + invalidating the order caused Disc % / payment
+    // totals to oscillate between saved custom discount and PI-derived default.
+    if (order.status !== 'Pending') return;
+    if (!allBatchesAssignedForTotals) return;
     // Don't rewrite total after full payment (settlement was against stored total)
     if (order.paymentStatus === 'Paid') return;
 
@@ -1909,17 +1912,27 @@ export const OrderDetailsPage: React.FC = () => {
     const gstRateForDisc =
       toNumber(allocation?.gstRate) || toNumber(item.gstRate) || toNumber(med?.gstRate) || 5;
     const useManualOverride = item.discountManuallySet === true;
-    const discountPct = batchNumber
-      ? resolveFulfillmentDiscountPct(
-          item.medicineId,
-          batchNumber,
-          item.discountPercentage,
-          allocation?.discountPercentage,
-          batch,
-          useManualOverride,
-          gstRateForDisc
-        )
-      : 0;
+    // After fulfill, show the saved Disc % as-is (avoid re-deriving from PI on every render).
+    const savedDisc =
+      allocation?.discountPercentage !== undefined && allocation?.discountPercentage !== null
+        ? toNumber(allocation.discountPercentage)
+        : item.discountPercentage !== undefined && item.discountPercentage !== null
+          ? toNumber(item.discountPercentage)
+          : undefined;
+    const discountPct =
+      order?.status !== 'Pending' && savedDisc !== undefined
+        ? savedDisc
+        : batchNumber
+          ? resolveFulfillmentDiscountPct(
+              item.medicineId,
+              batchNumber,
+              item.discountPercentage,
+              allocation?.discountPercentage,
+              batch,
+              useManualOverride,
+              gstRateForDisc
+            )
+          : 0;
 
     if (order?.status === 'Pending') {
       return (

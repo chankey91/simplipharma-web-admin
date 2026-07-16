@@ -229,14 +229,13 @@ export function isOrderTradeDiscountPct(n: number): boolean {
 }
 
 /**
- * Saved order trade discount (0% or 2%).
- * Legacy 1.5% is intentionally NOT trusted so Disc re-derives under the current rule (PI > 4% → 2%).
+ * Saved order-line Disc % (any 0–100 value the user/fulfillment stored).
+ * Prefer this over re-deriving from PI so custom discounts stay stable on the order details screen.
  */
-function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
+function readPersistedOrderDiscount(...values: unknown[]): number | undefined {
   for (const value of values) {
     const n = parseDiscountPct(value);
-    if (n === undefined || !isOrderTradeDiscountPct(n)) continue;
-    return Math.abs(n - 2) < 0.001 ? 2 : 0;
+    if (n !== undefined) return n;
   }
   return undefined;
 }
@@ -388,7 +387,9 @@ export function resolveOrderLineDiscountPct(params: {
     if (manual !== undefined) return manual;
   }
 
-  const persisted = readPersistedOrderTradeDiscount(
+  // Trust whatever Disc % is already saved on the order line (custom or default).
+  // Re-deriving from PI here caused Disc % / totals to flicker between custom and default.
+  const persisted = readPersistedOrderDiscount(
     params.allocationDiscount,
     params.itemDiscount
   );
