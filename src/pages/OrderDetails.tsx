@@ -2071,8 +2071,11 @@ export const OrderDetailsPage: React.FC = () => {
                 ? fulfillmentData.medicines
                     .filter(
                       (m) =>
-                        (m as any).lineType === 'product_demand' ||
-                        Boolean(m.medicineId)
+                        (m as any).lineType !== 'product_demand' &&
+                        Boolean(m.medicineId) &&
+                        (Boolean(m.batchNumber) ||
+                          (Array.isArray(m.batchAllocations) &&
+                            m.batchAllocations.some((a: any) => Boolean(a?.batchNumber))))
                     )
                     .map((m) => {
                       if ((m as any).lineType === 'product_demand') {
