@@ -102,7 +102,7 @@ export type OrderInvoicePrepared = {
     grandTotal: string;
     amountInWords: string;
   };
-  tax: { taxable: string; cgst: string; sgst: string; rate: string };
+  tax: { taxable: string; cgst: string; sgst: string; rate: string; summaryAmt?: string };
   invoiceData: {
     no: string;
     date: string;
@@ -246,7 +246,9 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
   // Calculate totals
   let totalSubTotal = 0;
   let totalProductDiscount = 0;
-  
+  let totalGST = 0;
+  const taxableByGstRate = new Map<number, number>();
+
   const items = invoiceMedicines.map((item, index) => {
     const medicineDetails = item.medicineId ? medicineDetailsMap.get(item.medicineId) : undefined;
 
@@ -488,6 +490,9 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     // Subtotal = Sum of all "Total" column values (Price * Quantity)
     totalSubTotal += totalAmount;
     totalProductDiscount += discountAmount;
+    const lineTaxable = Math.max(0, totalAmount - discountAmount);
+    totalGST += (lineTaxable * gstRate) / 100;
+    taxableByGstRate.set(gstRate, (taxableByGstRate.get(gstRate) || 0) + lineTaxable);
     
     // Format expiry date
     const resolvedExpiry =
@@ -538,12 +543,12 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     };
   });
   
-  // Subtotal is sum of all "Total" column values (Price * Quantity)
-  // Calculate tax on (Subtotal - Product Discount) using order's tax percentage
-  // Note: Bill discount has been removed from calculations
+  // Subtotal is sum of all "Total" column values (Price * Quantity).
+  // GST is summed per line using each line's GST % (supports mixed 5% / 18% orders).
   const amountAfterDiscount = totalSubTotal - totalProductDiscount;
-  const taxPercentage = order.taxPercentage || 5;
-  const totalGST = (amountAfterDiscount * taxPercentage) / 100;
+  const uniqueGstRates = [...taxableByGstRate.keys()].sort((a, b) => a - b);
+  const taxPercentage =
+    uniqueGstRates.length === 1 ? uniqueGstRates[0]! : order.taxPercentage || 5;
   const totalSGST = totalGST / 2;
   const totalCGST = totalGST / 2;
   const calculatedTotal = amountAfterDiscount + totalGST;
@@ -594,12 +599,19 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     processedBy: order.processedBy || '-'
   };
   
-  // Tax summary
+  // Tax summary — one Amt line per GST slab when mixed rates are present
+  const taxSummaryAmt =
+    uniqueGstRates.length <= 1
+      ? `Amt ${taxPercentage.toFixed(0)}%: ${amountAfterDiscount.toFixed(2)}`
+      : uniqueGstRates
+          .map((rate) => `Amt ${rate.toFixed(0)}%: ${(taxableByGstRate.get(rate) || 0).toFixed(2)}`)
+          .join(' | ');
   const tax = {
     taxable: amountAfterDiscount.toFixed(2),
     cgst: totalCGST.toFixed(2),
     sgst: totalSGST.toFixed(2),
-    rate: taxPercentage.toFixed(0),
+    rate: uniqueGstRates.length === 1 ? taxPercentage.toFixed(0) : 'mixed',
+    summaryAmt: taxSummaryAmt,
   };
 
   // Summary
@@ -751,12 +763,15 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
       it.amount,
     ]),
     [],
-    [
-      'Tax summary',
-      `Amt ${tax.rate}%: ${tax.taxable}; CGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.cgst}; SGST ${(
-        gstRatePercent / 2
-      ).toFixed(1)}%: ${tax.sgst}`,
-    ],
+    (() => {
+      const taxLine =
+        typeof tax.summaryAmt === 'string' && tax.summaryAmt.length > 0
+          ? `${tax.summaryAmt}; CGST: ${tax.cgst}; SGST: ${tax.sgst}`
+          : `Amt ${tax.rate}%: ${tax.taxable}; CGST ${(gstRatePercent / 2).toFixed(1)}%: ${tax.cgst}; SGST ${(
+              gstRatePercent / 2
+            ).toFixed(1)}%: ${tax.sgst}`;
+      return ['Tax summary', taxLine];
+    })(),
     ['SUB TOTAL', summary.subTotal],
     ['PRODUCT DISCOUNT', summary.discount],
     ['GST', (parseFloat(summary.sgst) + parseFloat(summary.cgst)).toFixed(2)],
