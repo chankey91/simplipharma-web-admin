@@ -43,6 +43,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
+import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
 import { useAppDialog } from '../context/AppDialogProvider';
 
 type InvoiceTab = 'order' | 'purchase';
@@ -180,7 +181,7 @@ export const InvoicesPage: React.FC = () => {
           date: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
           storeName: resolveStoreName(o.retailerName, o.retailerId),
           vendorOrStore: o.retailerEmail || 'N/A',
-          amount: o.totalAmount || 0,
+          amount: resolveOrderListTotalAmount(o.id, o.totalAmount || 0),
           status: o.paymentStatus || 'Unpaid',
         }));
     } else {
@@ -242,7 +243,7 @@ export const InvoicesPage: React.FC = () => {
         date: new Date(o.orderDate),
         storeName: o.retailerName?.trim() || 'N/A',
         vendorOrStore: o.retailerEmail || 'N/A',
-        amount: o.totalAmount || 0,
+        amount: resolveOrderListTotalAmount(o.id, o.totalAmount || 0),
         status: o.paymentStatus || 'Unpaid',
       }));
     }
