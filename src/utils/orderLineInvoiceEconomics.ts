@@ -83,10 +83,10 @@ export type OrderLineInvoiceEconomics = {
   discountPct: number;
 };
 
-/** `orderTaxPercentage` matches invoice: GST for rate-from-MRP uses item.gstRate if set, else order tax. */
+/** Line GST: order line → allocation → medicine catalog → order tax (same as sales invoice PDF). */
 export function orderLineInvoiceEconomics(
   item: any,
-  medicine: { stockBatches?: any[] } | undefined,
+  medicine: { stockBatches?: any[]; gstRate?: number } | undefined,
   orderTaxPercentage?: number,
   purchaseLookup?: PurchaseBatchDiscountLookup
 ): OrderLineInvoiceEconomics {
@@ -138,8 +138,18 @@ export function orderLineInvoiceEconomics(
     orderTaxPercentage !== undefined && orderTaxPercentage !== null
       ? toNum(orderTaxPercentage) || 5
       : 5;
-  const gstRate =
-    item.gstRate !== undefined ? toNum(item.gstRate) : taxFallback;
+  let gstRate = item.gstRate !== undefined && item.gstRate !== null ? toNum(item.gstRate) : 0;
+  if (gstRate <= 0 && allocs && allocs.length > 0) {
+    for (const a of allocs) {
+      const g = toNum(a.gstRate);
+      if (g > 0) {
+        gstRate = g;
+        break;
+      }
+    }
+  }
+  if (gstRate <= 0) gstRate = toNum(medicine?.gstRate);
+  if (gstRate <= 0) gstRate = taxFallback;
 
   const unitPrice = resolveOrderLineUnitPrice(
     item,

@@ -49,6 +49,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
+import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
 import { useAppDialog } from '../context/AppDialogProvider';
 import type { OrderSearchParams } from '../services/orderSearch';
 import { reindexOrdersTypesense } from '../services/orderSearch';
@@ -230,7 +231,7 @@ export const OrdersPage: React.FC = () => {
           storeName: resolveStoreName(o.retailerName, o.retailerId),
           retailerEmail: o.retailerEmail || '',
           itemCount: o.medicines.length,
-          totalAmount: o.totalAmount,
+          totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
           status: o.status,
         }));
     }
@@ -240,7 +241,7 @@ export const OrdersPage: React.FC = () => {
       storeName: o.retailerName?.trim() || 'N/A',
       retailerEmail: o.retailerEmail || '',
       itemCount: o.itemCount,
-      totalAmount: o.totalAmount,
+      totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
       status: o.status,
     }));
   }, [typesenseDisabled, fallbackSorted, page, searchData, storeNameByRetailerId]);
