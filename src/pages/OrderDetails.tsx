@@ -323,6 +323,8 @@ export const OrderDetailsPage: React.FC = () => {
     [purchaseInvoices]
   );
   const orderDemandRepairAttempted = useRef<string | null>(null);
+  /** After fulfill, hydrate UI once — PI/medicines refetch must not remount lines (Disc flicker). */
+  const fulfilledUiFrozenRef = useRef<string | null>(null);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localPendingEditsRef = useRef<{ orderId: string | null; dirty: boolean }>({
     orderId: null,
@@ -344,7 +346,8 @@ export const OrderDetailsPage: React.FC = () => {
       allocationDiscount?: unknown,
       batch?: { mrp?: number; purchasePrice?: number; discountPercentage?: number },
       discountManuallySet?: boolean,
-      gstRate?: number
+      gstRate?: number,
+      lockPersistedDiscount?: boolean
     ) =>
       resolveOrderLineDisplayDiscountPct({
         itemDiscount,
@@ -355,6 +358,7 @@ export const OrderDetailsPage: React.FC = () => {
         batch: batch ? { ...batch, batchNumber } : undefined,
         gstRate,
         discountManuallySet,
+        lockPersistedDiscount,
       }),
     [purchaseDiscountLookup]
   );
@@ -528,6 +532,7 @@ export const OrderDetailsPage: React.FC = () => {
     setFulfillmentDirty(false);
     localPendingEditsRef.current = { orderId: null, dirty: false };
     orderDemandRepairAttempted.current = null;
+    fulfilledUiFrozenRef.current = null;
   }, [orderId]);
 
   useEffect(() => {
@@ -563,6 +568,12 @@ export const OrderDetailsPage: React.FC = () => {
 
   useEffect(() => {
     if (!order || !medicines || purchaseInvoices === undefined) return;
+
+    // Fulfilled+: load lines once. Re-running on every PI/medicines update remounted Disc %
+    // and made totals look like they were flipping custom ↔ default.
+    if (order.status !== 'Pending' && fulfilledUiFrozenRef.current === order.id) {
+      return;
+    }
 
     if (localPendingEditsRef.current.orderId !== order.id) {
       localPendingEditsRef.current = { orderId: order.id, dirty: false };
@@ -626,10 +637,40 @@ export const OrderDetailsPage: React.FC = () => {
       };
     });
     setFulfillmentInitOrderId(order.id);
+    if (order.status !== 'Pending') {
+      fulfilledUiFrozenRef.current = order.id;
+    }
 
     let cancelled = false;
 
     void (async () => {
+      // Demand-line repair only — do not remount fulfilled UI from async remap (Disc flicker).
+      if (order.status !== 'Pending') {
+        const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
+          rawMedicines,
+          order.id,
+          productDemands || [],
+          medicines,
+          purchaseInvoicesList
+        );
+        if (cancelled) return;
+        if (changed && orderDemandRepairAttempted.current !== order.id) {
+          orderDemandRepairAttempted.current = order.id;
+          try {
+            await updateOrderMedicines(order.id, repaired);
+            // Allow one re-hydrate from saved medicines after repair write.
+            fulfilledUiFrozenRef.current = null;
+            queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+            queryClient.invalidateQueries({ queryKey: ['orders'] });
+            queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+          } catch (err) {
+            console.error('Failed to repair fulfilled demand order lines:', err);
+            orderDemandRepairAttempted.current = null;
+          }
+        }
+        return;
+      }
+
       const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
         rawMedicines,
         order.id,
@@ -681,11 +722,20 @@ export const OrderDetailsPage: React.FC = () => {
       cancelled = true;
     };
   }, [
-    order,
+    order?.id,
+    order?.status,
+    order?.medicines,
+    order?.taxPercentage,
+    order?.trayNumber,
+    order?.processedBy,
+    order?.fulfillmentDraft,
+    order?.paymentStatus,
+    order?.paidAmount,
     medicines,
     productDemands,
     purchaseInvoices,
     purchaseInvoicesList,
+    purchaseDiscountLookup,
     queryClient,
   ]);
 
@@ -794,6 +844,7 @@ export const OrderDetailsPage: React.FC = () => {
   );
 
   const taxPctForTotals = order?.taxPercentage || fulfillmentData.taxPercentage || 5;
+  const lockDiscAfterFulfill = Boolean(order && order.status !== 'Pending');
   const orderTotals = useMemo(
     () =>
       order
@@ -801,7 +852,8 @@ export const OrderDetailsPage: React.FC = () => {
             fulfillmentData.medicines,
             medicines,
             taxPctForTotals,
-            purchaseDiscountLookup
+            purchaseDiscountLookup,
+            { lockPersistedDiscount: lockDiscAfterFulfill }
           )
         : {
             billableLines: [],
@@ -813,7 +865,14 @@ export const OrderDetailsPage: React.FC = () => {
             grandTotal: 0,
             uniformTaxPercentage: null,
           },
-    [order, fulfillmentData.medicines, medicines, taxPctForTotals, purchaseDiscountLookup]
+    [
+      order,
+      fulfillmentData.medicines,
+      medicines,
+      taxPctForTotals,
+      purchaseDiscountLookup,
+      lockDiscAfterFulfill,
+    ]
   );
   const orderTotalSyncRef = useRef<string | null>(null);
   const autoStockRestoreRef = useRef<string | null>(null);
@@ -867,20 +926,21 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!order?.id) return;
     if (order.status === 'Cancelled') return;
+    // Only auto-sync live totals while Pending. After fulfill, rewriting totalAmount
+    // caused Disc % / payment totals to oscillate (custom ↔ PI default).
+    if (order.status !== 'Pending') {
+      const liveTotal = orderTotals.grandTotal;
+      if (liveTotal > 0) setOrderTotalOverride(order.id, liveTotal);
+      return;
+    }
     if (!allBatchesAssignedForTotals) return;
     if (!medicines?.length) return;
 
     const liveTotal = orderTotals.grandTotal;
     if (liveTotal <= 0) return;
-
-    // Always keep Orders list aligned with Invoice Details for this session
-    // (Typesense often still has the pre-heal amount).
     setOrderTotalOverride(order.id, liveTotal);
-
     if (Math.abs((order.totalAmount ?? 0) - liveTotal) < 0.005) return;
 
-    // Applies to every order (not a single order id): keep Firestore totalAmount aligned
-    // with per-line GST used in Invoice Details / fulfill.
     const syncKey = `${order.id}:${liveTotal}`;
     if (orderTotalSyncRef.current === syncKey) return;
 
@@ -890,46 +950,17 @@ export const OrderDetailsPage: React.FC = () => {
       subTotal: orderTotals.subTotal,
     })
       .then(() => {
-        const paid = order.paidAmount ?? 0;
-        const dueAmount = Math.max(0, liveTotal - paid);
-        queryClient.setQueriesData({ queryKey: ['ordersSearch'] }, (old: unknown) => {
-          if (!old || typeof old !== 'object') return old;
-          const data = old as { orders?: Array<{ id: string; totalAmount: number }> };
-          if (!Array.isArray(data.orders)) return old;
-          return {
-            ...data,
-            orders: data.orders.map((row) =>
-              row.id === order.id ? { ...row, totalAmount: liveTotal } : row
-            ),
-          };
-        });
-        queryClient.setQueriesData({ queryKey: ['orders'] }, (old: unknown) => {
-          if (!Array.isArray(old)) return old;
-          return old.map((row: { id: string; totalAmount?: number; dueAmount?: number }) =>
-            row.id === order.id
-              ? {
-                  ...row,
-                  totalAmount: liveTotal,
-                  dueAmount,
-                  taxAmount: orderTotals.taxAmount,
-                  subTotal: orderTotals.subTotal,
-                }
-              : row
-          );
-        });
         queryClient.setQueryData(['order', order.id], (old: unknown) => {
           if (!old || typeof old !== 'object') return old;
           return {
             ...(old as object),
             totalAmount: liveTotal,
-            dueAmount,
+            dueAmount: Math.max(0, liveTotal - (order.paidAmount ?? 0)),
             taxAmount: orderTotals.taxAmount,
             subTotal: orderTotals.subTotal,
           };
         });
         queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-        // Do not invalidate ordersSearch here — a Typesense refetch can overwrite
-        // the patched amount with the old indexed total.
       })
       .catch((err) => {
         console.error('Failed to sync order total:', err);
@@ -1959,17 +1990,26 @@ export const OrderDetailsPage: React.FC = () => {
     const gstRateForDisc =
       toNumber(allocation?.gstRate) || toNumber(item.gstRate) || toNumber(med?.gstRate) || 5;
     const useManualOverride = item.discountManuallySet === true;
-    const discountPct = batchNumber
-      ? resolveFulfillmentDiscountPct(
-          item.medicineId,
-          batchNumber,
-          item.discountPercentage,
-          allocation?.discountPercentage,
-          batch,
-          useManualOverride,
-          gstRateForDisc
+    const lockPersisted = order?.status !== 'Pending';
+    // After fulfill: show saved Disc % only (never re-derive from PI — that caused flicker).
+    const discountPct = lockPersisted
+      ? toNumber(
+          allocation?.discountPercentage !== undefined && allocation?.discountPercentage !== null
+            ? allocation.discountPercentage
+            : item.discountPercentage
         )
-      : 0;
+      : batchNumber
+        ? resolveFulfillmentDiscountPct(
+            item.medicineId,
+            batchNumber,
+            item.discountPercentage,
+            allocation?.discountPercentage,
+            batch,
+            useManualOverride,
+            gstRateForDisc,
+            false
+          )
+        : 0;
 
     if (order?.status === 'Pending') {
       return (
@@ -2028,11 +2068,29 @@ export const OrderDetailsPage: React.FC = () => {
     );
   
   const taxPercentage = taxPctForTotals;
-  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal } =
-    orderTotals;
+  const liveBreakdown = orderTotals;
+  // After fulfill, Invoice/Payment use saved money fields so PI/catalog loads cannot
+  // keep shifting totals (looked like Disc % / payment flickering).
+  const useStoredTotals =
+    order.status !== 'Pending' && order.status !== 'Cancelled' && toNumber(order.totalAmount) > 0;
+  const subTotal = useStoredTotals
+    ? toNumber(order.subTotal) || liveBreakdown.subTotal
+    : liveBreakdown.subTotal;
+  const taxAmount = useStoredTotals
+    ? toNumber(order.taxAmount) || liveBreakdown.taxAmount
+    : liveBreakdown.taxAmount;
+  const grandTotal = useStoredTotals ? toNumber(order.totalAmount) : liveBreakdown.grandTotal;
+  const totalDiscount = liveBreakdown.totalDiscount;
+  const roundoff = useStoredTotals
+    ? Number((grandTotal - (subTotal - totalDiscount + taxAmount)).toFixed(4))
+    : liveBreakdown.roundoff;
 
-  /** Keep Payment card aligned with Invoice Details (live grand total). */
-  const effectiveOrderTotal = grandTotal > 0 ? grandTotal : (order.totalAmount ?? 0);
+  /** Payment card: after fulfill always stored totalAmount (never live recompute). */
+  const effectiveOrderTotal = useStoredTotals
+    ? toNumber(order.totalAmount)
+    : liveBreakdown.grandTotal > 0
+      ? liveBreakdown.grandTotal
+      : toNumber(order.totalAmount);
   const effectiveDueAmount = Math.max(0, effectiveOrderTotal - (order.paidAmount ?? 0));
 
   return (
@@ -2508,9 +2566,17 @@ export const OrderDetailsPage: React.FC = () => {
                       const lineInvoiceAmt = orderLineTaxableBeforeDiscount(
                         item,
                         medForLine,
-                        taxPercentage
+                        taxPercentage,
+                        purchaseDiscountLookup,
+                        { lockPersistedDiscount: order.status !== 'Pending' }
                       );
-                      const econLine = orderLineInvoiceEconomics(item, medForLine, taxPercentage);
+                      const econLine = orderLineInvoiceEconomics(
+                        item,
+                        medForLine,
+                        taxPercentage,
+                        purchaseDiscountLookup,
+                        { lockPersistedDiscount: order.status !== 'Pending' }
+                      );
                       const sumAllocQtyForLine = item.batchAllocations.reduce(
                         (s: number, a: any) => s + toNumber(a.quantity),
                         0
@@ -2766,7 +2832,13 @@ export const OrderDetailsPage: React.FC = () => {
                     );
                     const paidForDisplay = singleLineDisplay.billQty;
                     const physicalForDisplay = singleLineDisplay.totalQty;
-                    const lineEcon = orderLineInvoiceEconomics(item, medSingle, taxPercentage);
+                    const lineEcon = orderLineInvoiceEconomics(
+                      item,
+                      medSingle,
+                      taxPercentage,
+                      purchaseDiscountLookup,
+                      { lockPersistedDiscount: order.status !== 'Pending' }
+                    );
                     const fallbackBatchMrp = toNumber(
                       medSingle?.stockBatches?.find((b: any) => toNumber(b?.mrp) > 0)?.mrp
                     );
@@ -2811,6 +2883,7 @@ export const OrderDetailsPage: React.FC = () => {
                           ),
                           gstRate: displayGstRate,
                           discountManuallySet: item.discountManuallySet === true,
+                          lockPersistedDiscount: order.status !== 'Pending',
                         })
                       : toNumber(item.discountPercentage);
                     return (
@@ -2972,7 +3045,7 @@ export const OrderDetailsPage: React.FC = () => {
                         </TableCell>
                         <TableCell align="right">
                           {canShowPricingColumns && (item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) || hasLinePricing)
-                            ? `₹${orderLineAmountAfterDiscount(item, medSingle, taxPercentage, purchaseDiscountLookup).toFixed(2)}`
+                            ? `₹${orderLineAmountAfterDiscount(item, medSingle, taxPercentage, purchaseDiscountLookup, { lockPersistedDiscount: order.status !== 'Pending' }).toFixed(2)}`
                             : <Typography variant="caption" color="textSecondary">-</Typography>}
                         </TableCell>
                         {order.status === 'Pending' && (

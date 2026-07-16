@@ -373,6 +373,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
             : undefined,
           gstRate,
           discountManuallySet,
+          lockPersistedDiscount: true,
         });
         return Math.max(best, pct);
       }, 0);
@@ -397,6 +398,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
             : undefined,
           gstRate,
           discountManuallySet,
+          lockPersistedDiscount: true,
         });
         return Math.max(best, pct);
       }, 0);
@@ -417,6 +419,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
           : undefined,
         gstRate,
         discountManuallySet,
+        lockPersistedDiscount: true,
       });
       displayDiscountPercentage = resolveOrderLineDisplayDiscountPct({
         itemDiscount: (item as any).discountPercentage,
@@ -434,6 +437,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
           : undefined,
         gstRate,
         discountManuallySet,
+        lockPersistedDiscount: true,
       });
     }
 
