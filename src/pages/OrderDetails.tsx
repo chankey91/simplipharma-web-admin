@@ -810,6 +810,7 @@ export const OrderDetailsPage: React.FC = () => {
             calculatedTotal: 0,
             roundoff: 0,
             grandTotal: 0,
+            uniformTaxPercentage: null,
           },
     [order, fulfillmentData.medicines, medicines, taxPctForTotals, purchaseDiscountLookup]
   );
@@ -1981,7 +1982,8 @@ export const OrderDetailsPage: React.FC = () => {
     );
   
   const taxPercentage = taxPctForTotals;
-  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal } = orderTotals;
+  const { subTotal, totalDiscount, taxAmount, roundoff, grandTotal, uniformTaxPercentage } =
+    orderTotals;
 
   /** Keep Payment card aligned with Invoice Details (live grand total). */
   const effectiveOrderTotal = grandTotal > 0 ? grandTotal : (order.totalAmount ?? 0);
@@ -1998,9 +2000,6 @@ export const OrderDetailsPage: React.FC = () => {
           <ArrowBack />
         </IconButton>
         <Typography variant="h4">Order #{formatOrderNumberForDisplay(order.id)}</Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ ml: 1, alignSelf: 'flex-end', pb: 0.5 }}>
-          {order.id}
-        </Typography>
         <Box sx={{ flexGrow: 1 }} />
         {hasFulfilledProductDemands && (
           <Button
@@ -3023,7 +3022,11 @@ export const OrderDetailsPage: React.FC = () => {
               <Typography>-₹{totalDiscount.toFixed(2)}</Typography>
             </Box>
             <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Tax ({taxPercentage}%):</Typography>
+              <Typography color="textSecondary">
+                {uniformTaxPercentage != null
+                  ? `Tax (${uniformTaxPercentage}%):`
+                  : 'Tax (GST):'}
+              </Typography>
               <Typography>₹{taxAmount.toFixed(2)}</Typography>
             </Box>
             {Math.abs(roundoff) > 0.01 && (

@@ -1,5 +1,5 @@
 import { Medicine } from '../types';
-import { orderLineInvoiceEconomics, orderLineTaxableBeforeDiscount } from './orderLineInvoiceEconomics';
+import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import type { PurchaseBatchDiscountLookup } from './orderFulfillmentDiscount';
 
 const toNum = (value: unknown): number => {
@@ -35,6 +35,11 @@ export type OrderTotalsBreakdown = {
   calculatedTotal: number;
   roundoff: number;
   grandTotal: number;
+  /**
+   * When every billable line shares the same GST %, that rate (for UI labels).
+   * Null when mixed rates (e.g. 5% + 18%) or no billable lines.
+   */
+  uniformTaxPercentage: number | null;
 };
 
 export function calculateOrderTotalsFromLines(
@@ -44,25 +49,32 @@ export function calculateOrderTotalsFromLines(
   purchaseLookup?: PurchaseBatchDiscountLookup
 ): OrderTotalsBreakdown {
   const billableLines = lines.filter(isBillableFulfillmentLine);
-  const taxPct = taxPercentage || 5;
+  const fallbackTaxPct = taxPercentage || 5;
 
-  const subTotal = billableLines.reduce((sum, item) => {
-    const med = medicines?.find((m) => m.id === item.medicineId);
-    return sum + orderLineTaxableBeforeDiscount(item, med, taxPct, purchaseLookup);
-  }, 0);
+  let subTotal = 0;
+  let totalDiscount = 0;
+  let taxAmount = 0;
+  const gstRates = new Set<number>();
 
-  const totalDiscount = billableLines.reduce((sum, item) => {
+  for (const item of billableLines) {
     const med = medicines?.find((m) => m.id === item.medicineId);
-    const e = orderLineInvoiceEconomics(item, med, taxPct, purchaseLookup);
-    const lineAmt = e.unitPrice * e.paidQty;
-    return sum + (lineAmt * e.discountPct) / 100;
-  }, 0);
+    const e = orderLineInvoiceEconomics(item, med, fallbackTaxPct, purchaseLookup);
+    const lineGross = e.unitPrice * e.paidQty;
+    const lineDiscount = (lineGross * e.discountPct) / 100;
+    const lineTaxable = lineGross - lineDiscount;
+    const lineGst = e.gstRate > 0 ? e.gstRate : fallbackTaxPct;
+
+    subTotal += lineGross;
+    totalDiscount += lineDiscount;
+    taxAmount += (lineTaxable * lineGst) / 100;
+    gstRates.add(lineGst);
+  }
 
   const amountAfterDiscount = subTotal - totalDiscount;
-  const taxAmount = (amountAfterDiscount * taxPct) / 100;
   const calculatedTotal = amountAfterDiscount + taxAmount;
   const roundoff = calculatedTotal > 0 ? Math.round(calculatedTotal) - calculatedTotal : 0;
   const grandTotal = calculatedTotal > 0 ? Math.round(calculatedTotal) : 0;
+  const uniformTaxPercentage = gstRates.size === 1 ? [...gstRates][0]! : null;
 
   return {
     billableLines,
@@ -72,5 +84,6 @@ export function calculateOrderTotalsFromLines(
     calculatedTotal,
     roundoff,
     grandTotal,
+    uniformTaxPercentage,
   };
 }
