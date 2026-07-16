@@ -149,10 +149,26 @@ export const DashboardPage: React.FC = () => {
   // aggregation query key so order/notes totals are computed server-side
   // instead of downloading entire collections.
   const monthStartMs = useMemo(() => startOfMonth(new Date()).getTime(), []);
-  const { data: orderStats, isLoading: ordersLoading } = useOrderDashboardStats(monthStartMs);
-  const { data: recentOrders } = useRecentOrders(6);
-  const { data: stores, isLoading: storesLoading } = useStores(!isOperations);
-  const { data: medicines, isLoading: medicinesLoading } = useMedicines();
+  const {
+    data: orderStats,
+    isLoading: ordersLoading,
+    isError: ordersError,
+    error: ordersQueryError,
+    refetch: refetchOrderStats,
+  } = useOrderDashboardStats(monthStartMs);
+  const { data: recentOrders, isError: recentOrdersError } = useRecentOrders(6);
+  const {
+    data: stores,
+    isLoading: storesLoading,
+    isError: storesError,
+    refetch: refetchStores,
+  } = useStores(!isOperations);
+  const {
+    data: medicines,
+    isLoading: medicinesLoading,
+    isError: medicinesError,
+    refetch: refetchMedicines,
+  } = useMedicines();
   // Derive expiry buckets from the already-cached medicines list instead of
   // issuing two more full-collection reads for the same data.
   const expiringMedicines = useMemo(
@@ -164,9 +180,24 @@ export const DashboardPage: React.FC = () => {
     [medicines]
   );
   const { data: pendingRetailerRequests } = usePendingRetailerRequests(!isOperations);
-  const { data: creditTotals, isLoading: creditLoading } = useCreditNoteTotals(monthStartMs);
-  const { data: debitTotals, isLoading: debitLoading } = useDebitNoteTotals(monthStartMs);
-  const { data: expiryReturns, isLoading: expiryReturnsLoading } = useExpiryReturns();
+  const {
+    data: creditTotals,
+    isLoading: creditLoading,
+    isError: creditError,
+    refetch: refetchCreditTotals,
+  } = useCreditNoteTotals(monthStartMs);
+  const {
+    data: debitTotals,
+    isLoading: debitLoading,
+    isError: debitError,
+    refetch: refetchDebitTotals,
+  } = useDebitNoteTotals(monthStartMs);
+  const {
+    data: expiryReturns,
+    isLoading: expiryReturnsLoading,
+    isError: expiryReturnsError,
+    refetch: refetchExpiryReturns,
+  } = useExpiryReturns();
 
   const stats = useMemo(() => {
     const statusCounts = orderStats?.statusCounts;
@@ -274,6 +305,25 @@ export const DashboardPage: React.FC = () => {
     return <Loading message="Loading dashboard..." />;
   }
 
+  const dataLoadErrors = [
+    ordersError && 'order statistics',
+    creditError && 'credit note totals',
+    debitError && 'debit note totals',
+    expiryReturnsError && 'expiry returns',
+    medicinesError && 'inventory',
+    !isOperations && storesError && 'stores',
+    recentOrdersError && 'recent orders',
+  ].filter(Boolean) as string[];
+
+  const handleRetryDashboard = () => {
+    void refetchOrderStats();
+    void refetchCreditTotals();
+    void refetchDebitTotals();
+    void refetchExpiryReturns();
+    void refetchMedicines();
+    if (!isOperations) void refetchStores();
+  };
+
   const accent = {
     warning: theme.palette.warning.main,
     primary: theme.palette.primary.main,
@@ -295,6 +345,22 @@ export const DashboardPage: React.FC = () => {
             : 'Orders, inventory, and quick actions at a glance.'}
         </Typography>
       </Box>
+
+      {dataLoadErrors.length > 0 && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 3 }}
+          action={
+            <Button color="inherit" size="small" onClick={handleRetryDashboard}>
+              Retry
+            </Button>
+          }
+        >
+          Some dashboard data could not be loaded ({dataLoadErrors.join(', ')}).
+          {ordersQueryError instanceof Error ? ` ${ordersQueryError.message}` : ''} Values may
+          show as zero until the request succeeds.
+        </Alert>
+      )}
 
       <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 3 }}>
         <Button
