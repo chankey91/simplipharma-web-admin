@@ -10,6 +10,7 @@ import {
   isSalesOfficerRole,
   isRetailerRole,
 } from './panelAuth';
+import { buildRetailerWelcomeEmail } from './emailTemplates/retailerWelcomeEmail';
 
 admin.initializeApp();
 
@@ -83,6 +84,7 @@ async function sendSmtpMail(options: {
   to: string;
   subject: string;
   html: string;
+  text?: string;
   attachments?: {
     filename: string;
     content: Buffer | string;
@@ -103,6 +105,7 @@ async function sendSmtpMail(options: {
       to: options.to,
       subject: options.subject,
       html: options.html,
+      ...(options.text ? { text: options.text } : {}),
       ...(options.attachments?.length
         ? { attachments: options.attachments.map((a) => ({ ...a })) }
         : {}),
@@ -411,14 +414,34 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
     // Send password email if SMTP configured
     let emailSent = false;
     try {
-      const smtpConfig = functions.config().smtp;
-      if (smtpConfig?.user && smtpConfig?.password) {
-        const transporter = getTransporter();
-        await transporter.sendMail({
-          from: smtpConfig.user,
+      if (role === 'retailer') {
+        const welcomeMail = buildRetailerWelcomeEmail({
+          email,
+          password,
+          shopName: storeData?.shopName || storeData?.displayName,
+          storeCode: storeData?.storeCode,
+          intro: 'Your SimpliPharma retailer account has been created. Use the credentials below to sign in.',
+          subject: 'Welcome to SimpliPharma — Your retailer account is ready',
+        });
+        const mailResult = await sendSmtpMail({
           to: email,
-          subject: `Your SimpliPharma ${accountLabel} Account`,
-          html: `
+          subject: welcomeMail.subject,
+          html: welcomeMail.html,
+          text: welcomeMail.text,
+        });
+        emailSent = mailResult.ok;
+        if (!mailResult.ok) {
+          console.error('createStoreUser: retailer welcome email not sent:', mailResult.error);
+        }
+      } else {
+        const smtpConfig = functions.config().smtp;
+        if (smtpConfig?.user && smtpConfig?.password) {
+          const transporter = getTransporter();
+          await transporter.sendMail({
+            from: smtpConfig.user,
+            to: email,
+            subject: `Your SimpliPharma ${accountLabel} Account`,
+            html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
               <p>Your ${accountLabel} account has been created.</p>
@@ -430,8 +453,9 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
               <p><strong>Important:</strong> Please change your password on first login.</p>
             </div>
           `,
-        });
-        emailSent = true;
+          });
+          emailSent = true;
+        }
       }
     } catch (emailErr: any) {
       console.error('Email send failed:', emailErr?.message);
@@ -590,20 +614,19 @@ export const approveRetailerRequest = functions.https.onCall(async (data, contex
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    const welcomeMail = buildRetailerWelcomeEmail({
+      email: cred.email,
+      password: cred.password,
+      shopName: req.shopName || req.displayName,
+      storeCode: req.storeCode,
+      intro: 'Your retailer registration has been approved. Your SimpliPharma account is now active.',
+      subject: 'Welcome to SimpliPharma — Your store account is approved',
+    });
     const approvalMail = await sendSmtpMail({
       to: cred.email,
-      subject: 'Your SimpliPharma Store Account - Approved',
-      html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
-              <p>Your retailer registration has been approved. Your account is now active.</p>
-              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                <p><strong>Email:</strong> ${cred.email}</p>
-                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${cred.password}</code></p>
-              </div>
-              <p><strong>Important:</strong> Please change your password on first login.</p>
-            </div>
-          `,
+      subject: welcomeMail.subject,
+      html: welcomeMail.html,
+      text: welcomeMail.text,
     });
     const emailSent = approvalMail.ok;
     if (!approvalMail.ok) {
