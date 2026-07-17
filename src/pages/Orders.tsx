@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -28,6 +28,7 @@ import {
   Pagination,
   LinearProgress,
   Alert,
+  Divider,
 } from '@mui/material';
 import {
   Search,
@@ -37,6 +38,7 @@ import {
   CloudSync,
 } from '@mui/icons-material';
 import { useOrders, useOrdersSearch, useCancelOrder } from '../hooks/useOrders';
+import { useQuery } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
 import { getOrdersByStatus, getOrdersInRange } from '../services/orders';
 import { Order, OrderStatus } from '../types';
@@ -53,7 +55,7 @@ import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
 import { useAppDialog } from '../context/AppDialogProvider';
 import type { OrderSearchParams } from '../services/orderSearch';
 import { reindexOrdersTypesense } from '../services/orderSearch';
-import { getTodayDateStringIST } from '../utils/dateTime';
+import { getTodayDateStringIST, isDateInIstRange, istDayEndExclusiveMs, istDayStartMs } from '../utils/dateTime';
 
 const ROWS_PER_PAGE = 10;
 
@@ -98,6 +100,8 @@ export const OrdersPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
+  const [fromDateFilter, setFromDateFilter] = useState('');
+  const [toDateFilter, setToDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingProductSummary, setIsExportingProductSummary] = useState(false);
@@ -139,6 +143,12 @@ export const OrdersPage: React.FC = () => {
     return () => clearTimeout(t);
   }, [searchTerm]);
 
+  const dateRangeInvalid =
+    Boolean(fromDateFilter && toDateFilter && fromDateFilter > toDateFilter);
+  const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
+  /** Typesense lacks date filter until functions deploy — use Firestore range + local filter when dates set. */
+  const useLocalList = typesenseDisabled || hasDateFilter;
+
   // Primary path: server-side search/filter/sort/pagination via Typesense.
   const searchParams: OrderSearchParams = {
     query: debouncedTerm,
@@ -147,36 +157,67 @@ export const OrdersPage: React.FC = () => {
     sortOrder: sortDirection,
     page,
     perPage: ROWS_PER_PAGE,
+    ...(fromDateFilter && !dateRangeInvalid ? { fromDate: fromDateFilter } : {}),
+    ...(toDateFilter && !dateRangeInvalid ? { toDate: toDateFilter } : {}),
   };
   const {
     data: searchData,
     isError: searchErrored,
     isLoading: searchLoading,
     isFetching: searchFetching,
-  } = useOrdersSearch(searchParams, { enabled: !typesenseDisabled });
+  } = useOrdersSearch(searchParams, { enabled: !useLocalList && !dateRangeInvalid });
 
   // If Typesense is unreachable/misconfigured, permanently fall back for this session.
   useEffect(() => {
     if (searchErrored) setTypesenseDisabled(true);
   }, [searchErrored]);
 
-  // Fallback path: load the full collection and filter/sort/paginate in memory
-  // (only fetched when Typesense is unavailable).
-  const { data: allOrders, isLoading: allLoading } = useOrders({ enabled: typesenseDisabled });
+  const dateRangeBounds = useMemo(() => {
+    if (!hasDateFilter) return null;
+    return {
+      startMs: fromDateFilter ? istDayStartMs(fromDateFilter) : 0,
+      endMsExclusive: toDateFilter ? istDayEndExclusiveMs(toDateFilter) : undefined,
+    };
+  }, [hasDateFilter, fromDateFilter, toDateFilter]);
 
-  const fallbackSorted = useMemo(() => {
-    if (!typesenseDisabled) return [];
-    const term = debouncedTerm.toLowerCase();
-    const filtered = (allOrders ?? []).filter((order) => {
-      const matchesSearch =
-        !term ||
-        order.id.toLowerCase().includes(term) ||
-        resolveStoreName(order.retailerName, order.retailerId).toLowerCase().includes(term) ||
-        order.retailerEmail?.toLowerCase().includes(term) ||
-        order.medicines.some((m) => m.name.toLowerCase().includes(term));
-      const matchesStatus = statusFilter === 'All' || order.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
+  const { data: rangedOrders, isLoading: rangeLoading } = useQuery({
+    queryKey: ['ordersInRange', dateRangeBounds?.startMs, dateRangeBounds?.endMsExclusive],
+    queryFn: () =>
+      getOrdersInRange(dateRangeBounds!.startMs, dateRangeBounds!.endMsExclusive),
+    enabled: hasDateFilter && dateRangeBounds != null,
+  });
+
+  // Fallback path: full collection when Typesense unavailable and no date filter.
+  const { data: allOrders, isLoading: allLoading } = useOrders({
+    enabled: typesenseDisabled && !hasDateFilter,
+  });
+
+  const localOrdersSource = hasDateFilter ? rangedOrders ?? [] : allOrders ?? [];
+
+  const filterLocalOrders = useCallback(
+    (orders: Order[], applyStatusFilter: boolean) => {
+      const term = debouncedTerm.toLowerCase();
+      return orders.filter((order) => {
+        const matchesSearch =
+          !term ||
+          order.id.toLowerCase().includes(term) ||
+          resolveStoreName(order.retailerName, order.retailerId).toLowerCase().includes(term) ||
+          order.retailerEmail?.toLowerCase().includes(term) ||
+          order.medicines.some((m) => m.name.toLowerCase().includes(term));
+        const matchesStatus =
+          !applyStatusFilter || statusFilter === 'All' || order.status === statusFilter;
+        const matchesDate =
+          hasDateFilter || isDateInIstRange(order.orderDate, fromDateFilter, toDateFilter);
+        return matchesSearch && matchesStatus && matchesDate;
+      });
+    },
+    [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, hasDateFilter, storeNameByRetailerId]
+  );
+
+  const localFilteredSorted = useMemo(() => {
+    if (!useLocalList) return [];
+    if (dateRangeInvalid) return [];
+    const filtered = filterLocalOrders(localOrdersSource, true);
     const sorted = [...filtered];
     sorted.sort((a, b) => {
       switch (sortKey) {
@@ -210,20 +251,27 @@ export const OrdersPage: React.FC = () => {
       }
     });
     return sorted;
-  }, [typesenseDisabled, allOrders, debouncedTerm, statusFilter, sortKey, sortDirection, storeNameByRetailerId]);
+  }, [
+    useLocalList,
+    dateRangeInvalid,
+    localOrdersSource,
+    filterLocalOrders,
+    sortKey,
+    sortDirection,
+  ]);
 
-  const fallbackStatusCounts = useMemo(() => {
+  const localStatusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const o of allOrders ?? []) {
+    for (const o of filterLocalOrders(localOrdersSource, false)) {
       counts[o.status] = (counts[o.status] ?? 0) + 1;
     }
     return counts;
-  }, [allOrders]);
+  }, [localOrdersSource, filterLocalOrders]);
 
   // Normalized view model shared by both paths.
   const rows: OrderRow[] = useMemo(() => {
-    if (typesenseDisabled) {
-      return fallbackSorted
+    if (useLocalList) {
+      return localFilteredSorted
         .slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE)
         .map((o) => ({
           id: o.id,
@@ -244,10 +292,10 @@ export const OrdersPage: React.FC = () => {
       totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
       status: o.status,
     }));
-  }, [typesenseDisabled, fallbackSorted, page, searchData, storeNameByRetailerId]);
+  }, [useLocalList, localFilteredSorted, page, searchData, storeNameByRetailerId]);
 
-  const statusCounts = typesenseDisabled ? fallbackStatusCounts : searchData?.statusCounts ?? {};
-  const totalCount = typesenseDisabled ? fallbackSorted.length : searchData?.found ?? 0;
+  const statusCounts = useLocalList ? localStatusCounts : searchData?.statusCounts ?? {};
+  const totalCount = useLocalList ? localFilteredSorted.length : searchData?.found ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / ROWS_PER_PAGE));
 
   const ordersByStatus = {
@@ -379,12 +427,16 @@ export const OrdersPage: React.FC = () => {
 
   // While Typesense is erroring but before the fallback has engaged, keep showing
   // the loader instead of a flash of "No orders found".
-  const initialLoading = typesenseDisabled ? allLoading : searchLoading || searchErrored;
+  const initialLoading = useLocalList
+    ? hasDateFilter
+      ? rangeLoading
+      : allLoading
+    : searchLoading || searchErrored;
   if (initialLoading) {
     return <Loading message="Loading orders..." />;
   }
 
-  const isBusy = !typesenseDisabled && searchFetching;
+  const isBusy = !useLocalList && searchFetching;
 
   return (
     <Box>
@@ -431,67 +483,129 @@ export const OrdersPage: React.FC = () => {
         ))}
       </Grid>
 
-      {/* Filters */}
-      <Box display="flex" gap={2} mb={2}>
-        <TextField
-          placeholder="Search orders..."
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value);
-            setPage(1);
-          }}
-          sx={{ flexGrow: 1 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search />
-              </InputAdornment>
-            ),
-          }}
-        />
-        <FormControl sx={{ minWidth: 200 }}>
-          <InputLabel>Status</InputLabel>
-          <Select
-            value={statusFilter}
-            label="Status"
-            onChange={(e) => {
-              setStatusFilter(e.target.value as any);
-              setPage(1);
-            }}
+      {/* Filters & exports */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Grid container spacing={2} alignItems="center">
+          <Grid item xs={12} lg={4}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Search orders..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setPage(1);
+              }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search fontSize="small" />
+                  </InputAdornment>
+                ),
+              }}
+            />
+          </Grid>
+          <Grid item xs={6} sm={4} md={3} lg={2}>
+            <TextField
+              fullWidth
+              size="small"
+              label="From"
+              type="date"
+              value={fromDateFilter}
+              onChange={(e) => {
+                setFromDateFilter(e.target.value);
+                setPage(1);
+              }}
+              InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+          <Grid item xs={6} sm={4} md={3} lg={2}>
+            <TextField
+              fullWidth
+              size="small"
+              label="To"
+              type="date"
+              value={toDateFilter}
+              onChange={(e) => {
+                setToDateFilter(e.target.value);
+                setPage(1);
+              }}
+              InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={4} md={6} lg={3}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Status</InputLabel>
+              <Select
+                value={statusFilter}
+                label="Status"
+                onChange={(e) => {
+                  setStatusFilter(e.target.value as OrderStatus | 'All');
+                  setPage(1);
+                }}
+              >
+                <MenuItem value="All">All Statuses</MenuItem>
+                <MenuItem value="Pending">Pending</MenuItem>
+                <MenuItem value="Order Fulfillment">Order Fulfillment</MenuItem>
+                <MenuItem value="In Transit">In Transit</MenuItem>
+                <MenuItem value="Delivered">Delivered</MenuItem>
+                <MenuItem value="Cancelled">Cancelled</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+          {(fromDateFilter || toDateFilter) && (
+            <Grid item xs={12} lg={1}>
+              <Button
+                fullWidth
+                size="small"
+                variant="text"
+                onClick={() => {
+                  setFromDateFilter('');
+                  setToDateFilter('');
+                  setPage(1);
+                }}
+              >
+                Clear dates
+              </Button>
+            </Grid>
+          )}
+        </Grid>
+
+        {dateRangeInvalid && (
+          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+            From date must be on or before To date.
+          </Typography>
+        )}
+
+        <Divider sx={{ my: 2 }} />
+
+        <Box display="flex" justifyContent="flex-end" flexWrap="wrap" gap={1}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Download />}
+            onClick={handleExportPendingOrders}
+            disabled={pendingOrderCount === 0 || isExporting || isExportingProductSummary}
           >
-            <MenuItem value="All">All Statuses</MenuItem>
-            <MenuItem value="Pending">Pending</MenuItem>
-            <MenuItem value="Order Fulfillment">Order Fulfillment</MenuItem>
-            <MenuItem value="In Transit">In Transit</MenuItem>
-            <MenuItem value="Delivered">Delivered</MenuItem>
-            <MenuItem value="Cancelled">Cancelled</MenuItem>
-          </Select>
-        </FormControl>
-        <Button
-          variant="outlined"
-          startIcon={<Download />}
-          onClick={handleExportPendingOrders}
-          disabled={pendingOrderCount === 0 || isExporting || isExportingProductSummary}
-          sx={{ minWidth: 200 }}
-        >
-          {isExporting ? 'Exporting...' : 'Export Pending Orders (Excel)'}
-        </Button>
-        <Button
-          variant="outlined"
-          startIcon={<Download />}
-          onClick={() =>
-            setProductSummaryDialog({
-              open: true,
-              fromDate: getTodayDateStringIST(),
-              toDate: getTodayDateStringIST(),
-            })
-          }
-          disabled={isExporting || isExportingProductSummary}
-          sx={{ minWidth: 240 }}
-        >
-          {isExportingProductSummary ? 'Exporting...' : 'Export Product Summary (Excel)'}
-        </Button>
-      </Box>
+            {isExporting ? 'Exporting…' : 'Export Pending Orders'}
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Download />}
+            onClick={() =>
+              setProductSummaryDialog({
+                open: true,
+                fromDate: getTodayDateStringIST(),
+                toDate: getTodayDateStringIST(),
+              })
+            }
+            disabled={isExporting || isExportingProductSummary}
+          >
+            {isExportingProductSummary ? 'Exporting…' : 'Export Product Summary'}
+          </Button>
+        </Box>
+      </Paper>
 
       {/* Orders Table */}
       <TableContainer component={Paper}>

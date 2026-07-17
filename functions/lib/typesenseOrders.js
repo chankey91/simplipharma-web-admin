@@ -237,6 +237,24 @@ function scopeFilterForSearch(scope) {
     }
     return undefined;
 }
+function parseIstDateFilter(value) {
+    if (typeof value !== 'string')
+        return undefined;
+    const s = value.trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : undefined;
+}
+function orderDateRangeFilters(fromDate, toDate) {
+    const out = [];
+    if (fromDate) {
+        const startMs = new Date(`${fromDate}T00:00:00+05:30`).getTime();
+        out.push(`orderDate:>=${startMs}`);
+    }
+    if (toDate) {
+        const endMsExclusive = new Date(`${toDate}T00:00:00+05:30`).getTime() + 24 * 60 * 60 * 1000;
+        out.push(`orderDate:<${endMsExclusive}`);
+    }
+    return out;
+}
 /**
  * Authenticated server-side order search. Returns one page of results already
  * filtered, sorted and paginated, plus global per-status counts for the KPI
@@ -261,6 +279,8 @@ exports.searchOrdersTypesense = functions.https.onCall(async (data, context) => 
     const sortFieldRaw = String((data === null || data === void 0 ? void 0 : data.sortField) || 'orderDate');
     const sortField = SORTABLE_FIELDS.has(sortFieldRaw) ? sortFieldRaw : 'orderDate';
     const sortOrder = String((data === null || data === void 0 ? void 0 : data.sortOrder) || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+    const fromDate = parseIstDateFilter(data === null || data === void 0 ? void 0 : data.fromDate);
+    const toDate = parseIstDateFilter(data === null || data === void 0 ? void 0 : data.toDate);
     try {
         await ensureOrdersCollection(client);
         const scope = await resolveOrderSearchScope(context.auth.uid);
@@ -283,6 +303,7 @@ exports.searchOrdersTypesense = functions.https.onCall(async (data, context) => 
         else if (paymentStatus && paymentStatus !== 'All') {
             filters.push(`paymentStatus:=\`${paymentStatus}\``);
         }
+        filters.push(...orderDateRangeFilters(fromDate, toDate));
         const filterBy = filters.length > 0 ? filters.join(' && ') : undefined;
         const searchParams = {
             q,
