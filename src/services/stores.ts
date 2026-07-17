@@ -124,8 +124,22 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
       cloudFunctionSucceeded = true;
       return { uid: data.uid || data.id, emailSent: data.emailSent === true };
     } catch (error: any) {
-      // If Cloud Function doesn't exist or fails, fall back to Firestore-only
       const errorMessage = error.message || 'Unknown error';
+      const errorCode = String(error.code || '');
+      const isEmailAlreadyUsed =
+        errorCode === 'functions/already-exists' ||
+        /already in use/i.test(errorMessage) ||
+        /already registered/i.test(errorMessage);
+
+      // Do not create a Firestore-only orphan when Auth rejected the email.
+      if (isEmailAlreadyUsed) {
+        throw new Error(
+          errorMessage.includes('already')
+            ? errorMessage
+            : 'This email is already registered. Use a different email or update the existing retailer account.'
+        );
+      }
+
       cloudFunctionError = errorMessage;
       console.warn('Cloud Function not available or failed, creating Firestore document only:', errorMessage);
       

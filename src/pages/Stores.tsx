@@ -463,9 +463,13 @@ export const StoresPage: React.FC = () => {
         } catch (createError: any) {
           if (createError.storeCreated) {
             await alert(
-              `Store created successfully, but email could not be sent.\n\nPlease share these credentials with the store owner:\n\nEmail: ${createError.email || formData.email}\nPassword: ${createError.password || generatedPassword}\n\nNote: Cloud Function for email sending is not configured or failed. Please set up Firebase Cloud Functions with SMTP to enable email notifications.\n\nError: ${createError.message}`,
+              `Store document was saved, but the login account or email could not be completed.\n\nPlease share these credentials manually if needed:\n\nEmail: ${createError.email || formData.email}\nPassword: ${createError.password || generatedPassword}\n\nError: ${createError.message}`,
               { severity: 'warning' }
             );
+          } else if (/already in use|already registered/i.test(createError.message || '')) {
+            await alert(createError.message || 'This email is already registered.', {
+              severity: 'error',
+            });
           } else {
             throw createError;
           }
