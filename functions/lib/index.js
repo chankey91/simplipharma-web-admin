@@ -16,6 +16,7 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 const panelAuth_1 = require("./panelAuth");
+const retailerWelcomeEmail_1 = require("./emailTemplates/retailerWelcomeEmail");
 admin.initializeApp();
 // Helper function to set CORS headers
 const setCorsHeaders = (res) => {
@@ -85,7 +86,7 @@ async function sendSmtpMail(options) {
             return { ok: false, error: 'SMTP not configured' };
         }
         const transporter = getTransporter();
-        await transporter.sendMail(Object.assign({ from: smtpConfig.user, to: options.to, subject: options.subject, html: options.html }, (((_a = options.attachments) === null || _a === void 0 ? void 0 : _a.length)
+        await transporter.sendMail(Object.assign(Object.assign({ from: smtpConfig.user, to: options.to, subject: options.subject, html: options.html }, (options.text ? { text: options.text } : {})), (((_a = options.attachments) === null || _a === void 0 ? void 0 : _a.length)
             ? { attachments: options.attachments.map((a) => (Object.assign({}, a))) }
             : {})));
         return { ok: true };
@@ -364,14 +365,35 @@ exports.createStoreUser = functions.https.onCall(async (data, context) => {
         // Send password email if SMTP configured
         let emailSent = false;
         try {
-            const smtpConfig = functions.config().smtp;
-            if ((smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) && (smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
-                const transporter = getTransporter();
-                await transporter.sendMail({
-                    from: smtpConfig.user,
+            if (role === 'retailer') {
+                const welcomeMail = (0, retailerWelcomeEmail_1.buildRetailerWelcomeEmail)({
+                    email,
+                    password,
+                    shopName: (storeData === null || storeData === void 0 ? void 0 : storeData.shopName) || (storeData === null || storeData === void 0 ? void 0 : storeData.displayName),
+                    storeCode: storeData === null || storeData === void 0 ? void 0 : storeData.storeCode,
+                    intro: 'Your SimpliPharma retailer account has been created. Use the credentials below to sign in.',
+                    subject: 'Welcome to SimpliPharma — Your retailer account is ready',
+                });
+                const mailResult = await sendSmtpMail({
                     to: email,
-                    subject: `Your SimpliPharma ${accountLabel} Account`,
-                    html: `
+                    subject: welcomeMail.subject,
+                    html: welcomeMail.html,
+                    text: welcomeMail.text,
+                });
+                emailSent = mailResult.ok;
+                if (!mailResult.ok) {
+                    console.error('createStoreUser: retailer welcome email not sent:', mailResult.error);
+                }
+            }
+            else {
+                const smtpConfig = functions.config().smtp;
+                if ((smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) && (smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
+                    const transporter = getTransporter();
+                    await transporter.sendMail({
+                        from: smtpConfig.user,
+                        to: email,
+                        subject: `Your SimpliPharma ${accountLabel} Account`,
+                        html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
               <p>Your ${accountLabel} account has been created.</p>
@@ -383,8 +405,9 @@ exports.createStoreUser = functions.https.onCall(async (data, context) => {
               <p><strong>Important:</strong> Please change your password on first login.</p>
             </div>
           `,
-                });
-                emailSent = true;
+                    });
+                    emailSent = true;
+                }
             }
         }
         catch (emailErr) {
@@ -524,20 +547,19 @@ exports.approveRetailerRequest = functions.https.onCall(async (data, context) =>
             reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+        const welcomeMail = (0, retailerWelcomeEmail_1.buildRetailerWelcomeEmail)({
+            email: cred.email,
+            password: cred.password,
+            shopName: req.shopName || req.displayName,
+            storeCode: req.storeCode,
+            intro: 'Your retailer registration has been approved. Your SimpliPharma account is now active.',
+            subject: 'Welcome to SimpliPharma — Your store account is approved',
+        });
         const approvalMail = await sendSmtpMail({
             to: cred.email,
-            subject: 'Your SimpliPharma Store Account - Approved',
-            html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
-              <p>Your retailer registration has been approved. Your account is now active.</p>
-              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                <p><strong>Email:</strong> ${cred.email}</p>
-                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${cred.password}</code></p>
-              </div>
-              <p><strong>Important:</strong> Please change your password on first login.</p>
-            </div>
-          `,
+            subject: welcomeMail.subject,
+            html: welcomeMail.html,
+            text: welcomeMail.text,
         });
         const emailSent = approvalMail.ok;
         if (!approvalMail.ok) {
