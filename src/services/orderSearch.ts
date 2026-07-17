@@ -46,6 +46,10 @@ export interface OrderSearchParams {
   sortOrder?: 'asc' | 'desc';
   page?: number;
   perPage?: number;
+  /** yyyy-MM-dd in IST — inclusive lower bound on orderDate */
+  fromDate?: string;
+  /** yyyy-MM-dd in IST — inclusive upper bound on orderDate */
+  toDate?: string;
 }
 
 const searchOrdersCallable = httpsCallable(functions, 'searchOrdersTypesense', {
@@ -68,6 +72,8 @@ export async function searchOrdersTypesense(
     sortOrder: params.sortOrder ?? 'desc',
     page: params.page ?? 1,
     perPage: params.perPage ?? 10,
+    fromDate: params.fromDate ?? '',
+    toDate: params.toDate ?? '',
   });
   const data = (res.data ?? {}) as Partial<OrderSearchResult>;
   return {

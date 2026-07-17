@@ -71,3 +71,36 @@ export function dateFromISTDateString(dateStr: string): Date {
 export function getTodayStartIST(): Date {
   return dateFromISTDateString(getTodayDateStringIST());
 }
+
+/** Inclusive IST calendar range; endMsExclusive suits Firestore/Typesense `<` upper bound. */
+export function istDateRangeBounds(
+  fromDate: string,
+  toDate: string
+): { startMs: number; endMsExclusive: number } {
+  const startMs = new Date(`${fromDate}T00:00:00+05:30`).getTime();
+  const endMsExclusive = new Date(`${toDate}T00:00:00+05:30`).getTime() + 24 * 60 * 60 * 1000;
+  return { startMs, endMsExclusive };
+}
+
+export function istDayStartMs(dateStr: string): number {
+  return new Date(`${dateStr}T00:00:00+05:30`).getTime();
+}
+
+export function istDayEndExclusiveMs(dateStr: string): number {
+  return istDayStartMs(dateStr) + 24 * 60 * 60 * 1000;
+}
+
+/** True when orderDate falls in [fromDate, toDate] inclusive (IST calendar days). */
+export function isDateInIstRange(
+  orderDate: unknown,
+  fromDate?: string,
+  toDate?: string
+): boolean {
+  if (!fromDate && !toDate) return true;
+  const d = coerceToDate(orderDate);
+  if (!d) return false;
+  const t = d.getTime();
+  if (fromDate && t < istDayStartMs(fromDate)) return false;
+  if (toDate && t >= istDayEndExclusiveMs(toDate)) return false;
+  return true;
+}
