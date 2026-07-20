@@ -34,7 +34,7 @@ import {
   PictureAsPdf,
   Edit,
 } from '@mui/icons-material';
-import { useMedicines, useAddStockBatch, useUpdateMedicine } from '../hooks/useInventory';
+import { useAddStockBatch, useUpdateMedicine, useMedicine } from '../hooks/useInventory';
 import { format } from 'date-fns';
 import { getTodayDateStringIST } from '../utils/dateTime';
 import { Loading } from '../components/Loading';
@@ -49,7 +49,7 @@ import { useAppDialog } from '../context/AppDialogProvider';
 export const MedicineDetailsPage: React.FC = () => {
   const { medicineId } = useParams<{ medicineId: string }>();
   const navigate = useNavigate();
-  const { data: medicines, isLoading } = useMedicines();
+  const { data: medicine, isLoading } = useMedicine(medicineId);
   const addBatchMutation = useAddStockBatch();
   const updateMedicineMutation = useUpdateMedicine();
   const { alert, confirm, prompt } = useAppDialog();
@@ -83,7 +83,7 @@ export const MedicineDetailsPage: React.FC = () => {
     qrCodeData: null,
   });
   
-  const medicine = medicines?.find(m => m.id === medicineId);
+  // medicine loaded via useMedicine(medicineId) — includes medicineBatches hydration
 
   const batchTableSort = useTableSort('expiry', 'asc');
   const batchesSortedForTable = useMemo(() => {

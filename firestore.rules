@@ -96,6 +96,11 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    // On-hand lots (transactional stock). Master catalog stays on medicines/{id}.
+    match /medicineBatches/{batchId} {
+      allow read, write: if signedIn();
+    }
+
     match /banners/{bannerId} {
       allow read, write: if signedIn();
     }
