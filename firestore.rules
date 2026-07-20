@@ -179,6 +179,7 @@ service cloud.firestore {
         resource.data.retailerId == request.auth.uid
         || resource.data.salesOfficerId == request.auth.uid
         || isAdminOrOperations()
+        || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
       allow create: if signedIn() && (
         request.resource.data.retailerId == request.auth.uid
@@ -199,6 +200,7 @@ service cloud.firestore {
         resource.data.retailerId == request.auth.uid
         || resource.data.salesOfficerId == request.auth.uid
         || isAdminOrOperations()
+        || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
       allow create: if signedIn() && (
         request.resource.data.retailerId == request.auth.uid
@@ -226,6 +228,7 @@ service cloud.firestore {
       allow read: if signedIn() && (
         isAdminOrOperations()
         || resource.data.retailerId == request.auth.uid
+        || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
       allow create, update: if isAdminOrOperations();
       allow delete: if false;
@@ -235,22 +238,57 @@ service cloud.firestore {
       allow read: if signedIn() && (
         isAdminOrOperations()
         || resource.data.retailerId == request.auth.uid
+        || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
       allow create, update: if isAdminOrOperations();
       allow delete: if false;
+    }
+
+    function paymentRequestCreateFieldsValid() {
+      return request.resource.data.orderId is string
+        && request.resource.data.requestedAmount is number
+        && request.resource.data.requestedAmount >= 0
+        && request.resource.data.status == 'pending_admin_review';
+    }
+
+    function orderAssignedToSO(orderId) {
+      return orderId is string
+        && exists(/databases/$(database)/documents/orders/$(orderId))
+        && get(/databases/$(database)/documents/orders/$(orderId)).data.salesOfficerId == request.auth.uid;
+    }
+
+    function paymentRequestSalesOfficerCreate() {
+      return isSalesOfficer()
+        && request.resource.data.retailerId != request.auth.uid
+        && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.submittedByRole == 'salesOfficer'
+        && request.resource.data.salesOfficerId == request.auth.uid
+        && paymentRequestCreateFieldsValid()
+        && (
+          retailerAssignedToSO(request.resource.data.retailerId)
+          || orderAssignedToSO(request.resource.data.orderId)
+        );
     }
 
     match /payment_requests/{requestId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
         || resource.data.retailerId == request.auth.uid
+        || (
+          isSalesOfficer()
+          && (
+            resource.data.submittedBy == request.auth.uid
+            || retailerAssignedToSO(resource.data.retailerId)
+          )
+        )
       );
-      allow create: if signedIn()
-        && request.resource.data.retailerId == request.auth.uid
-        && request.resource.data.orderId is string
-        && request.resource.data.requestedAmount is number
-        && request.resource.data.requestedAmount >= 0
-        && request.resource.data.status == 'pending_admin_review';
+      allow create: if signedIn() && (
+        (
+          request.resource.data.retailerId == request.auth.uid
+          && paymentRequestCreateFieldsValid()
+        )
+        || paymentRequestSalesOfficerCreate()
+      );
       allow update: if signedIn() && (
         isAdminOrOperations()
         || (
