@@ -1,6 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
-  getAllMedicines, 
+  getAllMedicines,
+  getAllMedicinesMasterOnly,
+  getMedicineById,
+  getMedicineBatches,
   updateMedicineStock, 
   addStockBatch,
   findMedicineByBarcode,
@@ -11,6 +14,7 @@ import {
 } from '../services/inventory';
 import { Medicine, StockBatch } from '../types';
 
+/** Full catalog with batches hydrated (medicineBatches preferred, embedded fallback). */
 export const useMedicines = (options?: { fresh?: boolean }) => {
   return useQuery({
     queryKey: ['medicines'],
@@ -19,6 +23,35 @@ export const useMedicines = (options?: { fresh?: boolean }) => {
     staleTime: options?.fresh ? 0 : 30 * 1000,
     refetchOnMount: options?.fresh ? 'always' : true,
     refetchOnWindowFocus: true,
+  });
+};
+
+/** Master catalog only (no batch docs). Prefer for list UIs that only need stock totals. */
+export const useMedicinesMaster = (options?: { fresh?: boolean }) => {
+  return useQuery({
+    queryKey: ['medicines', 'master'],
+    queryFn: getAllMedicinesMasterOnly,
+    staleTime: options?.fresh ? 0 : 60 * 1000,
+    refetchOnMount: options?.fresh ? 'always' : true,
+    refetchOnWindowFocus: true,
+  });
+};
+
+export const useMedicine = (medicineId: string | undefined) => {
+  return useQuery({
+    queryKey: ['medicines', medicineId],
+    queryFn: () => getMedicineById(medicineId!),
+    enabled: !!medicineId,
+    staleTime: 30 * 1000,
+  });
+};
+
+export const useMedicineBatches = (medicineId: string | undefined) => {
+  return useQuery({
+    queryKey: ['medicineBatches', medicineId],
+    queryFn: () => getMedicineBatches(medicineId!),
+    enabled: !!medicineId,
+    staleTime: 15 * 1000,
   });
 };
 
@@ -33,8 +66,9 @@ export const useUpdateStock = () => {
       medicineId: string; 
       updates: Parameters<typeof updateMedicineStock>[1] 
     }) => updateMedicineStock(medicineId, updates),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['medicineBatches', vars.medicineId] });
     }
   });
 };
@@ -50,8 +84,9 @@ export const useAddStockBatch = () => {
       medicineId: string; 
       batch: Omit<StockBatch, 'id'> 
     }) => addStockBatch(medicineId, batch),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['medicineBatches', vars.medicineId] });
     }
   });
 };
@@ -93,9 +128,9 @@ export const useUpdateMedicine = () => {
   return useMutation({
     mutationFn: ({ medicineId, updates }: { medicineId: string; updates: Partial<Medicine> }) =>
       updateMedicine(medicineId, updates),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['medicines', vars.medicineId] });
     }
   });
 };
-

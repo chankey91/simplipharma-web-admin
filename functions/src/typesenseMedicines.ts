@@ -174,9 +174,9 @@ async function canReindexMedicines(uid: string): Promise<boolean> {
 }
 
 /** Parse minimal Medicine card fields (aligned with mobile parseMedicineDocLite). */
-function parseMedicineLiteFromSnap(
+async function parseMedicineLiteFromSnap(
   snap: FirebaseFirestore.DocumentSnapshot
-): Record<string, unknown> | null {
+): Promise<Record<string, unknown> | null> {
   const data = snap.data();
   if (!data || data.deleted === true) return null;
   const basePrice = data.price ?? data.mrp ?? 0;
@@ -187,7 +187,23 @@ function parseMedicineLiteFromSnap(
         ? data.mrp
         : parseFloat(String(data.mrp))
       : undefined;
-  const rawBatches = Array.isArray(data.stockBatches) ? data.stockBatches : [];
+
+  // Prefer embedded stockBatches; if empty, try medicineBatches collection (post-split).
+  let rawBatches = Array.isArray(data.stockBatches) ? data.stockBatches : [];
+  if (rawBatches.length === 0) {
+    try {
+      const batchSnap = await admin
+        .firestore()
+        .collection('medicineBatches')
+        .where('medicineId', '==', snap.id)
+        .limit(50)
+        .get();
+      rawBatches = batchSnap.docs.map((d) => d.data());
+    } catch (err) {
+      console.warn('medicineBatches lookup failed for', snap.id, err);
+    }
+  }
+
   const stockBatches = rawBatches
     .map((b: any) => {
       if (!b || typeof b !== 'object') return null;
@@ -250,7 +266,7 @@ async function fetchMedicinesOrderedByIds(ids: string[]): Promise<Record<string,
     const refs = chunk.map((id) => db.collection('medicines').doc(id));
     const snaps = await db.getAll(...refs);
     for (const s of snaps) {
-      const m = parseMedicineLiteFromSnap(s);
+      const m = await parseMedicineLiteFromSnap(s);
       if (m) map.set(s.id, m);
     }
   }

@@ -169,7 +169,7 @@ async function canReindexMedicines(uid) {
     return role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations';
 }
 /** Parse minimal Medicine card fields (aligned with mobile parseMedicineDocLite). */
-function parseMedicineLiteFromSnap(snap) {
+async function parseMedicineLiteFromSnap(snap) {
     var _a, _b, _c;
     const data = snap.data();
     if (!data || data.deleted === true)
@@ -181,7 +181,22 @@ function parseMedicineLiteFromSnap(snap) {
             ? data.mrp
             : parseFloat(String(data.mrp))
         : undefined;
-    const rawBatches = Array.isArray(data.stockBatches) ? data.stockBatches : [];
+    // Prefer embedded stockBatches; if empty, try medicineBatches collection (post-split).
+    let rawBatches = Array.isArray(data.stockBatches) ? data.stockBatches : [];
+    if (rawBatches.length === 0) {
+        try {
+            const batchSnap = await admin
+                .firestore()
+                .collection('medicineBatches')
+                .where('medicineId', '==', snap.id)
+                .limit(50)
+                .get();
+            rawBatches = batchSnap.docs.map((d) => d.data());
+        }
+        catch (err) {
+            console.warn('medicineBatches lookup failed for', snap.id, err);
+        }
+    }
     const stockBatches = rawBatches
         .map((b) => {
         var _a, _b, _c, _d, _e, _f;
@@ -244,7 +259,7 @@ async function fetchMedicinesOrderedByIds(ids) {
         const refs = chunk.map((id) => db.collection('medicines').doc(id));
         const snaps = await db.getAll(...refs);
         for (const s of snaps) {
-            const m = parseMedicineLiteFromSnap(s);
+            const m = await parseMedicineLiteFromSnap(s);
             if (m)
                 map.set(s.id, m);
         }
