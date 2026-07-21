@@ -58,14 +58,20 @@ async function loadRetailerFields(retailerId: string) {
   if (!profile) {
     throw new Error('Retailer not found');
   }
-  return {
-    retailerName: profile.shopName || profile.displayName || profile.email,
-    retailerEmail: profile.email,
-    retailerGstin: profile.gst,
-    retailerAddress: profile.address,
-    retailerPhone: profile.phoneNumber,
-    retailerDl: profile.licenceNumber,
-  };
+  const name = profile.shopName || profile.displayName || profile.email || 'Unknown store';
+  return stripUndefinedDeep({
+    retailerName: name,
+    retailerEmail: profile.email || undefined,
+    retailerGstin: profile.gst || undefined,
+    retailerAddress: profile.address || undefined,
+    retailerPhone: profile.phoneNumber || undefined,
+    retailerDl: profile.licenceNumber || undefined,
+  });
+}
+
+function optionalTrimmed(value: string | undefined): string | undefined {
+  const t = value?.trim();
+  return t ? t : undefined;
 }
 
 function validateInput(input: CreateDirectLedgerNoteInput) {
@@ -95,6 +101,8 @@ export async function createDirectLedgerCreditNote(
   const noteRef = doc(collection(db, 'credit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
 
+  const originalInvoiceNumber = optionalTrimmed(input.originalInvoiceNumber);
+
   await setDoc(
     noteRef,
     stripUndefinedDeep({
@@ -102,7 +110,7 @@ export async function createDirectLedgerCreditNote(
       creditNoteDate: noteDate,
       type: 'ledger_adjustment',
       reason,
-      originalInvoiceNumber: input.originalInvoiceNumber?.trim() || undefined,
+      ...(originalInvoiceNumber ? { originalInvoiceNumber } : {}),
       retailerId,
       ...retailer,
       items,
@@ -113,7 +121,7 @@ export async function createDirectLedgerCreditNote(
       amountUsed: 0,
       taxPercentage,
       status: 'issued',
-      createdBy: auth.currentUser?.uid,
+      createdBy: auth.currentUser?.uid || undefined,
       createdAt: serverTimestamp(),
     })
   );
@@ -132,6 +140,8 @@ export async function createDirectLedgerDebitNote(
   const noteRef = doc(collection(db, 'debit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
 
+  const originalInvoiceNumber = optionalTrimmed(input.originalInvoiceNumber);
+
   await setDoc(
     noteRef,
     stripUndefinedDeep({
@@ -139,7 +149,7 @@ export async function createDirectLedgerDebitNote(
       debitNoteDate: noteDate,
       sourceType: 'ledger_adjustment',
       reason,
-      originalInvoiceNumber: input.originalInvoiceNumber?.trim() || undefined,
+      ...(originalInvoiceNumber ? { originalInvoiceNumber } : {}),
       retailerId,
       ...retailer,
       items,
@@ -148,7 +158,7 @@ export async function createDirectLedgerDebitNote(
       totalAmount,
       taxPercentage,
       status: 'issued',
-      createdBy: auth.currentUser?.uid,
+      createdBy: auth.currentUser?.uid || undefined,
       createdAt: serverTimestamp(),
     })
   );
