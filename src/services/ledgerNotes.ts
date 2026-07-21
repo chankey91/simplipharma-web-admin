@@ -12,13 +12,16 @@ import { generateCreditNoteNumber, generateDebitNoteNumber } from '../utils/invo
 import { stripUndefinedDeep } from '../utils/firestorePayload';
 import { CreditNoteLine } from '../types';
 
+export const LEDGER_NOTE_GST_RATES = [5, 18] as const;
+export type LedgerNoteGstRate = (typeof LEDGER_NOTE_GST_RATES)[number];
+
 export interface CreateDirectLedgerNoteInput {
   retailerId: string;
   totalAmount: number;
   reason: string;
   noteDate?: Date;
   originalInvoiceNumber?: string;
-  taxPercentage?: number;
+  taxPercentage?: LedgerNoteGstRate;
 }
 
 function round2(n: number): number {
@@ -31,7 +34,12 @@ function splitTaxInclusive(total: number, taxPct: number): { subTotal: number; t
   return { subTotal, taxAmount };
 }
 
-function buildLedgerLine(reason: string, subTotal: number, taxPct: number): CreditNoteLine {
+function buildLedgerLine(
+  reason: string,
+  subTotal: number,
+  totalAmount: number,
+  taxPct: number
+): CreditNoteLine {
   const label = reason.trim().slice(0, 200) || 'Ledger adjustment';
   return {
     medicineId: 'ledger-adjustment',
@@ -41,7 +49,7 @@ function buildLedgerLine(reason: string, subTotal: number, taxPct: number): Cred
     gstRate: taxPct,
     unitRefundPrice: subTotal,
     refundAmount: subTotal,
-    mrp: subTotal,
+    mrp: totalAmount,
   };
 }
 
@@ -70,10 +78,10 @@ function validateInput(input: CreateDirectLedgerNoteInput) {
     throw new Error('Enter a valid amount greater than zero');
   }
   const taxPercentage = input.taxPercentage ?? 5;
-  if (!Number.isFinite(taxPercentage) || taxPercentage < 0) {
-    throw new Error('Enter a valid tax percentage');
+  if (!LEDGER_NOTE_GST_RATES.includes(taxPercentage as LedgerNoteGstRate)) {
+    throw new Error('Select GST 5% or 18%');
   }
-  return { retailerId, reason, totalAmount, taxPercentage };
+  return { retailerId, reason, totalAmount, taxPercentage: taxPercentage as LedgerNoteGstRate };
 }
 
 export async function createDirectLedgerCreditNote(
@@ -82,7 +90,7 @@ export async function createDirectLedgerCreditNote(
   const { retailerId, reason, totalAmount, taxPercentage } = validateInput(input);
   const retailer = await loadRetailerFields(retailerId);
   const { subTotal, taxAmount } = splitTaxInclusive(totalAmount, taxPercentage);
-  const items = [buildLedgerLine(reason, subTotal, taxPercentage)];
+  const items = [buildLedgerLine(reason, subTotal, totalAmount, taxPercentage)];
   const creditNoteNumber = await generateCreditNoteNumber();
   const noteRef = doc(collection(db, 'credit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
@@ -119,7 +127,7 @@ export async function createDirectLedgerDebitNote(
   const { retailerId, reason, totalAmount, taxPercentage } = validateInput(input);
   const retailer = await loadRetailerFields(retailerId);
   const { subTotal, taxAmount } = splitTaxInclusive(totalAmount, taxPercentage);
-  const items = [buildLedgerLine(reason, subTotal, taxPercentage)];
+  const items = [buildLedgerLine(reason, subTotal, totalAmount, taxPercentage)];
   const debitNoteNumber = await generateDebitNoteNumber();
   const noteRef = doc(collection(db, 'debit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
