@@ -8,6 +8,7 @@ import {
   isAdminOrOperationsRole,
   isPanelRole,
   isSalesOfficerRole,
+  isPurchaseOfficerRole,
   isRetailerRole,
 } from './panelAuth';
 
@@ -359,12 +360,6 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
 
-  try {
-    await assertAdmin(context.auth.uid);
-  } catch {
-    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
-  }
-
   const { email, password, storeData } = data || {};
   if (!email || !password) {
     throw new functions.https.HttpsError('invalid-argument', 'Email and password are required');
@@ -373,9 +368,22 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
   const role = storeData?.role || 'retailer';
   const displayName = storeData?.displayName || storeData?.shopName || email;
 
-  const allowedRoles = ['retailer', 'salesOfficer', 'operations'];
+  const allowedRoles = ['retailer', 'salesOfficer', 'operations', 'purchaseOfficer'];
   if (!allowedRoles.includes(role)) {
     throw new functions.https.HttpsError('invalid-argument', `Invalid role: ${role}`);
+  }
+
+  try {
+    if (role === 'purchaseOfficer') {
+      await assertAdminOrOperations(context.auth.uid);
+    } else {
+      await assertAdmin(context.auth.uid);
+    }
+  } catch {
+    throw new functions.https.HttpsError(
+      'permission-denied',
+      role === 'purchaseOfficer' ? 'Admin or operations access required' : 'Admin access required'
+    );
   }
 
   const accountLabel =
@@ -383,7 +391,9 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
       ? 'Sales Officer'
       : role === 'operations'
         ? 'Operations'
-        : 'store';
+        : role === 'purchaseOfficer'
+          ? 'Purchase Officer'
+          : 'store';
 
   try {
     const userRecord = await admin.auth().createUser({
@@ -423,6 +433,7 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
               <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
               <p>Your ${accountLabel} account has been created.</p>
               ${role === 'operations' ? '<p>Sign in to the SimpliPharma Operations panel to manage orders, inventory, purchases, and warehouse tasks.</p>' : ''}
+              ${role === 'purchaseOfficer' ? '<p>Sign in to the SimpliPharma Purchase app to work through medicines that need to be purchased and update found quantities in real time.</p>' : ''}
               <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <p><strong>Email:</strong> ${email}</p>
                 <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
@@ -837,6 +848,14 @@ function getSalesOfficerPasswordResetContinueUrl(): string {
   return getPanelLoginUrl();
 }
 
+/** Continue URL after reset for Purchase Officer app; configurable via `app.po_password_reset_continue_url`. */
+function getPurchaseOfficerPasswordResetContinueUrl(): string {
+  const cfg = functions.config().app as { po_password_reset_continue_url?: string } | undefined;
+  const custom = cfg?.po_password_reset_continue_url?.trim();
+  if (custom) return custom.replace(/\/$/, '');
+  return getPanelLoginUrl();
+}
+
 async function generatePasswordResetLinkWithFallback(
   email: string,
   continueUrl: string,
@@ -1081,6 +1100,94 @@ export const sendSalesOfficerPasswordResetEmail = functions.https.onCall(async (
   return {
     success: true,
     message: 'Password reset link sent to the Sales Officer email.',
+    emailSent: true,
+  };
+});
+
+/**
+ * Admin only: send a password reset link to a Purchase Officer’s email (purchase PWA).
+ * Requires SMTP (same as other transactional emails).
+ */
+export const sendPurchaseOfficerPasswordResetEmail = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  try {
+    await assertAdminOrOperations(context.auth.uid);
+  } catch {
+    throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
+  }
+
+  const rawEmail = String(data?.email || '').trim();
+  if (!rawEmail) {
+    throw new functions.https.HttpsError('invalid-argument', 'Email is required');
+  }
+
+  let userRecord: admin.auth.UserRecord;
+  try {
+    userRecord = await admin.auth().getUserByEmail(rawEmail);
+  } catch {
+    throw new functions.https.HttpsError('not-found', 'No user found with this email');
+  }
+
+  const role = await getUserRole(userRecord.uid);
+  if (!isPurchaseOfficerRole(role)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'This email is not a Purchase Officer account'
+    );
+  }
+
+  const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
+  if (!userDoc.exists || userDoc.data()?.isActive === false) {
+    throw new functions.https.HttpsError('failed-precondition', 'This Purchase Officer account is inactive');
+  }
+
+  const email = String(userRecord.email || rawEmail).trim();
+
+  let resetLink: string;
+  try {
+    resetLink = await generatePasswordResetLinkWithFallback(
+      email,
+      getPurchaseOfficerPasswordResetContinueUrl(),
+      'sendPurchaseOfficerPasswordResetEmail'
+    );
+  } catch (err: any) {
+    console.error('sendPurchaseOfficerPasswordResetEmail: generatePasswordResetLink failed:', err?.message);
+    throw new functions.https.HttpsError('internal', 'Could not generate password reset link');
+  }
+
+  const mail = await sendSmtpMail({
+    to: email,
+    subject: 'SimpliPharma — Reset your Purchase Officer password',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2196F3;">Password reset</h2>
+        <p>An administrator requested a password reset for your SimpliPharma Purchase Officer account.</p>
+        <p style="margin: 24px 0;">
+          <a href="${resetLink}"
+             style="background: #00a99d; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Choose a new password
+          </a>
+        </p>
+        <p style="color: #666; font-size: 14px;">Or copy this link into your browser:</p>
+        <p style="word-break: break-all; font-size: 13px; color: #333;">${escapeHtmlText(resetLink)}</p>
+        <p style="color: #666; font-size: 12px; margin-top: 24px;">If you did not expect this, contact your administrator. The link expires after a short time.</p>
+      </div>
+    `,
+  });
+
+  if (!mail.ok) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      mail.error || 'SMTP is not configured. Set smtp.user and smtp.password in Firebase Functions config.'
+    );
+  }
+
+  return {
+    success: true,
+    message: 'Password reset link sent to the Purchase Officer email.',
     emailSent: true,
   };
 });
@@ -1637,3 +1744,9 @@ export {
   searchProductDemandsTypesense,
   adminReindexProductDemandsTypesense,
 } from './typesenseProductDemands';
+
+export {
+  scheduledPurchaseListNoon,
+  scheduledPurchaseListAfternoon,
+  publishPurchaseListNet,
+} from './purchaseListJob';

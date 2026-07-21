@@ -43,6 +43,7 @@ import {
   Article,
   HeadsetMic,
   Stars,
+  ShoppingBag,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -73,6 +74,7 @@ const MENU_SECTIONS: MenuSection[] = [
     items: [
       { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
       { text: 'Product demands', icon: <PostAdd />, path: '/product-demands' },
+      { text: 'Purchase lists', icon: <ShoppingBag />, path: '/purchase-lists' },
       { text: 'Sales invoices', icon: <Description />, path: '/invoices' },
       { text: 'Credit & debit notes', icon: <Article />, path: '/credit-notes' },
     ],

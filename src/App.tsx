@@ -41,6 +41,7 @@ import { VendorLedgerPage } from './pages/VendorLedger';
 import { PaymentRequestsPage } from './pages/PaymentRequests';
 import { SupportTicketsPage } from './pages/SupportTickets';
 import { HomeFeedPage } from './pages/HomeFeed';
+import { PurchaseListsPage } from './pages/PurchaseLists';
 import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
@@ -150,6 +151,7 @@ const router = createBrowserRouter([
   { path: '/order-returns', element: withLayout(<OrderReturnsPage />) },
   { path: '/margin', element: withLayout(<MarginReportPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
+  { path: '/purchase-lists', element: withLayout(<PurchaseListsPage />) },
 ]);
 
 function App() {

@@ -236,7 +236,9 @@ export interface User {
   id: string;
   uid: string;
   email: string;
-  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations';
+  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations' | 'purchaseOfficer';
+  firstName?: string;
+  lastName?: string;
   salesOfficerId?: string; // For retailers: which Sales Officer manages them
   displayName?: string;
   phoneNumber?: string;

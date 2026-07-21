@@ -40,6 +40,13 @@ service cloud.firestore {
       );
     }
 
+    function isPurchaseOfficer() {
+      return hasUserDoc() && (
+        userRole() == 'purchaseOfficer' ||
+        userRole() == 'PurchaseOfficer'
+      );
+    }
+
     function isAdminOrSalesOfficer() {
       return isAdmin() || isSalesOfficer();
     }
@@ -167,6 +174,10 @@ service cloud.firestore {
       allow write: if signedIn() && (
         request.auth.uid == userId
         || isAdminOrSalesOfficer()
+        || (
+          isOperations()
+          && resource.data.role == 'purchaseOfficer'
+        )
       );
     }
 
@@ -435,6 +446,30 @@ service cloud.firestore {
         )
       );
       allow delete: if false;
+    }
+
+    // Purchase officer lists (published product summary from admin)
+    match /purchaseLists/{listId} {
+      allow read: if isAdminOrOperations() || isPurchaseOfficer();
+      allow create: if isAdminOrOperations();
+      allow update: if isAdminOrOperations()
+        || (
+          isPurchaseOfficer()
+          && resource.data.status == 'open'
+          && request.resource.data.status in ['open', 'confirmed']
+        );
+      allow delete: if isAdmin();
+
+      match /items/{itemId} {
+        allow read: if isAdminOrOperations() || isPurchaseOfficer();
+        allow create: if isAdminOrOperations();
+        allow update: if isAdminOrOperations()
+          || (
+            isPurchaseOfficer()
+            && get(/databases/$(database)/documents/purchaseLists/$(listId)).data.status == 'open'
+          );
+        allow delete: if isAdmin();
+      }
     }
 
     match /{document=**} {

@@ -6,6 +6,7 @@ exports.isOperationsRole = isOperationsRole;
 exports.isAdminOrOperationsRole = isAdminOrOperationsRole;
 exports.isPanelRole = isPanelRole;
 exports.isSalesOfficerRole = isSalesOfficerRole;
+exports.isPurchaseOfficerRole = isPurchaseOfficerRole;
 exports.isRetailerRole = isRetailerRole;
 exports.assertAdminOrOperations = assertAdminOrOperations;
 exports.assertAdmin = assertAdmin;
@@ -29,6 +30,9 @@ function isPanelRole(role) {
 }
 function isSalesOfficerRole(role) {
     return role === 'salesOfficer' || role === 'SalesOfficer';
+}
+function isPurchaseOfficerRole(role) {
+    return role === 'purchaseOfficer' || role === 'PurchaseOfficer';
 }
 function isRetailerRole(role) {
     return role === 'retailer' || role === 'Retailer';
