@@ -218,12 +218,15 @@ export const onBulkMedicineJobCreated = functions
               manufacturer: m.manufacturer,
               stock: 0,
               currentStock: 0,
+              activeBatchCount: 0,
+              nearestExpiry: null,
               stockBatches: [],
               gstRate: m.gstRate,
               price: 0,
               unit: m.unit,
               code: m.code,
               description: m.description,
+              migrationVersion: 2,
             });
             writeBatch.set(ref, newDoc);
             nameToId.set(key, ref.id);

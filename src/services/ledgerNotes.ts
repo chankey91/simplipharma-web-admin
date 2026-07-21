@@ -9,6 +9,7 @@ import {
   getUserProfile,
 } from './firebase';
 import { generateCreditNoteNumber, generateDebitNoteNumber } from '../utils/invoiceNumber';
+import { stripUndefinedDeep } from '../utils/firestorePayload';
 import { CreditNoteLine } from '../types';
 
 export interface CreateDirectLedgerNoteInput {
@@ -86,25 +87,28 @@ export async function createDirectLedgerCreditNote(
   const noteRef = doc(collection(db, 'credit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
 
-  await setDoc(noteRef, {
-    creditNoteNumber,
-    creditNoteDate: noteDate,
-    type: 'ledger_adjustment',
-    reason,
-    originalInvoiceNumber: input.originalInvoiceNumber?.trim() || undefined,
-    retailerId,
-    ...retailer,
-    items,
-    subTotal,
-    taxAmount,
-    totalAmount,
-    amount: totalAmount,
-    amountUsed: 0,
-    taxPercentage,
-    status: 'issued',
-    createdBy: auth.currentUser?.uid,
-    createdAt: serverTimestamp(),
-  });
+  await setDoc(
+    noteRef,
+    stripUndefinedDeep({
+      creditNoteNumber,
+      creditNoteDate: noteDate,
+      type: 'ledger_adjustment',
+      reason,
+      originalInvoiceNumber: input.originalInvoiceNumber?.trim() || undefined,
+      retailerId,
+      ...retailer,
+      items,
+      subTotal,
+      taxAmount,
+      totalAmount,
+      amount: totalAmount,
+      amountUsed: 0,
+      taxPercentage,
+      status: 'issued',
+      createdBy: auth.currentUser?.uid,
+      createdAt: serverTimestamp(),
+    })
+  );
 
   return { id: noteRef.id, creditNoteNumber };
 }
@@ -120,23 +124,26 @@ export async function createDirectLedgerDebitNote(
   const noteRef = doc(collection(db, 'debit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
 
-  await setDoc(noteRef, {
-    debitNoteNumber,
-    debitNoteDate: noteDate,
-    sourceType: 'ledger_adjustment',
-    reason,
-    originalInvoiceNumber: input.originalInvoiceNumber?.trim() || undefined,
-    retailerId,
-    ...retailer,
-    items,
-    subTotal,
-    taxAmount,
-    totalAmount,
-    taxPercentage,
-    status: 'issued',
-    createdBy: auth.currentUser?.uid,
-    createdAt: serverTimestamp(),
-  });
+  await setDoc(
+    noteRef,
+    stripUndefinedDeep({
+      debitNoteNumber,
+      debitNoteDate: noteDate,
+      sourceType: 'ledger_adjustment',
+      reason,
+      originalInvoiceNumber: input.originalInvoiceNumber?.trim() || undefined,
+      retailerId,
+      ...retailer,
+      items,
+      subTotal,
+      taxAmount,
+      totalAmount,
+      taxPercentage,
+      status: 'issued',
+      createdBy: auth.currentUser?.uid,
+      createdAt: serverTimestamp(),
+    })
+  );
 
   return { id: noteRef.id, debitNoteNumber };
 }
