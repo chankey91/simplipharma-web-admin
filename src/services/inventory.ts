@@ -10,6 +10,7 @@ import {
   setDoc,
   deleteDoc,
   writeBatch,
+  deleteField,
   db,
 } from './firebase';
 import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
@@ -21,10 +22,10 @@ export const MEDICINE_BATCHES_COLLECTION = 'medicineBatches';
 
 /**
  * While true, stock mutations also keep the legacy embedded `stockBatches` array
- * on the medicine doc in sync (safe cutover / rollback). Turn off after migration
- * is verified on simplipharma-dev and all clients read from medicineBatches.
+ * on the medicine doc in sync (safe cutover / rollback).
+ * Off on simplipharma-dev after soak testing — source of truth is medicineBatches only.
  */
-export const DUAL_WRITE_EMBEDDED_STOCK_BATCHES = true;
+export const DUAL_WRITE_EMBEDDED_STOCK_BATCHES = false;
 
 export const MEDICINE_MIGRATION_VERSION = 2;
 
@@ -384,6 +385,9 @@ async function persistMedicineStockState(
 
   if (DUAL_WRITE_EMBEDDED_STOCK_BATCHES) {
     updateData.stockBatches = embeddedLegacy;
+  } else {
+    // Strip legacy embedded array if still present on the master doc
+    updateData.stockBatches = deleteField();
   }
 
   await updateDoc(medicineRef, updateData);
@@ -853,11 +857,6 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
     price: 0,
     migrationVersion: MEDICINE_MIGRATION_VERSION,
   };
-
-  // Dual-write empty embedded array during cutover so old readers don't break
-  if (DUAL_WRITE_EMBEDDED_STOCK_BATCHES) {
-    newMedicine.stockBatches = [];
-  }
 
   if (medicineData.code) newMedicine.code = medicineData.code;
   if (medicineData.unit) newMedicine.unit = medicineData.unit;
