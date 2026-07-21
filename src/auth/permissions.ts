@@ -1,6 +1,6 @@
 export type PanelRole = 'admin' | 'operations';
 
-export type AppRole = PanelRole | 'retailer' | 'salesOfficer';
+export type AppRole = PanelRole | 'retailer' | 'salesOfficer' | 'purchaseOfficer';
 
 /** Base paths allowed per panel role (sub-routes matched by prefix). */
 export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
@@ -23,6 +23,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/margin',
     '/product-demands',
     '/operations',
+    '/purchase-lists',
     '/invoices',
     '/credit-notes',
     '/payment-requests',
@@ -42,6 +43,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/orders',
     '/product-demands',
     '/operations',
+    '/purchase-lists',
     '/credit-notes',
     '/support',
   ],

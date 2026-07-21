@@ -20,6 +20,18 @@ service firebase.storage {
         userRole() == 'salesOfficer';
     }
 
+    function isPurchaseOfficer() {
+      return request.auth != null &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        (userRole() == 'purchaseOfficer' || userRole() == 'PurchaseOfficer');
+    }
+
+    function isOperations() {
+      return request.auth != null &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        (userRole() == 'operations' || userRole() == 'Operations');
+    }
+
     // Common path prefixes used by mobile apps — add more match blocks if your uploads use another folder name.
     match /retailer_registration/{allPaths=**} {
       allow read: if request.auth != null && (isAdmin() || isSalesOfficer());
@@ -71,6 +83,18 @@ service firebase.storage {
     // Other banner paths (legacy flat files, etc.): public read only.
     match /banners/{allPaths=**} {
       allow read: if true;
+    }
+
+    // Purchase officer optional invoice attachments before list confirmation
+    match /purchase_list_invoices/{listId}/{allPaths=**} {
+      allow read: if request.auth != null && (isAdmin() || isOperations() || isPurchaseOfficer());
+      allow write: if request.auth != null
+        && isPurchaseOfficer()
+        && request.resource.size < 10 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/.*')
+          || request.resource.contentType == 'application/pdf'
+        );
     }
 
     // Paths not matched above are denied by default.

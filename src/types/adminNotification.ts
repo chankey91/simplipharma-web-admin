@@ -3,7 +3,8 @@ export type AdminNotificationType =
   | 'product_demand'
   | 'retailer_registration'
   | 'order_return'
-  | 'expiry_return';
+  | 'expiry_return'
+  | 'purchase_list';
 
 export interface AdminNotification {
   id: string;
