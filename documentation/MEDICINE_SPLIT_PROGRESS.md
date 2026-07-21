@@ -8,16 +8,16 @@
 | Collection | Role | Doc ID |
 |------------|------|--------|
 | `medicines` | Master catalog + aggregates (`stock`, `currentStock`, `nearestExpiry`, `activeBatchCount`) | unchanged |
-| `medicineBatches` | On-hand lots | auto-id / legacy batch id; field `medicineId` required |
+| `medicineBatches` | On-hand lots (source of truth) | auto-id / legacy batch id; field `medicineId` required |
 
 Orders / PIs keep storing `medicineId` + `batchNumber` (no redesign).
 
 ## Cutover strategy
 
-1. Dual-read: prefer `medicineBatches` for a medicine; fall back to embedded `stockBatches` if none.
-2. Dual-write: `DUAL_WRITE_EMBEDDED_STOCK_BATCHES = true` in `src/services/inventory.ts` — stock mutations write both.
-3. Migration script copies embedded → `medicineBatches` on **dev**.
-4. Later: set dual-write flag false, delete `stockBatches` from masters.
+1. Dual-read: prefer `medicineBatches`; fall back to embedded `stockBatches` if present (legacy).
+2. Dual-write: **OFF** on dev (`DUAL_WRITE_EMBEDDED_STOCK_BATCHES = false`).
+3. Migration copied embedded → `medicineBatches` on **dev**.
+4. Embedded `stockBatches` **deleted** from all medicine masters on **dev**.
 
 ## Checklist
 
@@ -28,28 +28,38 @@ Orders / PIs keep storing `medicineId` + `batchNumber` (no redesign).
 - [x] `inventory.ts` rewritten (dual-read / dual-write)
 - [x] Hooks updated (`useMedicine`, `useMedicineBatches`, `useMedicinesMaster`)
 - [x] Migration script `functions/scripts/migrate-medicine-batches-to-collection.js`
-- [x] Migration **run on simplipharma-dev** — see results below
+- [x] Migration **run on simplipharma-dev**
 - [x] `MedicineDetails` → `useMedicine` (single-doc + batches)
-- [x] Dependent services use inventory API (orders / PI / creditNotes / expiryReturns) — no direct Firestore batch writes
-- [x] Cloud Functions: Typesense hydrate falls back to `medicineBatches`; bulk job sets `migrationVersion: 2`
-- [x] Deploy Cloud Functions to **simplipharma-dev** (`onMedicineWriteTypesense` + search/reindex/bulk)
-- [ ] Turn off dual-write + delete embedded `stockBatches` (after app soak)
-- [ ] Prod migration (only when approved)
+- [x] Dependent services use inventory API
+- [x] Cloud Functions: Typesense + bulk job updated for split
+- [x] Deploy Cloud Functions to **simplipharma-dev**
+- [x] Turn off dual-write (`DUAL_WRITE_EMBEDDED_STOCK_BATCHES = false`)
+- [x] Cleanup embedded `stockBatches` on **simplipharma-dev** (script below)
+- [ ] Prod migration + rules + cleanup (only when approved)
 
 ## Migration results (simplipharma-dev, 2026-07-20)
 
 ```
 medicines: 3006 (all migrationVersion >= 2)
-medicineBatches: 25
-medicines still with embedded stockBatches (dual-write): 20
+medicineBatches: 25 (at migration time)
 errors: 0
 ```
 
+## Dual-write off + cleanup (simplipharma-dev, 2026-07-21)
+
+```
+DUAL_WRITE_EMBEDDED_STOCK_BATCHES = false
+cleared stockBatches field from: 3006 medicines
+stillHaveStockBatchesField: 0
+medicineBatches docs: 27
+```
+
+Cleanup script:  
+`cd functions && node scripts/cleanup-embedded-stock-batches.js simplipharma-dev`
+
 ## Resume notes
 
-If work stops: check this file’s checklist.  
-Source of truth for stock writes: `src/services/inventory.ts` (`DUAL_WRITE_EMBEDDED_STOCK_BATCHES`).  
-Re-run migration (idempotent):  
-`cd functions && node scripts/migrate-medicine-batches-to-collection.js simplipharma-dev`
+Source of truth for stock: **`medicineBatches` only**.  
+Stock mutations also call `deleteField()` on `medicines.stockBatches` if the field reappears.
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21

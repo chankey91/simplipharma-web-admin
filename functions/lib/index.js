@@ -397,12 +397,6 @@ exports.createStoreUser = functions.https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
     }
-    try {
-        await (0, panelAuth_1.assertAdmin)(context.auth.uid);
-    }
-    catch (_b) {
-        throw new functions.https.HttpsError('permission-denied', 'Admin access required');
-    }
     const { email, password, storeData } = data || {};
     if (!email || !password) {
         throw new functions.https.HttpsError('invalid-argument', 'Email and password are required');
@@ -421,7 +415,7 @@ exports.createStoreUser = functions.https.onCall(async (data, context) => {
             await (0, panelAuth_1.assertAdmin)(context.auth.uid);
         }
     }
-    catch (_a) {
+    catch (_b) {
         throw new functions.https.HttpsError('permission-denied', role === 'purchaseOfficer' ? 'Admin or operations access required' : 'Admin access required');
     }
     const accountLabel = role === 'salesOfficer'
