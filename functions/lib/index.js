@@ -16,6 +16,7 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 const panelAuth_1 = require("./panelAuth");
+const retailerWelcomeEmail_1 = require("./emailTemplates/retailerWelcomeEmail");
 admin.initializeApp();
 // Helper function to set CORS headers
 const setCorsHeaders = (res) => {
@@ -85,7 +86,7 @@ async function sendSmtpMail(options) {
             return { ok: false, error: 'SMTP not configured' };
         }
         const transporter = getTransporter();
-        await transporter.sendMail(Object.assign({ from: smtpConfig.user, to: options.to, subject: options.subject, html: options.html }, (((_a = options.attachments) === null || _a === void 0 ? void 0 : _a.length)
+        await transporter.sendMail(Object.assign(Object.assign({ from: smtpConfig.user, to: options.to, subject: options.subject, html: options.html }, (options.text ? { text: options.text } : {})), (((_a = options.attachments) === null || _a === void 0 ? void 0 : _a.length)
             ? { attachments: options.attachments.map((a) => (Object.assign({}, a))) }
             : {})));
         return { ok: true };
@@ -314,9 +315,93 @@ exports.sendVendorPasswordEmail = functions.https.onCall(async (data, context) =
 /**
  * Create store/retailer or sales officer user (Firebase Auth + Firestore)
  */
+function cleanStoreDataForFirestore(storeData, uid, email, role) {
+    const _a = storeData || {}, { role: _r } = _a, restStoreData = __rest(_a, ["role"]);
+    const cleanData = {};
+    for (const [k, v] of Object.entries(restStoreData)) {
+        if (v !== undefined)
+            cleanData[k] = v;
+    }
+    cleanData.uid = uid;
+    cleanData.email = email;
+    cleanData.role = role;
+    cleanData.mustResetPassword = true;
+    cleanData.isActive = (storeData === null || storeData === void 0 ? void 0 : storeData.isActive) !== false;
+    return cleanData;
+}
+async function sendStoreUserWelcomeEmail(options) {
+    const { email, password, role, accountLabel, storeData } = options;
+    try {
+        if (role === 'retailer') {
+            const welcomeMail = (0, retailerWelcomeEmail_1.buildRetailerWelcomeEmail)({
+                email,
+                password,
+                shopName: (storeData === null || storeData === void 0 ? void 0 : storeData.shopName) || (storeData === null || storeData === void 0 ? void 0 : storeData.displayName),
+                storeCode: storeData === null || storeData === void 0 ? void 0 : storeData.storeCode,
+                intro: 'Your SimpliPharma retailer account has been created. Use the credentials below to sign in.',
+                subject: 'Welcome to SimpliPharma — Your retailer account is ready',
+            });
+            const mailResult = await sendSmtpMail({
+                to: email,
+                subject: welcomeMail.subject,
+                html: welcomeMail.html,
+                text: welcomeMail.text,
+            });
+            if (!mailResult.ok) {
+                console.error('createStoreUser: retailer welcome email not sent:', mailResult.error);
+            }
+            return mailResult.ok;
+        }
+        const smtpConfig = functions.config().smtp;
+        if (!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) || !(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
+            return false;
+        }
+        const transporter = getTransporter();
+        await transporter.sendMail({
+            from: smtpConfig.user,
+            to: email,
+            subject: `Your SimpliPharma ${accountLabel} Account`,
+            html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
+              <p>Your ${accountLabel} account has been created.</p>
+              ${role === 'operations' ? '<p>Sign in to the SimpliPharma Operations panel to manage orders, inventory, purchases, and warehouse tasks.</p>' : ''}
+              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Email:</strong> ${email}</p>
+                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
+              </div>
+              <p><strong>Important:</strong> Please change your password on first login.</p>
+            </div>
+          `,
+        });
+        return true;
+    }
+    catch (emailErr) {
+        console.error('Email send failed:', emailErr === null || emailErr === void 0 ? void 0 : emailErr.message);
+        return false;
+    }
+}
+function roleMatchesRequested(existingRole, requestedRole) {
+    if (!existingRole)
+        return true;
+    if (requestedRole === 'retailer')
+        return (0, panelAuth_1.isRetailerRole)(existingRole);
+    if (requestedRole === 'salesOfficer')
+        return (0, panelAuth_1.isSalesOfficerRole)(existingRole);
+    if (requestedRole === 'operations')
+        return (0, panelAuth_1.isOperationsRole)(existingRole);
+    return existingRole === requestedRole;
+}
 exports.createStoreUser = functions.https.onCall(async (data, context) => {
+    var _a;
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+    try {
+        await (0, panelAuth_1.assertAdmin)(context.auth.uid);
+    }
+    catch (_b) {
+        throw new functions.https.HttpsError('permission-denied', 'Admin access required');
     }
     const { email, password, storeData } = data || {};
     if (!email || !password) {
@@ -347,62 +432,65 @@ exports.createStoreUser = functions.https.onCall(async (data, context) => {
                 ? 'Purchase Officer'
                 : 'store';
     try {
-        const userRecord = await admin.auth().createUser({
+        let userRecord;
+        let reprovisioned = false;
+        try {
+            userRecord = await admin.auth().createUser({
+                email,
+                password,
+                displayName: displayName,
+                emailVerified: false,
+                disabled: false,
+            });
+        }
+        catch (createErr) {
+            if ((createErr === null || createErr === void 0 ? void 0 : createErr.code) !== 'auth/email-already-exists') {
+                throw createErr;
+            }
+            userRecord = await admin.auth().getUserByEmail(email);
+            const existingDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
+            const existingRole = existingDoc.exists
+                ? String(((_a = existingDoc.data()) === null || _a === void 0 ? void 0 : _a.role) || '')
+                : undefined;
+            if (!roleMatchesRequested(existingRole, role)) {
+                throw new functions.https.HttpsError('already-exists', `This email is already registered as ${existingRole || 'another account type'}. Use a different email or update the existing account.`);
+            }
+            await admin.auth().updateUser(userRecord.uid, {
+                password,
+                displayName,
+                disabled: false,
+            });
+            userRecord = await admin.auth().getUser(userRecord.uid);
+            reprovisioned = true;
+            console.log('createStoreUser: reprovisioned existing auth user', userRecord.uid, email);
+        }
+        const cleanData = cleanStoreDataForFirestore(storeData, userRecord.uid, email, role);
+        if (reprovisioned && (await admin.firestore().collection('users').doc(userRecord.uid).get()).exists) {
+            cleanData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+            await admin.firestore().collection('users').doc(userRecord.uid).set(cleanData, { merge: true });
+        }
+        else {
+            cleanData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+            await admin.firestore().collection('users').doc(userRecord.uid).set(cleanData);
+        }
+        const emailSent = await sendStoreUserWelcomeEmail({
             email,
             password,
-            displayName: displayName,
-            emailVerified: false,
-            disabled: false,
+            role,
+            accountLabel,
+            storeData,
         });
-        const _b = storeData || {}, { role: _r } = _b, restStoreData = __rest(_b, ["role"]);
-        // Firestore rejects undefined - strip them
-        const cleanData = {};
-        for (const [k, v] of Object.entries(restStoreData)) {
-            if (v !== undefined)
-                cleanData[k] = v;
-        }
-        cleanData.uid = userRecord.uid;
-        cleanData.email = email;
-        cleanData.role = role;
-        cleanData.mustResetPassword = true;
-        cleanData.createdAt = admin.firestore.FieldValue.serverTimestamp();
-        cleanData.isActive = (storeData === null || storeData === void 0 ? void 0 : storeData.isActive) !== false;
-        await admin.firestore().collection('users').doc(userRecord.uid).set(cleanData);
-        // Send password email if SMTP configured
-        let emailSent = false;
-        try {
-            const smtpConfig = functions.config().smtp;
-            if ((smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) && (smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
-                const transporter = getTransporter();
-                await transporter.sendMail({
-                    from: smtpConfig.user,
-                    to: email,
-                    subject: `Your SimpliPharma ${accountLabel} Account`,
-                    html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
-              <p>Your ${accountLabel} account has been created.</p>
-              ${role === 'operations' ? '<p>Sign in to the SimpliPharma Operations panel to manage orders, inventory, purchases, and warehouse tasks.</p>' : ''}
-              ${role === 'purchaseOfficer' ? '<p>Sign in to the SimpliPharma Purchase app to work through medicines that need to be purchased and update found quantities in real time.</p>' : ''}
-              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                <p><strong>Email:</strong> ${email}</p>
-                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
-              </div>
-              <p><strong>Important:</strong> Please change your password on first login.</p>
-            </div>
-          `,
-                });
-                emailSent = true;
-            }
-        }
-        catch (emailErr) {
-            console.error('Email send failed:', emailErr === null || emailErr === void 0 ? void 0 : emailErr.message);
-            // Return success with emailSent: false so admin knows to share password manually
-        }
-        return { success: true, uid: userRecord.uid, id: userRecord.uid, emailSent };
+        return { success: true, uid: userRecord.uid, id: userRecord.uid, emailSent, reprovisioned };
     }
     catch (error) {
         console.error('createStoreUser error:', error);
+        if (error instanceof functions.https.HttpsError) {
+            throw error;
+        }
+        const code = String((error === null || error === void 0 ? void 0 : error.code) || '');
+        if (code === 'auth/email-already-exists') {
+            throw new functions.https.HttpsError('already-exists', 'This email is already registered. Use a different email or contact support.');
+        }
         throw new functions.https.HttpsError('internal', error.message || 'Failed to create user');
     }
 });
@@ -532,20 +620,19 @@ exports.approveRetailerRequest = functions.https.onCall(async (data, context) =>
             reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+        const welcomeMail = (0, retailerWelcomeEmail_1.buildRetailerWelcomeEmail)({
+            email: cred.email,
+            password: cred.password,
+            shopName: req.shopName || req.displayName,
+            storeCode: req.storeCode,
+            intro: 'Your retailer registration has been approved. Your SimpliPharma account is now active.',
+            subject: 'Welcome to SimpliPharma — Your store account is approved',
+        });
         const approvalMail = await sendSmtpMail({
             to: cred.email,
-            subject: 'Your SimpliPharma Store Account - Approved',
-            html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
-              <p>Your retailer registration has been approved. Your account is now active.</p>
-              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                <p><strong>Email:</strong> ${cred.email}</p>
-                <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${cred.password}</code></p>
-              </div>
-              <p><strong>Important:</strong> Please change your password on first login.</p>
-            </div>
-          `,
+            subject: welcomeMail.subject,
+            html: welcomeMail.html,
+            text: welcomeMail.text,
         });
         const emailSent = approvalMail.ok;
         if (!approvalMail.ok) {

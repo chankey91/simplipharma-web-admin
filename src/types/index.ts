@@ -8,6 +8,10 @@ export interface Medicine {
   unit?: string;
   stock: number;
   currentStock?: number;
+  /** Min expiry among batches with quantity > 0 (denormalized on master). */
+  nearestExpiry?: Date | any;
+  /** Count of batches with quantity > 0 (denormalized on master). */
+  activeBatchCount?: number;
   price: number;
   costPrice?: number;
   mrp?: number;
@@ -25,17 +29,27 @@ export interface Medicine {
   dosage?: string;
   sideEffects?: string;
   composition?: string;
-  // NEW: Expiry and batch management
+  /** @deprecated Prefer nearestExpiry / medicineBatches. Kept for legacy docs. */
   expiryDate?: Date | any;
   mfgDate?: Date | any;
   batchNumber?: string;
   barcode?: string;
+  /**
+   * Hydrated at read time from `medicineBatches` (preferred) or legacy embedded array.
+   * Not written as the source of truth going forward — see medicineBatches collection.
+   */
   stockBatches?: StockBatch[];
   gstRate?: number; // GST rate percentage (default: 5)
+  /** Set by migration when embedded stockBatches were copied to medicineBatches. */
+  batchesMigratedAt?: Date | any;
+  migrationVersion?: number;
 }
 
+/** On-hand lot. Persisted in `medicineBatches` (field medicineId links to medicines/{id}). */
 export interface StockBatch {
   id: string;
+  /** Parent medicine id when loaded from medicineBatches. */
+  medicineId?: string;
   batchNumber: string;
   quantity: number;
   expiryDate: Date | any;

@@ -1,17 +1,11 @@
 /**
- * Utility function to update discountPercentage to 1.5 for all batches in Firestore
- * 
- * Usage from browser console:
- * 1. Open browser console (F12) on any admin page
- * 2. Import and run:
- *    import { updateAllBatchDiscounts } from './utils/updateBatchDiscounts';
- *    updateAllBatchDiscounts();
- * 
- * Or create a temporary button in the UI to trigger this function
+ * Utility: set discountPercentage on all medicineBatches (and dual-write embedded if present).
+ * Prefer running against medicineBatches collection (post-split source of truth).
  */
 
 import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { MEDICINE_BATCHES_COLLECTION } from '../services/inventory';
 
 export async function updateAllBatchDiscounts(): Promise<{
   totalMedicines: number;
@@ -20,82 +14,66 @@ export async function updateAllBatchDiscounts(): Promise<{
   errors: string[];
 }> {
   try {
-    console.log('Starting batch discount update...');
-    
-    // Get all medicines
-    const medicinesRef = collection(db, 'medicines');
-    const medicinesSnapshot = await getDocs(medicinesRef);
-    
+    console.log('Starting batch discount update (medicineBatches)...');
+
+    const batchesSnap = await getDocs(collection(db, MEDICINE_BATCHES_COLLECTION));
     let totalMedicines = 0;
     let totalBatches = 0;
     let updatedBatches = 0;
     const errors: string[] = [];
-    
-    for (const medicineDoc of medicinesSnapshot.docs) {
-      totalMedicines++;
+    const medicineIds = new Set<string>();
+
+    for (const batchDoc of batchesSnap.docs) {
+      totalBatches++;
+      const data = batchDoc.data();
+      if (data.medicineId) medicineIds.add(String(data.medicineId));
+      try {
+        const current =
+          typeof data.discountPercentage === 'number'
+            ? data.discountPercentage
+            : parseFloat(String(data.discountPercentage ?? ''));
+        if (current === 1.5) continue;
+        await updateDoc(doc(db, MEDICINE_BATCHES_COLLECTION, batchDoc.id), {
+          discountPercentage: 1.5,
+        });
+        updatedBatches++;
+      } catch (err: any) {
+        errors.push(`Batch ${batchDoc.id}: ${err?.message || String(err)}`);
+      }
+    }
+
+    totalMedicines = medicineIds.size;
+
+    // Also patch legacy embedded arrays if still present (dual-write window)
+    const medicinesSnap = await getDocs(collection(db, 'medicines'));
+    for (const medicineDoc of medicinesSnap.docs) {
       const medicine = medicineDoc.data();
       const batches = medicine.stockBatches || [];
-      
-      if (batches.length === 0) {
-        continue;
-      }
-      
-      totalBatches += batches.length;
-      
-      // Update each batch to include discountPercentage = 1.5
-      const updatedBatchesList = batches.map((batch: any) => {
-        return {
-          ...batch,
-          discountPercentage: 1.5
-        };
+      if (!Array.isArray(batches) || batches.length === 0) continue;
+      let changed = false;
+      const updated = batches.map((b: any) => {
+        if (b.discountPercentage === 1.5) return b;
+        changed = true;
+        return { ...b, discountPercentage: 1.5 };
       });
-      
-      // Update the medicine document
-      try {
-        const medicineRef = doc(db, 'medicines', medicineDoc.id);
-        await updateDoc(medicineRef, {
-          stockBatches: updatedBatchesList
-        });
-        
-        updatedBatches += batches.length;
-        console.log(`✓ Updated ${batches.length} batches in medicine ${medicineDoc.id} (${medicine.name || 'Unknown'})`);
-      } catch (error: any) {
-        const errorMsg = `Failed to update medicine ${medicineDoc.id}: ${error.message}`;
-        errors.push(errorMsg);
-        console.error(errorMsg);
+      if (changed) {
+        try {
+          await updateDoc(doc(db, 'medicines', medicineDoc.id), { stockBatches: updated });
+        } catch (err: any) {
+          errors.push(`Medicine embedded ${medicineDoc.id}: ${err?.message || String(err)}`);
+        }
       }
     }
-    
-    const summary = {
-      totalMedicines,
-      totalBatches,
-      updatedBatches,
-      errors
-    };
-    
-    console.log('\n=== Update Summary ===');
-    console.log(`Total medicines processed: ${totalMedicines}`);
-    console.log(`Total batches found: ${totalBatches}`);
-    console.log(`Batches updated: ${updatedBatches}`);
-    console.log(`Errors: ${errors.length}`);
-    
-    if (errors.length > 0) {
-      console.log('\nErrors:');
-      errors.forEach(err => console.error(`  - ${err}`));
-    }
-    
-    console.log('\n✓ Batch discount update completed!');
-    
-    return summary;
-    
+
+    console.log('Done', { totalMedicines, totalBatches, updatedBatches, errors });
+    return { totalMedicines, totalBatches, updatedBatches, errors };
   } catch (error: any) {
-    console.error('Error updating batch discounts:', error);
-    throw error;
+    console.error('updateAllBatchDiscounts failed', error);
+    return {
+      totalMedicines: 0,
+      totalBatches: 0,
+      updatedBatches: 0,
+      errors: [error?.message || String(error)],
+    };
   }
 }
-
-// Make it available globally for browser console access
-if (typeof window !== 'undefined') {
-  (window as any).updateAllBatchDiscounts = updateAllBatchDiscounts;
-}
-
