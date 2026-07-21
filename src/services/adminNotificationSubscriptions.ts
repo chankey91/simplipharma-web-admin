@@ -182,6 +182,31 @@ export function subscribeAdminNotifications(
         };
       }
     );
+
+    // Purchase officer confirmed a published list
+    watch(
+      'purchaseLists',
+      query(collection(db, 'purchaseLists'), where('status', '==', 'confirmed'), limit(LIST_LIMIT)),
+      (id, data) => {
+        const fromDate = typeof data.fromDate === 'string' ? data.fromDate : '';
+        const toDateStr = typeof data.toDate === 'string' ? data.toDate : '';
+        const range =
+          fromDate && toDateStr ? `${fromDate} → ${toDateStr}` : 'Purchase list confirmed';
+        const itemCount =
+          typeof data.itemCount === 'number' ? `${data.itemCount} medicines` : '';
+        const hasInvoice = Boolean(data.invoiceFileUrl);
+        return {
+          id: `purchase-list-${id}`,
+          type: 'purchase_list',
+          title: 'Purchase list confirmed',
+          message: [range, itemCount, hasInvoice ? 'Invoice attached' : 'No invoice']
+            .filter(Boolean)
+            .join(' · '),
+          path: `/purchase-lists?list=${id}`,
+          createdAt: toDate(data.confirmedAt ?? data.publishedAt ?? data.createdAt),
+        };
+      }
+    );
   }
 
   return () => {

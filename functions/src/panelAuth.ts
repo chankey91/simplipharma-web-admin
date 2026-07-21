@@ -27,6 +27,10 @@ export function isSalesOfficerRole(role: string | undefined): boolean {
   return role === 'salesOfficer' || role === 'SalesOfficer';
 }
 
+export function isPurchaseOfficerRole(role: string | undefined): boolean {
+  return role === 'purchaseOfficer' || role === 'PurchaseOfficer';
+}
+
 export function isRetailerRole(role: string | undefined): boolean {
   return role === 'retailer' || role === 'Retailer';
 }
