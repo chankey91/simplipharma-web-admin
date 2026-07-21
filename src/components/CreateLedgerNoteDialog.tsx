@@ -18,6 +18,8 @@ import { useStores } from '../hooks/useStores';
 import {
   createDirectLedgerCreditNote,
   createDirectLedgerDebitNote,
+  LEDGER_NOTE_GST_RATES,
+  type LedgerNoteGstRate,
 } from '../services/ledgerNotes';
 
 type NoteKind = 'credit' | 'debit';
@@ -37,7 +39,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
   const [storeSearch, setStoreSearch] = useState('');
   const [noteDate, setNoteDate] = useState(toInputDate(new Date()));
   const [totalAmount, setTotalAmount] = useState('');
-  const [taxPercentage, setTaxPercentage] = useState('5');
+  const [taxPercentage, setTaxPercentage] = useState<LedgerNoteGstRate>(5);
   const [reason, setReason] = useState('');
   const [originalInvoiceNumber, setOriginalInvoiceNumber] = useState('');
   const [saving, setSaving] = useState(false);
@@ -49,7 +51,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
     setStoreSearch('');
     setNoteDate(toInputDate(new Date()));
     setTotalAmount('');
-    setTaxPercentage('5');
+    setTaxPercentage(5);
     setReason('');
     setOriginalInvoiceNumber('');
     setError('');
@@ -79,7 +81,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
         reason,
         noteDate: new Date(noteDate),
         originalInvoiceNumber: originalInvoiceNumber.trim() || undefined,
-        taxPercentage: parseFloat(taxPercentage),
+        taxPercentage,
       };
       const result =
         kind === 'credit'
@@ -169,15 +171,20 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
             />
           </Grid>
           <Grid item xs={12} sm={6}>
-            <TextField
-              fullWidth
-              size="small"
-              label="GST %"
-              type="number"
-              inputProps={{ min: 0, step: '0.01' }}
-              value={taxPercentage}
-              onChange={(e) => setTaxPercentage(e.target.value)}
-            />
+            <FormControl fullWidth size="small" required>
+              <InputLabel>GST %</InputLabel>
+              <Select
+                label="GST %"
+                value={taxPercentage}
+                onChange={(e) => setTaxPercentage(Number(e.target.value) as LedgerNoteGstRate)}
+              >
+                {LEDGER_NOTE_GST_RATES.map((rate) => (
+                  <MenuItem key={rate} value={rate}>
+                    {rate}%
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField

@@ -49,6 +49,7 @@ function getRetailerLandingUrl() {
 function buildRetailerWelcomeEmail(params) {
     var _a, _b, _c;
     const landingUrl = getRetailerLandingUrl();
+    const logoUrl = `${landingUrl}/logo-horizontal.png`;
     const email = escapeHtml(params.email);
     const password = escapeHtml(params.password);
     const shopName = (_a = params.shopName) === null || _a === void 0 ? void 0 : _a.trim();
@@ -85,9 +86,16 @@ function buildRetailerWelcomeEmail(params) {
       <td align="center">
         <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
           <tr>
-            <td style="background:${BRAND.navy};padding:28px 32px;text-align:center;">
-              <p style="margin:0;font-size:28px;font-weight:700;color:#ffffff;letter-spacing:-0.5px;">SimpliPharma</p>
-              <p style="margin:8px 0 0;font-size:14px;color:${BRAND.teal};">Smart medicine supply for retailers</p>
+            <td style="background:#ffffff;padding:24px 32px 20px;text-align:center;border-bottom:4px solid ${BRAND.teal};">
+              <a href="${landingUrl}/" style="text-decoration:none;display:inline-block;">
+                <img
+                  src="${logoUrl}"
+                  alt="SimpliPharma"
+                  width="260"
+                  style="max-width:260px;width:100%;height:auto;display:block;margin:0 auto;border:0;outline:none;"
+                />
+              </a>
+              <p style="margin:12px 0 0;font-size:14px;color:#666;font-weight:500;">Smart medicine supply for retailers</p>
             </td>
           </tr>
           <tr>
