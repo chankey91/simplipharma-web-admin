@@ -167,9 +167,12 @@ const getCreditNoteHTML = async (note: CreditNote) => {
   const gstRatePercent = note.taxPercentage ?? 5;
   const totalCGST = note.taxAmount / 2;
   const totalSGST = note.taxAmount / 2;
-  const calculatedTotal = note.subTotal + note.taxAmount;
-  const grandTotal = Math.round(calculatedTotal);
-  const roundoff = grandTotal - calculatedTotal;
+  const calculatedTotal = Math.round((note.subTotal + note.taxAmount) * 100) / 100;
+  const grandTotal =
+    typeof note.totalAmount === 'number' && Number.isFinite(note.totalAmount)
+      ? Math.round(note.totalAmount * 100) / 100
+      : calculatedTotal;
+  const roundoff = Math.round((grandTotal - calculatedTotal) * 100) / 100;
 
   const documentData = {
     no: note.creditNoteNumber,
