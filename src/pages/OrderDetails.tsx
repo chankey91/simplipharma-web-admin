@@ -49,6 +49,8 @@ import {
   AttachMoney,
   Undo,
   Refresh,
+  Add,
+  Remove,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -124,6 +126,7 @@ import {
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContext';
 import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
+import { stripUndefinedDeep } from '../utils/firestorePayload';
 
 const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
@@ -131,6 +134,83 @@ const toNumber = (value: unknown): number => {
   if (value === undefined || value === null || value === '') return 0;
   const parsed = typeof value === 'number' ? value : parseFloat(String(value));
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+/** Ordered physical strips for a Pending line (admin qty edit / batch required qty). */
+const getOrderedPhysicalQty = (item: {
+  originalQuantity?: number;
+  quantity?: number;
+  freeQuantity?: number;
+}): number => {
+  const orig = toNumber(item.originalQuantity);
+  if (orig > 0) return Math.floor(orig);
+  const qty = toNumber(item.quantity);
+  const free = toNumber(item.freeQuantity);
+  if (free > 0) return Math.max(1, Math.floor(qty + free));
+  return Math.max(1, Math.floor(qty));
+};
+
+/** Map fulfillment UI line → OrderMedicine for Firestore (drops verified/scan-only fields). */
+const toPersistedOrderMedicine = (line: any): OrderMedicine => {
+  if ((line as { lineType?: string }).lineType === 'product_demand') {
+    return stripUndefinedDeep({
+      medicineId: line.medicineId || '',
+      name: line.name || '',
+      price: toNumber(line.price),
+      quantity: Math.max(1, toNumber(line.quantity) || 1),
+      lineType: 'product_demand' as const,
+      productDemandId: line.productDemandId,
+      manufacturerName: line.manufacturerName,
+      requestedUnit: line.requestedUnit,
+      notes: line.notes,
+      imageUrl: line.imageUrl,
+      originalQuantity: line.originalQuantity != null ? toNumber(line.originalQuantity) : undefined,
+    }) as OrderMedicine;
+  }
+
+  const out: Record<string, unknown> = {
+    medicineId: line.medicineId,
+    name: line.name,
+    price: toNumber(line.price),
+    quantity: toNumber(line.quantity),
+  };
+  if (line.freeQuantity != null) out.freeQuantity = toNumber(line.freeQuantity);
+  if (line.originalQuantity != null) out.originalQuantity = toNumber(line.originalQuantity);
+  if (line.batchNumber) out.batchNumber = line.batchNumber;
+  if (line.expiryDate) out.expiryDate = line.expiryDate;
+  else if (line.batchExpiryDate) out.expiryDate = line.batchExpiryDate;
+  if (line.discountPercentage != null && line.discountPercentage !== '') {
+    out.discountPercentage = toNumber(line.discountPercentage);
+  }
+  if (line.discountManuallySet === true) out.discountManuallySet = true;
+  if (line.gstRate != null) out.gstRate = toNumber(line.gstRate);
+  if (line.mrp != null) out.mrp = toNumber(line.mrp);
+  if (line.nonReturnable === true) out.nonReturnable = true;
+  if (line.productDemandId) {
+    out.productDemandId = line.productDemandId;
+    out.lineType = 'medicine';
+  }
+  if (typeof line.notes === 'string' && line.notes.trim()) out.notes = line.notes.trim();
+  if (Array.isArray(line.batchAllocations) && line.batchAllocations.length > 0) {
+    out.batchAllocations = line.batchAllocations.map((a: any) =>
+      stripUndefinedDeep({
+        batchNumber: a.batchNumber,
+        quantity: toNumber(a.quantity),
+        allocationFreeQty:
+          a.allocationFreeQty != null ? toNumber(a.allocationFreeQty) : undefined,
+        expiryDate: a.expiryDate,
+        mrp: a.mrp != null ? toNumber(a.mrp) : undefined,
+        purchasePrice: a.purchasePrice != null ? toNumber(a.purchasePrice) : undefined,
+        gstRate: a.gstRate != null ? toNumber(a.gstRate) : undefined,
+        discountPercentage:
+          a.discountPercentage != null ? toNumber(a.discountPercentage) : undefined,
+        schemePaidQty: a.schemePaidQty != null ? toNumber(a.schemePaidQty) : undefined,
+        schemeFreeQty: a.schemeFreeQty != null ? toNumber(a.schemeFreeQty) : undefined,
+        ...(a.nonReturnable === true ? { nonReturnable: true } : {}),
+      })
+    );
+  }
+  return stripUndefinedDeep(out) as unknown as OrderMedicine;
 };
 
 const formatExpiryMmYyyy = (value: unknown): string | null => {
@@ -1916,6 +1996,7 @@ export const OrderDetailsPage: React.FC = () => {
         gstRate: defaultGstRate,
         discountManuallySet: false,
         verified: true,
+        qtyAdjustedNeedsBatch: undefined,
       },
       purchaseDiscountLookup,
       (batchNumber) => findStockBatch(medicine, batchNumber),
@@ -1974,6 +2055,102 @@ export const OrderDetailsPage: React.FC = () => {
       medicines[itemIndex] = item;
       return { ...prev, medicines };
     });
+  };
+
+  const handleAdjustOrderedQuantity = async (itemIndex: number, nextPhysicalO: number) => {
+    if (!order || order.status !== 'Pending') return;
+    const item = fulfillmentData.medicines[itemIndex];
+    if (!item || (item as { lineType?: string }).lineType === 'product_demand') return;
+
+    const next = Math.max(1, Math.floor(Number(nextPhysicalO) || 0));
+    const current = getOrderedPhysicalQty(item);
+    if (next === current) return;
+
+    const updatedLine = {
+      ...item,
+      originalQuantity: next,
+      quantity: next,
+      freeQuantity: 0,
+      batchAllocations: undefined,
+      batchNumber: undefined,
+      verified: false,
+      scannedQRCode: '',
+      batchExpiryDate: undefined,
+      discountManuallySet: false,
+      nonReturnable: undefined,
+      qtyAdjustedNeedsBatch: true,
+    };
+
+    const newMedicines = [...fulfillmentData.medicines];
+    newMedicines[itemIndex] = updatedLine;
+    markFulfillmentDirty();
+    setFulfillmentData((prev) => ({ ...prev, medicines: newMedicines }));
+
+    try {
+      await updateOrderMedicines(order.id, newMedicines.map(toPersistedOrderMedicine));
+      scheduleFulfillmentDraftSave(newMedicines);
+      queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    } catch (err) {
+      console.error('Failed to update ordered quantity:', err);
+      await alert('Failed to update quantity. Please try again.', { severity: 'error' });
+    }
+  };
+
+  const renderOrderedQtyControls = (item: any, itemIndex: number) => {
+    const orderedQty = getOrderedPhysicalQty(item);
+    const showReassignHint = item.qtyAdjustedNeedsBatch === true;
+    return (
+      <Box display="flex" flexDirection="column" alignItems="flex-end" gap={0.25}>
+        <Box display="flex" alignItems="center" justifyContent="flex-end" gap={0.25}>
+          <IconButton
+            size="small"
+            aria-label="Decrease quantity"
+            disabled={orderedQty <= 1}
+            onClick={() => void handleAdjustOrderedQuantity(itemIndex, orderedQty - 1)}
+            sx={{ p: 0.25 }}
+          >
+            <Remove fontSize="small" />
+          </IconButton>
+          <TextField
+            size="small"
+            type="number"
+            defaultValue={orderedQty}
+            key={`ordered-qty-${itemIndex}-${orderedQty}`}
+            onBlur={(e) => {
+              const parsed = parseInt(e.target.value, 10);
+              void handleAdjustOrderedQuantity(
+                itemIndex,
+                Number.isFinite(parsed) ? parsed : orderedQty
+              );
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              (e.target as HTMLInputElement).blur();
+            }}
+            inputProps={{
+              min: 1,
+              step: 1,
+              style: { textAlign: 'center', padding: '4px 4px', width: 44 },
+            }}
+            sx={{ width: 64, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+          />
+          <IconButton
+            size="small"
+            aria-label="Increase quantity"
+            onClick={() => void handleAdjustOrderedQuantity(itemIndex, orderedQty + 1)}
+            sx={{ p: 0.25 }}
+          >
+            <Add fontSize="small" />
+          </IconButton>
+        </Box>
+        {showReassignHint ? (
+          <Typography variant="caption" color="warning.main" sx={{ lineHeight: 1.2 }}>
+            Re-assign batches
+          </Typography>
+        ) : null}
+      </Box>
+    );
   };
 
   const renderDiscPctCell = (
@@ -2635,9 +2812,13 @@ export const OrderDetailsPage: React.FC = () => {
                               )}
                             </TableCell>
                             <TableCell align="right">
+                              {order.status === 'Pending'
+                                ? renderOrderedQtyControls(item, index)
+                                : (
                               <Typography variant="body2" fontWeight="medium">
                                 {formatSchemeQty(paidQtyForLine)}
                               </Typography>
+                                )}
                             </TableCell>
                             <TableCell align="right">
                               <Box>
@@ -2927,7 +3108,9 @@ export const OrderDetailsPage: React.FC = () => {
                                 )}
                         </TableCell>
                         <TableCell align="right">
-                          {item.originalQuantity && item.originalQuantity !== item.quantity ? (
+                          {order.status === 'Pending' ? (
+                            renderOrderedQtyControls(item, index)
+                          ) : item.originalQuantity && item.originalQuantity !== item.quantity ? (
                             <Box>
                               <Typography variant="body2" fontWeight="medium">
                                 {formatSchemeQty(paidForDisplay)}
