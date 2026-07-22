@@ -41,7 +41,8 @@ import {
 } from '@mui/icons-material';
 import { useVendors } from '../hooks/useVendors';
 import { useMedicinesMaster, useCreateMedicine, useMedicine } from '../hooks/useInventory';
-import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
+import { useCreatePurchaseInvoice, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
+import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
@@ -118,7 +119,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     invoiceDate: getTodayDateStringIST(),
     notes: '',
   });
-  
+  const { lastPurchaseByMedicineId } = useVendorLastPurchases(
+    undefined,
+    undefined,
+    { enabled: true }
+  );
+
   const [items, setItems] = useState<PurchaseInvoiceItem[]>([]);
   const [selectedMedicine, setSelectedMedicine] = useState<Medicine | null>(null);
   const [addMedicineDialog, setAddMedicineDialog] = useState(false);
@@ -1014,9 +1020,19 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                           {item.freeQuantity && item.freeQuantity > 0 ? item.freeQuantity : '-'}
                         </TableCell>
                         <TableCell align="center">
-                          <Typography variant="caption">
-                            {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
-                          </Typography>
+                          <Box display="flex" alignItems="center" justifyContent="center" gap={0.5}>
+                            <Typography variant="caption">
+                              {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
+                            </Typography>
+                            {item.medicineId ? (
+                              <RetailerLastSchemeHint
+                                lastScheme={lastPurchaseByMedicineId.get(item.medicineId)}
+                                contextLabel="Previous purchase (same item · any vendor)"
+                                emptyHint="No prior purchase for this item"
+                                subjectLabel="this item"
+                              />
+                            ) : null}
+                          </Box>
                         </TableCell>
                         <TableCell align="center">
                           {item.nonReturnable === true ? (
@@ -1124,9 +1140,19 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               />
             </Grid>
             <Grid item xs={12}>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-                Retailer scheme (optional): e.g. 1 free on 10 strips → pay for = 10, free = 1. Shown in the retailer app for this batch.
-              </Typography>
+              <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} sx={{ mt: 0.5 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Retailer scheme (optional): e.g. 1 free on 10 strips → pay for = 10, free = 1. Shown in the retailer app for this batch.
+                </Typography>
+                {currentItem.medicineId ? (
+                  <RetailerLastSchemeHint
+                    lastScheme={lastPurchaseByMedicineId.get(currentItem.medicineId)}
+                    contextLabel="Previous purchase (same item · any vendor)"
+                    emptyHint="No prior purchase for this item"
+                    subjectLabel="this item"
+                  />
+                ) : null}
+              </Box>
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
