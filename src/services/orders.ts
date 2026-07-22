@@ -157,6 +157,33 @@ export const getOrdersByRetailer = async (retailerId: string): Promise<LedgerOrd
   }
 };
 
+/**
+ * Retailer orders for scheme history (no payment subcollection reads).
+ * Prefer recent first; caller builds last-scheme map.
+ */
+export const getRetailerOrdersForSchemeHistory = async (
+  retailerId: string
+): Promise<Order[]> => {
+  const ordersCol = collection(db, 'orders');
+  try {
+    const snapshot = await getDocs(
+      query(ordersCol, where('retailerId', '==', retailerId), orderBy('orderDate', 'desc'))
+    );
+    return snapshot.docs.map((docSnap) => mapOrderDoc(docSnap));
+  } catch (error) {
+    console.warn('getRetailerOrdersForSchemeHistory query failed, falling back:', error);
+    const snapshot = await getDocs(ordersCol);
+    return snapshot.docs
+      .map((docSnap) => mapOrderDoc(docSnap))
+      .filter((o) => o.retailerId === retailerId)
+      .sort((a, b) => {
+        const dateA = a.orderDate instanceof Date ? a.orderDate : new Date(a.orderDate);
+        const dateB = b.orderDate instanceof Date ? b.orderDate : new Date(b.orderDate);
+        return dateB.getTime() - dateA.getTime();
+      });
+  }
+};
+
 export const getOrderById = async (orderId: string): Promise<Order | null> => {
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
