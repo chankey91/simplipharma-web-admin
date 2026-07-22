@@ -65,6 +65,7 @@ import {
   useCancelOrder,
   useRestoreCancelledOrderStock,
   useUpdatePaymentStatus,
+  useRetailerLastSchemes,
 } from '../hooks/useOrders';
 import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
 import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
@@ -77,6 +78,7 @@ import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
 import { format } from 'date-fns';
 import { auth, doc, updateDoc, db } from '../services/firebase';
 import { Loading } from '../components/Loading';
+import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { ProductDemandImage } from '../components/ProductDemandImage';
 import { QRCodeScanner } from '../components/BarcodeScanner';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -482,6 +484,11 @@ export const OrderDetailsPage: React.FC = () => {
   const { data: trays, isError: traysQueryError, error: traysQueryErr, isFetching: traysFetching } = useTrays();
   const { data: operators, isError: operatorsQueryError, error: operatorsQueryErr } = useOperators();
   const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
+  const { lastSchemeByMedicineId } = useRetailerLastSchemes(
+    order?.retailerId,
+    order?.id,
+    { enabled: !!order?.retailerId }
+  );
   
   const fulfillOrderMutation = useFulfillOrder();
   const unfulfillOrderMutation = useUnfulfillOrder();
@@ -2846,15 +2853,22 @@ export const OrderDetailsPage: React.FC = () => {
                                 )}
                             </TableCell>
                             <TableCell align="right">
-                              <Box>
-                                <Typography variant="body2">
-                                  {lineDisplay.freeQty > 0 ? formatSchemeQty(lineDisplay.freeQty) : '-'}
-                                </Typography>
-                                {schemeLabels.length > 0 && (
-                                  <Typography variant="caption" color="text.secondary">
-                                    Scheme Applied: {schemeLabels.join(', ')}
+                              <Box display="flex" alignItems="flex-start" justifyContent="flex-end" gap={0.5}>
+                                <Box>
+                                  <Typography variant="body2">
+                                    {lineDisplay.freeQty > 0 ? formatSchemeQty(lineDisplay.freeQty) : '-'}
                                   </Typography>
-                                )}
+                                  {schemeLabels.length > 0 && (
+                                    <Typography variant="caption" color="text.secondary" display="block">
+                                      Scheme Applied: {schemeLabels.join(', ')}
+                                    </Typography>
+                                  )}
+                                </Box>
+                                {item.medicineId ? (
+                                  <RetailerLastSchemeHint
+                                    lastScheme={lastSchemeByMedicineId.get(item.medicineId)}
+                                  />
+                                ) : null}
                               </Box>
                             </TableCell>
                             <TableCell align="right">
@@ -3155,15 +3169,22 @@ export const OrderDetailsPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell align="right">
-                          <Box>
-                            <Typography variant="body2">
-                              {singleLineDisplay.freeQty > 0 ? formatSchemeQty(singleLineDisplay.freeQty) : '-'}
-                            </Typography>
-                            {schemeLabels.length > 0 && (
-                              <Typography variant="caption" color="text.secondary">
-                                Scheme Applied: {schemeLabels.join(', ')}
+                          <Box display="flex" alignItems="flex-start" justifyContent="flex-end" gap={0.5}>
+                            <Box>
+                              <Typography variant="body2">
+                                {singleLineDisplay.freeQty > 0 ? formatSchemeQty(singleLineDisplay.freeQty) : '-'}
                               </Typography>
-                            )}
+                              {schemeLabels.length > 0 && (
+                                <Typography variant="caption" color="text.secondary" display="block">
+                                  Scheme Applied: {schemeLabels.join(', ')}
+                                </Typography>
+                              )}
+                            </Box>
+                            {item.medicineId ? (
+                              <RetailerLastSchemeHint
+                                lastScheme={lastSchemeByMedicineId.get(item.medicineId)}
+                              />
+                            ) : null}
                           </Box>
                         </TableCell>
                         <TableCell align="right">
