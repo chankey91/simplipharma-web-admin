@@ -6,6 +6,7 @@ import {
   createStore,
   assignRetailerToSalesOfficer,
   sendRetailerPasswordResetEmail,
+  grantOrderBlockOverride,
 } from '../services/stores';
 import { User } from '../types';
 
@@ -37,6 +38,16 @@ export const useUpdateStore = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] });
     }
+  });
+};
+
+export const useGrantOrderBlockOverride = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (storeId: string) => grantOrderBlockOverride(storeId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
+    },
   });
 };
 

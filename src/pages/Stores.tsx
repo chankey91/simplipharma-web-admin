@@ -43,11 +43,13 @@ import {
   Select,
   MenuItem,
 } from '@mui/material';
-import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore, useSendRetailerPasswordResetEmail } from '../hooks/useStores';
+import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore, useSendRetailerPasswordResetEmail, useGrantOrderBlockOverride } from '../hooks/useStores';
 import { useSalesOfficers } from '../hooks/useSalesOfficers';
 import { useStoreNoteStats } from '../hooks/useStoreNoteStats';
+import { useOrderPlacementBlockedRetailerIds } from '../hooks/useOrders';
 import { User } from '../types';
 import { Loading } from '../components/Loading';
+import { OrderPlacementStatusChip } from '../components/OrderPlacementStatusChip';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
@@ -56,7 +58,7 @@ import {
   checkLicenseAndAadharUnique,
   resolveRetailerImageUrl,
 } from '../services/retailerDocuments';
-
+import { format } from 'date-fns';
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -94,13 +96,16 @@ export const StoresPage: React.FC = () => {
     debitNoteStatsByRetailerId,
     isLoading: noteStatsLoading,
   } = useStoreNoteStats();
+  const { blockedRetailerIds, overdueRetailerIds } = useOrderPlacementBlockedRetailerIds();
   const updateStoreMutation = useUpdateStore();
   const createStoreMutation = useCreateStore();
   const toggleStatusMutation = useToggleStoreStatus();
   const resetPasswordMutation = useSendRetailerPasswordResetEmail();
+  const grantOverrideMutation = useGrantOrderBlockOverride();
   const { alert, confirm, prompt } = useAppDialog();
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [orderBlockedOnly, setOrderBlockedOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [editingStore, setEditingStore] = useState<User | null>(null);
@@ -152,12 +157,21 @@ export const StoresPage: React.FC = () => {
     setAadharImageFile(null);
   };
 
-  const filteredStores = stores?.filter(store =>
-    store.shopName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    store.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    store.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    store.storeCode?.toLowerCase().includes(searchTerm.toLowerCase())
-  ) || [];
+  const filteredStores = useMemo(() => {
+    const q = searchTerm.toLowerCase();
+    return (
+      stores?.filter((store) => {
+        if (orderBlockedOnly && !blockedRetailerIds.has(store.id)) return false;
+        if (!q) return true;
+        return (
+          store.shopName?.toLowerCase().includes(q) ||
+          store.email.toLowerCase().includes(q) ||
+          store.displayName?.toLowerCase().includes(q) ||
+          store.storeCode?.toLowerCase().includes(q)
+        );
+      }) || []
+    );
+  }, [stores, searchTerm, orderBlockedOnly, blockedRetailerIds]);
 
   const sortedStores = useMemo(() => {
     const list = [...filteredStores];
@@ -201,12 +215,24 @@ export const StoresPage: React.FC = () => {
           );
         case 'isActive':
           return applyDirection(compareAsc(a.isActive !== false ? 1 : 0, b.isActive !== false ? 1 : 0), sortDirection);
+        case 'orderBlocked':
+          return applyDirection(
+            compareAsc(blockedRetailerIds.has(a.id) ? 1 : 0, blockedRetailerIds.has(b.id) ? 1 : 0),
+            sortDirection
+          );
         default:
           return applyDirection(compareAsc((a.shopName || '').toLowerCase(), (b.shopName || '').toLowerCase()), 'asc');
       }
     });
     return list;
-  }, [filteredStores, sortKey, sortDirection, creditNoteStatsByRetailerId, debitNoteStatsByRetailerId]);
+  }, [
+    filteredStores,
+    sortKey,
+    sortDirection,
+    creditNoteStatsByRetailerId,
+    debitNoteStatsByRetailerId,
+    blockedRetailerIds,
+  ]);
 
   const requestSortResetPage = (key: string) => {
     requestSort(key);
@@ -223,6 +249,25 @@ export const StoresPage: React.FC = () => {
 
   const handleOpenVisitLog = (store: User) => {
     setVisitLogStore(store);
+  };
+
+  const handleGrantOrderOverride = async (retailerId: string) => {
+    const store = stores?.find((s) => s.id === retailerId);
+    const name = store?.shopName || store?.displayName || 'this store';
+    const ok = await confirm(
+      `Enable ordering for ${name} for the next 6 hours? The retailer will be able to place orders even if payment is overdue.`,
+      { title: 'Unlock ordering (6 hours)', confirmLabel: 'Enable 6 hours' }
+    );
+    if (!ok) return;
+    try {
+      const until = await grantOverrideMutation.mutateAsync(retailerId);
+      await alert(
+        `Ordering unlocked until ${format(until, 'MMM dd, h:mm a')}.`,
+        { severity: 'success' }
+      );
+    } catch (e: any) {
+      await alert(e?.message || 'Failed to unlock ordering', { severity: 'error' });
+    }
   };
 
   const handleOpenCreate = async () => {
@@ -498,23 +543,44 @@ export const StoresPage: React.FC = () => {
         </Button>
       </Box>
 
-      <TextField
-        fullWidth
-        placeholder="Search stores..."
-        value={searchTerm}
-        onChange={(e) => {
-          setSearchTerm(e.target.value);
-          setPage(1);
-        }}
+      <Box
+        display="flex"
+        flexWrap="wrap"
+        gap={2}
+        alignItems="center"
         sx={{ mb: 2 }}
-        InputProps={{
-          startAdornment: (
-            <InputAdornment position="start">
-              <Search />
-            </InputAdornment>
-          ),
-        }}
-      />
+      >
+        <TextField
+          fullWidth
+          placeholder="Search stores..."
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value);
+            setPage(1);
+          }}
+          sx={{ flex: '1 1 280px', minWidth: 0 }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <Search />
+              </InputAdornment>
+            ),
+          }}
+        />
+        <FormControlLabel
+          control={
+            <Switch
+              checked={orderBlockedOnly}
+              onChange={(e) => {
+                setOrderBlockedOnly(e.target.checked);
+                setPage(1);
+              }}
+              color="warning"
+            />
+          }
+          label={`Order blocked only${blockedRetailerIds.size ? ` (${blockedRetailerIds.size})` : ''}`}
+        />
+      </Box>
 
       <TableContainer component={Paper}>
         <Table>
@@ -530,13 +596,14 @@ export const StoresPage: React.FC = () => {
               <SortableTableHeadCell columnId="creditNoteTotal" label="Credit notes" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <SortableTableHeadCell columnId="debitNoteTotal" label="Debit notes" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <SortableTableHeadCell columnId="isActive" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="orderBlocked" label="Ordering" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {paginatedStores.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} align="center">
+                <TableCell colSpan={12} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No stores found</Typography>
                 </TableCell>
               </TableRow>
@@ -582,6 +649,15 @@ export const StoresPage: React.FC = () => {
                     label={store.isActive !== false ? 'Active' : 'Inactive'}
                     color={store.isActive !== false ? 'success' : 'default'}
                     size="small"
+                  />
+                </TableCell>
+                <TableCell>
+                  <OrderPlacementStatusChip
+                    retailerId={store.id}
+                    overdue={overdueRetailerIds.has(store.id)}
+                    overrideUntil={store.orderBlockOverrideUntil}
+                    onGrantOverride={handleGrantOrderOverride}
+                    disabled={grantOverrideMutation.isPending}
                   />
                 </TableCell>
                 <TableCell align="right">
