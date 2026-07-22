@@ -29,6 +29,11 @@ import { getCreditNotesByRetailer } from '../services/creditNotes';
 import { getDebitNotesByRetailer } from '../services/debitNotes';
 import { getOrderDashboardStats, getOrderInvoicedAmountTotal } from '../services/orderAggregations';
 import { OrderStatus } from '../types';
+import {
+  buildOrderPlacementBlockedRetailerIds,
+  buildPaymentOverdueRetailerIds,
+} from '../utils/retailerPaymentBlock';
+import { useStores } from './useStores';
 
 export const useOrders = (options?: { enabled?: boolean }) => {
   return useQuery({
@@ -86,6 +91,40 @@ export const useReceivableOrders = (options?: { enabled?: boolean }) => {
     queryFn: getReceivableOrders,
     enabled: options?.enabled ?? true,
   });
+};
+
+/**
+ * Retailer IDs blocked from placing new orders (delivered unpaid past 2-day grace).
+ * Same rule as the retailer app checkout block. Respects admin 6h unlock.
+ */
+export const useOrderPlacementBlockedRetailerIds = (options?: { enabled?: boolean }) => {
+  const { data: orders, isLoading: ordersLoading, error, isFetching } = useReceivableOrders(options);
+  const { data: stores, isLoading: storesLoading } = useStores(options?.enabled ?? true);
+  const overrideUntilByRetailerId = useMemo(() => {
+    const map = new Map<string, unknown>();
+    for (const s of stores ?? []) {
+      map.set(s.id, s.orderBlockOverrideUntil);
+    }
+    return map;
+  }, [stores]);
+  const overdueRetailerIds = useMemo(
+    () => buildPaymentOverdueRetailerIds(orders ?? []),
+    [orders]
+  );
+  const blockedRetailerIds = useMemo(
+    () =>
+      buildOrderPlacementBlockedRetailerIds(orders ?? [], {
+        overrideUntilByRetailerId,
+      }),
+    [orders, overrideUntilByRetailerId]
+  );
+  return {
+    blockedRetailerIds,
+    overdueRetailerIds,
+    isLoading: ordersLoading || storesLoading,
+    isFetching,
+    error,
+  };
 };
 
 /** Orders, credit notes, and debit notes for a retailer ledger. */
