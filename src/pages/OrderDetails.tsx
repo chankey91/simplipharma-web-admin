@@ -395,7 +395,7 @@ export const OrderDetailsPage: React.FC = () => {
     }
     return m;
   }, [productDemands]);
-  const { data: purchaseInvoices, isLoading: purchaseInvoicesLoading } = usePurchaseInvoices();
+  const { data: purchaseInvoices } = usePurchaseInvoices();
   const purchaseInvoicesList = purchaseInvoices || [];
   const purchaseDiscountLookup = useMemo(
     () => buildPurchaseBatchDiscountLookup(purchaseInvoices || []),
@@ -570,7 +570,7 @@ export const OrderDetailsPage: React.FC = () => {
   }, [order?.medicines, fulfillmentData.medicines]);
 
   const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(
-    medicineIdsForOrder.length > 0 ? medicineIdsForOrder : undefined
+    medicineIdsForOrder
   );
 
   // Batch allocation dialog state
@@ -662,7 +662,9 @@ export const OrderDetailsPage: React.FC = () => {
   }, [leaveBlocker.state, confirmLeaveIfNeeded, leaveBlocker]);
 
   useEffect(() => {
-    if (!order || !medicines || purchaseInvoices === undefined) return;
+    // Do not wait for full purchaseInvoices catalog — hydrate with empty lookup first,
+    // then re-run when PIs arrive (discount lookup updates).
+    if (!order || medicines === undefined) return;
 
     // Fulfilled+: load lines once. Re-running on every PI/medicines update remounted Disc %
     // and made totals look like they were flipping custom ↔ default.
@@ -1075,7 +1077,7 @@ export const OrderDetailsPage: React.FC = () => {
   ]);
 
   const handleResyncDemandLinesFromPi = useCallback(async () => {
-    if (!order?.id || !medicines || purchaseInvoices === undefined) return;
+    if (!order?.id || medicines === undefined || purchaseInvoices === undefined) return;
 
     setResyncingDemandLines(true);
     orderDemandRepairAttempted.current = null;
@@ -1127,7 +1129,7 @@ export const OrderDetailsPage: React.FC = () => {
   ]);
 
   const handleRecalculatePricing = useCallback(async () => {
-    if (!order?.id || !medicines) return;
+    if (!order?.id || medicines === undefined) return;
     if (!canRecalculatePricing) {
       await alert('Assign batches to all lines before recalculating pricing.', { severity: 'warning' });
       return;
@@ -1194,7 +1196,7 @@ export const OrderDetailsPage: React.FC = () => {
     markFulfillmentDirty,
   ]);
 
-  if (isLoading || medicinesLoading || purchaseInvoicesLoading) {
+  if (isLoading || medicinesLoading) {
     return <Loading message="Loading order details..." />;
   }
 

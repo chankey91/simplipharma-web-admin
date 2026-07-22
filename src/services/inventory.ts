@@ -5,6 +5,7 @@ import {
   updateDoc,
   query,
   where,
+  documentId,
   Timestamp,
   getDoc,
   setDoc,
@@ -567,14 +568,70 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
   return masterFromDoc(medicineDoc, batches);
 };
 
-/** Hydrate specific medicines with batches (order fulfillment). */
+/** Hydrate specific medicines with batches (order fulfillment). Batched Firestore reads. */
 export const getMedicinesByIdsWithBatches = async (
   medicineIds: string[]
 ): Promise<Medicine[]> => {
   const unique = [...new Set(medicineIds.filter(Boolean))];
   if (unique.length === 0) return [];
-  const results = await Promise.all(unique.map((id) => getMedicineById(id)));
-  return results.filter((m): m is Medicine => m != null);
+
+  const IN_LIMIT = 30;
+  const medicineById = new Map<string, { id: string; data: () => any }>();
+  const batchesByMedicine = new Map<string, StockBatch[]>();
+
+  // Masters: documentId() in […] (≤30 per query)
+  for (let i = 0; i < unique.length; i += IN_LIMIT) {
+    const chunk = unique.slice(i, i + IN_LIMIT);
+    const snap = await getDocs(
+      query(collection(db, 'medicines'), where(documentId(), 'in', chunk))
+    );
+    for (const d of snap.docs) {
+      medicineById.set(d.id, d);
+    }
+  }
+
+  // Batches: medicineId in […] (≤30 per query)
+  for (let i = 0; i < unique.length; i += IN_LIMIT) {
+    const chunk = unique.slice(i, i + IN_LIMIT);
+    const snap = await getDocs(
+      query(
+        collection(db, MEDICINE_BATCHES_COLLECTION),
+        where('medicineId', 'in', chunk)
+      )
+    );
+    for (const d of snap.docs) {
+      const data = d.data();
+      const mid = String(data.medicineId || '');
+      if (!mid) continue;
+      const gstRate = medicineById.has(mid)
+        ? parseGstRate(medicineById.get(mid)!.data())
+        : 5;
+      const list = batchesByMedicine.get(mid) || [];
+      list.push(parseStockBatchFromRaw(data, { docId: d.id, medicineId: mid, gstRate }));
+      batchesByMedicine.set(mid, list);
+    }
+  }
+
+  const results: Medicine[] = [];
+  for (const id of unique) {
+    const snap = medicineById.get(id);
+    if (!snap) continue;
+    const data = snap.data();
+    const gstRate = parseGstRate(data);
+    let batches = batchesByMedicine.get(id) || [];
+    // Legacy fallback if collection empty but embedded array still present
+    if (
+      batches.length === 0 &&
+      Array.isArray(data.stockBatches) &&
+      data.stockBatches.length > 0
+    ) {
+      batches = data.stockBatches.map((b: any) =>
+        parseStockBatchFromRaw(b, { docId: b.id, medicineId: id, gstRate })
+      );
+    }
+    results.push(masterFromDoc(snap, batches));
+  }
+  return results;
 };
 
 export const updateMedicineStock = async (

@@ -116,9 +116,7 @@ export const MarginReportPage: React.FC = () => {
     return [...ids];
   }, [orders, creditNotes, expiryReturns]);
 
-  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(
-    marginMedicineIds.length > 0 ? marginMedicineIds : undefined
-  );
+  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(marginMedicineIds);
 
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(15);
