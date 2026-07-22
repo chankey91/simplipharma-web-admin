@@ -1,17 +1,36 @@
-import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, serverTimestamp, deleteField, db, functions } from './firebase';
+import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, serverTimestamp, deleteField, db, functions, auth } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
 import { generateStoreCode } from '../utils/storeCode';
+import { ORDER_BLOCK_OVERRIDE_MS } from '../utils/retailerPaymentBlock';
+
+function toJsDate(v: unknown): Date | undefined {
+  if (v == null) return undefined;
+  if (v instanceof Date) return isNaN(v.getTime()) ? undefined : v;
+  if (typeof (v as { toDate?: () => Date })?.toDate === 'function') {
+    const d = (v as { toDate: () => Date }).toDate();
+    return d instanceof Date && !isNaN(d.getTime()) ? d : undefined;
+  }
+  const d = new Date(v as string | number);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
+function mapStoreDoc(docSnap: { id: string; data: () => Record<string, unknown> }): User {
+  const data = docSnap.data();
+  return {
+    id: docSnap.id,
+    uid: docSnap.id,
+    ...data,
+    orderBlockOverrideUntil: toJsDate(data.orderBlockOverrideUntil) ?? data.orderBlockOverrideUntil,
+    orderBlockOverrideAt: toJsDate(data.orderBlockOverrideAt) ?? data.orderBlockOverrideAt,
+  } as User;
+}
 
 export const getAllStores = async (): Promise<User[]> => {
   const usersCol = collection(db, 'users');
   const q = query(usersCol, where('role', '==', 'retailer'));
   const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({
-    id: doc.id,
-    uid: doc.id,
-    ...doc.data()
-  } as User));
+  return snapshot.docs.map((d) => mapStoreDoc(d));
 };
 
 /**
@@ -212,6 +231,18 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
 
 export const toggleStoreStatus = async (storeId: string, isActive: boolean) => {
   await updateStore(storeId, { isActive });
+};
+
+/** Temporarily allow a payment-blocked retailer to place orders for 6 hours. */
+export const grantOrderBlockOverride = async (storeId: string): Promise<Date> => {
+  const until = new Date(Date.now() + ORDER_BLOCK_OVERRIDE_MS);
+  const storeRef = doc(db, 'users', storeId);
+  await updateDoc(storeRef, {
+    orderBlockOverrideUntil: Timestamp.fromDate(until),
+    orderBlockOverrideAt: serverTimestamp(),
+    orderBlockOverrideBy: auth.currentUser?.uid || null,
+  });
+  return until;
 };
 
 export const resetStorePassword = async (storeId: string) => {

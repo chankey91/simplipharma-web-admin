@@ -278,6 +278,10 @@ export interface User {
     address?: string;
   };
   mustResetPassword?: boolean;
+  /** Admin temporary unlock: retailer may place orders until this time despite overdue payment. */
+  orderBlockOverrideUntil?: Date | any;
+  orderBlockOverrideAt?: Date | any;
+  orderBlockOverrideBy?: string;
 }
 
 export interface Vendor {

@@ -22,13 +22,16 @@ import {
   DialogContent,
   DialogActions,
   IconButton,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import { Search, Visibility, Receipt } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { useReceivableOrders } from '../hooks/useOrders';
-import { useStores } from '../hooks/useStores';
+import { useStores, useGrantOrderBlockOverride } from '../hooks/useStores';
 import { Loading } from '../components/Loading';
+import { OrderPlacementStatusChip } from '../components/OrderPlacementStatusChip';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
@@ -37,7 +40,13 @@ import {
   formatOrderInvoiceLabel,
   type StoreReceivableSummary,
 } from '../utils/storeReceivables';
+import {
+  buildOrderPlacementBlockedRetailerIds,
+  buildPaymentOverdueRetailerIds,
+  isOrderPlacementBlockingOrder,
+} from '../utils/retailerPaymentBlock';
 import { Order } from '../types';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -52,9 +61,12 @@ const paymentChipColor = (status?: string): 'success' | 'warning' | 'error' | 'd
 export const StoreReceivablesPage: React.FC = () => {
   const { data: orders, isLoading: ordersLoading } = useReceivableOrders();
   const { data: stores, isLoading: storesLoading } = useStores();
+  const grantOverrideMutation = useGrantOrderBlockOverride();
+  const { alert, confirm } = useAppDialog();
   const navigate = useNavigate();
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [orderBlockedOnly, setOrderBlockedOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [drillDown, setDrillDown] = useState<StoreReceivableSummary | null>(null);
@@ -66,6 +78,46 @@ export const StoreReceivablesPage: React.FC = () => {
     [orders, stores]
   );
 
+  const overrideUntilByRetailerId = useMemo(() => {
+    const map = new Map<string, unknown>();
+    for (const s of stores ?? []) {
+      map.set(s.id, s.orderBlockOverrideUntil);
+    }
+    return map;
+  }, [stores]);
+
+  const overdueRetailerIds = useMemo(
+    () => buildPaymentOverdueRetailerIds(orders ?? []),
+    [orders]
+  );
+
+  const blockedRetailerIds = useMemo(
+    () =>
+      buildOrderPlacementBlockedRetailerIds(orders ?? [], {
+        overrideUntilByRetailerId,
+      }),
+    [orders, overrideUntilByRetailerId]
+  );
+
+  const handleGrantOrderOverride = async (retailerId: string) => {
+    const row = summaries.find((s) => s.retailerId === retailerId);
+    const name = row?.displayName || 'this store';
+    const ok = await confirm(
+      `Enable ordering for ${name} for the next 6 hours? The retailer will be able to place orders even if payment is overdue.`,
+      { title: 'Unlock ordering (6 hours)', confirmLabel: 'Enable 6 hours' }
+    );
+    if (!ok) return;
+    try {
+      const until = await grantOverrideMutation.mutateAsync(retailerId);
+      await alert(
+        `Ordering unlocked until ${format(until, 'MMM dd, h:mm a')}.`,
+        { severity: 'success' }
+      );
+    } catch (e: any) {
+      await alert(e?.message || 'Failed to unlock ordering', { severity: 'error' });
+    }
+  };
+
   const totals = useMemo(() => {
     const totalOutstanding = summaries.reduce((s, r) => s + r.totalOutstanding, 0);
     const openBills = summaries.reduce((s, r) => s + r.orderCount, 0);
@@ -73,19 +125,22 @@ export const StoreReceivablesPage: React.FC = () => {
       totalOutstanding,
       storesWithDues: summaries.length,
       openBills,
+      orderBlockedStores: summaries.filter((s) => blockedRetailerIds.has(s.retailerId)).length,
     };
-  }, [summaries]);
+  }, [summaries, blockedRetailerIds]);
 
   const filteredSummaries = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    if (!q) return summaries;
-    return summaries.filter(
-      (s) =>
+    return summaries.filter((s) => {
+      if (orderBlockedOnly && !blockedRetailerIds.has(s.retailerId)) return false;
+      if (!q) return true;
+      return (
         s.displayName.toLowerCase().includes(q) ||
         s.storeCode.toLowerCase().includes(q) ||
         s.retailerEmail.toLowerCase().includes(q)
-    );
-  }, [summaries, searchTerm]);
+      );
+    });
+  }, [summaries, searchTerm, orderBlockedOnly, blockedRetailerIds]);
 
   const sortedSummaries = useMemo(() => {
     const list = [...filteredSummaries];
@@ -110,12 +165,20 @@ export const StoreReceivablesPage: React.FC = () => {
             ),
             sortDirection
           );
+        case 'orderBlocked':
+          return applyDirection(
+            compareAsc(
+              blockedRetailerIds.has(a.retailerId) ? 1 : 0,
+              blockedRetailerIds.has(b.retailerId) ? 1 : 0
+            ),
+            sortDirection
+          );
         default:
           return applyDirection(compareAsc(a.totalOutstanding, b.totalOutstanding), sortDirection);
       }
     });
     return list;
-  }, [filteredSummaries, sortKey, sortDirection]);
+  }, [filteredSummaries, sortKey, sortDirection, blockedRetailerIds]);
 
   const requestSortResetPage = (key: string) => {
     requestSort(key);
@@ -140,12 +203,13 @@ export const StoreReceivablesPage: React.FC = () => {
         </Typography>
         <Typography variant="body2" color="text.secondary">
           Outstanding bills from medical stores. Open a store to see unpaid orders, then collect
-          payment on the order details page.
+          payment on the order details page. Click Order blocked to unlock ordering for 6 hours.
+          Stores still overdue after unlock show Unlocked until…
         </Typography>
       </Box>
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="subtitle2" gutterBottom>
@@ -157,7 +221,7 @@ export const StoreReceivablesPage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="subtitle2" gutterBottom>
@@ -169,7 +233,7 @@ export const StoreReceivablesPage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="subtitle2" gutterBottom>
@@ -181,25 +245,53 @@ export const StoreReceivablesPage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Typography color="textSecondary" variant="subtitle2" gutterBottom>
+                Order blocked
+              </Typography>
+              <Typography variant="h5" color="warning.main" fontWeight={600}>
+                {totals.orderBlockedStores}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
       </Grid>
 
       <Paper sx={{ p: 2, mb: 3 }}>
-        <TextField
-          fullWidth
-          placeholder="Search by shop name, store code, or email..."
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value);
-            setPage(1);
-          }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search />
-              </InputAdornment>
-            ),
-          }}
-        />
+        <Box display="flex" flexWrap="wrap" gap={2} alignItems="center">
+          <TextField
+            fullWidth
+            placeholder="Search by shop name, store code, or email..."
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setPage(1);
+            }}
+            sx={{ flex: '1 1 280px', minWidth: 0 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={orderBlockedOnly}
+                onChange={(e) => {
+                  setOrderBlockedOnly(e.target.checked);
+                  setPage(1);
+                }}
+                color="warning"
+              />
+            }
+            label={`Order blocked only${totals.orderBlockedStores ? ` (${totals.orderBlockedStores})` : ''}`}
+          />
+        </Box>
       </Paper>
 
       <TableContainer component={Paper}>
@@ -216,6 +308,13 @@ export const StoreReceivablesPage: React.FC = () => {
               <SortableTableHeadCell
                 columnId="displayName"
                 label="Medical store"
+                sortKey={sortKey}
+                sortDirection={sortDirection}
+                onRequestSort={requestSortResetPage}
+              />
+              <SortableTableHeadCell
+                columnId="orderBlocked"
+                label="Ordering"
                 sortKey={sortKey}
                 sortDirection={sortDirection}
                 onRequestSort={requestSortResetPage}
@@ -249,7 +348,7 @@ export const StoreReceivablesPage: React.FC = () => {
           <TableBody>
             {paginatedSummaries.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
                   <Typography color="text.secondary">
                     {summaries.length === 0
                       ? 'No outstanding receivables — all store bills are paid.'
@@ -266,6 +365,15 @@ export const StoreReceivablesPage: React.FC = () => {
                     <Typography variant="caption" color="text.secondary">
                       {row.retailerEmail}
                     </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <OrderPlacementStatusChip
+                      retailerId={row.retailerId}
+                      overdue={overdueRetailerIds.has(row.retailerId)}
+                      overrideUntil={overrideUntilByRetailerId.get(row.retailerId)}
+                      onGrantOverride={handleGrantOrderOverride}
+                      disabled={grantOverrideMutation.isPending}
+                    />
                   </TableCell>
                   <TableCell align="right">{row.orderCount}</TableCell>
                   <TableCell align="right">
@@ -319,6 +427,12 @@ export const StoreReceivablesPage: React.FC = () => {
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                 {drillDown.storeCode} · {formatCurrency(drillDown.totalOutstanding)} due across{' '}
                 {drillDown.orderCount} bill{drillDown.orderCount === 1 ? '' : 's'}
+                {overdueRetailerIds.has(drillDown.retailerId) &&
+                !blockedRetailerIds.has(drillDown.retailerId)
+                  ? ' · Ordering temporarily unlocked (6h override)'
+                  : blockedRetailerIds.has(drillDown.retailerId)
+                    ? ' · Order placement blocked in retailer app'
+                    : ''}
               </Typography>
             </DialogTitle>
             <DialogContent dividers>
@@ -366,6 +480,7 @@ const ReceivableOrderRow: React.FC<{
 }> = ({ order, onOpen }) => {
   const paid = order.paidAmount ?? 0;
   const total = order.totalAmount ?? 0;
+  const blocksOrdering = isOrderPlacementBlockingOrder(order);
 
   return (
     <TableRow hover>
@@ -377,11 +492,21 @@ const ReceivableOrderRow: React.FC<{
         )}
       </TableCell>
       <TableCell>
-        <Chip
-          size="small"
-          label={order.paymentStatus || 'Unpaid'}
-          color={paymentChipColor(order.paymentStatus)}
-        />
+        <Box display="flex" flexWrap="wrap" gap={0.5} alignItems="center">
+          <Chip
+            size="small"
+            label={order.paymentStatus || 'Unpaid'}
+            color={paymentChipColor(order.paymentStatus)}
+          />
+          {blocksOrdering ? (
+            <Chip
+              size="small"
+              color="warning"
+              label="Blocks orders"
+              title="Delivered more than 2 days ago with unpaid balance"
+            />
+          ) : null}
+        </Box>
       </TableCell>
       <TableCell align="right">{formatCurrency(total)}</TableCell>
       <TableCell align="right">{formatCurrency(paid)}</TableCell>
