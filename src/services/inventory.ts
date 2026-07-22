@@ -572,12 +572,9 @@ export const getMedicinesByIdsWithBatches = async (
   medicineIds: string[]
 ): Promise<Medicine[]> => {
   const unique = [...new Set(medicineIds.filter(Boolean))];
-  const results: Medicine[] = [];
-  for (const id of unique) {
-    const m = await getMedicineById(id);
-    if (m) results.push(m);
-  }
-  return results;
+  if (unique.length === 0) return [];
+  const results = await Promise.all(unique.map((id) => getMedicineById(id)));
+  return results.filter((m): m is Medicine => m != null);
 };
 
 export const updateMedicineStock = async (
@@ -776,12 +773,12 @@ export const filterExpiredMedicines = (medicines: Medicine[]): Medicine[] => {
 };
 
 export const getExpiringMedicines = async (days: number = 30): Promise<Medicine[]> => {
-  const medicines = await getAllMedicines();
+  const medicines = await getAllMedicinesMasterOnly();
   return filterExpiringMedicines(medicines, days);
 };
 
 export const getExpiredMedicines = async (): Promise<Medicine[]> => {
-  const medicines = await getAllMedicines();
+  const medicines = await getAllMedicinesMasterOnly();
   return filterExpiredMedicines(medicines);
 };
 

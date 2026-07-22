@@ -11,7 +11,7 @@ import {
 import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
-import { getMedicineById, getAllMedicines } from '../services/inventory';
+import { getMedicineById, getMedicinesByIdsWithBatches } from '../services/inventory';
 import { getProductDemandsByIds } from '../services/productDemands';
 import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
 import { getAllPurchaseInvoices, collectPurchaseInvoicesForDemands } from '../services/purchaseInvoices';
@@ -172,9 +172,16 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
   let medicineList: Medicine[] = [];
 
   if (relevantDemands.some((d) => d.status === 'fulfilled')) {
+    const demandMedicineIds = [
+      ...new Set(
+        relevantDemands
+          .map((d) => d.fulfilledMedicineId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      ),
+    ];
     const [baseInvoices, meds] = await Promise.all([
       getAllPurchaseInvoices(),
-      getAllMedicines(),
+      getMedicinesByIdsWithBatches(demandMedicineIds),
     ]);
     mergedInvoices = await collectPurchaseInvoicesForDemands(baseInvoices, relevantDemands);
     medicineList = meds;

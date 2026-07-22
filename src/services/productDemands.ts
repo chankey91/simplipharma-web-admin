@@ -16,7 +16,7 @@ import {
   getCountFromServer,
 } from './firebase';
 import { OrderMedicine, ProductDemand, ProductDemandStatus, PurchaseInvoice } from '../types';
-import { createMedicine, getAllMedicines, getMedicineById } from './inventory';
+import { createMedicine, getAllMedicinesMasterOnly, getMedicineById } from './inventory';
 import { getAllPurchaseInvoices, getPurchaseInvoiceByReference } from './purchaseInvoices';
 import {
   buildFulfilledDemandOrderLine,
@@ -98,7 +98,7 @@ export async function ensureMedicineForProductDemand(
   }
 
   if (!nameToMedicineId) {
-    const all = await getAllMedicines();
+    const all = await getAllMedicinesMasterOnly();
     const existing = all.find((m) => m.name.toLowerCase().trim() === key);
     if (existing) {
       return { medicineId: existing.id, created: false };
@@ -158,7 +158,7 @@ export async function migrateProductDemandsToMedicines(options?: {
     return Boolean(options?.includePending && d.status === 'pending');
   });
 
-  const allMedicines = await getAllMedicines();
+  const allMedicines = await getAllMedicinesMasterOnly();
   const nameToMedicineId = new Map<string, string>();
   for (const m of allMedicines) {
     const k = m.name.toLowerCase().trim();

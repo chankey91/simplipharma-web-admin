@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -6,14 +6,9 @@ import {
   TextField,
   Button,
   Grid,
-  MenuItem,
-  FormControl,
-  InputLabel,
-  Select,
   Alert,
   Card,
   CardContent,
-  Divider,
   Table,
   TableBody,
   TableCell,
@@ -21,6 +16,8 @@ import {
   TableHead,
   TableRow,
   IconButton,
+  Autocomplete,
+  CircularProgress,
 } from '@mui/material';
 import {
   QrCodeScanner,
@@ -28,7 +25,13 @@ import {
   Search,
 } from '@mui/icons-material';
 import { QRCodeScanner } from '../components/BarcodeScanner';
-import { useMedicines, useUpdateStock, useAddStockBatch, useFindMedicineByBarcode } from '../hooks/useInventory';
+import {
+  useMedicine,
+  useUpdateStock,
+  useAddStockBatch,
+  useFindMedicineByBarcode,
+} from '../hooks/useInventory';
+import { getMedicineById } from '../services/inventory';
 import { Medicine } from '../types';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
@@ -37,19 +40,31 @@ import { getTodayDateStringIST } from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import {
+  searchMedicinesTypesenseAdmin,
+} from '../services/medicineSearch';
+import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
 
 export const StockUpdatePage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const medicineIdFromUrl = searchParams.get('medicineId');
-  
-  const { data: medicines, isLoading: medicinesLoading } = useMedicines();
+
   const updateStock = useUpdateStock();
   const addBatch = useAddStockBatch();
   const findMedicine = useFindMedicineByBarcode();
-  
+
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [selectedMedicine, setSelectedMedicine] = useState<Medicine | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(medicineIdFromUrl);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchHits, setSearchHits] = useState<Medicine[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchSeq = useRef(0);
+
+  const { data: selectedMedicine, isLoading: medicineLoading, refetch: refetchMedicine } =
+    useMedicine(selectedId || undefined);
+
   const [stockData, setStockData] = useState({
     quantity: '',
     batchNumber: '',
@@ -94,13 +109,32 @@ export const StockUpdatePage: React.FC = () => {
   }, [selectedMedicine?.stockBatches, selectedMedicine?.id, batchSort.sortKey, batchSort.sortDirection]);
 
   useEffect(() => {
-    if (medicineIdFromUrl && medicines) {
-      const medicine = medicines.find(m => m.id === medicineIdFromUrl);
-      if (medicine) {
-        setSelectedMedicine(medicine);
-      }
+    if (medicineIdFromUrl) setSelectedId(medicineIdFromUrl);
+  }, [medicineIdFromUrl]);
+
+  useEffect(() => {
+    const trimmed = searchInput.trim();
+    if (trimmed.length < 2) {
+      setSearchHits([]);
+      setSearchLoading(false);
+      return;
     }
-  }, [medicineIdFromUrl, medicines]);
+    const seq = ++searchSeq.current;
+    setSearchLoading(true);
+    const t = window.setTimeout(() => {
+      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
+        .then((rows) => {
+          if (searchSeq.current === seq) setSearchHits(rows);
+        })
+        .catch(() => {
+          if (searchSeq.current === seq) setSearchHits([]);
+        })
+        .finally(() => {
+          if (searchSeq.current === seq) setSearchLoading(false);
+        });
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const handleBarcodeScan = async (barcode: string) => {
     setBarcodeInput(barcode);
@@ -108,19 +142,30 @@ export const StockUpdatePage: React.FC = () => {
     try {
       const result = await findMedicine.mutateAsync(barcode);
       if (result) {
-        setSelectedMedicine(result);
+        setSelectedId(result.id);
+        setSearchInput(getMedicinePickerLabel(result));
         setSuccess('Medicine found!');
       } else {
-        const medicine = medicines?.find(m => m.barcode === barcode || m.code === barcode);
-        if (medicine) {
-          setSelectedMedicine(medicine);
-          setSuccess('Medicine found!');
-        } else {
-          setError('Medicine not found with this barcode');
-        }
+        setError('Medicine not found with this barcode');
       }
-    } catch (error) {
+    } catch {
       setError('Error searching for medicine');
+    }
+  };
+
+  const handleSelectMedicine = async (picked: Medicine | null) => {
+    if (!picked) {
+      setSelectedId(null);
+      return;
+    }
+    setSelectedId(picked.id);
+    setSearchInput(getMedicinePickerLabel(picked));
+    // Ensure batches are loaded (useMedicine will fetch; also warm full doc)
+    try {
+      const full = await getMedicineById(picked.id);
+      if (full) setSearchInput(getMedicinePickerLabel(full));
+    } catch {
+      // ignore
     }
   };
 
@@ -148,6 +193,10 @@ export const StockUpdatePage: React.FC = () => {
         },
       });
 
+      const expiry = new Date(stockData.expiryDate);
+      const batchNumber = stockData.batchNumber;
+      const mrp = stockData.mrp ? parseFloat(stockData.mrp) : selectedMedicine.mrp;
+
       setStockData({
         quantity: '',
         batchNumber: '',
@@ -158,23 +207,24 @@ export const StockUpdatePage: React.FC = () => {
         mrp: '',
       });
       setSuccess('Stock updated successfully!');
-      
-      // Update the main medicine data as well (latest batch info)
+
       await updateStock.mutateAsync({
         medicineId: selectedMedicine.id,
         updates: {
-          expiryDate: new Date(stockData.expiryDate),
-          batchNumber: stockData.batchNumber,
-          mrp: stockData.mrp ? parseFloat(stockData.mrp) : selectedMedicine.mrp,
-        }
+          expiryDate: expiry,
+          batchNumber,
+          mrp,
+        },
       });
-
-    } catch (error: any) {
-      setError(error.message || 'Failed to update stock');
+      await refetchMedicine();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update stock');
     }
   };
 
-  if (medicinesLoading) return <Loading message="Loading medicines..." />;
+  if (medicineIdFromUrl && medicineLoading && !selectedMedicine) {
+    return <Loading message="Loading medicine..." />;
+  }
 
   return (
     <Box>
@@ -185,7 +235,9 @@ export const StockUpdatePage: React.FC = () => {
       <Grid container spacing={3}>
         <Grid item xs={12} md={4}>
           <Paper sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>Find Medicine</Typography>
+            <Typography variant="h6" gutterBottom>
+              Find Medicine
+            </Typography>
             <Button
               fullWidth
               variant="outlined"
@@ -210,25 +262,44 @@ export const StockUpdatePage: React.FC = () => {
                 ),
               }}
             />
-            <FormControl fullWidth>
-              <InputLabel>Or Select Medicine</InputLabel>
-              <Select
-                value={selectedMedicine?.id || ''}
-                label="Or Select Medicine"
-                onChange={(e) => setSelectedMedicine(medicines?.find(m => m.id === e.target.value) || null)}
-              >
-                {medicines?.map((m) => (
-                  <MenuItem key={m.id} value={m.id}>{m.name}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <Autocomplete
+              options={searchHits}
+              loading={searchLoading}
+              value={selectedMedicine ?? null}
+              inputValue={searchInput}
+              onInputChange={(_e, v) => setSearchInput(v)}
+              onChange={(_e, v) => void handleSelectMedicine(v)}
+              getOptionLabel={(m) => getMedicinePickerLabel(m)}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              filterOptions={(x) => x}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Search medicine (Typesense)"
+                  placeholder="Type 2+ characters…"
+                  InputProps={{
+                    ...params.InputProps,
+                    endAdornment: (
+                      <>
+                        {searchLoading ? <CircularProgress color="inherit" size={18} /> : null}
+                        {params.InputProps.endAdornment}
+                      </>
+                    ),
+                  }}
+                />
+              )}
+            />
 
             {selectedMedicine && (
               <Card sx={{ mt: 3, bgcolor: 'rgba(33, 150, 243, 0.05)' }}>
                 <CardContent>
-                  <Typography variant="subtitle2" color="primary">Current Info</Typography>
+                  <Typography variant="subtitle2" color="primary">
+                    Current Info
+                  </Typography>
                   <Typography variant="h6">{selectedMedicine.name}</Typography>
-                  <Typography variant="body2">Current Stock: {selectedMedicine.currentStock ?? selectedMedicine.stock ?? 0}</Typography>
+                  <Typography variant="body2">
+                    Current Stock: {selectedMedicine.currentStock ?? selectedMedicine.stock ?? 0}
+                  </Typography>
                   <Typography variant="body2">Category: {selectedMedicine.category}</Typography>
                 </CardContent>
               </Card>
@@ -238,9 +309,19 @@ export const StockUpdatePage: React.FC = () => {
 
         <Grid item xs={12} md={8}>
           <Paper sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>Add New Stock Batch</Typography>
-            {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-            {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
+            <Typography variant="h6" gutterBottom>
+              Add New Stock Batch
+            </Typography>
+            {error && (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                {error}
+              </Alert>
+            )}
+            {success && (
+              <Alert severity="success" sx={{ mb: 2 }}>
+                {success}
+              </Alert>
+            )}
 
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
@@ -255,7 +336,7 @@ export const StockUpdatePage: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="Quantity Received"
+                  label="Quantity"
                   type="number"
                   required
                   value={stockData.quantity}
@@ -265,11 +346,11 @@ export const StockUpdatePage: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="Manufacturing Date (MFG)"
+                  label="Mfg Date"
                   type="date"
+                  InputLabelProps={{ shrink: true }}
                   value={stockData.mfgDate}
                   onChange={(e) => setStockData({ ...stockData, mfgDate: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -278,59 +359,59 @@ export const StockUpdatePage: React.FC = () => {
                   label="Expiry Date"
                   type="date"
                   required
+                  InputLabelProps={{ shrink: true }}
                   value={stockData.expiryDate}
                   onChange={(e) => setStockData({ ...stockData, expiryDate: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
                 />
               </Grid>
-              <Grid item xs={12} md={4}>
+              <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="MRP"
-                  type="number"
-                  value={stockData.mrp}
-                  onChange={(e) => setStockData({ ...stockData, mrp: e.target.value })}
-                  InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
+                  label="Purchase Date"
+                  type="date"
+                  InputLabelProps={{ shrink: true }}
+                  value={stockData.purchaseDate}
+                  onChange={(e) => setStockData({ ...stockData, purchaseDate: e.target.value })}
                 />
               </Grid>
-              <Grid item xs={12} md={4}>
+              <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
                   label="Purchase Price"
                   type="number"
                   value={stockData.purchasePrice}
                   onChange={(e) => setStockData({ ...stockData, purchasePrice: e.target.value })}
-                  InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
                 />
               </Grid>
-              <Grid item xs={12} md={4}>
+              <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="Purchase Date"
-                  type="date"
-                  value={stockData.purchaseDate}
-                  onChange={(e) => setStockData({ ...stockData, purchaseDate: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
+                  label="MRP"
+                  type="number"
+                  value={stockData.mrp}
+                  onChange={(e) => setStockData({ ...stockData, mrp: e.target.value })}
                 />
+              </Grid>
+              <Grid item xs={12}>
+                <Button
+                  variant="contained"
+                  startIcon={<Save />}
+                  onClick={() => void handleSave()}
+                  disabled={!selectedMedicine || addBatch.isPending}
+                >
+                  {addBatch.isPending ? 'Saving…' : 'Add Batch'}
+                </Button>
+                <Button sx={{ ml: 1 }} onClick={() => navigate(-1)}>
+                  Back
+                </Button>
               </Grid>
             </Grid>
 
-            <Box mt={3} display="flex" justifyContent="flex-end">
-              <Button
-                variant="contained"
-                size="large"
-                startIcon={<Save />}
-                onClick={handleSave}
-                disabled={!selectedMedicine || addBatch.isPending}
-              >
-                Save Batch
-              </Button>
-            </Box>
-
             {selectedMedicine?.stockBatches && selectedMedicine.stockBatches.length > 0 && (
-              <>
-                <Divider sx={{ my: 4 }} />
-                <Typography variant="h6" gutterBottom>Existing Batches for {selectedMedicine.name}</Typography>
+              <Box mt={4}>
+                <Typography variant="h6" gutterBottom>
+                  Existing Batches for {selectedMedicine.name}
+                </Typography>
                 <TableContainer>
                   <Table size="small">
                     <TableHead>
@@ -348,11 +429,10 @@ export const StockUpdatePage: React.FC = () => {
                           sortKey={batchSort.sortKey}
                           sortDirection={batchSort.sortDirection}
                           onRequestSort={batchSort.requestSort}
-                          align="right"
                         />
                         <SortableTableHeadCell
                           columnId="mfgDate"
-                          label="MFG"
+                          label="Mfg"
                           sortKey={batchSort.sortKey}
                           sortDirection={batchSort.sortDirection}
                           onRequestSort={batchSort.requestSort}
@@ -370,24 +450,35 @@ export const StockUpdatePage: React.FC = () => {
                           sortKey={batchSort.sortKey}
                           sortDirection={batchSort.sortDirection}
                           onRequestSort={batchSort.requestSort}
-                          align="right"
                         />
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {sortedBatches.map((batch) => (
-                        <TableRow key={batch.id}>
-                          <TableCell>{batch.batchNumber}</TableCell>
-                          <TableCell align="right">{batch.quantity}</TableCell>
-                          <TableCell>{batch.mfgDate ? format(batch.mfgDate instanceof Date ? batch.mfgDate : batch.mfgDate.toDate(), 'MM/yy') : '-'}</TableCell>
-                          <TableCell>{format(batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate(), 'MM/yy')}</TableCell>
-                          <TableCell align="right">₹{batch.mrp?.toFixed(2) || '-'}</TableCell>
+                      {sortedBatches.map((b) => (
+                        <TableRow key={b.id || b.batchNumber}>
+                          <TableCell>{b.batchNumber}</TableCell>
+                          <TableCell>{b.quantity}</TableCell>
+                          <TableCell>
+                            {b.mfgDate
+                              ? format(
+                                  b.mfgDate instanceof Date ? b.mfgDate : b.mfgDate.toDate(),
+                                  'dd MMM yyyy'
+                                )
+                              : '—'}
+                          </TableCell>
+                          <TableCell>
+                            {format(
+                              b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate(),
+                              'dd MMM yyyy'
+                            )}
+                          </TableCell>
+                          <TableCell>{b.mrp ?? '—'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </TableContainer>
-              </>
+              </Box>
             )}
           </Paper>
         </Grid>
@@ -396,7 +487,10 @@ export const StockUpdatePage: React.FC = () => {
       <QRCodeScanner
         open={scannerOpen}
         onClose={() => setScannerOpen(false)}
-        onScan={handleBarcodeScan}
+        onScan={(code) => {
+          setScannerOpen(false);
+          void handleBarcodeScan(code);
+        }}
       />
     </Box>
   );

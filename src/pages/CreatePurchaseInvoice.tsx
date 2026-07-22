@@ -40,7 +40,7 @@ import {
   QrCode,
 } from '@mui/icons-material';
 import { useVendors } from '../hooks/useVendors';
-import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
+import { useMedicinesMaster, useCreateMedicine, useMedicine } from '../hooks/useInventory';
 import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
 import { format } from 'date-fns';
@@ -107,7 +107,7 @@ function parseExpiryMmYy(value: string): ExpiryParseResult {
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
   const { data: vendors } = useVendors();
-  const { data: medicines } = useMedicines();
+  const { data: medicines } = useMedicinesMaster();
   const createMedicineMutation = useCreateMedicine();
   const createInvoiceMutation = useCreatePurchaseInvoice();
   const { alert, confirm, prompt } = useAppDialog();
@@ -188,6 +188,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   medicineSearchInputRef.current = medicineSearchInput;
   const newMedicineNameRef = useRef(newMedicineData.name);
   newMedicineNameRef.current = newMedicineData.name;
+
+  // Batches for the line being edited (master list has no stockBatches).
+  const { data: currentItemMedicineFull } = useMedicine(
+    currentItem.medicineId ? String(currentItem.medicineId) : undefined
+  );
 
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
   const isSavingInvoice = createInvoiceMutation.isPending;
@@ -380,7 +385,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   ): StockBatch | undefined => {
     const key = batchNumber.trim().toLowerCase();
     if (!medicineId || !key) return undefined;
-    const medicine = medicines?.find((m) => m.id === medicineId);
+    const medicine =
+      (selectedMedicine?.id === medicineId ? selectedMedicine : undefined) ||
+      (currentItemMedicineFull?.id === medicineId ? currentItemMedicineFull : undefined) ||
+      medicines?.find((m) => m.id === medicineId);
     return medicine?.stockBatches?.find(
       (b) => String(b.batchNumber || '').trim().toLowerCase() === key
     );
@@ -388,7 +396,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const existingBatchForCurrentItem = useMemo(
     () => findExistingStockBatch(currentItem.medicineId, String(currentItem.batchNumber || '')),
-    [medicines, currentItem.medicineId, currentItem.batchNumber]
+    [
+      medicines,
+      selectedMedicine,
+      currentItemMedicineFull,
+      currentItem.medicineId,
+      currentItem.batchNumber,
+    ]
   );
 
   /** Fill item fields from inventory when batch already exists for this medicine (quantity unchanged). */

@@ -41,7 +41,7 @@ import {
 } from '../hooks/useProductDemands';
 import { getProductDemandsByIds, getProductDemandsPage } from '../services/productDemands';
 import { reindexProductDemandsTypesense, searchProductDemandsTypesense } from '../services/productDemandSearch';
-import { useMedicines } from '../hooks/useInventory';
+import { useMedicinesMaster } from '../hooks/useInventory';
 import { ProductDemand, Medicine } from '../types';
 import { Loading } from '../components/Loading';
 import { ProductDemandImage } from '../components/ProductDemandImage';
@@ -120,7 +120,7 @@ function navigateToReturnPath(navigate: NavigateFunction, returnToRef: React.Mut
 export const ProductDemandsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: medicines } = useMedicines();
+  const { data: medicines } = useMedicinesMaster();
   const fulfillMutation = useFulfillProductDemand();
   const rejectMutation = useRejectProductDemand();
   const migrateMutation = useMigrateProductDemandsToMedicines();
