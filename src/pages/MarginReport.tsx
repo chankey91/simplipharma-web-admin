@@ -31,7 +31,7 @@ import {
 import { Search, Visibility, TrendingUp, InfoOutlined } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useOrdersInPeriod } from '../hooks/useOrders';
-import { useMedicines } from '../hooks/useInventory';
+import { useMedicinesByIds } from '../hooks/useInventory';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useCreditNotesInPeriod } from '../hooks/useCreditNotes';
 import { useExpiryReturnsInPeriod } from '../hooks/useExpiryReturns';
@@ -90,10 +90,35 @@ export const MarginReportPage: React.FC = () => {
   // Scope the orders query to the selected period so "this month"/"last month"
   // don't download the entire orders history.
   const { data: orders, isLoading: ordersLoading } = useOrdersInPeriod(periodFilter);
-  const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const { data: purchaseInvoices } = usePurchaseInvoices();
   const { data: creditNotes } = useCreditNotesInPeriod(periodFilter);
   const { data: expiryReturns } = useExpiryReturnsInPeriod(periodFilter);
+
+  const marginMedicineIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const o of orders ?? []) {
+      for (const line of o.medicines ?? []) {
+        if (line.medicineId) ids.add(line.medicineId);
+      }
+    }
+    for (const cn of creditNotes ?? []) {
+      for (const line of cn.items ?? []) {
+        if (line.medicineId) ids.add(line.medicineId);
+      }
+    }
+    for (const er of expiryReturns ?? []) {
+      for (const line of (er as { items?: Array<{ medicineId?: string }> }).items ?? []) {
+        if (line.medicineId) ids.add(line.medicineId);
+      }
+      const mid = (er as { medicineId?: string }).medicineId;
+      if (mid) ids.add(mid);
+    }
+    return [...ids];
+  }, [orders, creditNotes, expiryReturns]);
+
+  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(
+    marginMedicineIds.length > 0 ? marginMedicineIds : undefined
+  );
 
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(15);

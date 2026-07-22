@@ -37,7 +37,14 @@ import {
   CloudSync,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
-import { useMedicines, useExpiringMedicines, useExpiredMedicines } from '../hooks/useInventory';
+import { useMedicinesMaster } from '../hooks/useInventory';
+import {
+  filterExpiringMedicines,
+  filterExpiredMedicines,
+} from '../services/inventory';
+import { searchMedicinesTypesenseAdmin } from '../services/medicineSearch';
+import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import type { Medicine } from '../types';
 import { format } from 'date-fns';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { categoriesMatch } from '../utils/categoryMatch';
@@ -53,16 +60,26 @@ import { httpsCallable } from 'firebase/functions';
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
-  const { data: medicines, isLoading } = useMedicines({ fresh: true });
-  const { data: expiringMedicines } = useExpiringMedicines(30);
-  const { data: expiredMedicines } = useExpiredMedicines();
+  const { data: medicines, isLoading } = useMedicinesMaster({ fresh: true });
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   
   const [searchTerm, setSearchTerm] = useState('');
+  const [typesenseHits, setTypesenseHits] = useState<Medicine[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchSeq = useRef(0);
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [manufacturerFilter, setManufacturerFilter] = useState<string>('All');
   const [stockFilter, setStockFilter] = useState<string>('All');
+
+  const expiringMedicines = useMemo(
+    () => (medicines ? filterExpiringMedicines(medicines, 30) : undefined),
+    [medicines]
+  );
+  const expiredMedicines = useMemo(
+    () => (medicines ? filterExpiredMedicines(medicines) : undefined),
+    [medicines]
+  );
 
   useEffect(() => {
     const q = searchParams.get('q');
@@ -74,6 +91,48 @@ export const InventoryPage: React.FC = () => {
       setStockFilter(stock);
     }
   }, [searchParams]);
+
+  // Typesense-first when user types a search query (≥2 chars).
+  useEffect(() => {
+    const trimmed = searchTerm.trim();
+    if (trimmed.length < 2) {
+      setTypesenseHits(null);
+      setSearchLoading(false);
+      return;
+    }
+    const seq = ++searchSeq.current;
+    setSearchLoading(true);
+    const t = window.setTimeout(() => {
+      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 80, strict: true })
+        .then((rows) => {
+          if (searchSeq.current !== seq) return;
+          const byId = new Map((medicines ?? []).map((m) => [m.id, m]));
+          setTypesenseHits(
+            rows.map((r) => {
+              const master = byId.get(r.id);
+              return master
+                ? {
+                    ...r,
+                    stock: master.stock,
+                    currentStock: master.currentStock ?? master.stock,
+                    nearestExpiry: master.nearestExpiry,
+                    gstRate: master.gstRate ?? r.gstRate,
+                    unit: master.unit ?? r.unit,
+                  }
+                : r;
+            })
+          );
+        })
+        .catch(() => {
+          if (searchSeq.current === seq) setTypesenseHits(null);
+        })
+        .finally(() => {
+          if (searchSeq.current === seq) setSearchLoading(false);
+        });
+    }, MEDICINE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchTerm, medicines]);
+
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const { sortKey, sortDirection, requestSort } = useTableSort('name', 'asc');
@@ -125,33 +184,49 @@ export const InventoryPage: React.FC = () => {
     return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   }, [medicines]);
 
-  const filteredMedicines = medicines?.filter(medicine => {
-    const name = String(medicine.name || '').toLowerCase();
-    const code = String(medicine.code || '').toLowerCase();
-    const manufacturerLower = String(medicine.manufacturer || '').toLowerCase();
-    const search = searchTerm.toLowerCase();
+  const filteredMedicines = useMemo(() => {
+    const source =
+      searchTerm.trim().length >= 2 && typesenseHits != null ? typesenseHits : medicines ?? [];
 
-    const matchesSearch =
-      name.includes(search) ||
-      code.includes(search) ||
-      manufacturerLower.includes(search);
-    
-    const matchesCategory =
-      categoryFilter === 'All' || categoriesMatch(medicine.category, categoryFilter);
+    return source.filter((medicine) => {
+      // When not using Typesense, apply client substring search on master list.
+      if (searchTerm.trim().length < 2 || typesenseHits == null) {
+        const name = String(medicine.name || '').toLowerCase();
+        const code = String(medicine.code || '').toLowerCase();
+        const manufacturerLower = String(medicine.manufacturer || '').toLowerCase();
+        const search = searchTerm.toLowerCase();
+        const matchesSearch =
+          !search ||
+          name.includes(search) ||
+          code.includes(search) ||
+          manufacturerLower.includes(search);
+        if (!matchesSearch) return false;
+      }
 
-    const mfLabel = String(medicine.manufacturer || medicine.company || '').trim();
-    const matchesManufacturer =
-      manufacturerFilter === 'All' || mfLabel === manufacturerFilter;
-    
-    const currentStock = medicine.currentStock ?? medicine.stock ?? 0;
-    const matchesStock =
-      stockFilter === 'All' ||
-      (stockFilter === 'Low' && currentStock < 10 && currentStock > 0) ||
-      (stockFilter === 'Out' && currentStock === 0) ||
-      (stockFilter === 'In Stock' && currentStock > 0);
-    
-    return matchesSearch && matchesCategory && matchesManufacturer && matchesStock;
-  }) || [];
+      const matchesCategory =
+        categoryFilter === 'All' || categoriesMatch(medicine.category, categoryFilter);
+
+      const mfLabel = String(medicine.manufacturer || medicine.company || '').trim();
+      const matchesManufacturer =
+        manufacturerFilter === 'All' || mfLabel === manufacturerFilter;
+
+      const currentStock = medicine.currentStock ?? medicine.stock ?? 0;
+      const matchesStock =
+        stockFilter === 'All' ||
+        (stockFilter === 'Low' && currentStock < 10 && currentStock > 0) ||
+        (stockFilter === 'Out' && currentStock === 0) ||
+        (stockFilter === 'In Stock' && currentStock > 0);
+
+      return matchesCategory && matchesManufacturer && matchesStock;
+    });
+  }, [
+    medicines,
+    typesenseHits,
+    searchTerm,
+    categoryFilter,
+    manufacturerFilter,
+    stockFilter,
+  ]);
 
   const sortedMedicines = useMemo(() => {
     const list = [...filteredMedicines];
@@ -441,7 +516,19 @@ export const InventoryPage: React.FC = () => {
                     <Search />
                   </InputAdornment>
                 ),
+                endAdornment: searchLoading ? (
+                  <InputAdornment position="end">
+                    <Typography variant="caption" color="text.secondary">
+                      …
+                    </Typography>
+                  </InputAdornment>
+                ) : undefined,
               }}
+              helperText={
+                searchTerm.trim().length >= 2
+                  ? 'Searching via Typesense'
+                  : 'Type 2+ characters for Typesense search'
+              }
             />
           </Grid>
           <Grid item xs={12} sm={6} md={2}>

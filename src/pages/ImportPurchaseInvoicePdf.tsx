@@ -24,7 +24,7 @@ import { format } from 'date-fns';
 import QRCode from 'qrcode';
 import { auth } from '../services/firebase';
 import { useVendors } from '../hooks/useVendors';
-import { useMedicines } from '../hooks/useInventory';
+import { useMedicinesMaster } from '../hooks/useInventory';
 import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
 import {
@@ -68,7 +68,7 @@ const newRowId = () => `r-${Math.random().toString(36).slice(2, 11)}`;
 export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: vendors } = useVendors();
-  const { data: medicines, isLoading: medLoading } = useMedicines();
+  const { data: medicines, isLoading: medLoading } = useMedicinesMaster();
   const createInvoiceMutation = useCreatePurchaseInvoice();
   const { alert, confirm, prompt } = useAppDialog();
 
