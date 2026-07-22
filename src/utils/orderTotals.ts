@@ -94,3 +94,38 @@ export function calculateOrderTotalsFromLines(
     uniformTaxPercentage,
   };
 }
+
+/**
+ * Invoice-correct grand total for ledger / receivables / lists.
+ * Prefers live line maths (same as GST PDF) when billable lines exist; otherwise stored totalAmount.
+ */
+export function resolveOrderInvoiceGrandTotal(
+  order: {
+    medicines?: any[];
+    taxPercentage?: number;
+    totalAmount?: number;
+    status?: string;
+  },
+  medicinesCatalog?: Medicine[],
+  purchaseLookup?: PurchaseBatchDiscountLookup
+): number {
+  const stored = toNum(order.totalAmount);
+  const lines = order.medicines || [];
+  if (!lines.length || order.status === 'Pending' || order.status === 'Cancelled') {
+    return stored;
+  }
+
+  const breakdown = calculateOrderTotalsFromLines(
+    lines,
+    medicinesCatalog,
+    order.taxPercentage || 5,
+    purchaseLookup,
+    { lockPersistedDiscount: true }
+  );
+
+  if (breakdown.billableLines.length > 0 && breakdown.grandTotal > 0) {
+    return breakdown.grandTotal;
+  }
+  return stored;
+}
+
