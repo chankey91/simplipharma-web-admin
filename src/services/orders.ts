@@ -539,6 +539,7 @@ export const fulfillOrder = async (
     taxAmount: number;
     taxPercentage: number;
     subTotal: number;
+    totalDiscount?: number;
     totalAmount: number;
     trayNumber?: string;
     processedBy?: string;
@@ -944,6 +945,7 @@ export const fulfillOrder = async (
     taxAmount: fulfillmentData.taxAmount || 0,
     taxPercentage: fulfillmentData.taxPercentage || 5,
     subTotal: fulfillmentData.subTotal || 0,
+    totalDiscount: fulfillmentData.totalDiscount || 0,
     totalAmount: fulfillmentData.totalAmount || 0,
   };
   
@@ -1095,6 +1097,7 @@ export const recalculateOrderPricing = async (
   await updateDoc(orderRef, {
     medicines: recalculated,
     subTotal: totals.subTotal,
+    totalDiscount: totals.totalDiscount,
     taxAmount: totals.taxAmount,
     totalAmount: totals.grandTotal,
     dueAmount: Math.max(0, totals.grandTotal - paidAmount),
