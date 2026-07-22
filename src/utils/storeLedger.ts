@@ -1,6 +1,7 @@
 import { endOfDay, startOfDay } from 'date-fns';
 import { CreditNote, DebitNote, Order, Payment, User } from '../types';
 import { formatOrderInvoiceLabel } from './orderDisplay';
+import { resolveOrderInvoiceGrandTotal } from './orderTotals';
 import {
   defaultVendorLedgerDateRange,
   formatLedgerAmount,
@@ -137,7 +138,7 @@ export function buildStoreLedger(
     if (!isLedgerBillableOrder(order)) continue;
 
     const orderDate = toLedgerDate(order.orderDate);
-    const total = order.totalAmount ?? 0;
+    const total = resolveOrderInvoiceGrandTotal(order);
     const credits = extractStorePaymentCredits(order);
     const invoiceRef = formatOrderInvoiceLabel(order);
 

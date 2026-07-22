@@ -1023,28 +1023,36 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!order?.id) return;
     if (order.status === 'Cancelled') return;
-    // Only auto-sync live totals while Pending. After fulfill, rewriting totalAmount
-    // caused Disc % / payment totals to oscillate (custom ↔ PI default).
-    if (order.status !== 'Pending') {
-      const liveTotal = orderTotals.grandTotal;
-      if (liveTotal > 0) setOrderTotalOverride(order.id, liveTotal);
-      return;
-    }
-    if (!allBatchesAssignedForTotals) return;
     if (!medicines?.length) return;
 
     const liveTotal = orderTotals.grandTotal;
     if (liveTotal <= 0) return;
-    setOrderTotalOverride(order.id, liveTotal);
-    if (Math.abs((order.totalAmount ?? 0) - liveTotal) < 0.005) return;
+    if (orderTotals.billableLines.length === 0) return;
 
-    const syncKey = `${order.id}:${liveTotal}`;
+    // Pending: wait until batches are assigned before writing totals.
+    if (order.status === 'Pending' && !allBatchesAssignedForTotals) return;
+
+    setOrderTotalOverride(order.id, liveTotal);
+
+    const storedTotal = toNumber(order.totalAmount);
+    const storedSub = toNumber(order.subTotal);
+    const storedTax = toNumber(order.taxAmount);
+    const storedDisc = toNumber(order.totalDiscount);
+    const needsSync =
+      Math.abs(storedTotal - liveTotal) >= 0.005 ||
+      Math.abs(storedSub - orderTotals.subTotal) >= 0.005 ||
+      Math.abs(storedTax - orderTotals.taxAmount) >= 0.005 ||
+      Math.abs(storedDisc - orderTotals.totalDiscount) >= 0.005;
+    if (!needsSync) return;
+
+    const syncKey = `${order.id}:${liveTotal}:${orderTotals.subTotal}:${orderTotals.taxAmount}:${orderTotals.totalDiscount}`;
     if (orderTotalSyncRef.current === syncKey) return;
 
     orderTotalSyncRef.current = syncKey;
     void updateOrderTotalAmount(order.id, liveTotal, order.paidAmount ?? 0, {
       taxAmount: orderTotals.taxAmount,
       subTotal: orderTotals.subTotal,
+      totalDiscount: orderTotals.totalDiscount,
     })
       .then(() => {
         queryClient.setQueryData(['order', order.id], (old: unknown) => {
@@ -1055,6 +1063,7 @@ export const OrderDetailsPage: React.FC = () => {
             dueAmount: Math.max(0, liveTotal - (order.paidAmount ?? 0)),
             taxAmount: orderTotals.taxAmount,
             subTotal: orderTotals.subTotal,
+            totalDiscount: orderTotals.totalDiscount,
           };
         });
         queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
@@ -1067,10 +1076,15 @@ export const OrderDetailsPage: React.FC = () => {
     order?.id,
     order?.status,
     order?.totalAmount,
+    order?.subTotal,
+    order?.taxAmount,
+    order?.totalDiscount,
     order?.paidAmount,
     orderTotals.grandTotal,
     orderTotals.taxAmount,
     orderTotals.subTotal,
+    orderTotals.totalDiscount,
+    orderTotals.billableLines.length,
     allBatchesAssignedForTotals,
     medicines,
     queryClient,
@@ -1282,7 +1296,8 @@ export const OrderDetailsPage: React.FC = () => {
         const fulfillTotals = calculateOrderTotalsFromLines(
           fulfillmentData.medicines,
           medicines,
-          taxPctForLines
+          taxPctForLines,
+          purchaseDiscountLookup
         );
         const { subTotal, totalDiscount, taxAmount, grandTotal: totalAmount } = fulfillTotals;
         
@@ -1303,6 +1318,7 @@ export const OrderDetailsPage: React.FC = () => {
           fulfillmentData: {
             medicines: fulfillmentData.medicines,
             subTotal,
+            totalDiscount,
             taxPercentage: taxPctForLines,
             taxAmount,
             totalAmount,
@@ -2263,26 +2279,18 @@ export const OrderDetailsPage: React.FC = () => {
   
   const taxPercentage = taxPctForTotals;
   const liveBreakdown = orderTotals;
-  // After fulfill, Invoice/Payment use saved money fields so PI/catalog loads cannot
-  // keep shifting totals (looked like Disc % / payment flickering).
-  const useStoredTotals =
-    order.status !== 'Pending' && order.status !== 'Cancelled' && toNumber(order.totalAmount) > 0;
-  const subTotal = useStoredTotals
-    ? toNumber(order.subTotal) || liveBreakdown.subTotal
-    : liveBreakdown.subTotal;
-  const taxAmount = useStoredTotals
-    ? toNumber(order.taxAmount) || liveBreakdown.taxAmount
-    : liveBreakdown.taxAmount;
-  const grandTotal = useStoredTotals ? toNumber(order.totalAmount) : liveBreakdown.grandTotal;
+  // Always use the same live line maths as the GST invoice PDF (subtotal / discount / tax /
+  // nearest-rupee round-off). Disc % after fulfill is locked via lockPersistedDiscount so this
+  // stays stable; do not mix stored money fields with live discount (that created fake ₹15 round-off).
+  const subTotal = liveBreakdown.subTotal;
+  const taxAmount = liveBreakdown.taxAmount;
+  const grandTotal = liveBreakdown.grandTotal;
   const totalDiscount = liveBreakdown.totalDiscount;
-  const roundoff = useStoredTotals
-    ? Number((grandTotal - (subTotal - totalDiscount + taxAmount)).toFixed(4))
-    : liveBreakdown.roundoff;
+  const roundoff = liveBreakdown.roundoff;
 
-  /** Payment card: after fulfill always stored totalAmount (never live recompute). */
-  const effectiveOrderTotal = useStoredTotals
-    ? toNumber(order.totalAmount)
-    : liveBreakdown.grandTotal > 0
+  /** Payment card follows the same invoice grand total as the sidebar. */
+  const effectiveOrderTotal =
+    liveBreakdown.grandTotal > 0
       ? liveBreakdown.grandTotal
       : toNumber(order.totalAmount);
   const effectiveDueAmount = Math.max(0, effectiveOrderTotal - (order.paidAmount ?? 0));

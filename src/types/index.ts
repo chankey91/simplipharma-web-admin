@@ -126,6 +126,8 @@ export interface Order {
   retailerName?: string;
   medicines: OrderMedicine[];
   subTotal: number;
+  /** Sum of line trade discounts (Rate×Qty × Disc%). */
+  totalDiscount?: number;
   taxAmount: number;
   taxPercentage?: number;
   totalAmount: number;

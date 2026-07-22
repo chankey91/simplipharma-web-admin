@@ -1,4 +1,5 @@
 import { Order, User } from '../types';
+import { resolveOrderInvoiceGrandTotal } from './orderTotals';
 
 export type ReceivableOrder = Order & {
   outstanding: number;
@@ -24,13 +25,9 @@ export function isReceivableOrder(o: Order): boolean {
 }
 
 export function orderOutstanding(o: Order): number {
-  if (o.paymentStatus === 'Partial') {
-    if (o.dueAmount != null && o.dueAmount > 0) return o.dueAmount;
-    return Math.max(0, (o.totalAmount ?? 0) - (o.paidAmount ?? 0));
-  }
-  // Unpaid or unset paymentStatus — prefer dueAmount when present
-  if (o.dueAmount != null && o.dueAmount > 0) return o.dueAmount;
-  return Math.max(0, (o.totalAmount ?? 0) - (o.paidAmount ?? 0));
+  const invoiceTotal = resolveOrderInvoiceGrandTotal(o);
+  const paid = o.paidAmount ?? 0;
+  return Math.max(0, invoiceTotal - paid);
 }
 
 export function buildStoreReceivableSummaries(
