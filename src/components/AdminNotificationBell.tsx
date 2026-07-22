@@ -20,6 +20,7 @@ import {
   PersonAdd,
   Undo,
   Archive,
+  ShoppingBag,
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
@@ -38,6 +39,7 @@ const TYPE_ICONS: Record<AdminNotificationType, React.ReactNode> = {
   retailer_registration: <PersonAdd fontSize="small" />,
   order_return: <Undo fontSize="small" />,
   expiry_return: <Archive fontSize="small" />,
+  purchase_list: <ShoppingBag fontSize="small" />,
 };
 
 export const AdminNotificationBell: React.FC<Props> = ({

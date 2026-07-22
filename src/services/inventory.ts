@@ -568,12 +568,9 @@ export const getMedicinesByIdsWithBatches = async (
   medicineIds: string[]
 ): Promise<Medicine[]> => {
   const unique = [...new Set(medicineIds.filter(Boolean))];
-  const results: Medicine[] = [];
-  for (const id of unique) {
-    const m = await getMedicineById(id);
-    if (m) results.push(m);
-  }
-  return results;
+  if (!unique.length) return [];
+  const results = await Promise.all(unique.map((id) => getMedicineById(id)));
+  return results.filter((m): m is Medicine => m != null);
 };
 
 export const updateMedicineStock = async (

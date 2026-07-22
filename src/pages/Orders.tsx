@@ -36,6 +36,7 @@ import {
   Cancel,
   Download,
   CloudSync,
+  Publish,
 } from '@mui/icons-material';
 import { useOrders, useOrdersSearch, useCancelOrder } from '../hooks/useOrders';
 import { useQuery } from '@tanstack/react-query';
@@ -47,6 +48,7 @@ import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
 import { exportPendingOrdersByStore, exportPendingOrdersProductSummary } from '../utils/export';
+import { publishPurchaseList } from '../services/purchaseLists';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
@@ -105,6 +107,7 @@ export const OrdersPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingProductSummary, setIsExportingProductSummary] = useState(false);
+  const [isPublishingPurchaseList, setIsPublishingPurchaseList] = useState(false);
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
@@ -406,6 +409,44 @@ export const OrdersPage: React.FC = () => {
       await alert(`Failed to export: ${message}`, { severity: 'error' });
     } finally {
       setIsExportingProductSummary(false);
+    }
+  };
+
+  const handlePublishPurchaseList = async () => {
+    const { fromDate, toDate } = productSummaryDialog;
+    if (!fromDate || !toDate) {
+      await alert('Please select both From and To dates', { severity: 'warning' });
+      return;
+    }
+    if (fromDate > toDate) {
+      await alert('From date must be on or before To date', { severity: 'warning' });
+      return;
+    }
+
+    setIsPublishingPurchaseList(true);
+    try {
+      const result = await publishPurchaseList({
+        orders: [],
+        fromDate,
+        toDate,
+      });
+      setProductSummaryDialog((prev) => ({ ...prev, open: false }));
+      const eliminated = result.eliminatedCount ?? 0;
+      const reduced = result.reducedCount ?? 0;
+      await alert(
+        result.message ||
+          `Published purchase list with ${result.itemCount} medicines.` +
+            (eliminated || reduced
+              ? ` Eliminated ${eliminated} fully covered; reduced ${reduced} partially covered.`
+              : ''),
+        { severity: 'success' }
+      );
+    } catch (error: unknown) {
+      console.error('Error publishing purchase list:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await alert(`Failed to publish: ${message}`, { severity: 'error' });
+    } finally {
+      setIsPublishingPurchaseList(false);
     }
   };
 
@@ -733,13 +774,17 @@ export const OrdersPage: React.FC = () => {
         open={productSummaryDialog.open}
         onClose={() =>
           !isExportingProductSummary &&
+          !isPublishingPurchaseList &&
           setProductSummaryDialog((prev) => ({ ...prev, open: false }))
         }
       >
-        <DialogTitle>Export Product Summary</DialogTitle>
+        <DialogTitle>Product Summary</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Choose the order date range. Pending orders in this range will be aggregated into the product summary Excel.
+            Choose the order date range for Excel download. Publish refreshes the purchase list for
+            the selected dates: same-day runs merge into the open list (need increases, found qty
+            kept, submitted manufacturer groups reopen when more is needed). Auto jobs run daily at
+            12:00 &amp; 15:00 IST.
           </Typography>
           <Box display="flex" gap={2} flexWrap="wrap" sx={{ pt: 1 }}>
             <TextField
@@ -750,7 +795,7 @@ export const OrdersPage: React.FC = () => {
                 setProductSummaryDialog((prev) => ({ ...prev, fromDate: e.target.value }))
               }
               InputLabelProps={{ shrink: true }}
-              disabled={isExportingProductSummary}
+              disabled={isExportingProductSummary || isPublishingPurchaseList}
               sx={{ minWidth: 180 }}
             />
             <TextField
@@ -761,29 +806,43 @@ export const OrdersPage: React.FC = () => {
                 setProductSummaryDialog((prev) => ({ ...prev, toDate: e.target.value }))
               }
               InputLabelProps={{ shrink: true }}
-              disabled={isExportingProductSummary}
+              disabled={isExportingProductSummary || isPublishingPurchaseList}
               sx={{ minWidth: 180 }}
             />
           </Box>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ flexWrap: 'wrap', gap: 1 }}>
           <Button
             onClick={() => setProductSummaryDialog((prev) => ({ ...prev, open: false }))}
-            disabled={isExportingProductSummary}
+            disabled={isExportingProductSummary || isPublishingPurchaseList}
           >
             Cancel
           </Button>
           <Button
-            variant="contained"
+            variant="outlined"
             startIcon={<Download />}
             onClick={() => void handleExportPendingProductSummary()}
             disabled={
               isExportingProductSummary ||
+              isPublishingPurchaseList ||
               !productSummaryDialog.fromDate ||
               !productSummaryDialog.toDate
             }
           >
             {isExportingProductSummary ? 'Exporting...' : 'Download Excel'}
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<Publish />}
+            onClick={() => void handlePublishPurchaseList()}
+            disabled={
+              isExportingProductSummary ||
+              isPublishingPurchaseList ||
+              !productSummaryDialog.fromDate ||
+              !productSummaryDialog.toDate
+            }
+          >
+            {isPublishingPurchaseList ? 'Publishing...' : 'Publish to Purchase App'}
           </Button>
         </DialogActions>
       </Dialog>

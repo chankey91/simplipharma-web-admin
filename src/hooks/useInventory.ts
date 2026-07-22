@@ -3,6 +3,7 @@ import {
   getAllMedicines,
   getAllMedicinesMasterOnly,
   getMedicineById,
+  getMedicinesByIdsWithBatches,
   getMedicineBatches,
   updateMedicineStock, 
   addStockBatch,
@@ -42,6 +43,17 @@ export const useMedicine = (medicineId: string | undefined) => {
     queryKey: ['medicines', medicineId],
     queryFn: () => getMedicineById(medicineId!),
     enabled: !!medicineId,
+    staleTime: 30 * 1000,
+  });
+};
+
+/** Order fulfillment — only medicines on the order (not the full catalog). */
+export const useMedicinesForOrder = (medicineIds: string[]) => {
+  const key = [...new Set(medicineIds.filter(Boolean))].sort().join(',');
+  return useQuery({
+    queryKey: ['medicines', 'forOrder', key],
+    queryFn: () => getMedicinesByIdsWithBatches(medicineIds),
+    enabled: key.length > 0,
     staleTime: 30 * 1000,
   });
 };

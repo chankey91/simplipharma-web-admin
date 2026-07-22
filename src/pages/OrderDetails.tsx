@@ -70,7 +70,7 @@ import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft
 import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
-import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
+import { useMedicinesForOrder, useCreateMedicine } from '../hooks/useInventory';
 import { useProductDemandsForOrder } from '../hooks/useProductDemands';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
@@ -369,6 +369,8 @@ function mapRepairedLineToFulfillment(
   };
 }
 
+const EMPTY_MEDICINES: Medicine[] = [];
+
 export const OrderDetailsPage: React.FC = () => {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
@@ -380,7 +382,16 @@ export const OrderDetailsPage: React.FC = () => {
   // Only Pending orders hold soft batch reservations (via their fulfillment
   // drafts), so scope this instead of downloading the whole orders collection.
   const { data: allOrders } = useOrdersByStatuses(['Pending']);
-  const { data: medicines, isLoading: medicinesLoading } = useMedicines();
+  const lineMedicineIds = useMemo(
+    () =>
+      (order?.medicines ?? [])
+        .map((m) => m.medicineId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    [order?.medicines]
+  );
+  const { data: orderMedicines, isLoading: orderMedicinesLoading } =
+    useMedicinesForOrder(lineMedicineIds);
+  const medicines = orderMedicines ?? EMPTY_MEDICINES;
   const lineDemandIds = useMemo(
     () =>
       (order?.medicines ?? [])
@@ -396,8 +407,9 @@ export const OrderDetailsPage: React.FC = () => {
     }
     return m;
   }, [productDemands]);
-  const { data: purchaseInvoices, isLoading: purchaseInvoicesLoading } = usePurchaseInvoices();
-  const purchaseInvoicesList = purchaseInvoices || [];
+  // Load in background — do not block order page on the full purchase-invoice collection.
+  const { data: purchaseInvoices } = usePurchaseInvoices();
+  const purchaseInvoicesList = purchaseInvoices ?? [];
   const purchaseDiscountLookup = useMemo(
     () => buildPurchaseBatchDiscountLookup(purchaseInvoices || []),
     [purchaseInvoices]
@@ -647,7 +659,7 @@ export const OrderDetailsPage: React.FC = () => {
   }, [leaveBlocker.state, confirmLeaveIfNeeded, leaveBlocker]);
 
   useEffect(() => {
-    if (!order || !medicines || purchaseInvoices === undefined) return;
+    if (!order || orderMedicinesLoading) return;
 
     // Fulfilled+: load lines once. Re-running on every PI/medicines update remounted Disc %
     // and made totals look like they were flipping custom ↔ default.
@@ -1179,7 +1191,7 @@ export const OrderDetailsPage: React.FC = () => {
     markFulfillmentDirty,
   ]);
 
-  if (isLoading || medicinesLoading || purchaseInvoicesLoading) {
+  if (isLoading || orderMedicinesLoading) {
     return <Loading message="Loading order details..." />;
   }
 
