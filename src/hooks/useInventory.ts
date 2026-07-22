@@ -45,11 +45,13 @@ export const useMedicinesByIds = (
   medicineIds: string[] | undefined,
   options?: { fresh?: boolean }
 ) => {
-  const sortedKey = [...new Set((medicineIds ?? []).filter(Boolean))].sort().join(',');
+  const ids = [...new Set((medicineIds ?? []).filter(Boolean))].sort();
+  const sortedKey = ids.join(',');
   return useQuery({
     queryKey: ['medicines', 'byIds', sortedKey],
-    queryFn: () => getMedicinesByIdsWithBatches(sortedKey ? sortedKey.split(',') : []),
-    enabled: sortedKey.length > 0,
+    queryFn: () => getMedicinesByIdsWithBatches(ids),
+    // Always enabled: empty id list resolves to [] so callers are not stuck on `undefined`.
+    enabled: true,
     staleTime: options?.fresh ? 0 : 30 * 1000,
     refetchOnMount: options?.fresh ? 'always' : true,
   });
