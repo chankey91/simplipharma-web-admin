@@ -190,18 +190,20 @@ export async function searchMedicinesTypesenseAdmin(
   }
 }
 
-/** After picking from index-only search, merge with master list or one Firestore read for GST, batches, etc. */
+/** After picking from index-only search, load full Firestore doc (incl. batches) when cache is master-only. */
 export async function resolveMedicineAfterPickerSelection(
   picked: Medicine,
   masterList: Medicine[] | undefined
 ): Promise<Medicine> {
   const cached = masterList?.find((m) => m.id === picked.id);
-  if (cached) return cached;
+  // Master-only catalog has no stockBatches array — always hydrate for PI / fulfillment pickers.
+  if (cached && Array.isArray(cached.stockBatches)) return cached;
   try {
     const full = await getMedicineById(picked.id);
     if (full) return full;
   } catch {
     // ignore
   }
+  if (cached) return cached;
   return { ...picked, gstRate: picked.gstRate ?? 5, category: picked.category || '' };
 }

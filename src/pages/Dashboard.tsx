@@ -38,7 +38,7 @@ import {
 import { alpha, useTheme } from '@mui/material/styles';
 import { useOrderDashboardStats, useRecentOrders } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
-import { useMedicines } from '../hooks/useInventory';
+import { useMedicinesMaster } from '../hooks/useInventory';
 import { filterExpiringMedicines, filterExpiredMedicines } from '../services/inventory';
 import { usePendingRetailerRequests } from '../hooks/usePendingRetailers';
 import { useCreditNoteTotals, useDebitNoteTotals } from '../hooks/useCreditNotes';
@@ -168,9 +168,8 @@ export const DashboardPage: React.FC = () => {
     isLoading: medicinesLoading,
     isError: medicinesError,
     refetch: refetchMedicines,
-  } = useMedicines();
-  // Derive expiry buckets from the already-cached medicines list instead of
-  // issuing two more full-collection reads for the same data.
+  } = useMedicinesMaster();
+  // Derive expiry buckets from master list (nearestExpiry) — no second full catalog read.
   const expiringMedicines = useMemo(
     () => (medicines ? filterExpiringMedicines(medicines, 30) : undefined),
     [medicines]

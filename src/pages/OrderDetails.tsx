@@ -70,7 +70,7 @@ import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft
 import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
-import { useMedicines, useCreateMedicine } from '../hooks/useInventory';
+import { useMedicinesByIds, useCreateMedicine } from '../hooks/useInventory';
 import { useProductDemandsForOrder } from '../hooks/useProductDemands';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
@@ -380,7 +380,6 @@ export const OrderDetailsPage: React.FC = () => {
   // Only Pending orders hold soft batch reservations (via their fulfillment
   // drafts), so scope this instead of downloading the whole orders collection.
   const { data: allOrders } = useOrdersByStatuses(['Pending']);
-  const { data: medicines, isLoading: medicinesLoading } = useMedicines();
   const lineDemandIds = useMemo(
     () =>
       (order?.medicines ?? [])
@@ -557,6 +556,22 @@ export const OrderDetailsPage: React.FC = () => {
   });
   /** Tracks which order id has had fulfillment lines synced (avoids empty table on first paint). */
   const [fulfillmentInitOrderId, setFulfillmentInitOrderId] = useState<string | null>(null);
+
+  // Only load medicines (with batches) for this order's line IDs — not the full catalog.
+  const medicineIdsForOrder = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of order?.medicines ?? []) {
+      if (m.medicineId) ids.add(m.medicineId);
+    }
+    for (const m of fulfillmentData.medicines ?? []) {
+      if (m?.medicineId) ids.add(String(m.medicineId));
+    }
+    return [...ids];
+  }, [order?.medicines, fulfillmentData.medicines]);
+
+  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(
+    medicineIdsForOrder.length > 0 ? medicineIdsForOrder : undefined
+  );
 
   // Batch allocation dialog state
   const [batchAllocationDialog, setBatchAllocationDialog] = useState<{
