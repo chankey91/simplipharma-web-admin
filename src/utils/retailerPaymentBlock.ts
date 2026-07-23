@@ -14,6 +14,15 @@ function toDate(v: unknown): Date | null {
     const d = (v as { toDate: () => Date }).toDate();
     return d instanceof Date && !isNaN(d.getTime()) ? d : null;
   }
+  const raw = v as { seconds?: number; _seconds?: number };
+  if (typeof raw?.seconds === 'number') {
+    const d = new Date(raw.seconds * 1000);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof raw?._seconds === 'number') {
+    const d = new Date(raw._seconds * 1000);
+    return isNaN(d.getTime()) ? null : d;
+  }
   const d = new Date(v as string | number);
   return isNaN(d.getTime()) ? null : d;
 }
