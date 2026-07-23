@@ -35,6 +35,7 @@ import {
   PhotoCamera,
   History,
   LockReset,
+  Download,
 } from '@mui/icons-material';
 import { RetailerVisitLogDialog } from '../components/RetailerVisitLogDialog';
 import {
@@ -58,6 +59,7 @@ import {
   checkLicenseAndAadharUnique,
   resolveRetailerImageUrl,
 } from '../services/retailerDocuments';
+import { exportRetailersWithSalesOfficers } from '../utils/export';
 import { format } from 'date-fns';
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -117,6 +119,7 @@ export const StoresPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
 
   const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
 
   const salesOfficerNameById = useMemo(() => {
@@ -532,15 +535,41 @@ export const StoresPage: React.FC = () => {
     }
   };
 
+  const handleExportRetailers = async () => {
+    if (sortedStores.length === 0) {
+      await alert('No retailers found to export', { severity: 'warning' });
+      return;
+    }
+    setIsExporting(true);
+    try {
+      await exportRetailersWithSalesOfficers(sortedStores, salesOfficers);
+    } catch (error: any) {
+      console.error('Error exporting retailers:', error);
+      await alert(`Failed to export: ${error.message || 'Unknown error'}`, { severity: 'error' });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   if (isLoading) return <Loading message="Loading stores..." />;
 
   return (
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Store Management</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={handleOpenCreate}>
-          Add Store
-        </Button>
+        <Box display="flex" gap={1}>
+          <Button
+            variant="outlined"
+            startIcon={<Download />}
+            onClick={() => void handleExportRetailers()}
+            disabled={isExporting || sortedStores.length === 0}
+          >
+            {isExporting ? 'Exporting…' : 'Export'}
+          </Button>
+          <Button variant="contained" startIcon={<Add />} onClick={handleOpenCreate}>
+            Add Store
+          </Button>
+        </Box>
       </Box>
 
       <Box
