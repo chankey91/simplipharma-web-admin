@@ -379,9 +379,10 @@ export const OrderDetailsPage: React.FC = () => {
   const { setGuardActive, allowNextNavigation, guardedNavigate, confirmLeaveIfNeeded } =
     useFulfillmentLeaveGuard();
   const { data: order, isLoading } = useOrder(orderId || '');
-  // Only Pending orders hold soft batch reservations (via their fulfillment
-  // drafts), so scope this instead of downloading the whole orders collection.
-  const { data: allOrders } = useOrdersByStatuses(['Pending']);
+  // Only Pending orders need soft batch-reservation scans — skip until we know status is Pending.
+  const { data: allOrders } = useOrdersByStatuses(['Pending'], {
+    enabled: order?.status === 'Pending',
+  });
   const lineDemandIds = useMemo(
     () =>
       (order?.medicines ?? [])
@@ -397,6 +398,7 @@ export const OrderDetailsPage: React.FC = () => {
     }
     return m;
   }, [productDemands]);
+  // Cached globally (long staleTime) — do not block first paint on this.
   const { data: purchaseInvoices } = usePurchaseInvoices();
   const purchaseInvoicesList = purchaseInvoices || [];
   const purchaseDiscountLookup = useMemo(
@@ -565,20 +567,20 @@ export const OrderDetailsPage: React.FC = () => {
   const [fulfillmentInitOrderId, setFulfillmentInitOrderId] = useState<string | null>(null);
 
   // Only load medicines (with batches) for this order's line IDs — not the full catalog.
+  // `undefined` until order is loaded so we do not fire an empty fetch then a second fetch.
   const medicineIdsForOrder = useMemo(() => {
+    if (!order) return undefined;
     const ids = new Set<string>();
-    for (const m of order?.medicines ?? []) {
+    for (const m of order.medicines ?? []) {
       if (m.medicineId) ids.add(m.medicineId);
     }
     for (const m of fulfillmentData.medicines ?? []) {
       if (m?.medicineId) ids.add(String(m.medicineId));
     }
     return [...ids];
-  }, [order?.medicines, fulfillmentData.medicines]);
+  }, [order, fulfillmentData.medicines]);
 
-  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(
-    medicineIdsForOrder
-  );
+  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(medicineIdsForOrder);
 
   // Batch allocation dialog state
   const [batchAllocationDialog, setBatchAllocationDialog] = useState<{
@@ -1217,7 +1219,7 @@ export const OrderDetailsPage: React.FC = () => {
     markFulfillmentDirty,
   ]);
 
-  if (isLoading || medicinesLoading) {
+  if (isLoading || (Boolean(orderId) && (medicines === undefined || medicinesLoading))) {
     return <Loading message="Loading order details..." />;
   }
 

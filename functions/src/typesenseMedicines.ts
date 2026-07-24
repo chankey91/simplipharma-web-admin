@@ -355,7 +355,8 @@ export const searchMedicinesTypesense = functions
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
-    const query = String(data.query || '').trim();
+    // Lowercase to match search_blob indexing and avoid case-sensitive misses (e.g. CROCIN vs Crocin).
+    const query = String(data.query || '').trim().toLowerCase();
     const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
     /** `strict !== true` (default unless explicitly `true`): prefix + extra typos + split_join_tokens — aligns with retailer mobile fallback. Admin panels pass `{ strict: true }`. */
     const strict = data.strict === true;

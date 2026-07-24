@@ -163,7 +163,7 @@ export async function searchMedicinesTypesenseAdmin(
   query: string,
   opts?: SearchMedicinesOptions
 ): Promise<Medicine[]> {
-  const q = query.trim();
+  const q = query.trim().toLowerCase();
   if (q.length < 2) return [];
   const hydrate = opts?.hydrate ?? true;
   const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 120);

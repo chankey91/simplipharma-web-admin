@@ -43,17 +43,20 @@ export const useMedicinesMaster = (options?: { fresh?: boolean }) => {
 /** Load specific medicines with stockBatches (order fulfillment, margin for those SKUs). */
 export const useMedicinesByIds = (
   medicineIds: string[] | undefined,
-  options?: { fresh?: boolean }
+  options?: { fresh?: boolean; enabled?: boolean }
 ) => {
   const ids = [...new Set((medicineIds ?? []).filter(Boolean))].sort();
   const sortedKey = ids.join(',');
+  // `undefined` = caller not ready yet (e.g. order still loading) — do not fetch [].
+  // `[]` = ready, no medicine ids — resolve empty list.
+  const idsReady = medicineIds !== undefined;
   return useQuery({
     queryKey: ['medicines', 'byIds', sortedKey],
     queryFn: () => getMedicinesByIdsWithBatches(ids),
-    // Always enabled: empty id list resolves to [] so callers are not stuck on `undefined`.
-    enabled: true,
-    staleTime: options?.fresh ? 0 : 30 * 1000,
-    refetchOnMount: options?.fresh ? 'always' : true,
+    enabled: (options?.enabled ?? true) && idsReady,
+    staleTime: options?.fresh ? 0 : 2 * 60 * 1000,
+    refetchOnMount: options?.fresh ? 'always' : false,
+    refetchOnWindowFocus: false,
   });
 };
 
