@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -40,7 +40,7 @@ import {
   QrCode,
 } from '@mui/icons-material';
 import { useVendors } from '../hooks/useVendors';
-import { useMedicinesMaster, useCreateMedicine, useMedicine } from '../hooks/useInventory';
+import { useCreateMedicine, useMedicine } from '../hooks/useInventory';
 import { useCreatePurchaseInvoice, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
@@ -50,11 +50,10 @@ import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
 import {
-  searchMedicinesTypesenseAdmin,
   resolveMedicineAfterPickerSelection,
-  refineMedicineSearchResults,
+  findMedicineByExactName,
 } from '../services/medicineSearch';
-import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { getTodayDateStringIST, getYearIST } from '../utils/dateTime';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
@@ -108,10 +107,33 @@ function parseExpiryMmYy(value: string): ExpiryParseResult {
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
   const { data: vendors } = useVendors();
-  const { data: medicines } = useMedicinesMaster();
   const createMedicineMutation = useCreateMedicine();
   const createInvoiceMutation = useCreatePurchaseInvoice();
   const { alert, confirm, prompt } = useAppDialog();
+
+  /** Session cache of medicines touched this visit — never load the full catalog. */
+  const [medicineCache, setMedicineCache] = useState<Record<string, Medicine>>({});
+  const rememberMedicines = useCallback((rows: Medicine[]) => {
+    if (!rows.length) return;
+    setMedicineCache((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const m of rows) {
+        if (!m?.id) continue;
+        if (!next[m.id]) {
+          next[m.id] = m;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+  const rememberMedicine = useCallback(
+    (m: Medicine | null | undefined) => {
+      if (m?.id) rememberMedicines([m]);
+    },
+    [rememberMedicines]
+  );
 
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: '',
@@ -181,27 +203,59 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [expiryDateError, setExpiryDateError] = useState<string>('');
 
   const [medicineSearchInput, setMedicineSearchInput] = useState('');
-  const [medicineSearchHits, setMedicineSearchHits] = useState<Medicine[]>([]);
-  const [medicineSearchLoading, setMedicineSearchLoading] = useState(false);
-  const medicineSearchSeq = useRef(0);
   const medicineSearchInputElRef = useRef<HTMLInputElement | null>(null);
   const savingInvoiceRef = useRef(false);
-
-  const [addMedicineSearchHits, setAddMedicineSearchHits] = useState<Medicine[]>([]);
-  const addMedicineSearchSeq = useRef(0);
-
-  const medicineSearchInputRef = useRef(medicineSearchInput);
-  medicineSearchInputRef.current = medicineSearchInput;
-  const newMedicineNameRef = useRef(newMedicineData.name);
-  newMedicineNameRef.current = newMedicineData.name;
 
   // Batches for the line being edited (master list has no stockBatches).
   const { data: currentItemMedicineFull } = useMedicine(
     currentItem.medicineId ? String(currentItem.medicineId) : undefined
   );
 
+  useEffect(() => {
+    if (currentItemMedicineFull) rememberMedicine(currentItemMedicineFull);
+  }, [currentItemMedicineFull, rememberMedicine]);
+
+  const lookupMedicine = useCallback(
+    (id: string | undefined | null): Medicine | undefined => {
+      if (!id) return undefined;
+      if (selectedMedicine?.id === id) return selectedMedicine;
+      if (currentItemMedicineFull?.id === id) return currentItemMedicineFull;
+      return medicineCache[id];
+    },
+    [medicineCache, selectedMedicine, currentItemMedicineFull]
+  );
+
   const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
   const isSavingInvoice = createInvoiceMutation.isPending;
+
+  const mainSkip =
+    selectedMedicine != null ? getMedicinePickerLabel(selectedMedicine) : undefined;
+  const {
+    medicines: medicineSearchHits,
+    loading: medicineSearchLoading,
+  } = useMedicineSearch(medicineSearchInput, {
+    hydrate: false,
+    limit: 40,
+    strict: true,
+    skipQuery: mainSkip,
+  });
+
+  const {
+    medicines: addMedicineSearchHits,
+  } = useMedicineSearch(newMedicineData.name, {
+    hydrate: false,
+    limit: 40,
+    strict: true,
+    enabled: addMedicineDialog,
+  });
+
+  useEffect(() => {
+    rememberMedicines(medicineSearchHits);
+  }, [medicineSearchHits, rememberMedicines]);
+
+  useEffect(() => {
+    rememberMedicines(addMedicineSearchHits);
+  }, [addMedicineSearchHits, rememberMedicines]);
 
   useEffect(() => {
     const t = window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 0);
@@ -212,69 +266,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 100);
   };
 
-  useEffect(() => {
-    const trimmed = medicineSearchInput.trim();
-    if (trimmed.length < 2) {
-      medicineSearchSeq.current += 1;
-      setMedicineSearchHits([]);
-      setMedicineSearchLoading(false);
-      return;
-    }
-    // After a selection, input is the long label ("Name (code) - mfr"). Do not search on that string.
-    if (
-      selectedMedicine &&
-      trimmed === getMedicinePickerLabel(selectedMedicine).trim()
-    ) {
-      medicineSearchSeq.current += 1;
-      setMedicineSearchLoading(false);
-      return;
-    }
-    const seq = ++medicineSearchSeq.current;
-    setMedicineSearchHits([]);
-    setMedicineSearchLoading(true);
-    const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
-        .then((rows) => {
-          if (medicineSearchSeq.current !== seq) return;
-          if (medicineSearchInputRef.current.trim() !== trimmed) return;
-          setMedicineSearchHits(rows);
-        })
-        .finally(() => {
-          if (medicineSearchSeq.current === seq) {
-            setMedicineSearchLoading(false);
-          }
-        });
-    }, MEDICINE_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [medicineSearchInput, selectedMedicine]);
-
-  useEffect(() => {
-    if (!addMedicineDialog) {
-      addMedicineSearchSeq.current += 1;
-      setAddMedicineSearchHits([]);
-      return;
-    }
-    const q = newMedicineData.name.trim();
-    if (q.length < 2) {
-      addMedicineSearchSeq.current += 1;
-      setAddMedicineSearchHits([]);
-      return;
-    }
-    const seq = ++addMedicineSearchSeq.current;
-    setAddMedicineSearchHits([]);
-    const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(q, { hydrate: false, limit: 40, strict: true }).then((rows) => {
-        if (addMedicineSearchSeq.current !== seq) return;
-        if (newMedicineNameRef.current.trim() !== q) return;
-        setAddMedicineSearchHits(rows);
-      });
-    }, MEDICINE_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [addMedicineDialog, newMedicineData.name]);
-
   const purchaseMedicineOptions = useMemo(() => {
     const q = medicineSearchInput.trim();
-    const all = medicines || [];
 
     if (
       selectedMedicine &&
@@ -284,28 +277,23 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     if (q.length >= 2) {
-      let list = refineMedicineSearchResults(medicineSearchHits, q, all);
+      const list = medicineSearchHits;
       if (selectedMedicine && !list.some((m) => m.id === selectedMedicine.id)) {
         return [selectedMedicine, ...list];
       }
       return list;
     }
 
-    if (selectedMedicine && !all.some((m) => m.id === selectedMedicine.id)) {
-      return [selectedMedicine];
-    }
-    return [];
-  }, [medicineSearchInput, medicineSearchHits, medicines, selectedMedicine]);
+    return selectedMedicine ? [selectedMedicine] : [];
+  }, [medicineSearchInput, medicineSearchHits, selectedMedicine]);
 
   const addMedicineOptions = useMemo(() => {
     const q = newMedicineData.name.trim();
-    const all = medicines || [];
-
     if (q.length >= 2) {
-      return refineMedicineSearchResults(addMedicineSearchHits, q, all);
+      return addMedicineSearchHits;
     }
     return [];
-  }, [newMedicineData.name, addMedicineSearchHits, medicines]);
+  }, [newMedicineData.name, addMedicineSearchHits]);
 
   const calculateTotals = () => {
     // Calculate subtotal: sum of (purchasePrice * quantity) for all items
@@ -361,7 +349,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const getCurrentItemGstRate = () => {
-    const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+    const selectedMed = lookupMedicine(currentItem.medicineId);
     return selectedMed?.gstRate || parseNumber(currentItem.gstRate) || 5;
   };
 
@@ -394,7 +382,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const medicine =
       (selectedMedicine?.id === medicineId ? selectedMedicine : undefined) ||
       (currentItemMedicineFull?.id === medicineId ? currentItemMedicineFull : undefined) ||
-      medicines?.find((m) => m.id === medicineId);
+      lookupMedicine(medicineId);
     return medicine?.stockBatches?.find(
       (b) => String(b.batchNumber || '').trim().toLowerCase() === key
     );
@@ -403,7 +391,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const existingBatchForCurrentItem = useMemo(
     () => findExistingStockBatch(currentItem.medicineId, String(currentItem.batchNumber || '')),
     [
-      medicines,
+      medicineCache,
       selectedMedicine,
       currentItemMedicineFull,
       currentItem.medicineId,
@@ -419,7 +407,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const batch = findExistingStockBatch(currentItem.medicineId, batchNumber);
     if (!batch) return;
 
-    const medicine = medicines?.find((m) => m.id === currentItem.medicineId);
+    const medicine = lookupMedicine(currentItem.medicineId);
     const gstRate = medicine?.gstRate || 5;
     const mrp = batch.mrp && batch.mrp > 0 ? batch.mrp : 0;
     let purchasePrice =
@@ -542,7 +530,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const purchasePrice = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
     const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
     // Get GST rate from medicine master data (from selectedMedicine)
-    const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+    const selectedMed = lookupMedicine(currentItem.medicineId);
     const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
     const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
     
@@ -610,7 +598,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     setItemDialog({ open: false, itemIndex: null });
     setSelectedMedicine(null);
     setMedicineSearchInput('');
-    setMedicineSearchHits([]);
     focusMedicineSearch();
     setExpiryDateError(''); // Clear error when dialog closes
     setCurrentItem({
@@ -692,13 +679,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     try {
-      // Check if medicine with same name already exists
-      const existingMedicine = medicines?.find(
-        m => m.name.toLowerCase().trim() === newMedicineData.name.toLowerCase().trim()
-      );
-      
+      // Check if medicine with same name already exists (Typesense — no full catalog scan)
+      const existingMedicine = await findMedicineByExactName(newMedicineData.name);
+
       if (existingMedicine) {
-        // Medicine already exists - use the existing one
+        rememberMedicine(existingMedicine);
         setSelectedMedicine(existingMedicine);
         setAddMedicineDialog(false);
         setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
@@ -720,16 +705,20 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         description: `Packaging: ${newMedicineData.packaging}`,
       });
 
-      const newMedicine = medicines?.find(m => m.id === medicineId) || {
+      const newMedicine = {
         id: medicineId,
         name: newMedicineData.name,
         code: newMedicineData.code,
         category: newMedicineData.type,
         manufacturer: newMedicineData.manufacturer,
         unit: newMedicineData.packaging,
+        stock: 0,
+        price: 0,
+        gstRate: newMedicineData.gstRate ? parseFloat(newMedicineData.gstRate) : 5,
       } as Medicine;
 
-      setSelectedMedicine(newMedicine as Medicine);
+      rememberMedicine(newMedicine);
+      setSelectedMedicine(newMedicine);
       setAddMedicineDialog(false);
       setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
     } catch (error: any) {
@@ -929,14 +918,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     setMedicineSearchInput(newInputValue);
                   }}
                   onChange={(_, newValue) => {
-                    setMedicineSearchHits([]);
                     if (!newValue) {
                       setSelectedMedicine(null);
                       setMedicineSearchInput('');
                       return;
                     }
-                    void resolveMedicineAfterPickerSelection(newValue, medicines ?? undefined).then(
+                    void resolveMedicineAfterPickerSelection(newValue, undefined).then(
                       (merged) => {
+                        rememberMedicine(merged);
                         setSelectedMedicine(merged);
                         setMedicineSearchInput(getMedicinePickerLabel(merged));
                       }
@@ -1265,7 +1254,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 type="number"
                 value={(() => {
                   // Get GST rate from medicine master data
-                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+                  const selectedMed = lookupMedicine(currentItem.medicineId);
                   return selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
                 })()}
                 InputProps={{ 
@@ -1342,7 +1331,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
                   const price = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
                   // Get GST rate from medicine master data
-                  const selectedMed = medicines?.find(m => m.id === currentItem.medicineId);
+                  const selectedMed = lookupMedicine(currentItem.medicineId);
                   const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
                   const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
                   
@@ -1424,9 +1413,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 onChange={(_, newValue) => {
                   if (newValue && typeof newValue === 'object') {
                     const selectedMed = newValue as Medicine;
-                    setAddMedicineSearchHits([]);
-                    void resolveMedicineAfterPickerSelection(selectedMed, medicines ?? undefined).then(
+                    void resolveMedicineAfterPickerSelection(selectedMed, undefined).then(
                       (merged) => {
+                        rememberMedicine(merged);
                         setNewMedicineData({
                           name: merged.name || '',
                           code: merged.code || '',

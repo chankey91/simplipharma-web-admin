@@ -12,6 +12,7 @@ import {
   deleteDoc,
   writeBatch,
   deleteField,
+  limit,
   db,
 } from './firebase';
 import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
@@ -568,6 +569,36 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
   return masterFromDoc(medicineDoc, batches);
 };
 
+/**
+ * Resolve a medicine by on-hand batch number via medicineBatches (scales; no full-catalog scan).
+ * Prefers a unique match; if multiple medicines share the batch string, returns the first.
+ */
+export const findMedicineByBatchNumberQuery = async (
+  batchNumber: string
+): Promise<Medicine | null> => {
+  const key = batchNumber.trim();
+  if (!key) return null;
+  const variants = [...new Set([key, key.toUpperCase(), key.toLowerCase()])];
+  for (const variant of variants) {
+    const snap = await getDocs(
+      query(
+        collection(db, MEDICINE_BATCHES_COLLECTION),
+        where('batchNumber', '==', variant),
+        limit(5)
+      )
+    );
+    if (snap.empty) continue;
+    const medicineIds = [
+      ...new Set(snap.docs.map((d) => String(d.data().medicineId || '')).filter(Boolean)),
+    ];
+    if (medicineIds.length === 0) continue;
+    if (medicineIds.length === 1) return getMedicineById(medicineIds[0]);
+    // Ambiguous batch — skip rather than guess wrong SKU
+    return null;
+  }
+  return null;
+};
+
 /** Hydrate specific medicines with batches (order fulfillment). Batched Firestore reads. */
 export const getMedicinesByIdsWithBatches = async (
   medicineIds: string[]
@@ -829,14 +860,29 @@ export const filterExpiredMedicines = (medicines: Medicine[]): Medicine[] => {
   });
 };
 
-export const getExpiringMedicines = async (days: number = 30): Promise<Medicine[]> => {
-  const medicines = await getAllMedicinesMasterOnly();
-  return filterExpiringMedicines(medicines, days);
+export const getExpiringMedicines = async (_days: number = 30): Promise<Medicine[]> => {
+  // Uses Typesense browse + expiryFilter (30-day window on the search API). No full catalog download.
+  const { searchMedicinesCatalog } = await import('./medicineSearch');
+  const res = await searchMedicinesCatalog('', {
+    browse: true,
+    hydrate: false,
+    limit: 120,
+    page: 1,
+    expiryFilter: 'expiring',
+  });
+  return res.medicines;
 };
 
 export const getExpiredMedicines = async (): Promise<Medicine[]> => {
-  const medicines = await getAllMedicinesMasterOnly();
-  return filterExpiredMedicines(medicines);
+  const { searchMedicinesCatalog } = await import('./medicineSearch');
+  const res = await searchMedicinesCatalog('', {
+    browse: true,
+    hydrate: false,
+    limit: 120,
+    page: 1,
+    expiryFilter: 'expired',
+  });
+  return res.medicines;
 };
 
 export const updateMedicine = async (

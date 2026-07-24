@@ -1818,6 +1818,7 @@ export {
   onMedicineWriteTypesense,
   searchMedicinesTypesense,
   adminReindexMedicinesTypesense,
+  adminSyncMedicineSynonymsTypesense,
 } from './typesenseMedicines';
 
 export {

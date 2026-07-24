@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, startTransition } from 'react';
 import {
   Box,
   Typography,
@@ -16,8 +16,6 @@ import {
   Chip,
   Alert,
   Grid,
-  Card,
-  CardContent,
   MenuItem,
   FormControl,
   InputLabel,
@@ -28,6 +26,7 @@ import {
   DialogContent,
   DialogActions,
   LinearProgress,
+  CircularProgress,
 } from '@mui/material';
 import {
   Search,
@@ -37,57 +36,41 @@ import {
   CloudSync,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
-import { useMedicinesMaster } from '../hooks/useInventory';
-import {
-  filterExpiringMedicines,
-  filterExpiredMedicines,
-} from '../services/inventory';
-import { searchMedicinesTypesenseAdmin } from '../services/medicineSearch';
-import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
-import type { Medicine } from '../types';
-import { format } from 'date-fns';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { categoriesMatch } from '../utils/categoryMatch';
+import { searchMedicinesCatalog } from '../services/medicineSearch';
+import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
-import { applyDirection, compareAsc } from '../utils/tableSort';
 import * as XLSX from 'xlsx';
 import { doc, setDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes } from 'firebase/storage';
 import { auth, db, storage, functions } from '../services/firebase';
 import { httpsCallable } from 'firebase/functions';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
-  const { data: medicines, isLoading } = useMedicinesMaster();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  
+
   const [searchTerm, setSearchTerm] = useState('');
-  const [typesenseHits, setTypesenseHits] = useState<Medicine[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const searchSeq = useRef(0);
-  const searchTermRef = useRef(searchTerm);
-  searchTermRef.current = searchTerm;
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [manufacturerFilter, setManufacturerFilter] = useState<string>('All');
   const [stockFilter, setStockFilter] = useState<string>('All');
+  const [page, setPage] = useState(1);
+  const [rowsPerPage] = useState(10);
+  const { sortKey, sortDirection, requestSort } = useTableSort('name', 'asc');
 
-  const medicinesById = useMemo(() => {
-    const map = new Map<string, Medicine>();
-    for (const m of medicines ?? []) map.set(m.id, m);
-    return map;
-  }, [medicines]);
+  const [expiredCount, setExpiredCount] = useState(0);
+  const [expiringCount, setExpiringCount] = useState(0);
 
-  const expiringMedicines = useMemo(
-    () => (medicines ? filterExpiringMedicines(medicines, 30) : undefined),
-    [medicines]
-  );
-  const expiredMedicines = useMemo(
-    () => (medicines ? filterExpiredMedicines(medicines) : undefined),
-    [medicines]
-  );
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [bulkPhase, setBulkPhase] = useState<'idle' | 'uploading' | 'running' | 'done' | 'error'>('idle');
+  const [jobStatusLine, setJobStatusLine] = useState('');
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+  const jobUnsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const q = searchParams.get('q');
@@ -100,47 +83,62 @@ export const InventoryPage: React.FC = () => {
     }
   }, [searchParams]);
 
-  // Same pattern as CreatePurchaseInvoice / StockUpdate: Typesense only, debounce + seq cancel.
-  // Do not depend on `medicines` (re-fires on every master refetch and freezes the UI).
-  useEffect(() => {
-    const trimmed = searchTerm.trim();
-    if (trimmed.length < 2) {
-      searchSeq.current += 1;
-      setTypesenseHits([]);
-      setSearchLoading(false);
-      return;
-    }
-    const seq = ++searchSeq.current;
-    setTypesenseHits([]);
-    setSearchLoading(true);
-    const t = window.setTimeout(() => {
-      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 80, strict: true })
-        .then((rows) => {
-          if (searchSeq.current !== seq) return;
-          if (searchTermRef.current.trim() !== trimmed) return;
-          setTypesenseHits(rows);
-        })
-        .catch(() => {
-          if (searchSeq.current === seq) setTypesenseHits([]);
-        })
-        .finally(() => {
-          if (searchSeq.current === seq) setSearchLoading(false);
-        });
-    }, MEDICINE_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [searchTerm]);
+  // Typesense-only list — never loads ~800k Firestore masters into the browser.
+  const typesenseSortKey =
+    sortKey === 'stock' || sortKey === 'manufacturer' || sortKey === 'name' ? sortKey : 'name';
 
-  const [page, setPage] = useState(1);
-  const [rowsPerPage] = useState(10);
-  const { sortKey, sortDirection, requestSort } = useTableSort('name', 'asc');
-  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  /** Client upload + server job lifecycle */
-  const [bulkPhase, setBulkPhase] = useState<'idle' | 'uploading' | 'running' | 'done' | 'error'>('idle');
-  const [jobStatusLine, setJobStatusLine] = useState('');
-  const [reindexing, setReindexing] = useState(false);
-  const [reindexMessage, setReindexMessage] = useState<string | null>(null);
-  const jobUnsubRef = useRef<(() => void) | null>(null);
+  const {
+    medicines: pageRows,
+    found,
+    facet_counts,
+    loading: searchLoading,
+  } = useMedicineSearch(searchTerm, {
+    browseWhenEmpty: true,
+    hydrate: false,
+    limit: rowsPerPage,
+    page,
+    strict: true,
+    category: categoryFilter,
+    manufacturer: manufacturerFilter,
+    stockFilter,
+    sortKey: searchTerm.trim().length >= 2 ? '_text_match' : typesenseSortKey,
+    sortDirection,
+    // Facets only needed for filter dropdowns while browsing — typed search matches PI path.
+    includeFacets: searchTerm.trim().length < 2,
+    debounceMs: searchTerm.trim().length >= 2 ? 350 : 50,
+  });
+
+  const categories = (facet_counts.category || []).map((c) => c.value).filter(Boolean);
+  const manufacturers = (facet_counts.manufacturer || []).map((c) => c.value).filter(Boolean);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [expired, expiring] = await Promise.all([
+        searchMedicinesCatalog('', {
+          browse: true,
+          hydrate: false,
+          limit: 1,
+          page: 1,
+          expiryFilter: 'expired',
+        }),
+        searchMedicinesCatalog('', {
+          browse: true,
+          hydrate: false,
+          limit: 1,
+          page: 1,
+          expiryFilter: 'expiring',
+        }),
+      ]);
+      if (!cancelled) {
+        setExpiredCount(expired.found);
+        setExpiringCount(expiring.found);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const stopJobListener = () => {
     jobUnsubRef.current?.();
@@ -162,119 +160,14 @@ export const InventoryPage: React.FC = () => {
     }
   }, [bulkUploadOpen]);
 
-  const categories = Array.from(new Set(medicines?.map(m => m.category).filter(Boolean) || []));
-
-  useEffect(() => {
-    if (categoryFilter === 'All' || !medicines?.length) return;
-    const list = Array.from(new Set(medicines.map((m) => m.category).filter(Boolean))) as string[];
-    if (list.some((c) => c === categoryFilter)) return;
-    const canon = list.find((c) => categoriesMatch(c, categoryFilter));
-    if (canon) setCategoryFilter(canon);
-  }, [medicines, categoryFilter]);
-
-  const manufacturers = useMemo(() => {
-    const set = new Set<string>();
-    medicines?.forEach((m) => {
-      const mf = String(m.manufacturer || m.company || '').trim();
-      if (mf) set.add(mf);
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-  }, [medicines]);
-
-  const filteredMedicines = useMemo(() => {
-    const trimmed = searchTerm.trim();
-    const searching = trimmed.length >= 2;
-
-    // While searching: only Typesense hits (merged with master stock). Never scan full catalog.
-    // While not searching: master list with category / manufacturer / stock filters only.
-    const source = searching
-      ? typesenseHits.map((r) => {
-          const master = medicinesById.get(r.id);
-          return master
-            ? {
-                ...r,
-                stock: master.stock,
-                currentStock: master.currentStock ?? master.stock,
-                nearestExpiry: master.nearestExpiry,
-                gstRate: master.gstRate ?? r.gstRate,
-                unit: master.unit ?? r.unit,
-                category: master.category || r.category,
-                manufacturer: master.manufacturer || r.manufacturer,
-                company: master.company ?? r.company,
-              }
-            : r;
-        })
-      : medicines ?? [];
-
-    return source.filter((medicine) => {
-      const matchesCategory =
-        categoryFilter === 'All' || categoriesMatch(medicine.category, categoryFilter);
-
-      const mfLabel = String(medicine.manufacturer || medicine.company || '').trim();
-      const matchesManufacturer =
-        manufacturerFilter === 'All' || mfLabel === manufacturerFilter;
-
-      const currentStock = medicine.currentStock ?? medicine.stock ?? 0;
-      const matchesStock =
-        stockFilter === 'All' ||
-        (stockFilter === 'Low' && currentStock < 10 && currentStock > 0) ||
-        (stockFilter === 'Out' && currentStock === 0) ||
-        (stockFilter === 'In Stock' && currentStock > 0);
-
-      return matchesCategory && matchesManufacturer && matchesStock;
-    });
-  }, [
-    medicines,
-    medicinesById,
-    typesenseHits,
-    searchTerm,
-    categoryFilter,
-    manufacturerFilter,
-    stockFilter,
-  ]);
-
-  const sortedMedicines = useMemo(() => {
-    const list = [...filteredMedicines];
-    list.sort((a, b) => {
-      switch (sortKey) {
-        case 'name':
-          return applyDirection(compareAsc(a.name, b.name), sortDirection);
-        case 'type':
-          return applyDirection(compareAsc(a.category, b.category), sortDirection);
-        case 'packaging':
-          return applyDirection(compareAsc(a.unit || '', b.unit || ''), sortDirection);
-        case 'manufacturer':
-          return applyDirection(
-            compareAsc(
-              (a.manufacturer || a.company || '').toLowerCase(),
-              (b.manufacturer || b.company || '').toLowerCase()
-            ),
-            sortDirection
-          );
-        case 'gst':
-          return applyDirection(compareAsc(a.gstRate ?? 5, b.gstRate ?? 5), sortDirection);
-        case 'stock':
-          return applyDirection(
-            compareAsc(a.currentStock ?? a.stock ?? 0, b.currentStock ?? b.stock ?? 0),
-            sortDirection
-          );
-        default:
-          return applyDirection(compareAsc(a.name, b.name), 'asc');
-      }
-    });
-    return list;
-  }, [filteredMedicines, sortKey, sortDirection]);
-
   const requestSortResetPage = (key: string) => {
     requestSort(key);
     setPage(1);
   };
 
-  // Pagination
-  const totalPages = Math.ceil(sortedMedicines.length / rowsPerPage);
-  const paginatedMedicines = sortedMedicines.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  const totalPages = Math.max(1, Math.ceil(found / rowsPerPage));
 
-  const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
+  const handlePageChange = (_event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
   };
 
@@ -288,7 +181,6 @@ export const InventoryPage: React.FC = () => {
     setReindexing(true);
     setReindexMessage(null);
     try {
-      // Server allows up to 540s; default client timeout is ~60s and causes deadline-exceeded.
       const fn = httpsCallable(functions, 'adminReindexMedicinesTypesense', {
         timeout: 600000,
       });
@@ -297,6 +189,7 @@ export const InventoryPage: React.FC = () => {
       setReindexMessage(
         `Search index updated: ${d.indexed ?? 0} documents indexed (${d.totalDocs ?? 0} Firestore docs scanned).`
       );
+      setPage(1);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       const hint =
@@ -310,26 +203,25 @@ export const InventoryPage: React.FC = () => {
   };
 
   const handleDownloadTemplate = () => {
-    // Create sample data for template
     const templateData = [
       {
         'Medicine Name': 'Paracetamol 500mg',
-        'Code': 'PARA500',
-        'Type': 'Tablet',
-        'Packaging': 'Strip of 10',
-        'Manufacturer': 'ABC Pharma',
+        Code: 'PARA500',
+        Type: 'Tablet',
+        Packaging: 'Strip of 10',
+        Manufacturer: 'ABC Pharma',
         'GST Rate (%)': 5,
-        'Description': 'Pain reliever'
+        Description: 'Pain reliever',
       },
       {
         'Medicine Name': 'Amoxicillin 250mg',
-        'Code': 'AMOX250',
-        'Type': 'Capsule',
-        'Packaging': 'Bottle of 15',
-        'Manufacturer': 'XYZ Pharma',
+        Code: 'AMOX250',
+        Type: 'Capsule',
+        Packaging: 'Bottle of 15',
+        Manufacturer: 'XYZ Pharma',
         'GST Rate (%)': 5,
-        'Description': 'Antibiotic'
-      }
+        Description: 'Antibiotic',
+      },
     ];
 
     const ws = XLSX.utils.json_to_sheet(templateData);
@@ -342,40 +234,15 @@ export const InventoryPage: React.FC = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const user = auth.currentUser;
-    if (!user) {
-      setUploadError('You must be signed in to run a bulk import.');
-      return;
-    }
-
     setUploadError(null);
     setBulkPhase('uploading');
-    setJobStatusLine('Reading and validating Excel…');
+    setJobStatusLine('');
 
     try {
+      const user = auth.currentUser;
+      if (!user) throw new Error('You must be signed in to upload.');
+
       const data = await file.arrayBuffer();
-      const workbook = XLSX.read(data, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(worksheet);
-
-      if (jsonData.length === 0) {
-        throw new Error('Excel file is empty. Please add medicine data.');
-      }
-
-      let validPreview = 0;
-      for (let i = 0; i < jsonData.length; i++) {
-        const row = jsonData[i] as Record<string, unknown>;
-        if (row['Medicine Name'] && row['Manufacturer'] && row['Type'] && row['Packaging']) {
-          validPreview++;
-        }
-      }
-      if (validPreview === 0) {
-        throw new Error(
-          'No valid rows found. Required columns: Medicine Name, Type, Packaging, Manufacturer.'
-        );
-      }
-
       setJobStatusLine('Uploading file to cloud storage…');
       const jobRef = doc(collection(db, 'bulk_medicine_jobs'));
       const jobId = jobRef.id;
@@ -424,6 +291,7 @@ export const InventoryPage: React.FC = () => {
             `Import finished: ${c} created, ${u} updated, ${f} row failures. Check your email (${notifyEmail}) for the full report.`
           );
           void queryClient.invalidateQueries({ queryKey: ['medicines'] });
+          setPage(1);
           stopJobListener();
         }
         if (st === 'failed') {
@@ -444,7 +312,9 @@ export const InventoryPage: React.FC = () => {
     if (fileInput) fileInput.value = '';
   };
 
-  if (isLoading) return <Loading message="Loading inventory..." />;
+  if (searchLoading && pageRows.length === 0 && searchTerm.trim().length === 0 && found === 0) {
+    return <Loading message="Loading inventory..." />;
+  }
 
   return (
     <Box>
@@ -489,21 +359,19 @@ export const InventoryPage: React.FC = () => {
         </Alert>
       )}
 
-      {/* Alerts */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        {expiredMedicines && expiredMedicines.length > 0 && (
+        {expiredCount > 0 && (
           <Grid item xs={12}>
-            <Alert severity="error">{expiredMedicines.length} items have expired!</Alert>
+            <Alert severity="error">{expiredCount} items have expired!</Alert>
           </Grid>
         )}
-        {expiringMedicines && expiringMedicines.length > 0 && (
+        {expiringCount > 0 && (
           <Grid item xs={12}>
-            <Alert severity="warning">{expiringMedicines.length} items expiring within 30 days.</Alert>
+            <Alert severity="warning">{expiringCount} items expiring within 30 days.</Alert>
           </Grid>
         )}
       </Grid>
 
-      {/* Filters */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
           <Grid item xs={12} md={6}>
@@ -512,8 +380,9 @@ export const InventoryPage: React.FC = () => {
               placeholder="Search by name, code, or manufacturer..."
               value={searchTerm}
               onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setPage(1);
+                const next = e.target.value;
+                setSearchTerm(next);
+                startTransition(() => setPage(1));
               }}
               InputProps={{
                 startAdornment: (
@@ -523,18 +392,18 @@ export const InventoryPage: React.FC = () => {
                 ),
                 endAdornment: searchLoading ? (
                   <InputAdornment position="end">
-                    <Typography variant="caption" color="text.secondary">
-                      …
-                    </Typography>
+                    <CircularProgress color="inherit" size={18} />
                   </InputAdornment>
                 ) : undefined,
               }}
               helperText={
-                searchTerm.trim().length >= 2
-                  ? searchLoading
-                    ? 'Searching…'
-                    : `${filteredMedicines.length} result${filteredMedicines.length === 1 ? '' : 's'}`
-                  : 'Type 2+ characters to search (same as Purchase Invoice)'
+                searchTerm.trim().length === 0
+                  ? `Browsing catalog via Typesense (${found.toLocaleString()} total)`
+                  : searchTerm.trim().length < 2
+                    ? 'Type one more character…'
+                    : searchLoading
+                      ? 'Searching…'
+                      : `${found.toLocaleString()} result${found === 1 ? '' : 's'}`
               }
             />
           </Grid>
@@ -550,8 +419,10 @@ export const InventoryPage: React.FC = () => {
                 }}
               >
                 <MenuItem value="All">All Types</MenuItem>
-                {categories.map(cat => (
-                  <MenuItem key={cat} value={cat}>{cat}</MenuItem>
+                {categories.map((cat) => (
+                  <MenuItem key={cat} value={cat}>
+                    {cat}
+                  </MenuItem>
                 ))}
               </Select>
             </FormControl>
@@ -598,7 +469,6 @@ export const InventoryPage: React.FC = () => {
         </Grid>
       </Paper>
 
-      {/* Table */}
       <TableContainer component={Paper}>
         <Table>
           <TableHead>
@@ -613,67 +483,89 @@ export const InventoryPage: React.FC = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {paginatedMedicines.length === 0 ? (
+            {pageRows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} align="center">
-                  <Typography color="textSecondary" sx={{ py: 3 }}>No medicines found</Typography>
+                  <Typography color="textSecondary" sx={{ py: 3 }}>
+                    {searchLoading ? 'Loading…' : 'No medicines found'}
+                  </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              paginatedMedicines.map((medicine) => (
-              <TableRow key={medicine.id} hover onClick={() => navigate(`/inventory/${medicine.id}`)} sx={{ cursor: 'pointer' }}>
-                <TableCell>
-                  <Typography variant="body2" fontWeight="bold">{medicine.name}</Typography>
-                  <Typography variant="caption" color="textSecondary">{medicine.code || 'No code'}</Typography>
-                </TableCell>
-                <TableCell>{medicine.category}</TableCell>
-                <TableCell>{medicine.unit || 'N/A'}</TableCell>
-                <TableCell>{medicine.manufacturer}</TableCell>
-                <TableCell align="right">
-                  <Chip
-                    label={`${medicine.gstRate || 5}%`}
-                    size="small"
-                    color="primary"
-                    variant="outlined"
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <Chip
-                    label={medicine.currentStock ?? medicine.stock ?? 0}
-                    size="small"
-                    color={getStockColor(medicine.currentStock ?? medicine.stock ?? 0) as any}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); navigate(`/inventory/${medicine.id}`); }}>
-                    <Visibility />
-                  </IconButton>
-                </TableCell>
-              </TableRow>
+              pageRows.map((medicine) => (
+                <TableRow
+                  key={medicine.id}
+                  hover
+                  onClick={() => navigate(`/inventory/${medicine.id}`)}
+                  sx={{ cursor: 'pointer' }}
+                >
+                  <TableCell>
+                    <Typography variant="body2" fontWeight="bold">
+                      {medicine.name}
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary">
+                      {medicine.code || 'No code'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>{medicine.category}</TableCell>
+                  <TableCell>{medicine.unit || 'N/A'}</TableCell>
+                  <TableCell>{medicine.manufacturer}</TableCell>
+                  <TableCell align="right">
+                    <Chip
+                      label={`${medicine.gstRate || 5}%`}
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                    />
+                  </TableCell>
+                  <TableCell align="right">
+                    <Chip
+                      label={medicine.currentStock ?? medicine.stock ?? 0}
+                      size="small"
+                      color={
+                        getStockColor(medicine.currentStock ?? medicine.stock ?? 0) as
+                          | 'error'
+                          | 'warning'
+                          | 'success'
+                      }
+                    />
+                  </TableCell>
+                  <TableCell align="right">
+                    <IconButton
+                      size="small"
+                      color="primary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/inventory/${medicine.id}`);
+                      }}
+                    >
+                      <Visibility />
+                    </IconButton>
+                  </TableCell>
+                </TableRow>
               ))
             )}
           </TableBody>
         </Table>
       </TableContainer>
 
-      {/* Pagination */}
-      {sortedMedicines.length > 0 && (
+      {found > 0 && (
         <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
           <Pagination
             count={totalPages}
-            page={page}
+            page={Math.min(page, totalPages)}
             onChange={handlePageChange}
             color="primary"
             showFirstButton
             showLastButton
           />
           <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, sortedMedicines.length)} of {sortedMedicines.length} medicines
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, found)} of{' '}
+            {found.toLocaleString()} medicines
           </Typography>
         </Box>
       )}
 
-      {/* Bulk Upload Dialog */}
       <Dialog
         open={bulkUploadOpen}
         onClose={() => bulkPhase !== 'uploading' && setBulkUploadOpen(false)}

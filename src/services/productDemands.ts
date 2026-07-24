@@ -16,7 +16,8 @@ import {
   getCountFromServer,
 } from './firebase';
 import { OrderMedicine, ProductDemand, ProductDemandStatus, PurchaseInvoice } from '../types';
-import { createMedicine, getAllMedicinesMasterOnly, getMedicineById } from './inventory';
+import { createMedicine, getMedicineById } from './inventory';
+import { findMedicineByExactName } from './medicineSearch';
 import { getAllPurchaseInvoices, getPurchaseInvoiceByReference } from './purchaseInvoices';
 import {
   buildFulfilledDemandOrderLine,
@@ -76,7 +77,7 @@ export const getProductDemandsByIds = async (ids: string[]): Promise<Map<string,
 
 /**
  * Ensure a catalog medicine exists for a fulfilled product demand.
- * Matches existing medicines by name (case-insensitive); otherwise creates a new medicines doc.
+ * Matches existing medicines by exact name via Typesense (case-insensitive); otherwise creates a new medicines doc.
  */
 export async function ensureMedicineForProductDemand(
   demand: {
@@ -97,12 +98,10 @@ export async function ensureMedicineForProductDemand(
     return { medicineId: cachedId, created: false };
   }
 
-  if (!nameToMedicineId) {
-    const all = await getAllMedicinesMasterOnly();
-    const existing = all.find((m) => m.name.toLowerCase().trim() === key);
-    if (existing) {
-      return { medicineId: existing.id, created: false };
-    }
+  const existing = await findMedicineByExactName(name);
+  if (existing) {
+    nameToMedicineId?.set(key, existing.id);
+    return { medicineId: existing.id, created: false };
   }
 
   const medicineId = await createMedicine({
@@ -158,14 +157,8 @@ export async function migrateProductDemandsToMedicines(options?: {
     return Boolean(options?.includePending && d.status === 'pending');
   });
 
-  const allMedicines = await getAllMedicinesMasterOnly();
+  // Session cache only — never preload the full medicine catalog (does not scale to ~800k).
   const nameToMedicineId = new Map<string, string>();
-  for (const m of allMedicines) {
-    const k = m.name.toLowerCase().trim();
-    if (k && !nameToMedicineId.has(k)) {
-      nameToMedicineId.set(k, m.id);
-    }
-  }
 
   let purchaseInvoices: PurchaseInvoice[] | undefined;
   try {
