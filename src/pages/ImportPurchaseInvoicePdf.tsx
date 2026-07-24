@@ -24,7 +24,6 @@ import { format } from 'date-fns';
 import QRCode from 'qrcode';
 import { auth } from '../services/firebase';
 import { useVendors } from '../hooks/useVendors';
-import { useMedicinesMaster } from '../hooks/useInventory';
 import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
 import {
@@ -37,12 +36,14 @@ import {
   resolveMedicineForImportLine,
   type ParsedPdfProductLine,
 } from '../utils/purchaseInvoicePdfImport';
-import { resolveMedicineAfterPickerSelection } from '../services/medicineSearch';
+import {
+  resolveMedicineAfterPickerSelection,
+} from '../services/medicineSearch';
+import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { getTodayDateStringIST } from '../utils/dateTime';
 import { Medicine, PurchaseInvoiceItem } from '../types';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import { Loading } from '../components/Loading';
 import { useAppDialog } from '../context/AppDialogProvider';
 
 type ImportRow = {
@@ -65,12 +66,79 @@ type ImportRow = {
 
 const newRowId = () => `r-${Math.random().toString(36).slice(2, 11)}`;
 
+/** Per-row Typesense medicine picker (no full catalog download). */
+const ImportMedicinePicker: React.FC<{
+  value: Medicine | null | undefined;
+  onChange: (m: Medicine | null) => void;
+}> = ({ value, onChange }) => {
+  const [input, setInput] = useState(value ? getMedicinePickerLabel(value) : '');
+  const skipLabel = value ? getMedicinePickerLabel(value) : undefined;
+  const { medicines: hits, loading } = useMedicineSearch(input, {
+    hydrate: false,
+    limit: 40,
+    strict: true,
+    skipQuery: skipLabel,
+  });
+
+  useEffect(() => {
+    if (value) setInput(getMedicinePickerLabel(value));
+  }, [value]);
+
+  const options =
+    value && !hits.some((h) => h.id === value.id) ? [value, ...hits] : hits.length ? hits : value ? [value] : [];
+
+  return (
+    <Autocomplete
+      size="small"
+      options={options}
+      loading={loading}
+      value={value || null}
+      inputValue={input}
+      getOptionLabel={getMedicinePickerLabel}
+      isOptionEqualToValue={(a, b) => a.id === b.id}
+      filterOptions={(opts) => opts}
+      onInputChange={(_, v, reason) => {
+        if (reason === 'input') setInput(v);
+        else if (reason === 'clear') {
+          setInput('');
+          onChange(null);
+        } else setInput(v);
+      }}
+      onChange={(_, v) => {
+        if (!v) {
+          onChange(null);
+          setInput('');
+          return;
+        }
+        void resolveMedicineAfterPickerSelection(v, undefined).then((merged) => {
+          onChange(merged);
+          setInput(getMedicinePickerLabel(merged));
+        });
+      }}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          placeholder="Search medicine (Typesense)…"
+          InputProps={{
+            ...params.InputProps,
+            endAdornment: (
+              <>
+                {loading ? <CircularProgress color="inherit" size={16} /> : null}
+                {params.InputProps.endAdornment}
+              </>
+            ),
+          }}
+        />
+      )}
+    />
+  );
+};
+
 export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: vendors } = useVendors();
-  const { data: medicines, isLoading: medLoading } = useMedicinesMaster();
   const createInvoiceMutation = useCreatePurchaseInvoice();
-  const { alert, confirm, prompt } = useAppDialog();
+  const { alert, confirm } = useAppDialog();
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
@@ -116,13 +184,12 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
       }
 
       const rawLines = extractPotentialProductLines(text);
-      const catalog = medicines || [];
       const built: ImportRow[] = [];
 
       for (const line of rawLines) {
         const parsed = parseProductLineFromRawLine(line);
         if (!parsed) continue;
-        const { medicine, source } = await resolveMedicineForImportLine(parsed, catalog);
+        const { medicine, source } = await resolveMedicineForImportLine(parsed);
         built.push({
           id: newRowId(),
           raw: line,
@@ -149,36 +216,27 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
           'No product lines could be parsed from this PDF. Text-based PDFs work best. You can still add rows manually.'
         );
       }
-    } catch (e: any) {
-      console.error(e);
-      setPdfError(e?.message || 'Failed to read PDF. Try a text-based PDF (not a scan).');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setPdfError(msg || 'Failed to read PDF');
       setRows([]);
     } finally {
       setProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) void processPdfFile(f);
-    e.target.value = '';
+  const updateRowField = (id: string, patch: Partial<ImportRow>) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   };
 
-  const removeRow = (id: string) => setRows((r) => r.filter((x) => x.id !== id));
-
-  const addManualRow = () => {
-    const parsed: ParsedPdfProductLine = {
-      raw: '',
-      productName: '',
-      batchNumber: '',
-      quantity: 1,
-    };
-    setRows((r) => [
-      ...r,
+  const addEmptyRow = () => {
+    setRows((prev) => [
+      ...prev,
       {
         id: newRowId(),
-        raw: '(manual)',
-        parsed,
+        raw: '',
+        parsed: { productName: '' },
         matchSource: 'none',
         batchNumber: '',
         quantity: 1,
@@ -194,139 +252,69 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
     ]);
   };
 
-  const updateRowField = (id: string, patch: Partial<ImportRow>) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  };
+  const removeRow = (id: string) => setRows((prev) => prev.filter((r) => r.id !== id));
 
-  const parseNum = (v: string) => {
-    const n = parseFloat(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  const calculatePurchasePriceFromMrp = (mrp: number, gstRate: number, standardDiscount: number) => {
-    if (mrp <= 0) return 0;
-    return (mrp * (1 - standardDiscount / 100)) / (1 + gstRate / 100);
-  };
-
-  const buildPurchaseItems = async (): Promise<PurchaseInvoiceItem[]> => {
-    const catalog = medicines || [];
-    const out: PurchaseInvoiceItem[] = [];
-
-    for (const row of rows) {
-      if (!row.medicine) continue;
-      const med = (await resolveMedicineAfterPickerSelection(row.medicine, catalog)) as Medicine;
-      const gstRate = med.gstRate || 5;
-      const batchNumber = row.batchNumber.trim();
-      const qty = Math.max(1, Math.round(row.quantity));
-      const expiryParts = row.expiryMmYyyy.trim().split('/');
-      if (expiryParts.length !== 2) throw new Error(`Expiry MM/YYYY required for ${med.name}`);
-      const em = parseInt(expiryParts[0], 10);
-      const ey = parseInt(expiryParts[1], 10);
-      if (isNaN(em) || isNaN(ey) || em < 1 || em > 12) throw new Error(`Invalid expiry for ${med.name}`);
-
-      let purchasePrice = parseNum(row.purchasePrice);
-      const mrp = row.mrp ? parseNum(row.mrp) : 0;
-      const stdDisc = row.standardDiscount ? parseNum(row.standardDiscount) : 20;
-      if (purchasePrice <= 0 && mrp > 0) {
-        purchasePrice = calculatePurchasePriceFromMrp(mrp, gstRate, stdDisc);
-      }
-      if (purchasePrice <= 0) throw new Error(`Purchase price or MRP required for ${med.name}`);
-
-      const freeQty = row.freeQuantity ? parseNum(row.freeQuantity) : 0;
-      const sp = row.schemePaidQty ? Math.floor(parseNum(row.schemePaidQty)) : NaN;
-      const sf = row.schemeFreeQty ? Math.floor(parseNum(row.schemeFreeQty)) : NaN;
-      const schemePaidQty = !isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0 ? sp : undefined;
-      const schemeFreeQty = schemePaidQty != null ? sf : undefined;
-      const discountPct = row.discountPercentage ? parseNum(row.discountPercentage) : 0;
-
-      const expiryDate = new Date(ey, em - 1, 1);
-      const std =
-        row.standardDiscount !== '' && row.standardDiscount !== undefined
-          ? parseNum(row.standardDiscount)
-          : mrp > 0
-            ? (1 - (purchasePrice * (1 + gstRate / 100)) / mrp) * 100
-            : 20;
-
-      const baseAmount = purchasePrice * qty;
-      const discountAmount = (baseAmount * discountPct) / 100;
-      const amountAfterDiscount = baseAmount - discountAmount;
-      const gstAmount = (amountAfterDiscount * gstRate) / 100;
-      const totalAmount = amountAfterDiscount + gstAmount;
-
-      const qrData = JSON.stringify({
-        medicineId: med.id,
-        medicineName: med.name,
-        batchNumber,
-        expiryDate: format(expiryDate, 'MM/yyyy'),
-        quantity: qty,
-        freeQuantity: freeQty > 0 ? freeQty : undefined,
-        schemePaidQty,
-        schemeFreeQty,
-        purchasePrice,
-        mrp: mrp > 0 ? mrp : undefined,
-      });
-      const qrCode = await QRCode.toDataURL(qrData, { width: 200, margin: 1 }).catch(() => '');
-
-      out.push({
-        medicineId: med.id,
-        medicineName: med.name,
-        batchNumber,
-        expiryDate,
-        quantity: qty,
-        freeQuantity: freeQty > 0 ? freeQty : undefined,
-        ...(schemePaidQty != null && schemeFreeQty != null ? { schemePaidQty, schemeFreeQty } : {}),
-        unitPrice: purchasePrice,
-        purchasePrice,
-        mrp: mrp > 0 ? mrp : undefined,
-        gstRate,
-        standardDiscount: Number.isFinite(std) ? std : undefined,
-        discountPercentage: discountPct > 0 ? discountPct : undefined,
-        totalAmount,
-        qrCode: qrCode || undefined,
-      });
+  const handleSave = async () => {
+    if (!vendorId || !invoiceNumber.trim()) {
+      await alert('Invoice number and vendor are required', { severity: 'warning' });
+      return;
     }
-    return out;
-  };
+    const linked = rows.filter((r) => r.medicine);
+    if (linked.length === 0) {
+      await alert('Link at least one medicine row before saving', { severity: 'warning' });
+      return;
+    }
+    const ok = await confirm(
+      `Create purchase invoice with ${linked.length} linked line(s)? Unlinked rows will be skipped.`,
+      { title: 'Create invoice' }
+    );
+    if (!ok) return;
 
-  const calculateTotals = (invoiceItems: PurchaseInvoiceItem[]) => {
-    const subTotal = invoiceItems.reduce((s, it) => s + (it.purchasePrice || 0) * (it.quantity || 0), 0);
-    const totalDiscount = invoiceItems.reduce((s, it) => {
-      const base = (it.purchasePrice || 0) * (it.quantity || 0);
-      return s + (base * (it.discountPercentage || 0)) / 100;
-    }, 0);
-    const amountAfterDiscount = subTotal - totalDiscount;
-    const avgGst =
-      invoiceItems.length > 0
-        ? invoiceItems.reduce((sum, it) => sum + (it.gstRate || 5), 0) / invoiceItems.length
-        : 5;
-    const totalTax = (amountAfterDiscount * avgGst) / 100;
-    const calculatedTotal = subTotal - totalDiscount + totalTax;
-    const grandTotal = Math.round(calculatedTotal);
-    return { subTotal, totalDiscount, totalTax, grandTotal };
-  };
-
-  const handleSaveInvoice = async () => {
     const user = auth.currentUser;
     if (!user) {
-      await alert('Please login', { severity: 'warning' });
+      await alert('Please sign in', { severity: 'warning' });
       return;
     }
-    if (!invoiceNumber.trim() || !vendorId || rows.length === 0) {
-      await alert('Invoice number, vendor, and at least one row are required.', { severity: 'warning' });
-      return;
+
+    const items: PurchaseInvoiceItem[] = [];
+    for (const r of linked) {
+      const med = r.medicine!;
+      const qty = Math.max(1, r.quantity || 1);
+      const mrp = parseFloat(r.mrp) || 0;
+      const purchasePrice = parseFloat(r.purchasePrice) || 0;
+      const gstRate = med.gstRate ?? 5;
+      const discountPercentage = parseFloat(r.discountPercentage) || 0;
+      const freeQuantity = parseFloat(r.freeQuantity) || 0;
+      const schemePaidQty = parseFloat(r.schemePaidQty) || undefined;
+      const schemeFreeQty = parseFloat(r.schemeFreeQty) || undefined;
+      const standardDiscount = parseFloat(r.standardDiscount) || 20;
+      const base = purchasePrice * qty;
+      const afterDisc = base - (base * discountPercentage) / 100;
+      const taxAmount = (afterDisc * gstRate) / 100;
+      items.push({
+        medicineId: med.id,
+        medicineName: med.name,
+        batchNumber: r.batchNumber || undefined,
+        quantity: qty,
+        freeQuantity: freeQuantity || undefined,
+        schemePaidQty,
+        schemeFreeQty,
+        unitPrice: purchasePrice,
+        purchasePrice,
+        mrp: mrp || undefined,
+        gstRate,
+        discountPercentage: discountPercentage || undefined,
+        standardDiscount,
+        taxAmount,
+        totalAmount: afterDisc + taxAmount,
+        expiryDate: r.expiryMmYyyy || undefined,
+      });
     }
-    const unresolved = rows.filter((r) => !r.medicine);
-    if (unresolved.length) {
-      await alert(`Link medicine for ${unresolved.length} row(s) before saving.`, { severity: 'warning' });
-      return;
-    }
+
+    const subTotal = items.reduce((s, i) => s + (i.purchasePrice || 0) * (i.quantity || 0), 0);
+    const taxAmount = items.reduce((s, i) => s + (i.taxAmount || 0), 0);
+
     try {
-      const items = await buildPurchaseItems();
-      if (items.length === 0) {
-        await alert('No valid rows to save.', { severity: 'warning' });
-        return;
-      }
-      const { subTotal, totalDiscount, totalTax, grandTotal } = calculateTotals(items);
       await createInvoiceMutation.mutateAsync({
         invoiceData: {
           invoiceNumber: invoiceNumber.trim(),
@@ -335,125 +323,110 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
           invoiceDate: new Date(invoiceDate),
           items,
           subTotal,
-          taxAmount: totalTax,
-          discount: totalDiscount > 0 ? totalDiscount : undefined,
-          totalAmount: grandTotal,
+          taxAmount,
+          totalAmount: subTotal + taxAmount,
           paymentStatus: 'Unpaid',
           createdBy: user.uid,
           createdAt: new Date(),
-        },
+          notes: `Imported from PDF (${format(new Date(), 'yyyy-MM-dd')})`,
+        } as any,
         updateStock: true,
       });
+      await alert('Purchase invoice created', { severity: 'success' });
       navigate('/purchases');
-    } catch (e: any) {
-      await alert(e?.message || 'Failed to create invoice', { severity: 'error' });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await alert(msg || 'Failed to create invoice', { severity: 'error' });
     }
   };
-
-  if (medLoading) return <Loading message="Loading catalog..." />;
 
   return (
     <Box>
       <Breadcrumbs
-        items={[
-          { label: 'Purchase Invoices', path: '/purchases' },
-          { label: 'Import from PDF' },
-        ]}
+        items={[{ label: 'Purchase Invoices', path: '/purchases' }, { label: 'Import from PDF' }]}
       />
-      <Box display="flex" alignItems="center" mb={2} flexWrap="wrap" gap={1}>
+      <Box display="flex" alignItems="center" gap={2} mb={2}>
         <IconButton onClick={() => navigate('/purchases')}>
           <ArrowBack />
         </IconButton>
-        <Typography variant="h4">Import purchase invoice (PDF)</Typography>
-        <Box sx={{ flexGrow: 1 }} />
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/pdf"
-          hidden
-          onChange={handleFileChange}
-        />
-        <Button
-          variant="outlined"
-          startIcon={<PictureAsPdf />}
-          disabled={processing}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          {processing ? 'Reading PDF…' : 'Choose PDF'}
-        </Button>
-        <Button variant="contained" onClick={handleSaveInvoice} disabled={createInvoiceMutation.isPending}>
-          {createInvoiceMutation.isPending ? <CircularProgress size={22} /> : 'Create invoice'}
-        </Button>
+        <Typography variant="h5">Import purchase invoice (PDF)</Typography>
       </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>
         Uses text inside the PDF (not OCR). Vendor is auto-picked by vendor name (fallback GSTIN), and each item
-        appears with a medicine dropdown so you can confirm or change selections before saving.
+        appears with a Typesense medicine search so you can confirm or change selections before saving.
       </Alert>
 
-      {pdfError && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {pdfError}
-        </Alert>
-      )}
-
-      <Grid container spacing={2}>
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Invoice header
-            </Typography>
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Grid container spacing={2} alignItems="center">
+          <Grid item xs={12} md={4}>
+            <Button
+              variant="contained"
+              component="label"
+              startIcon={processing ? <CircularProgress size={18} color="inherit" /> : <PictureAsPdf />}
+              disabled={processing}
+            >
+              {processing ? 'Reading PDF…' : 'Upload PDF'}
+              <input
+                ref={fileInputRef}
+                hidden
+                type="file"
+                accept="application/pdf"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void processPdfFile(f);
+                }}
+              />
+            </Button>
+          </Grid>
+          <Grid item xs={12} md={4}>
             <TextField
               fullWidth
+              size="small"
               label="Invoice number"
               value={invoiceNumber}
               onChange={(e) => setInvoiceNumber(e.target.value)}
-              sx={{ mb: 2 }}
             />
+          </Grid>
+          <Grid item xs={12} md={4}>
             <TextField
               fullWidth
+              size="small"
               type="date"
               label="Invoice date"
+              InputLabelProps={{ shrink: true }}
               value={invoiceDate}
               onChange={(e) => setInvoiceDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-              sx={{ mb: 2 }}
             />
+          </Grid>
+          <Grid item xs={12} md={6}>
             <Autocomplete
-              options={vendors?.filter((v) => v.isActive !== false) || []}
-              getOptionLabel={(v) => v.vendorName || ''}
+              options={vendors || []}
+              getOptionLabel={(v) => v.vendorName || v.id}
               value={selectedVendor || null}
               onChange={(_, v) => setVendorId(v?.id || '')}
-              renderInput={(params) => <TextField {...params} label="Vendor" required />}
+              renderInput={(params) => <TextField {...params} label="Vendor" size="small" />}
             />
-            {detectedGstins.length > 0 && (
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-                GSTIN in PDF: {detectedGstins.join(', ')}
-                {selectedVendor ? ` — matched: ${selectedVendor.vendorName}` : ' — pick vendor manually if needed'}
+          </Grid>
+          {detectedGstins.length > 0 && (
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary">
+                GSTINs found: {detectedGstins.join(', ')}
               </Typography>
-            )}
-          </Paper>
+            </Grid>
+          )}
         </Grid>
-        <Grid item xs={12} md={8}>
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Extracted text preview (truncated)
-            </Typography>
-            <Typography
-              variant="caption"
-              component="pre"
-              sx={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto', display: 'block' }}
-            >
-              {rawPreview || '—'}
-            </Typography>
-          </Paper>
-        </Grid>
-      </Grid>
+        {pdfError && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            {pdfError}
+          </Alert>
+        )}
+      </Paper>
 
-      <Box display="flex" justifyContent="space-between" alignItems="center" mt={2} mb={1}>
-        <Typography variant="h6">Imported lines ({rows.length})</Typography>
-        <Button startIcon={<Add />} onClick={addManualRow}>
-          Add row manually
+      <Box display="flex" justifyContent="space-between" mb={1}>
+        <Typography variant="subtitle1">Lines ({rows.length})</Typography>
+        <Button size="small" startIcon={<Add />} onClick={addEmptyRow}>
+          Add row
         </Button>
       </Box>
 
@@ -462,7 +435,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
           <TableHead>
             <TableRow>
               <TableCell>Match</TableCell>
-              <TableCell>PDF / product</TableCell>
+              <TableCell>PDF text</TableCell>
               <TableCell>Medicine</TableCell>
               <TableCell>Batch</TableCell>
               <TableCell align="right">Qty</TableCell>
@@ -493,21 +466,18 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
                   </Typography>
                 </TableCell>
                 <TableCell sx={{ minWidth: 280 }}>
-                  <Autocomplete
-                    size="small"
-                    options={medicines || []}
-                    value={row.medicine || null}
-                    getOptionLabel={getMedicinePickerLabel}
-                    isOptionEqualToValue={(a, b) => a.id === b.id}
-                    onChange={(_, v) =>
+                  <ImportMedicinePicker
+                    value={row.medicine}
+                    onChange={(v) =>
                       updateRowField(row.id, {
                         medicine: v || undefined,
-                        matchSource: v ? (row.matchSource === 'batch' || row.matchSource === 'name' ? row.matchSource : 'manual') : 'none',
+                        matchSource: v
+                          ? row.matchSource === 'batch' || row.matchSource === 'name'
+                            ? row.matchSource
+                            : 'manual'
+                          : 'none',
                       })
                     }
-                    renderInput={(params) => (
-                      <TextField {...params} placeholder="Search medicine..." />
-                    )}
                   />
                 </TableCell>
                 <TableCell>
@@ -524,7 +494,9 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
                     sx={{ width: 72 }}
                     value={row.quantity}
                     onChange={(e) =>
-                      updateRowField(row.id, { quantity: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                      updateRowField(row.id, {
+                        quantity: Math.max(1, parseInt(e.target.value, 10) || 1),
+                      })
                     }
                   />
                 </TableCell>
@@ -565,6 +537,28 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {rawPreview && (
+        <Paper sx={{ p: 2, mt: 2 }}>
+          <Typography variant="caption" color="text.secondary">
+            Text preview (truncated)
+          </Typography>
+          <Typography
+            component="pre"
+            variant="caption"
+            sx={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}
+          >
+            {rawPreview}
+          </Typography>
+        </Paper>
+      )}
+
+      <Box mt={2} display="flex" gap={2}>
+        <Button variant="contained" onClick={() => void handleSave()} disabled={createInvoiceMutation.isPending}>
+          Create invoice
+        </Button>
+        <Button onClick={() => navigate('/purchases')}>Cancel</Button>
+      </Box>
     </Box>
   );
 };

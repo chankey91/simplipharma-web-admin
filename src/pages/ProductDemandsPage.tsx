@@ -41,17 +41,12 @@ import {
 } from '../hooks/useProductDemands';
 import { getProductDemandsByIds, getProductDemandsPage } from '../services/productDemands';
 import { reindexProductDemandsTypesense, searchProductDemandsTypesense } from '../services/productDemandSearch';
-import { useMedicinesMaster } from '../hooks/useInventory';
 import { ProductDemand, Medicine } from '../types';
 import { Loading } from '../components/Loading';
 import { ProductDemandImage } from '../components/ProductDemandImage';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import {
-  searchMedicinesTypesenseAdmin,
-  resolveMedicineAfterPickerSelection,
-  refineMedicineSearchResults,
-} from '../services/medicineSearch';
-import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { resolveMedicineAfterPickerSelection } from '../services/medicineSearch';
+import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -120,7 +115,6 @@ function navigateToReturnPath(navigate: NavigateFunction, returnToRef: React.Mut
 export const ProductDemandsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: medicines } = useMedicinesMaster();
   const fulfillMutation = useFulfillProductDemand();
   const rejectMutation = useRejectProductDemand();
   const migrateMutation = useMigrateProductDemandsToMedicines();
@@ -143,13 +137,21 @@ export const ProductDemandsPage: React.FC = () => {
   const [rejectReason, setRejectReason] = useState('');
 
   const [fulfillMedicineSearchInput, setFulfillMedicineSearchInput] = useState('');
-  const [fulfillMedicineSearchHits, setFulfillMedicineSearchHits] = useState<Medicine[]>([]);
-  const [fulfillMedicineSearchLoading, setFulfillMedicineSearchLoading] = useState(false);
-  const fulfillMedicineSearchSeq = useRef(0);
-  const fulfillMedicineSearchInputRef = useRef(fulfillMedicineSearchInput);
-  fulfillMedicineSearchInputRef.current = fulfillMedicineSearchInput;
 
   const { sortKey, sortDirection, requestSort } = useTableSort('createdAt', 'desc');
+
+  const fulfillSkip =
+    selectedMedicine != null ? getMedicinePickerLabel(selectedMedicine) : undefined;
+  const {
+    medicines: fulfillMedicineSearchHits,
+    loading: fulfillMedicineSearchLoading,
+  } = useMedicineSearch(fulfillMedicineSearchInput, {
+    hydrate: false,
+    limit: 40,
+    strict: true,
+    enabled: fulfillOpen,
+    skipQuery: fulfillSkip,
+  });
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedTerm(searchTerm.trim()), 350);
@@ -265,54 +267,13 @@ export const ProductDemandsPage: React.FC = () => {
 
   useEffect(() => {
     if (!fulfillOpen) {
-      fulfillMedicineSearchSeq.current += 1;
       setFulfillMedicineSearchInput('');
-      setFulfillMedicineSearchHits([]);
-      setFulfillMedicineSearchLoading(false);
       setSelectedMedicine(null);
     }
   }, [fulfillOpen]);
 
-  useEffect(() => {
-    if (!fulfillOpen) return;
-
-    const trimmed = fulfillMedicineSearchInput.trim();
-    if (trimmed.length < 2) {
-      fulfillMedicineSearchSeq.current += 1;
-      setFulfillMedicineSearchHits([]);
-      setFulfillMedicineSearchLoading(false);
-      return;
-    }
-    if (
-      selectedMedicine &&
-      trimmed === getMedicinePickerLabel(selectedMedicine).trim()
-    ) {
-      fulfillMedicineSearchSeq.current += 1;
-      setFulfillMedicineSearchLoading(false);
-      return;
-    }
-    const seq = ++fulfillMedicineSearchSeq.current;
-    setFulfillMedicineSearchHits([]);
-    setFulfillMedicineSearchLoading(true);
-    const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
-        .then((rows) => {
-          if (fulfillMedicineSearchSeq.current !== seq) return;
-          if (fulfillMedicineSearchInputRef.current.trim() !== trimmed) return;
-          setFulfillMedicineSearchHits(rows);
-        })
-        .finally(() => {
-          if (fulfillMedicineSearchSeq.current === seq) {
-            setFulfillMedicineSearchLoading(false);
-          }
-        });
-    }, MEDICINE_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [fulfillOpen, fulfillMedicineSearchInput, selectedMedicine]);
-
   const fulfillMasterMedicineOptions = useMemo(() => {
     const q = fulfillMedicineSearchInput.trim();
-    const all = medicines || [];
 
     if (
       selectedMedicine &&
@@ -322,25 +283,20 @@ export const ProductDemandsPage: React.FC = () => {
     }
 
     if (q.length >= 2) {
-      let list = refineMedicineSearchResults(fulfillMedicineSearchHits, q, all);
+      const list = fulfillMedicineSearchHits;
       if (selectedMedicine && !list.some((m) => m.id === selectedMedicine.id)) {
         return [selectedMedicine, ...list];
       }
       return list;
     }
 
-    if (selectedMedicine && !all.some((m) => m.id === selectedMedicine.id)) {
-      return [selectedMedicine];
-    }
-    return [];
-  }, [fulfillMedicineSearchInput, fulfillMedicineSearchHits, medicines, selectedMedicine]);
+    return selectedMedicine ? [selectedMedicine] : [];
+  }, [fulfillMedicineSearchInput, fulfillMedicineSearchHits, selectedMedicine]);
 
   const openFulfill = useCallback((d: ProductDemand) => {
     setSelectedDemand(d);
     setSelectedMedicine(null);
     setFulfillMedicineSearchInput('');
-    setFulfillMedicineSearchHits([]);
-    fulfillMedicineSearchSeq.current += 1;
     setFulfillNote('');
     setPurchaseInvoiceId('');
     const q = d.requestedQuantity;
@@ -857,13 +813,12 @@ export const ProductDemandsPage: React.FC = () => {
               setFulfillMedicineSearchInput(newInputValue);
             }}
             onChange={(_, newValue) => {
-              setFulfillMedicineSearchHits([]);
               if (!newValue) {
                 setSelectedMedicine(null);
                 setFulfillMedicineSearchInput('');
                 return;
               }
-              void resolveMedicineAfterPickerSelection(newValue, medicines ?? undefined).then((merged) => {
+              void resolveMedicineAfterPickerSelection(newValue, undefined).then((merged) => {
                 setSelectedMedicine(merged);
                 setFulfillMedicineSearchInput(getMedicinePickerLabel(merged));
               });

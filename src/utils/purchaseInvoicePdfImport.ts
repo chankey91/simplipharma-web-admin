@@ -1,9 +1,6 @@
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import type { Medicine, Vendor } from '../types';
-import {
-  refineMedicineSearchResults,
-  searchMedicinesTypesenseAdmin,
-} from '../services/medicineSearch';
+import { searchMedicinesTypesenseAdmin } from '../services/medicineSearch';
 
 // Vite resolves worker as URL for bundling
 // eslint-disable-next-line import/no-unresolved
@@ -251,18 +248,22 @@ export function findMedicineByBatchNumber(
 
 export async function resolveMedicineForImportLine(
   parsed: ParsedPdfProductLine,
-  medicines: Medicine[]
+  _medicines?: Medicine[]
 ): Promise<{ medicine?: Medicine; source: 'batch' | 'name' | 'none' }> {
   if (parsed.batchNumber) {
-    const byBatch = findMedicineByBatchNumber(medicines, parsed.batchNumber);
-    if (byBatch) return { medicine: byBatch, source: 'batch' };
+    try {
+      const { findMedicineByBatchNumberQuery } = await import('../services/inventory');
+      const byBatch = await findMedicineByBatchNumberQuery(parsed.batchNumber);
+      if (byBatch) return { medicine: byBatch, source: 'batch' };
+    } catch {
+      // fall through to name search
+    }
   }
   const q = parsed.productName.trim();
   if (q.length >= 2) {
     try {
       const hits = await searchMedicinesTypesenseAdmin(q, { hydrate: true, limit: 12, strict: true });
-      const refined = refineMedicineSearchResults(hits, q, medicines);
-      if (refined[0]) return { medicine: refined[0], source: 'name' };
+      if (hits[0]) return { medicine: hits[0], source: 'name' };
     } catch {
       // ignore search failures
     }

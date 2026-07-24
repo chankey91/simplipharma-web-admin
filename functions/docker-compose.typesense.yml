@@ -7,8 +7,8 @@
 #   echo "TS_API_KEY=$(openssl rand -hex 24)" >> .env
 #   docker compose -f docker-compose.typesense.yml --env-file .env up -d
 #
-# Then set Firebase config: typesense.host, typesense.api_key, typesense.protocol=https, typesense.port=443
-# (or http + 8108 if you expose this port directly — use TLS in production).
+# Production: put Nginx+TLS in front, raise ulimits (prevents "Too many open files"),
+# and run scripts/typesense-healthcheck.sh via cron.
 
 services:
   typesense:
@@ -18,6 +18,17 @@ services:
       - "8108:8108"
     volumes:
       - typesense-data:/data
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+      nproc: 65535
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8108 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ok <&3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     command:
       - "--data-dir"
       - "/data"
