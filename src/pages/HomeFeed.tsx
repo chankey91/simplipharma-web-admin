@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -23,8 +23,7 @@ import Stars from '@mui/icons-material/Stars';
 import { useQuery } from '@tanstack/react-query';
 import { getMedicineById } from '../services/inventory';
 import type { Medicine } from '../types';
-import { searchMedicinesTypesenseAdmin } from '../services/medicineSearch';
-import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
+import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { auth } from '../services/firebase';
 import {
   subscribeHomeFeedConfig,
@@ -57,9 +56,15 @@ const ProductPickList: React.FC<{
   disabled?: boolean;
 }> = ({ title, ids, onIdsChange, disabled }) => {
   const [searchInput, setSearchInput] = useState('');
-  const [searchHits, setSearchHits] = useState<Medicine[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const searchSeq = useRef(0);
+  const { medicines: rawHits, loading: searchLoading } = useMedicineSearch(searchInput, {
+    hydrate: false,
+    limit: 40,
+    strict: true,
+  });
+  const searchHits = useMemo(
+    () => rawHits.filter((m) => !ids.includes(m.id)),
+    [rawHits, ids]
+  );
 
   const idsKey = useMemo(() => [...new Set(ids.filter(Boolean))].sort().join(','), [ids]);
   const { data: selectedMedicines = [] } = useQuery({
@@ -77,29 +82,6 @@ const ProductPickList: React.FC<{
     for (const o of searchHits) m.set(o.id, o);
     return m;
   }, [selectedMedicines, searchHits]);
-
-  useEffect(() => {
-    const trimmed = searchInput.trim();
-    if (trimmed.length < 2) {
-      searchSeq.current += 1;
-      setSearchHits([]);
-      setSearchLoading(false);
-      return;
-    }
-    const seq = ++searchSeq.current;
-    setSearchLoading(true);
-    const t = setTimeout(() => {
-      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
-        .then((rows) => {
-          if (searchSeq.current !== seq) return;
-          setSearchHits(rows.filter((m) => !ids.includes(m.id)));
-        })
-        .finally(() => {
-          if (searchSeq.current === seq) setSearchLoading(false);
-        });
-    }, MEDICINE_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [searchInput, ids]);
 
   const autocompleteOptions = useMemo(() => {
     const q = searchInput.trim();
@@ -132,7 +114,6 @@ const ProductPickList: React.FC<{
           if (!v || ids.includes(v.id) || ids.length >= HOME_FEED_SLOT_CAP) return;
           onIdsChange([...ids, v.id]);
           setSearchInput('');
-          setSearchHits([]);
         }}
         sx={{ mb: 2 }}
       />

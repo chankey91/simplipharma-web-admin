@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -40,11 +40,8 @@ import { getTodayDateStringIST } from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
-import {
-  searchMedicinesTypesenseAdmin,
-} from '../services/medicineSearch';
+import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
-import { MEDICINE_SEARCH_DEBOUNCE_MS } from '../constants/medicineSearchDebounce';
 
 export const StockUpdatePage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -58,12 +55,17 @@ export const StockUpdatePage: React.FC = () => {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(medicineIdFromUrl);
   const [searchInput, setSearchInput] = useState('');
-  const [searchHits, setSearchHits] = useState<Medicine[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const searchSeq = useRef(0);
 
   const { data: selectedMedicine, isLoading: medicineLoading, refetch: refetchMedicine } =
     useMedicine(selectedId || undefined);
+
+  const skipLabel = selectedMedicine ? getMedicinePickerLabel(selectedMedicine) : undefined;
+  const { medicines: searchHits, loading: searchLoading } = useMedicineSearch(searchInput, {
+    hydrate: false,
+    limit: 40,
+    strict: true,
+    skipQuery: skipLabel,
+  });
 
   const [stockData, setStockData] = useState({
     quantity: '',
@@ -111,30 +113,6 @@ export const StockUpdatePage: React.FC = () => {
   useEffect(() => {
     if (medicineIdFromUrl) setSelectedId(medicineIdFromUrl);
   }, [medicineIdFromUrl]);
-
-  useEffect(() => {
-    const trimmed = searchInput.trim();
-    if (trimmed.length < 2) {
-      setSearchHits([]);
-      setSearchLoading(false);
-      return;
-    }
-    const seq = ++searchSeq.current;
-    setSearchLoading(true);
-    const t = window.setTimeout(() => {
-      searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 40, strict: true })
-        .then((rows) => {
-          if (searchSeq.current === seq) setSearchHits(rows);
-        })
-        .catch(() => {
-          if (searchSeq.current === seq) setSearchHits([]);
-        })
-        .finally(() => {
-          if (searchSeq.current === seq) setSearchLoading(false);
-        });
-    }, MEDICINE_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [searchInput]);
 
   const handleBarcodeScan = async (barcode: string) => {
     setBarcodeInput(barcode);

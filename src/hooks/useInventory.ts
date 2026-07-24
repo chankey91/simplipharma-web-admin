@@ -29,7 +29,10 @@ export const useMedicines = (options?: { fresh?: boolean }) => {
   });
 };
 
-/** Master catalog only (no batch docs). Prefer for list UIs that only need stock totals. */
+/** Master catalog only (no batch docs).
+ * @deprecated Do not use for list/search UIs — does not scale past tens of thousands of docs.
+ * Prefer `useMedicineSearch` / `searchMedicinesCatalog` (Typesense) and `useMedicine` / `useMedicinesByIds` for detail.
+ */
 export const useMedicinesMaster = (options?: { fresh?: boolean }) => {
   return useQuery({
     queryKey: ['medicines', 'master'],

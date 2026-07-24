@@ -1,7 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.TYPESENSE_COLLECTION = void 0;
+exports.adminSyncMedicineSynonymsTypesense = exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.TYPESENSE_COLLECTION = void 0;
 exports.getTypesenseClient = getTypesenseClient;
+exports.getTypesenseSearchClient = getTypesenseSearchClient;
 exports.upsertMedicineInTypesense = upsertMedicineInTypesense;
 exports.deleteMedicineFromTypesense = deleteMedicineFromTypesense;
 /**
@@ -9,24 +10,26 @@ exports.deleteMedicineFromTypesense = deleteMedicineFromTypesense;
  *
  * Versions:
  * - NPM `typesense` (JS client): use latest 3.x in `functions/` (`npm install typesense@latest`).
- * - Typesense Server (Cloud or self-host): e.g. Docker `typesense/typesense:30.1` — see `docker-compose.typesense.yml`.
+ * - Typesense Server (Cloud or self-host): e.g. Docker `typesense/typesense:30.1` â€” see `docker-compose.typesense.yml`.
  *
- * Configure (deployed project) — see `functions/TYPESENSE_CONFIG.md`. Example (self-host HTTP on port 8088):
+ * Configure (deployed project) â€” see `functions/TYPESENSE_CONFIG.md`. Example (self-host HTTP on port 8088):
  *   firebase functions:config:set \
  *     typesense.host="YOUR_SERVER_IP" \
- *     typesense.api_key='YOUR_KEY' \
+ *     typesense.api_key='YOUR_ADMIN_KEY' \
+ *     typesense.search_api_key='YOUR_SEARCH_ONLY_KEY' \
  *     typesense.protocol="http" \
  *     typesense.port="8088"
  *
  * Typesense Cloud: use https + 443. After config: `firebase deploy --only functions`.
- * Run callable `adminReindexMedicinesTypesense` once (Admin → Inventory → Rebuild search index).
+ * Run callable `adminReindexMedicinesTypesense` once (Admin â†’ Inventory â†’ Rebuild search index).
  */
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const typesenseMedicineSynonyms_1 = require("./typesenseMedicineSynonyms");
 exports.TYPESENSE_COLLECTION = 'medicines';
 function loadTypesenseClientConstructor() {
     var _a;
-    // Lazy require — avoids slow cold load during Firebase deploy discovery
+    // Lazy require â€” avoids slow cold load during Firebase deploy discovery
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Typesense = require('typesense');
     return ((_a = Typesense.default) !== null && _a !== void 0 ? _a : Typesense).Client;
@@ -39,52 +42,96 @@ function getTypesenseConfig() {
     const protocol = (cfg.protocol || 'https').replace(/:$/, '');
     const defaultPort = protocol === 'https' ? '443' : '8108';
     const port = parseInt(String(cfg.port || defaultPort), 10) || (protocol === 'https' ? 443 : 8108);
+    const apiKey = String(cfg.api_key).trim();
+    const searchApiKey = String(cfg.search_api_key || cfg.api_key).trim();
     return {
         host: String(cfg.host).trim(),
-        apiKey: String(cfg.api_key).trim(),
+        apiKey,
+        searchApiKey,
         protocol,
         port,
     };
 }
+/** Admin/master key — upsert, delete, reindex, synonyms. */
 function getTypesenseClient() {
+    return buildTypesenseClient('admin');
+}
+/** Search-only key when configured (falls back to admin key). Prefer for hot search path. */
+function getTypesenseSearchClient() {
+    return buildTypesenseClient('search');
+}
+function buildTypesenseClient(mode) {
     const c = getTypesenseConfig();
     if (!c)
         return null;
     const Client = loadTypesenseClientConstructor();
     return new Client({
         nodes: [{ host: c.host, port: c.port, protocol: c.protocol }],
-        apiKey: c.apiKey,
+        apiKey: mode === 'search' ? c.searchApiKey : c.apiKey,
         connectionTimeoutSeconds: 15,
     });
 }
 const COLLECTION_FIELDS_BASE = [
-    { name: 'name', type: 'string' },
+    { name: 'name', type: 'string', sort: true },
     { name: 'code', type: 'string', optional: true },
-    { name: 'manufacturer', type: 'string', optional: true },
+    { name: 'manufacturer', type: 'string', optional: true, facet: true, sort: true },
     { name: 'category', type: 'string', optional: true, facet: true },
     { name: 'price', type: 'float', optional: true },
     /** Lowercase concat of name/code/mfr/category for middle-token & multi-word recall */
     { name: 'search_blob', type: 'string', optional: true },
+    /** Denormalized master aggregates â€” required for Inventory browse/filter at scale (no full catalog download). */
+    { name: 'stock', type: 'int32', optional: true, sort: true, facet: true },
+    { name: 'currentStock', type: 'int32', optional: true },
+    { name: 'nearestExpiry', type: 'int64', optional: true, sort: true },
+    { name: 'unit', type: 'string', optional: true },
+    { name: 'gstRate', type: 'float', optional: true },
 ];
+const OPTIONAL_SCHEMA_FIELDS = COLLECTION_FIELDS_BASE.filter((f) => ['search_blob', 'stock', 'currentStock', 'nearestExpiry', 'unit', 'gstRate'].includes(f.name));
+/** One ensure per warm instance â€” never on every search (hot path). */
+let ensureCollectionPromise = null;
 async function ensureCollection(client) {
-    try {
-        const existing = await client.collections(exports.TYPESENSE_COLLECTION).retrieve();
-        const names = new Set((existing.fields || []).map((f) => f.name));
-        if (!names.has('search_blob')) {
-            await client.collections(exports.TYPESENSE_COLLECTION).update({
-                fields: [{ name: 'search_blob', type: 'string', optional: true }],
-            });
-        }
-    }
-    catch (e) {
-        const http = e === null || e === void 0 ? void 0 : e.httpStatus;
-        if (http !== 404)
-            throw e;
-        await client.collections().create({
-            name: exports.TYPESENSE_COLLECTION,
-            fields: COLLECTION_FIELDS_BASE,
+    if (!ensureCollectionPromise) {
+        ensureCollectionPromise = (async () => {
+            try {
+                const existing = await client.collections(exports.TYPESENSE_COLLECTION).retrieve();
+                const names = new Set((existing.fields || []).map((f) => f.name));
+                const toAdd = OPTIONAL_SCHEMA_FIELDS.filter((f) => !names.has(f.name));
+                // name/manufacturer may exist without sort/facet â€” Typesense cannot patch those in-place;
+                // new optional fields are additive. Full recreate only via reindex ops if needed.
+                if (toAdd.length > 0) {
+                    await client.collections(exports.TYPESENSE_COLLECTION).update({ fields: toAdd });
+                }
+            }
+            catch (e) {
+                const http = e === null || e === void 0 ? void 0 : e.httpStatus;
+                if (http !== 404)
+                    throw e;
+                await client.collections().create({
+                    name: exports.TYPESENSE_COLLECTION,
+                    fields: COLLECTION_FIELDS_BASE,
+                });
+            }
+        })().catch((err) => {
+            ensureCollectionPromise = null;
+            throw err;
         });
     }
+    await ensureCollectionPromise;
+}
+function toEpochMs(value) {
+    var _a;
+    if (value == null || value === '')
+        return 0;
+    if (typeof value.toMillis === 'function') {
+        return value.toMillis();
+    }
+    if (typeof value.toDate === 'function') {
+        const d = value.toDate();
+        const t = (_a = d === null || d === void 0 ? void 0 : d.getTime) === null || _a === void 0 ? void 0 : _a.call(d);
+        return Number.isFinite(t) ? t : 0;
+    }
+    const t = new Date(value).getTime();
+    return Number.isFinite(t) ? t : 0;
 }
 /** Mirrors mobile/Firestore search helpers: joint text blob for Typesense recall. */
 function buildMedicineSearchBlob(data) {
@@ -96,11 +143,15 @@ function buildMedicineSearchBlob(data) {
     return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 function firestoreDataToTypesenseDoc(medicineId, data) {
-    var _a, _b;
+    var _a, _b, _c, _d, _e;
     if (!data || data.deleted === true)
         return null;
     const basePrice = (_b = (_a = data.price) !== null && _a !== void 0 ? _a : data.mrp) !== null && _b !== void 0 ? _b : 0;
     const price = typeof basePrice === 'number' ? basePrice : parseFloat(String(basePrice)) || 0;
+    const stockRaw = (_d = (_c = data.currentStock) !== null && _c !== void 0 ? _c : data.stock) !== null && _d !== void 0 ? _d : 0;
+    const stock = typeof stockRaw === 'number' ? Math.max(0, Math.floor(stockRaw)) : parseInt(String(stockRaw), 10) || 0;
+    const gstRaw = data.gstRate;
+    const gstRate = typeof gstRaw === 'number' ? gstRaw : parseFloat(String(gstRaw !== null && gstRaw !== void 0 ? gstRaw : 5)) || 5;
     const searchBlob = buildMedicineSearchBlob(data);
     const doc = {
         id: medicineId,
@@ -109,6 +160,11 @@ function firestoreDataToTypesenseDoc(medicineId, data) {
         manufacturer: String(data.manufacturer || data.company || ''),
         category: String(data.category || ''),
         price,
+        stock,
+        currentStock: stock,
+        nearestExpiry: toEpochMs((_e = data.nearestExpiry) !== null && _e !== void 0 ? _e : data.expiryDate),
+        unit: data.unit != null ? String(data.unit) : '',
+        gstRate,
     };
     if (searchBlob)
         doc.search_blob = searchBlob;
@@ -271,8 +327,9 @@ async function fetchMedicinesOrderedByIds(ids) {
     }
     return out;
 }
-/** Map Typesense hit documents only (no Firestore) — fast path for autocomplete UIs. */
+/** Map Typesense hit documents only (no Firestore) — fast path for autocomplete + Inventory browse. */
 function medicinesFromTypesenseHitsOnly(hits) {
+    var _a, _b;
     const out = [];
     for (const h of hits) {
         const d = (h.document && typeof h.document === 'object' ? h.document : {});
@@ -280,10 +337,15 @@ function medicinesFromTypesenseHitsOnly(hits) {
         if (!id)
             continue;
         const rawPrice = d.price;
-        const price = typeof rawPrice === 'number'
-            ? rawPrice
-            : parseFloat(String(rawPrice !== null && rawPrice !== void 0 ? rawPrice : 0)) || 0;
+        const price = typeof rawPrice === 'number' ? rawPrice : parseFloat(String(rawPrice !== null && rawPrice !== void 0 ? rawPrice : 0)) || 0;
+        const stockRaw = (_b = (_a = d.currentStock) !== null && _a !== void 0 ? _a : d.stock) !== null && _b !== void 0 ? _b : 0;
+        const stock = typeof stockRaw === 'number' ? stockRaw : parseInt(String(stockRaw), 10) || 0;
         const codeRaw = d.code;
+        const nearestRaw = d.nearestExpiry;
+        const nearestExpiry = typeof nearestRaw === 'number' && nearestRaw > 0 ? nearestRaw : undefined;
+        const gstRaw = d.gstRate;
+        const gstRate = typeof gstRaw === 'number' ? gstRaw : parseFloat(String(gstRaw !== null && gstRaw !== void 0 ? gstRaw : 5)) || 5;
+        const unitRaw = d.unit;
         out.push({
             id,
             name: String(d.name || ''),
@@ -291,15 +353,15 @@ function medicinesFromTypesenseHitsOnly(hits) {
             category: String(d.category || ''),
             manufacturer: String(d.manufacturer || ''),
             price,
-            stock: 0,
+            stock,
+            currentStock: stock,
+            nearestExpiry,
+            unit: unitRaw != null && String(unitRaw).trim() !== '' ? String(unitRaw) : undefined,
+            gstRate,
         });
     }
     return out;
 }
-/**
- * `code` alone is shared HSN for many SKUs — keep index field for lookups but prefer `search_blob`
- * (+ name/mfr) for fuzzy text when strict; digit-only lookups still prioritize `code` via query_by shape.
- */
 function typesenseQueryBy(query, strict) {
     if (!strict)
         return 'search_blob,name,code,manufacturer';
@@ -311,7 +373,6 @@ function typesenseQueryBy(query, strict) {
         return 'search_blob,name,code,manufacturer';
     return 'search_blob,name,manufacturer';
 }
-/** Align weights with {@link typesenseQueryBy} field order: search_blob boosts middle-token recall. */
 function typesenseQueryByWeights(queryBy) {
     const weights = {
         search_blob: 4,
@@ -325,19 +386,90 @@ function typesenseQueryByWeights(queryBy) {
         .filter(Boolean);
     return parts.map((field) => { var _a; return String((_a = weights[field]) !== null && _a !== void 0 ? _a : 3); }).join(',');
 }
-/** Natural / retailer-style broad search when `strict` is not true OR `queryMode === 'natural'`. */
 function isBroadRetailSearch(strict, queryModeRaw) {
     if (!strict)
         return true;
     return String(queryModeRaw || '').toLowerCase() === 'natural';
 }
+function escapeFilterValue(value) {
+    return value.replace(/\\/g, '\\\\').replace(/`/g, '\\`');
+}
+function buildMedicineFilters(data) {
+    const filters = [];
+    const category = String(data.category || '').trim();
+    if (category && category !== 'All') {
+        filters.push(`category:=\`${escapeFilterValue(category)}\``);
+    }
+    const manufacturer = String(data.manufacturer || '').trim();
+    if (manufacturer && manufacturer !== 'All') {
+        filters.push(`manufacturer:=\`${escapeFilterValue(manufacturer)}\``);
+    }
+    const stockFilter = String(data.stockFilter || '').trim();
+    if (stockFilter === 'Out')
+        filters.push('stock:=0');
+    else if (stockFilter === 'Low')
+        filters.push('stock:>0 && stock:<10');
+    else if (stockFilter === 'In Stock')
+        filters.push('stock:>0');
+    const expiry = String(data.expiryFilter || '').trim();
+    const now = Date.now();
+    if (expiry === 'expired') {
+        filters.push(`nearestExpiry:>0 && nearestExpiry:<${now}`);
+    }
+    else if (expiry === 'expiring') {
+        const in30 = now + 30 * 24 * 60 * 60 * 1000;
+        filters.push(`nearestExpiry:>=${now} && nearestExpiry:<=${in30}`);
+    }
+    return filters;
+}
+function resolveSortBy(data, browsing) {
+    const sortKey = String(data.sortKey || '').trim();
+    const dir = String(data.sortDirection || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
+    if (sortKey === '_text_match')
+        return '_text_match:desc';
+    // Numeric sorts are safe once stock/nearestExpiry fields exist (added via schema patch).
+    if (sortKey === 'stock' || sortKey === 'nearestExpiry')
+        return `${sortKey}:${dir}`;
+    // name/manufacturer may lack sort:true on legacy collections — omit rather than fail the query.
+    if (!browsing)
+        return '_text_match:desc';
+    return undefined;
+}
+async function upsertMedicineSynonyms(client) {
+    let upserted = 0;
+    for (const def of typesenseMedicineSynonyms_1.MEDICINE_SYNONYM_SEED) {
+        const payload = { synonyms: def.synonyms };
+        if (def.root)
+            payload.root = def.root;
+        await client.collections(exports.TYPESENSE_COLLECTION).synonyms().upsert(def.id, payload);
+        upserted += 1;
+    }
+    return upserted;
+}
+/** Structured log + best-effort daily Firestore counters (never blocks search). */
+function recordMedicineSearchAnalytics(payload) {
+    console.log(JSON.stringify(Object.assign({ event: 'typesense_medicine_search' }, payload)));
+    const day = new Date().toISOString().slice(0, 10);
+    void admin
+        .firestore()
+        .collection('typesenseSearchAnalytics')
+        .doc(`medicines_${day}`)
+        .set({
+        day,
+        collection: 'medicines',
+        searches: admin.firestore.FieldValue.increment(1),
+        emptySearches: admin.firestore.FieldValue.increment(payload.empty ? 1 : 0),
+        browseSearches: admin.firestore.FieldValue.increment(payload.browse ? 1 : 0),
+        latencyMsSum: admin.firestore.FieldValue.increment(payload.latencyMs),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true })
+        .catch((err) => {
+        console.warn('typesenseSearchAnalytics write failed', (err === null || err === void 0 ? void 0 : err.message) || err);
+    });
+}
 /**
  * Authenticated catalog search (Typesense + optional Firestore hydrate).
- * minInstances keeps one instance warm to reduce cold-start latency (requires Blaze; billed while idle).
- *
- * Request (optional backwards-compatible fields consumed by retailer app):
- * - `matchTokenCount` — informational / future tuning
- * - `queryMode`: `'natural' | 'strict'` — `'natural'` widens Typesense behaviour even if `strict` is true (escape hatch).
+ * Autocomplete: q length ≥ 2. Inventory browse: `browse: true` → q:"*" + page/filters/facets.
  */
 exports.searchMedicinesTypesense = functions
     .runWith({ minInstances: 1 })
@@ -345,52 +477,106 @@ exports.searchMedicinesTypesense = functions
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
-        // Lowercase to match search_blob indexing and avoid case-sensitive misses (e.g. CROCIN vs Crocin).
-        const query = String(data.query || '').trim().toLowerCase();
-        const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
-    /** `strict !== true` (default unless explicitly `true`): prefix + extra typos + split_join_tokens — aligns with retailer mobile fallback. Admin panels pass `{ strict: true }`. */
+    const rawQuery = String(data.query || '').trim();
+    const query = rawQuery.toLowerCase();
+    const browse = data.browse === true;
+    const page = Math.min(Math.max(Number(data.page) || 1, 1), 500);
+    const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
     const strict = data.strict === true;
     const broad = isBroadRetailSearch(strict, data.queryMode);
-    /** Default true: full lite docs from Firestore. Set false for autocomplete speed (Typesense fields only). */
     const hydrate = data.hydrate !== false;
-    if (query.length < 2) {
-        return { medicines: [], source: 'typesense' };
+    const includeFacets = data.includeFacets === true;
+    const startedAt = Date.now();
+    if (!browse && query.length < 2) {
+        return {
+            medicines: [],
+            found: 0,
+            page: 1,
+            facet_counts: {},
+            source: 'typesense',
+        };
     }
-    const client = getTypesenseClient();
+    // Prefer search-only key; do not ensureCollection here (needs admin key / write ACL).
+    const client = getTypesenseSearchClient();
     if (!client) {
         throw new functions.https.HttpsError('failed-precondition', 'Typesense is not configured on the server');
     }
     try {
-        await ensureCollection(client);
-        const queryBy = typesenseQueryBy(query, strict);
-        const res = await client.collections(exports.TYPESENSE_COLLECTION).documents().search({
-            q: query,
+        const browsing = browse && query.length < 2;
+        const q = browsing ? '*' : query;
+        const queryBy = browsing ? 'name' : typesenseQueryBy(query, strict);
+        const filters = buildMedicineFilters(data);
+        const sortBy = resolveSortBy(data, browsing);
+        const searchParams = {
+            q,
             query_by: queryBy,
-            query_by_weights: typesenseQueryByWeights(queryBy),
             per_page: limit,
-            prefix: broad,
-            num_typos: broad ? 2 : 1,
-            split_join_tokens: broad ? 'always' : 'fallback',
-            sort_by: '_text_match:desc',
-            prioritize_exact_match: true,
-        });
+            page,
+            prioritize_exact_match: !browsing,
+        };
+        if (filters.length)
+            searchParams.filter_by = filters.join(' && ');
+        if (sortBy)
+            searchParams.sort_by = sortBy;
+        if (!browsing) {
+            searchParams.query_by_weights = typesenseQueryByWeights(queryBy);
+            searchParams.prefix = broad;
+            searchParams.num_typos = broad ? 2 : 1;
+            searchParams.split_join_tokens = broad ? 'always' : 'fallback';
+        }
+        if (includeFacets) {
+            searchParams.facet_by = 'category,manufacturer';
+            searchParams.max_facet_values = 100;
+        }
+        const res = await client.collections(exports.TYPESENSE_COLLECTION).documents().search(searchParams);
         const hits = res.hits || [];
+        const facet_counts = {};
+        for (const fc of res.facet_counts || []) {
+            const field = String(fc.field_name || '');
+            if (!field)
+                continue;
+            facet_counts[field] = (fc.counts || []).map((c) => ({ value: String(c.value), count: Number(c.count) || 0 }));
+        }
+        const found = Number(res.found) || hits.length;
+        recordMedicineSearchAnalytics({
+            browse: browsing,
+            queryLen: rawQuery.length,
+            found,
+            latencyMs: Date.now() - startedAt,
+            page,
+            hydrate,
+            empty: found === 0,
+        });
         if (!hydrate) {
             const medicines = medicinesFromTypesenseHitsOnly(hits);
-            return { medicines, source: 'typesense_index' };
+            return {
+                medicines,
+                found: Number(res.found) || medicines.length,
+                page,
+                facet_counts,
+                source: 'typesense_index',
+            };
         }
-        const ids = hits.map((h) => { var _a; return String(((_a = h.document) === null || _a === void 0 ? void 0 : _a.id) || ''); }).filter(Boolean);
+        const ids = hits
+            .map((h) => { var _a; return String(((_a = h.document) === null || _a === void 0 ? void 0 : _a.id) || ''); })
+            .filter(Boolean);
         const medicines = await fetchMedicinesOrderedByIds(ids);
-        return { medicines, source: 'typesense' };
+        return {
+            medicines,
+            found: Number(res.found) || medicines.length,
+            page,
+            facet_counts,
+            source: 'typesense',
+        };
     }
     catch (err) {
         console.error('searchMedicinesTypesense error', (err === null || err === void 0 ? void 0 : err.message) || err);
         throw new functions.https.HttpsError('internal', (err === null || err === void 0 ? void 0 : err.message) || 'Search failed');
     }
 });
-/** One-time / maintenance: full reindex from Firestore (admin only). */
+/** Paginated reindex — safe for ~800k Firestore masters. */
 exports.adminReindexMedicinesTypesense = functions
-    .runWith({ timeoutSeconds: 540, memory: '512MB' })
+    .runWith({ timeoutSeconds: 540, memory: '1GB' })
     .https.onCall(async (_data, context) => {
     try {
         if (!context.auth) {
@@ -403,6 +589,7 @@ exports.adminReindexMedicinesTypesense = functions
         if (!client) {
             throw new functions.https.HttpsError('failed-precondition', 'Typesense is not configured. Set firebase functions:config:set typesense.host, typesense.api_key, typesense.protocol, typesense.port (http defaults to port 8108 if port omitted!), then firebase deploy --only functions. See functions/TYPESENSE_CONFIG.md.');
         }
+        ensureCollectionPromise = null;
         await ensureCollection(client);
         let batch = [];
         const flush = async () => {
@@ -411,19 +598,44 @@ exports.adminReindexMedicinesTypesense = functions
             await client.collections(exports.TYPESENSE_COLLECTION).documents().import(batch, { action: 'upsert' });
             batch = [];
         };
-        const snap = await admin.firestore().collection('medicines').get();
+        const db = admin.firestore();
+        const pageSize = 500;
+        let lastDoc = null;
         let count = 0;
-        for (const doc of snap.docs) {
-            const d = firestoreDataToTypesenseDoc(doc.id, doc.data());
-            if (d) {
-                batch.push(d);
-                count++;
+        let totalDocs = 0;
+        for (;;) {
+            let q = db
+                .collection('medicines')
+                .orderBy(admin.firestore.FieldPath.documentId())
+                .limit(pageSize);
+            if (lastDoc)
+                q = q.startAfter(lastDoc);
+            const snap = await q.get();
+            if (snap.empty)
+                break;
+            totalDocs += snap.size;
+            for (const doc of snap.docs) {
+                const d = firestoreDataToTypesenseDoc(doc.id, doc.data());
+                if (d) {
+                    batch.push(d);
+                    count++;
+                }
+                if (batch.length >= 100)
+                    await flush();
             }
-            if (batch.length >= 100)
-                await flush();
+            lastDoc = snap.docs[snap.docs.length - 1];
+            if (snap.size < pageSize)
+                break;
         }
         await flush();
-        return { ok: true, indexed: count, totalDocs: snap.size };
+        let synonymsUpserted = 0;
+        try {
+            synonymsUpserted = await upsertMedicineSynonyms(client);
+        }
+        catch (synErr) {
+            console.warn('medicine synonyms upsert after reindex failed', (synErr === null || synErr === void 0 ? void 0 : synErr.message) || synErr);
+        }
+        return { ok: true, indexed: count, totalDocs, synonymsUpserted };
     }
     catch (err) {
         if (err instanceof functions.https.HttpsError)
@@ -438,5 +650,23 @@ exports.adminReindexMedicinesTypesense = functions
             'Verify firebase functions:config typesense.host, protocol, port (must match your server — e.g. 8088 is NOT the default when protocol is http; default is 8108), and api_key. ' +
             'Ensure the Typesense server allows inbound TCP from the internet / Google Cloud egress. Run: firebase deploy --only functions after config changes.');
     }
+});
+/** Upsert pharma synonym seed into Typesense (admin/ops). Safe to re-run. */
+exports.adminSyncMedicineSynonymsTypesense = functions
+    .runWith({ timeoutSeconds: 120, memory: '256MB' })
+    .https.onCall(async (_data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+    }
+    if (!(await canReindexMedicines(context.auth.uid))) {
+        throw new functions.https.HttpsError('permission-denied', 'Admin or operations access required');
+    }
+    const client = getTypesenseClient();
+    if (!client) {
+        throw new functions.https.HttpsError('failed-precondition', 'Typesense is not configured on the server');
+    }
+    await ensureCollection(client);
+    const upserted = await upsertMedicineSynonyms(client);
+    return { ok: true, upserted, seedSize: typesenseMedicineSynonyms_1.MEDICINE_SYNONYM_SEED.length };
 });
 //# sourceMappingURL=typesenseMedicines.js.map
