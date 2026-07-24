@@ -103,8 +103,9 @@ export const InventoryPage: React.FC = () => {
     stockFilter,
     sortKey: searchTerm.trim().length >= 2 ? '_text_match' : typesenseSortKey,
     sortDirection,
-    includeFacets: true,
-    debounceMs: searchTerm.trim().length >= 2 ? 350 : 0,
+    // Facets only needed for filter dropdowns while browsing — typed search matches PI path.
+    includeFacets: searchTerm.trim().length < 2,
+    debounceMs: searchTerm.trim().length >= 2 ? 350 : 50,
   });
 
   const categories = (facet_counts.category || []).map((c) => c.value).filter(Boolean);
