@@ -236,7 +236,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
       {
         id: newRowId(),
         raw: '',
-        parsed: { productName: '' },
+        parsed: { raw: '', productName: '', batchNumber: '', quantity: 0 },
         matchSource: 'none',
         batchNumber: '',
         quantity: 1,
@@ -290,11 +290,11 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
       const standardDiscount = parseFloat(r.standardDiscount) || 20;
       const base = purchasePrice * qty;
       const afterDisc = base - (base * discountPercentage) / 100;
-      const taxAmount = (afterDisc * gstRate) / 100;
+      const lineTax = (afterDisc * gstRate) / 100;
       items.push({
         medicineId: med.id,
         medicineName: med.name,
-        batchNumber: r.batchNumber || undefined,
+        batchNumber: r.batchNumber || '',
         quantity: qty,
         freeQuantity: freeQuantity || undefined,
         schemePaidQty,
@@ -305,14 +305,17 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
         gstRate,
         discountPercentage: discountPercentage || undefined,
         standardDiscount,
-        taxAmount,
-        totalAmount: afterDisc + taxAmount,
-        expiryDate: r.expiryMmYyyy || undefined,
+        totalAmount: afterDisc + lineTax,
+        expiryDate: r.expiryMmYyyy || '',
       });
     }
 
     const subTotal = items.reduce((s, i) => s + (i.purchasePrice || 0) * (i.quantity || 0), 0);
-    const taxAmount = items.reduce((s, i) => s + (i.taxAmount || 0), 0);
+    const taxAmount = items.reduce((s, i) => {
+      const base = (i.purchasePrice || 0) * (i.quantity || 0);
+      const afterDisc = base - (base * (i.discountPercentage || 0)) / 100;
+      return s + (afterDisc * (i.gstRate || 0)) / 100;
+    }, 0);
 
     try {
       await createInvoiceMutation.mutateAsync({
