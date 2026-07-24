@@ -60,17 +60,25 @@ import { httpsCallable } from 'firebase/functions';
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
-  const { data: medicines, isLoading } = useMedicinesMaster({ fresh: true });
+  const { data: medicines, isLoading } = useMedicinesMaster();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   
   const [searchTerm, setSearchTerm] = useState('');
-  const [typesenseHits, setTypesenseHits] = useState<Medicine[] | null>(null);
+  const [typesenseHits, setTypesenseHits] = useState<Medicine[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchSeq = useRef(0);
+  const searchTermRef = useRef(searchTerm);
+  searchTermRef.current = searchTerm;
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [manufacturerFilter, setManufacturerFilter] = useState<string>('All');
   const [stockFilter, setStockFilter] = useState<string>('All');
+
+  const medicinesById = useMemo(() => {
+    const map = new Map<string, Medicine>();
+    for (const m of medicines ?? []) map.set(m.id, m);
+    return map;
+  }, [medicines]);
 
   const expiringMedicines = useMemo(
     () => (medicines ? filterExpiringMedicines(medicines, 30) : undefined),
@@ -92,46 +100,35 @@ export const InventoryPage: React.FC = () => {
     }
   }, [searchParams]);
 
-  // Typesense-first when user types a search query (≥2 chars).
+  // Same pattern as CreatePurchaseInvoice / StockUpdate: Typesense only, debounce + seq cancel.
+  // Do not depend on `medicines` (re-fires on every master refetch and freezes the UI).
   useEffect(() => {
     const trimmed = searchTerm.trim();
     if (trimmed.length < 2) {
-      setTypesenseHits(null);
+      searchSeq.current += 1;
+      setTypesenseHits([]);
       setSearchLoading(false);
       return;
     }
     const seq = ++searchSeq.current;
+    setTypesenseHits([]);
     setSearchLoading(true);
     const t = window.setTimeout(() => {
       searchMedicinesTypesenseAdmin(trimmed, { hydrate: false, limit: 80, strict: true })
         .then((rows) => {
           if (searchSeq.current !== seq) return;
-          const byId = new Map((medicines ?? []).map((m) => [m.id, m]));
-          setTypesenseHits(
-            rows.map((r) => {
-              const master = byId.get(r.id);
-              return master
-                ? {
-                    ...r,
-                    stock: master.stock,
-                    currentStock: master.currentStock ?? master.stock,
-                    nearestExpiry: master.nearestExpiry,
-                    gstRate: master.gstRate ?? r.gstRate,
-                    unit: master.unit ?? r.unit,
-                  }
-                : r;
-            })
-          );
+          if (searchTermRef.current.trim() !== trimmed) return;
+          setTypesenseHits(rows);
         })
         .catch(() => {
-          if (searchSeq.current === seq) setTypesenseHits(null);
+          if (searchSeq.current === seq) setTypesenseHits([]);
         })
         .finally(() => {
           if (searchSeq.current === seq) setSearchLoading(false);
         });
     }, MEDICINE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [searchTerm, medicines]);
+  }, [searchTerm]);
 
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
@@ -185,24 +182,31 @@ export const InventoryPage: React.FC = () => {
   }, [medicines]);
 
   const filteredMedicines = useMemo(() => {
-    const source =
-      searchTerm.trim().length >= 2 && typesenseHits != null ? typesenseHits : medicines ?? [];
+    const trimmed = searchTerm.trim();
+    const searching = trimmed.length >= 2;
+
+    // While searching: only Typesense hits (merged with master stock). Never scan full catalog.
+    // While not searching: master list with category / manufacturer / stock filters only.
+    const source = searching
+      ? typesenseHits.map((r) => {
+          const master = medicinesById.get(r.id);
+          return master
+            ? {
+                ...r,
+                stock: master.stock,
+                currentStock: master.currentStock ?? master.stock,
+                nearestExpiry: master.nearestExpiry,
+                gstRate: master.gstRate ?? r.gstRate,
+                unit: master.unit ?? r.unit,
+                category: master.category || r.category,
+                manufacturer: master.manufacturer || r.manufacturer,
+                company: master.company ?? r.company,
+              }
+            : r;
+        })
+      : medicines ?? [];
 
     return source.filter((medicine) => {
-      // When not using Typesense, apply client substring search on master list.
-      if (searchTerm.trim().length < 2 || typesenseHits == null) {
-        const name = String(medicine.name || '').toLowerCase();
-        const code = String(medicine.code || '').toLowerCase();
-        const manufacturerLower = String(medicine.manufacturer || '').toLowerCase();
-        const search = searchTerm.toLowerCase();
-        const matchesSearch =
-          !search ||
-          name.includes(search) ||
-          code.includes(search) ||
-          manufacturerLower.includes(search);
-        if (!matchesSearch) return false;
-      }
-
       const matchesCategory =
         categoryFilter === 'All' || categoriesMatch(medicine.category, categoryFilter);
 
@@ -221,6 +225,7 @@ export const InventoryPage: React.FC = () => {
     });
   }, [
     medicines,
+    medicinesById,
     typesenseHits,
     searchTerm,
     categoryFilter,
@@ -526,8 +531,10 @@ export const InventoryPage: React.FC = () => {
               }}
               helperText={
                 searchTerm.trim().length >= 2
-                  ? 'Searching via Typesense'
-                  : 'Type 2+ characters for Typesense search'
+                  ? searchLoading
+                    ? 'Searching…'
+                    : `${filteredMedicines.length} result${filteredMedicines.length === 1 ? '' : 's'}`
+                  : 'Type 2+ characters to search (same as Purchase Invoice)'
               }
             />
           </Grid>
