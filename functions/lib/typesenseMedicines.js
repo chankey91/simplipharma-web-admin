@@ -333,7 +333,8 @@ function medicinesFromTypesenseHitsOnly(hits) {
     const out = [];
     for (const h of hits) {
         const d = (h.document && typeof h.document === 'object' ? h.document : {});
-        const id = String(d.id || '').trim();
+        // Typesense always keys docs by `id`; some payloads omit it inside document — use either.
+        const id = String(d.id || h.id || '').trim();
         if (!id)
             continue;
         const rawPrice = d.price;
@@ -435,6 +436,68 @@ function resolveSortBy(data, browsing) {
         return '_text_match:desc';
     return undefined;
 }
+async function runMedicineSearch(client, searchParams) {
+    return client.collections(exports.TYPESENSE_COLLECTION).documents().search(searchParams);
+}
+/**
+ * Search with graceful degradation: facets / numeric sorts / filters / search_blob
+ * can fail on legacy schemas. Retry without the offending options before failing hard.
+ */
+async function searchMedicinesWithFallback(client, baseParams) {
+    const attempts = [baseParams];
+    const withNoFacets = Object.assign({}, baseParams);
+    delete withNoFacets.facet_by;
+    delete withNoFacets.max_facet_values;
+    attempts.push(withNoFacets);
+    const queryBy = String(baseParams.query_by || '');
+    if (queryBy.includes('search_blob')) {
+        const noBlob = Object.assign(Object.assign({}, withNoFacets), { query_by: queryBy
+                .split(',')
+                .map((s) => s.trim())
+                .filter((f) => f && f !== 'search_blob')
+                .join(',') });
+        if (noBlob.query_by) {
+            const weights = {
+                name: 6,
+                code: 5,
+                manufacturer: 2,
+            };
+            const parts = String(noBlob.query_by)
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean);
+            noBlob.query_by_weights = parts.map((field) => { var _a; return String((_a = weights[field]) !== null && _a !== void 0 ? _a : 3); }).join(',');
+            attempts.push(noBlob);
+        }
+    }
+    const minimal = Object.assign({}, withNoFacets);
+    delete minimal.filter_by;
+    if (minimal.sort_by && !String(minimal.sort_by).includes('_text_match')) {
+        delete minimal.sort_by;
+    }
+    attempts.push(minimal);
+    // Dedupe identical attempt payloads
+    const seen = new Set();
+    const uniqueAttempts = [];
+    for (const params of attempts) {
+        const key = JSON.stringify(params);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        uniqueAttempts.push(params);
+    }
+    let lastErr;
+    for (const params of uniqueAttempts) {
+        try {
+            return await runMedicineSearch(client, params);
+        }
+        catch (err) {
+            lastErr = err;
+            console.warn('typesense medicine search attempt failed', { keys: Object.keys(params), query_by: params.query_by }, (err === null || err === void 0 ? void 0 : err.message) || err);
+        }
+    }
+    throw lastErr;
+}
 async function upsertMedicineSynonyms(client) {
     let upserted = 0;
     for (const def of typesenseMedicineSynonyms_1.MEDICINE_SYNONYM_SEED) {
@@ -496,8 +559,18 @@ exports.searchMedicinesTypesense = functions
             source: 'typesense',
         };
     }
-    // Prefer search-only key; do not ensureCollection here (needs admin key / write ACL).
-    const client = getTypesenseSearchClient();
+    // Prefer search-only key for queries. Ensure schema with admin key (search keys cannot PATCH).
+    const adminClient = getTypesenseClient();
+    if (adminClient) {
+        try {
+            await ensureCollection(adminClient);
+        }
+        catch (ensureErr) {
+            console.warn('ensureCollection (admin) skipped', (ensureErr === null || ensureErr === void 0 ? void 0 : ensureErr.message) || ensureErr);
+        }
+    }
+    const searchClient = getTypesenseSearchClient();
+    const client = searchClient || adminClient;
     if (!client) {
         throw new functions.https.HttpsError('failed-precondition', 'Typesense is not configured on the server');
     }
@@ -528,7 +601,20 @@ exports.searchMedicinesTypesense = functions
             searchParams.facet_by = 'category,manufacturer';
             searchParams.max_facet_values = 100;
         }
-        const res = await client.collections(exports.TYPESENSE_COLLECTION).documents().search(searchParams);
+        let res;
+        try {
+            res = await searchMedicinesWithFallback(client, searchParams);
+        }
+        catch (primaryErr) {
+            // Last resort: admin key (in case search-only key is mis-scoped).
+            if (adminClient && client !== adminClient) {
+                console.warn('search-only Typesense key failed; retrying with admin key', (primaryErr === null || primaryErr === void 0 ? void 0 : primaryErr.message) || primaryErr);
+                res = await searchMedicinesWithFallback(adminClient, searchParams);
+            }
+            else {
+                throw primaryErr;
+            }
+        }
         const hits = res.hits || [];
         const facet_counts = {};
         for (const fc of res.facet_counts || []) {
