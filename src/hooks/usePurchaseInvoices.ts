@@ -23,6 +23,10 @@ export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
     queryKey: ['purchaseInvoices'],
     queryFn: getAllPurchaseInvoices,
     enabled: options?.enabled ?? true,
+    // Full PI catalog is large — keep warm so Order Details does not re-download every visit.
+    staleTime: 5 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 };
 

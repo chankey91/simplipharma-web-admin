@@ -55,6 +55,9 @@ export const useOrdersByStatuses = (
     queryKey: ['ordersByStatuses', [...statuses].sort()],
     queryFn: () => getOrdersByStatuses(statuses),
     enabled: options?.enabled ?? true,
+    staleTime: 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 };
 
@@ -198,6 +201,9 @@ export const useOrdersSearch = (
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
     retry: 1,
+    staleTime: 30 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 };
 
@@ -205,7 +211,10 @@ export const useOrder = (orderId: string) => {
   return useQuery({
     queryKey: ['order', orderId],
     queryFn: () => getOrderById(orderId),
-    enabled: !!orderId
+    enabled: !!orderId,
+    staleTime: 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 };
 
