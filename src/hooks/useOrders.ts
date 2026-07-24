@@ -23,6 +23,7 @@ import {
   restoreStockForCancelledOrder,
   getOrderById,
   getOrdersByRetailer,
+  getRetailerOrdersForSchemeHistory,
   updatePaymentStatus
 } from '../services/orders';
 import { getCreditNotesByRetailer } from '../services/creditNotes';
@@ -33,6 +34,7 @@ import {
   buildOrderPlacementBlockedRetailerIds,
   buildPaymentOverdueRetailerIds,
 } from '../utils/retailerPaymentBlock';
+import { buildLastSchemeByMedicineId } from '../utils/retailerLastScheme';
 import { useStores } from './useStores';
 
 export const useOrders = (options?: { enabled?: boolean }) => {
@@ -148,6 +150,29 @@ export const useRetailerLedgerData = (
     enabled: (options?.enabled ?? true) && !!retailerId,
     staleTime: 0,
   });
+};
+
+/**
+ * Last applied sales scheme per medicineId for this retailer (prior fulfilled orders).
+ * Used on Order Details scheme icon hover/click.
+ */
+export const useRetailerLastSchemes = (
+  retailerId: string | undefined,
+  excludeOrderId?: string,
+  options?: { enabled?: boolean }
+) => {
+  const rid = retailerId?.trim() ?? '';
+  const query = useQuery({
+    queryKey: ['retailerLastSchemes', rid],
+    queryFn: () => getRetailerOrdersForSchemeHistory(rid),
+    enabled: (options?.enabled ?? true) && !!rid,
+    staleTime: 5 * 60 * 1000,
+  });
+  const lastSchemeByMedicineId = useMemo(
+    () => buildLastSchemeByMedicineId(query.data ?? [], excludeOrderId),
+    [query.data, excludeOrderId]
+  );
+  return { ...query, lastSchemeByMedicineId };
 };
 
 /** Live payment status for a bounded set of orders (Payment Requests page). */

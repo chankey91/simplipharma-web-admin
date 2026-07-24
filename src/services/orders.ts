@@ -157,6 +157,33 @@ export const getOrdersByRetailer = async (retailerId: string): Promise<LedgerOrd
   }
 };
 
+/**
+ * Retailer orders for scheme history (no payment subcollection reads).
+ * Prefer recent first; caller builds last-scheme map.
+ */
+export const getRetailerOrdersForSchemeHistory = async (
+  retailerId: string
+): Promise<Order[]> => {
+  const ordersCol = collection(db, 'orders');
+  try {
+    const snapshot = await getDocs(
+      query(ordersCol, where('retailerId', '==', retailerId), orderBy('orderDate', 'desc'))
+    );
+    return snapshot.docs.map((docSnap) => mapOrderDoc(docSnap));
+  } catch (error) {
+    console.warn('getRetailerOrdersForSchemeHistory query failed, falling back:', error);
+    const snapshot = await getDocs(ordersCol);
+    return snapshot.docs
+      .map((docSnap) => mapOrderDoc(docSnap))
+      .filter((o) => o.retailerId === retailerId)
+      .sort((a, b) => {
+        const dateA = a.orderDate instanceof Date ? a.orderDate : new Date(a.orderDate);
+        const dateB = b.orderDate instanceof Date ? b.orderDate : new Date(b.orderDate);
+        return dateB.getTime() - dateA.getTime();
+      });
+  }
+};
+
 export const getOrderById = async (orderId: string): Promise<Order | null> => {
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
@@ -539,6 +566,7 @@ export const fulfillOrder = async (
     taxAmount: number;
     taxPercentage: number;
     subTotal: number;
+    totalDiscount?: number;
     totalAmount: number;
     trayNumber?: string;
     processedBy?: string;
@@ -944,6 +972,7 @@ export const fulfillOrder = async (
     taxAmount: fulfillmentData.taxAmount || 0,
     taxPercentage: fulfillmentData.taxPercentage || 5,
     subTotal: fulfillmentData.subTotal || 0,
+    totalDiscount: fulfillmentData.totalDiscount || 0,
     totalAmount: fulfillmentData.totalAmount || 0,
   };
   
@@ -1095,6 +1124,7 @@ export const recalculateOrderPricing = async (
   await updateDoc(orderRef, {
     medicines: recalculated,
     subTotal: totals.subTotal,
+    totalDiscount: totals.totalDiscount,
     taxAmount: totals.taxAmount,
     totalAmount: totals.grandTotal,
     dueAmount: Math.max(0, totals.grandTotal - paidAmount),

@@ -299,3 +299,100 @@ export const exportPendingOrdersProductSummary = async (
   const dateStr = istDateStampCompact();
   XLSX.writeFile(wb, `${filename}-${dateStr}.xlsx`);
 };
+
+/**
+ * One row per retailer with store details and associated Sales Officer fields.
+ * Caller should pass the already filtered/sorted store list.
+ */
+export const exportRetailersWithSalesOfficers = async (
+  retailers: User[],
+  salesOfficers: User[],
+  filename: string = 'retailers-with-sales-officers'
+) => {
+  if (retailers.length === 0) {
+    await appAlert('No retailers found to export', { severity: 'warning' });
+    return;
+  }
+
+  const soById = new Map(salesOfficers.map((so) => [so.id, so]));
+
+  const excelData: (string | number)[][] = [
+    [
+      'SR',
+      'Store Code',
+      'Shop Name',
+      'Owner',
+      'Email',
+      'Phone',
+      'Address',
+      'Licence No.',
+      'Aadhar No.',
+      'Licence Holder',
+      'PAN',
+      'GST',
+      'Status',
+      'Latitude',
+      'Longitude',
+      'Retailer ID',
+      'SO Name',
+      'SO Email',
+      'SO Phone',
+      'SO ID',
+    ],
+  ];
+
+  retailers.forEach((store, index) => {
+    const so = store.salesOfficerId ? soById.get(store.salesOfficerId) : undefined;
+    excelData.push([
+      index + 1,
+      store.storeCode || '',
+      store.shopName || store.displayName || '',
+      store.ownerName || store.displayName || '',
+      store.email || '',
+      store.phoneNumber || '',
+      store.address || store.location?.address || '',
+      store.licenceNumber || '',
+      store.aadharNumber || '',
+      store.licenceHolderName || '',
+      store.pan || '',
+      store.gst || '',
+      store.isActive !== false ? 'Active' : 'Inactive',
+      store.location?.latitude ?? '',
+      store.location?.longitude ?? '',
+      store.id || '',
+      so?.displayName || so?.email || '',
+      so?.email || '',
+      so?.phoneNumber || '',
+      store.salesOfficerId || '',
+    ]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(excelData);
+  ws['!cols'] = [
+    { wch: 5 },
+    { wch: 12 },
+    { wch: 30 },
+    { wch: 22 },
+    { wch: 28 },
+    { wch: 14 },
+    { wch: 40 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 22 },
+    { wch: 14 },
+    { wch: 16 },
+    { wch: 10 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 28 },
+    { wch: 22 },
+    { wch: 28 },
+    { wch: 14 },
+    { wch: 28 },
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Retailers');
+
+  const dateStr = istDateStampCompact();
+  XLSX.writeFile(wb, `${filename}-${dateStr}.xlsx`);
+};

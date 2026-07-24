@@ -38,10 +38,11 @@ import {
   Payment,
   AttachMoney,
 } from '@mui/icons-material';
-import { usePurchaseInvoice, useUpdatePurchaseInvoice, useUpdatePurchaseInvoicePayment } from '../hooks/usePurchaseInvoices';
+import { usePurchaseInvoice, useUpdatePurchaseInvoice, useUpdatePurchaseInvoicePayment, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
+import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
 import { PurchaseInvoiceItem } from '../types';
@@ -54,6 +55,11 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { data: invoice, isLoading } = usePurchaseInvoice(invoiceId || '');
   const updateInvoiceMutation = useUpdatePurchaseInvoice();
   const updatePaymentMutation = useUpdatePurchaseInvoicePayment();
+  const { lastPurchaseByMedicineId } = useVendorLastPurchases(
+    undefined,
+    invoice?.id,
+    { enabled: true }
+  );
   const { alert, confirm, prompt } = useAppDialog();
   const [paymentDialog, setPaymentDialog] = useState({
     open: false,
@@ -373,7 +379,19 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                           {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
                         </TableCell>
                         <TableCell align="center">
-                          {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
+                          <Box display="flex" alignItems="center" justifyContent="center" gap={0.5}>
+                            <Typography variant="body2" component="span">
+                              {formatPurchaseSchemeLabel(item.schemePaidQty, item.schemeFreeQty)}
+                            </Typography>
+                            {item.medicineId ? (
+                              <RetailerLastSchemeHint
+                                lastScheme={lastPurchaseByMedicineId.get(item.medicineId)}
+                                contextLabel="Previous purchase (same item · any vendor)"
+                                emptyHint="No prior purchase for this item"
+                                subjectLabel="this item"
+                              />
+                            ) : null}
+                          </Box>
                         </TableCell>
                         <TableCell align="center">
                           {item.nonReturnable === true ? (
@@ -681,6 +699,21 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 value={currentItem.discountPercentage}
                 onChange={(e) => setCurrentItem({ ...currentItem, discountPercentage: e.target.value })}
               />
+            </Grid>
+            <Grid item xs={12}>
+              <Box display="flex" alignItems="center" justifyContent="space-between" gap={1}>
+                <Typography variant="caption" color="text.secondary">
+                  Previous purchase for this item (scheme, discount, rate)
+                </Typography>
+                {itemDialog.itemIndex != null && items[itemDialog.itemIndex]?.medicineId ? (
+                  <RetailerLastSchemeHint
+                    lastScheme={lastPurchaseByMedicineId.get(items[itemDialog.itemIndex].medicineId)}
+                    contextLabel="Previous purchase (same item · any vendor)"
+                    emptyHint="No prior purchase for this item"
+                    subjectLabel="this item"
+                  />
+                ) : null}
+              </Box>
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField

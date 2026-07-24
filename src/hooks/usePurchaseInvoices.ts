@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { 
   getAllPurchaseInvoices,
   getPayablePurchaseInvoices,
@@ -17,6 +18,7 @@ import {
 import { TypesenseSearchParams, TypesenseSearchResult } from '../services/typesenseSearch';
 import { getPurchaseInvoiceAmountTotal } from '../services/dashboardAggregations';
 import { PurchaseInvoice } from '../types';
+import { buildLastPurchaseByMedicineId } from '../utils/vendorLastPurchase';
 
 export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
   return useQuery({
@@ -37,6 +39,28 @@ export const useVendorPurchaseInvoices = (vendorId: string, options?: { enabled?
     enabled: (options?.enabled ?? true) && !!vendorId,
     staleTime: 0,
   });
+};
+
+/**
+ * Last purchase line per medicineId across all vendors
+ * (scheme, discount, rate, etc.). Used on Create / Purchase Invoice Details.
+ */
+export const useVendorLastPurchases = (
+  _vendorId?: string | undefined,
+  excludeInvoiceId?: string,
+  options?: { enabled?: boolean }
+) => {
+  const query = useQuery({
+    queryKey: ['purchaseLastByMedicine'],
+    queryFn: () => getAllPurchaseInvoices(),
+    enabled: options?.enabled ?? true,
+    staleTime: 5 * 60 * 1000,
+  });
+  const lastPurchaseByMedicineId = useMemo(
+    () => buildLastPurchaseByMedicineId(query.data ?? [], excludeInvoiceId),
+    [query.data, excludeInvoiceId]
+  );
+  return { ...query, lastPurchaseByMedicineId };
 };
 
 /** Payable purchase bills only (Unpaid/Partial) — vendor ledger. */
