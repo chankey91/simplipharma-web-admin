@@ -38,8 +38,7 @@ import {
 import { alpha, useTheme } from '@mui/material/styles';
 import { useOrderDashboardStats, useRecentOrders } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
-import { useMedicinesMaster } from '../hooks/useInventory';
-import { filterExpiringMedicines, filterExpiredMedicines } from '../services/inventory';
+import { useMedicineCatalogStats } from '../hooks/useMedicineCatalogStats';
 import { usePendingRetailerRequests } from '../hooks/usePendingRetailers';
 import { useCreditNoteTotals, useDebitNoteTotals } from '../hooks/useCreditNotes';
 import { useExpiryReturns } from '../hooks/useExpiryReturns';
@@ -164,20 +163,11 @@ export const DashboardPage: React.FC = () => {
     refetch: refetchStores,
   } = useStores(!isOperations);
   const {
-    data: medicines,
+    data: medicineStats,
     isLoading: medicinesLoading,
     isError: medicinesError,
     refetch: refetchMedicines,
-  } = useMedicinesMaster();
-  // Derive expiry buckets from master list (nearestExpiry) — no second full catalog read.
-  const expiringMedicines = useMemo(
-    () => (medicines ? filterExpiringMedicines(medicines, 30) : undefined),
-    [medicines]
-  );
-  const expiredMedicines = useMemo(
-    () => (medicines ? filterExpiredMedicines(medicines) : undefined),
-    [medicines]
-  );
+  } = useMedicineCatalogStats();
   const { data: pendingRetailerRequests } = usePendingRetailerRequests(!isOperations);
   const {
     data: creditTotals,
@@ -210,11 +200,7 @@ export const DashboardPage: React.FC = () => {
     const thisMonthGross = orderStats?.thisMonthGross ?? 0;
     const unpaid = orderStats?.unpaidCount ?? 0;
 
-    const lowStock =
-      medicines?.filter((m) => {
-        const q = m.currentStock ?? m.stock ?? 0;
-        return q > 0 && q < 10;
-      }).length ?? 0;
+    const lowStock = medicineStats?.lowStock ?? 0;
 
     const activeStores = stores?.filter((s) => s.isActive !== false).length ?? 0;
 
@@ -254,11 +240,13 @@ export const DashboardPage: React.FC = () => {
       unpaid,
       lowStock,
       activeStores,
-      productCount: medicines?.length ?? 0,
+      productCount: medicineStats?.productCount ?? 0,
+      expiredCount: medicineStats?.expiredCount ?? 0,
+      expiringCount: medicineStats?.expiringCount ?? 0,
       recent,
       pendingRetailers,
     };
-  }, [orderStats, recentOrders, medicines, stores, pendingRetailerRequests, creditTotals, debitTotals, expiryReturns]);
+  }, [orderStats, recentOrders, medicineStats, stores, pendingRetailerRequests, creditTotals, debitTotals, expiryReturns]);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
   const sortedRecentOrders = useMemo(() => {
@@ -581,22 +569,22 @@ export const DashboardPage: React.FC = () => {
                     awaiting review
                   </Alert>
                 )}
-                {expiredMedicines && expiredMedicines.length > 0 && (
+                {stats.expiredCount > 0 && (
                   <Alert
                     severity="error"
                     onClick={() => navigate('/inventory')}
                     sx={{ cursor: 'pointer' }}
                   >
-                    {expiredMedicines.length} batch{expiredMedicines.length !== 1 ? 'es' : ''} with expired stock
+                    {stats.expiredCount} medicine{stats.expiredCount !== 1 ? 's' : ''} with expired stock
                   </Alert>
                 )}
-                {expiringMedicines && expiringMedicines.length > 0 && (
+                {stats.expiringCount > 0 && (
                   <Alert
                     severity="warning"
                     onClick={() => navigate('/inventory')}
                     sx={{ cursor: 'pointer' }}
                   >
-                    {expiringMedicines.length} medicine{expiringMedicines.length !== 1 ? 's' : ''} expiring within 30
+                    {stats.expiringCount} medicine{stats.expiringCount !== 1 ? 's' : ''} expiring within 30
                     days
                   </Alert>
                 )}
@@ -620,8 +608,8 @@ export const DashboardPage: React.FC = () => {
                   </Alert>
                 )}
                 {(isOperations || stats.pendingRetailers === 0) &&
-                  (!expiredMedicines || expiredMedicines.length === 0) &&
-                  (!expiringMedicines || expiringMedicines.length === 0) &&
+                  stats.expiredCount === 0 &&
+                  stats.expiringCount === 0 &&
                   stats.lowStock === 0 &&
                   stats.thisMonthCreditCount === 0 && (
                     <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>

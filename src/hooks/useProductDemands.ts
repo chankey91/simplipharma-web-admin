@@ -61,13 +61,16 @@ export const useProductDemand = (demandId: string) => {
   });
 };
 
-/** Scoped to one order (+ line demand ids) for OrderDetails instead of full collection. */
+/** Scoped to one order (+ line demand ids) for Order Details instead of full collection. */
 export const useProductDemandsForOrder = (orderId: string, lineDemandIds: string[]) => {
   const key = [...lineDemandIds].sort().join(',');
   return useQuery({
     queryKey: ['productDemands', 'order', orderId, key],
     queryFn: () => getProductDemandsForOrder(orderId, lineDemandIds),
     enabled: !!orderId || lineDemandIds.length > 0,
+    staleTime: 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 };
 
