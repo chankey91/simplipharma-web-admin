@@ -27,6 +27,23 @@ export function isBillableFulfillmentLine(line: {
   );
 }
 
+/**
+ * Line has a real batch assignment. This is THE rule for what appears on the GST
+ * invoice PDF — totals shown/stored for fulfilled orders must use the same rule,
+ * otherwise the page bills lines the printed invoice omits (e.g. "Not assigned").
+ */
+export function hasBatchAssignment(line: {
+  batchNumber?: string;
+  batchAllocations?: unknown[];
+}): boolean {
+  if (String(line.batchNumber || '').trim()) return true;
+  const allocs = line.batchAllocations;
+  if (!Array.isArray(allocs) || allocs.length === 0) return false;
+  return allocs.some(
+    (a) => String((a as { batchNumber?: string } | null)?.batchNumber || '').trim().length > 0
+  );
+}
+
 export type OrderTotalsBreakdown = {
   billableLines: any[];
   subTotal: number;
@@ -47,9 +64,27 @@ export function calculateOrderTotalsFromLines(
   medicines: Medicine[] | undefined,
   taxPercentage: number,
   purchaseLookup?: PurchaseBatchDiscountLookup,
-  options?: { lockPersistedDiscount?: boolean }
+  options?: {
+    lockPersistedDiscount?: boolean;
+    /**
+     * Bill only lines that will appear on the GST invoice PDF (batch assigned).
+     * Use so page/stored totals always match the printed invoice.
+     */
+    invoiceLinesOnly?: boolean;
+    /**
+     * Pending fulfillment UI: also require the green tick (verified).
+     * Verified is UI-only and not persisted after fulfill.
+     */
+    requireVerified?: boolean;
+  }
 ): OrderTotalsBreakdown {
-  const billableLines = lines.filter(isBillableFulfillmentLine);
+  let billableLines = lines.filter(isBillableFulfillmentLine);
+  if (options?.invoiceLinesOnly) {
+    billableLines = billableLines.filter(hasBatchAssignment);
+  }
+  if (options?.requireVerified) {
+    billableLines = billableLines.filter((line) => line?.verified === true);
+  }
   const fallbackTaxPct = taxPercentage || 5;
 
   let subTotal = 0;
@@ -120,7 +155,7 @@ export function resolveOrderInvoiceGrandTotal(
     medicinesCatalog,
     order.taxPercentage || 5,
     purchaseLookup,
-    { lockPersistedDiscount: true }
+    { lockPersistedDiscount: true, invoiceLinesOnly: true }
   );
 
   if (breakdown.billableLines.length > 0 && breakdown.grandTotal > 0) {
