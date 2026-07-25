@@ -951,6 +951,7 @@ export const OrderDetailsPage: React.FC = () => {
 
   const taxPctForTotals = order?.taxPercentage || fulfillmentData.taxPercentage || 5;
   const lockDiscAfterFulfill = Boolean(order && order.status !== 'Pending');
+  const isPendingFulfillment = order?.status === 'Pending';
   const orderTotals = useMemo(
     () =>
       order
@@ -959,7 +960,12 @@ export const OrderDetailsPage: React.FC = () => {
             medicines,
             taxPctForTotals,
             purchaseDiscountLookup,
-            { lockPersistedDiscount: lockDiscAfterFulfill }
+            {
+              lockPersistedDiscount: lockDiscAfterFulfill,
+              // Invoice omits batch-less lines; Pending also requires green tick.
+              invoiceLinesOnly: true,
+              requireVerified: isPendingFulfillment,
+            }
           )
         : {
             billableLines: [],
@@ -978,6 +984,7 @@ export const OrderDetailsPage: React.FC = () => {
       taxPctForTotals,
       purchaseDiscountLookup,
       lockDiscAfterFulfill,
+      isPendingFulfillment,
     ]
   );
   const orderTotalSyncRef = useRef<string | null>(null);
@@ -1306,7 +1313,9 @@ export const OrderDetailsPage: React.FC = () => {
           fulfillmentData.medicines,
           medicines,
           taxPctForLines,
-          purchaseDiscountLookup
+          purchaseDiscountLookup,
+          // Same rules as the invoice: batch-assigned + verified only.
+          { invoiceLinesOnly: true, requireVerified: true }
         );
         const { subTotal, totalDiscount, taxAmount, grandTotal: totalAmount } = fulfillTotals;
         

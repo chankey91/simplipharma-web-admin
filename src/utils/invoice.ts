@@ -27,6 +27,7 @@ import {
   unitPriceFromMrp,
 } from './orderFulfillmentDiscount';
 import { PAYMENT_QR_DATA_URI } from '../assets/paymentQr';
+import { hasBatchAssignment } from './orderTotals';
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
@@ -135,10 +136,9 @@ export type OrderInvoicePrepared = {
 /** True when the line has a real batch assignment and should appear on the tax invoice. */
 function isAllocatedInvoiceMedicineLine(item: Order['medicines'][number]): boolean {
   if ((item as { lineType?: string }).lineType === 'product_demand') return false;
-  if (String(item.batchNumber || '').trim()) return true;
-  const allocs = item.batchAllocations;
-  if (!Array.isArray(allocs) || allocs.length === 0) return false;
-  return allocs.some((a) => String(a?.batchNumber || '').trim().length > 0);
+  // Shared rule with calculateOrderTotalsFromLines({ invoiceLinesOnly }) — keep in sync
+  // so page/stored totals never bill lines the printed invoice omits.
+  return hasBatchAssignment(item);
 }
 
 async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepared> {
