@@ -326,6 +326,7 @@ async function parseMedicineLiteFromSnap(
     id: snap.id,
     name: String(data.name || ''),
     code: data.code ? String(data.code) : undefined,
+    productId: data.productId ? String(data.productId) : undefined,
     category: String(data.category || ''),
     unit: data.unit ? String(data.unit) : undefined,
     stock: typeof data.stock === 'number' ? data.stock : parseInt(String(data.stock ?? '0'), 10) || 0,

@@ -23,8 +23,12 @@ function mapLiteToMedicine(raw: Record<string, unknown>): Medicine {
     id: String(raw.id ?? ''),
     name: String(raw.name ?? ''),
     category: String(raw.category ?? ''),
-    code: raw.code != null ? String(raw.code) : undefined,
-    productId: raw.productId != null ? String(raw.productId) : undefined,
+    code:
+      raw.code != null && String(raw.code).trim() !== '' ? String(raw.code).trim() : undefined,
+    productId:
+      raw.productId != null && String(raw.productId).trim() !== ''
+        ? String(raw.productId).trim()
+        : undefined,
     unit: raw.unit != null ? String(raw.unit) : undefined,
     manufacturer: String(raw.manufacturer ?? ''),
     stock,
