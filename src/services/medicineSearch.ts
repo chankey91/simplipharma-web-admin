@@ -59,15 +59,16 @@ export type SearchMedicinesOptions = {
   /** Page number (1-based). Used for Inventory browse/search pagination. */
   page?: number;
   /**
-   * Typesense strictness. When omitted (recommended), matches retailer:
-   * single-token → strict; multi-word → natural (broader prefix/typos/code).
+   * Typesense strictness. When omitted, admin uses **natural** (prefix/typos/code).
+   * Retailer gets many single-token hits via Firestore name-prefix; without those reads,
+   * natural Typesense is the recall equivalent (e.g. "test" → "Testa…").
    */
   strict?: boolean;
   matchTokenCount?: number;
   queryMode?: 'strict' | 'natural';
   /**
    * Client refine/re-rank on Typesense hits only (no Firestore).
-   * Default: on for typed search, off for browse.
+   * Default: on for typed search, off for browse. Never drops a page to empty if Typesense returned hits.
    */
   refineResults?: boolean;
   /** When true (and query &lt; 2 chars), browse catalog via q:"*" — do not download Firestore masters. */
@@ -217,8 +218,9 @@ export type MedicineSearchRefineResult = {
 };
 
 /**
- * Retailer-aligned post-filter/rank on Typesense hits only (no Firestore fallback).
- * Match haystack includes name / code / manufacturer / productId.
+ * Light post-filter/rank on Typesense hits only (no Firestore).
+ * If AND/OR gates would empty a non-empty Typesense page, keep server hits (avoids
+ * "N results" + empty table). Match haystack: name / code / manufacturer / productId.
  */
 export function refineMedicineSearchResults(
   typesenseHits: Medicine[],
@@ -237,8 +239,15 @@ export function refineMedicineSearchResults(
   if (strictFromTs.length > 0) {
     fromTs = strictFromTs;
   } else if (typesenseHits.length > 0) {
-    fromTs = typesenseHits.filter((m) => medicineMatchesSearchInputRelaxed(m, t));
-    usedRelaxed = fromTs.length > 0;
+    const relaxed = typesenseHits.filter((m) => medicineMatchesSearchInputRelaxed(m, t));
+    if (relaxed.length > 0) {
+      fromTs = relaxed;
+      usedRelaxed = true;
+    } else {
+      // Synonym / tokenized Typesense hits that don't substring-match client fields.
+      fromTs = typesenseHits;
+      usedRelaxed = true;
+    }
   } else {
     fromTs = [];
   }
@@ -263,8 +272,8 @@ export async function searchMedicinesCatalog(
   const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 120);
   const page = Math.min(Math.max(opts?.page ?? 1, 1), 500);
   const tc = deriveSearchMatchTokens(q);
-  // Retailer default: single-token strict; multi-word natural (broader Typesense recall).
-  const strict = typeof opts?.strict === 'boolean' ? opts.strict : tc.length <= 1;
+  // Natural Typesense ≈ retailer Firestore name-prefix recall, without Firestore reads.
+  const strict = typeof opts?.strict === 'boolean' ? opts.strict : false;
   const matchTokenCount = opts?.matchTokenCount ?? tc.length;
   const queryMode = opts?.queryMode ?? (strict ? 'strict' : 'natural');
   const doRefine = opts?.refineResults ?? !browse;

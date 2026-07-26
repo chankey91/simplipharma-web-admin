@@ -98,6 +98,8 @@ export const InventoryPage: React.FC = () => {
     hydrate: false,
     limit: rowsPerPage,
     page,
+    // Trust Typesense page rows for the table (found count must match visible rows).
+    refineResults: false,
     category: categoryFilter,
     manufacturer: manufacturerFilter,
     stockFilter,
