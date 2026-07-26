@@ -408,6 +408,8 @@ export const OrderDetailsPage: React.FC = () => {
   const orderDemandRepairAttempted = useRef<string | null>(null);
   /** After fulfill, hydrate UI once — PI/medicines refetch must not remount lines (Disc flicker). */
   const fulfilledUiFrozenRef = useRef<string | null>(null);
+  /** Pending: structure key of last line hydrate — skip remount when only PI/catalog arrives. */
+  const pendingHydrateStructureKeyRef = useRef<string>('');
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localPendingEditsRef = useRef<{ orderId: string | null; dirty: boolean }>({
     orderId: null,
@@ -465,9 +467,9 @@ export const OrderDetailsPage: React.FC = () => {
       };
       writeSessionFulfillmentDraft(order.id, payload);
       await saveOrderFulfillmentDraft(order.id, payload);
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      // Do not invalidate order lists here — that refetch remounted Pending UI / conflict checks.
     },
-    [order?.id, order?.status, order?.taxPercentage, queryClient]
+    [order?.id, order?.status, order?.taxPercentage]
   );
 
   const scheduleFulfillmentDraftSave = useCallback(
@@ -566,21 +568,35 @@ export const OrderDetailsPage: React.FC = () => {
   /** Tracks which order id has had fulfillment lines synced (avoids empty table on first paint). */
   const [fulfillmentInitOrderId, setFulfillmentInitOrderId] = useState<string | null>(null);
 
-  // Only load medicines (with batches) for this order's line IDs — not the full catalog.
-  // `undefined` until order is loaded so we do not fire an empty fetch then a second fetch.
+  // Load medicines for server order lines. Extra ids only when user adds a line not on the order yet
+  // (stable key — do not depend on full fulfillmentData.medicines remaps).
   const medicineIdsForOrder = useMemo(() => {
     if (!order) return undefined;
     const ids = new Set<string>();
     for (const m of order.medicines ?? []) {
-      if (m.medicineId) ids.add(m.medicineId);
+      if (m.medicineId) ids.add(String(m.medicineId));
     }
+    const serverIds = ids;
     for (const m of fulfillmentData.medicines ?? []) {
-      if (m?.medicineId) ids.add(String(m.medicineId));
+      const id = m?.medicineId != null ? String(m.medicineId) : '';
+      if (id && !serverIds.has(id)) ids.add(id);
     }
     return [...ids];
-  }, [order, fulfillmentData.medicines]);
+  }, [order, order?.medicines, fulfillmentData.medicines]);
 
-  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(medicineIdsForOrder);
+  const medicineIdsKey = useMemo(
+    () => (medicineIdsForOrder ? [...medicineIdsForOrder].sort().join(',') : ''),
+    [medicineIdsForOrder]
+  );
+
+  // Recompute ids for the hook from the stable key so remap-only array identity changes do not refetch.
+  const stableMedicineIdsForOrder = useMemo(() => {
+    if (!order) return undefined;
+    if (!medicineIdsKey) return [] as string[];
+    return medicineIdsKey.split(',').filter(Boolean);
+  }, [order, medicineIdsKey]);
+
+  const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(stableMedicineIdsForOrder);
 
   // Batch allocation dialog state
   const [batchAllocationDialog, setBatchAllocationDialog] = useState<{
@@ -637,6 +653,7 @@ export const OrderDetailsPage: React.FC = () => {
     localPendingEditsRef.current = { orderId: null, dirty: false };
     orderDemandRepairAttempted.current = null;
     fulfilledUiFrozenRef.current = null;
+    pendingHydrateStructureKeyRef.current = '';
   }, [orderId]);
 
   useEffect(() => {
@@ -671,13 +688,54 @@ export const OrderDetailsPage: React.FC = () => {
   }, [leaveBlocker.state, confirmLeaveIfNeeded, leaveBlocker]);
 
   useEffect(() => {
-    // Do not wait for full purchaseInvoices catalog — hydrate with empty lookup first,
-    // then re-run when PIs arrive (discount lookup updates).
+    // Hydrate fulfillment lines from order (+ optional draft). Catalog/PI updates must not
+    // remount lines — discount re-apply effect handles Disc % without full reset.
     if (!order || medicines === undefined) return;
 
-    // Fulfilled+: load lines once. Re-running on every PI/medicines update remounted Disc %
-    // and made totals look like they were flipping custom ↔ default.
+    // Fulfilled+: load lines once.
     if (order.status !== 'Pending' && fulfilledUiFrozenRef.current === order.id) {
+      return;
+    }
+
+    const draftUpdatedAtMs = (() => {
+      const u = order.fulfillmentDraft?.updatedAt as
+        | { toMillis?: () => number }
+        | Date
+        | number
+        | undefined;
+      if (u == null) return 0;
+      if (typeof u === 'number') return u;
+      if (u instanceof Date) return u.getTime();
+      if (typeof u.toMillis === 'function') return u.toMillis();
+      return 0;
+    })();
+
+    const structureKey = [
+      order.id,
+      order.status,
+      order.trayNumber || '',
+      order.processedBy || '',
+      order.paymentStatus || '',
+      String(order.paidAmount ?? ''),
+      String(order.taxPercentage ?? ''),
+      String(draftUpdatedAtMs),
+      JSON.stringify(
+        (order.medicines || []).map((m) => [
+          m.medicineId || '',
+          m.productDemandId || '',
+          m.quantity ?? '',
+          m.batchNumber || '',
+          m.lineType || '',
+        ])
+      ),
+    ].join('|');
+
+    // Pending already hydrated for this structure — ignore medicines/PI catalog churn.
+    if (
+      order.status === 'Pending' &&
+      pendingHydrateStructureKeyRef.current === structureKey &&
+      fulfillmentInitOrderId === order.id
+    ) {
       return;
     }
 
@@ -719,9 +777,11 @@ export const OrderDetailsPage: React.FC = () => {
       ? mergeFulfillmentWorkIntoLines(mappedFromServer, savedDraft.medicines)
       : mappedFromServer;
 
-    if (savedDraft) {
-      localPendingEditsRef.current = { orderId: order.id, dirty: true };
-      setFulfillmentDirty(true);
+    // Draft already persisted in Firestore/session — apply to UI without marking dirty
+    // (dirty would auto-save in a loop and flicker the page).
+    if (savedDraft && localPendingEditsRef.current.orderId === order.id) {
+      localPendingEditsRef.current = { orderId: order.id, dirty: false };
+      setFulfillmentDirty(false);
     }
 
     setFulfillmentData((prev) => {
@@ -743,7 +803,9 @@ export const OrderDetailsPage: React.FC = () => {
       };
     });
     setFulfillmentInitOrderId(order.id);
-    if (order.status !== 'Pending') {
+    if (order.status === 'Pending') {
+      pendingHydrateStructureKeyRef.current = structureKey;
+    } else {
       fulfilledUiFrozenRef.current = order.id;
     }
 
@@ -777,6 +839,9 @@ export const OrderDetailsPage: React.FC = () => {
         return;
       }
 
+      // Pending: repair server lines at most once; do not replace local work from async remap.
+      if (orderDemandRepairAttempted.current === order.id) return;
+
       const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
         rawMedicines,
         order.id,
@@ -785,43 +850,24 @@ export const OrderDetailsPage: React.FC = () => {
         purchaseInvoicesList
       );
 
-      if (changed && orderDemandRepairAttempted.current !== order.id) {
+      if (cancelled) return;
+
+      if (changed) {
         orderDemandRepairAttempted.current = order.id;
         try {
           await updateOrderMedicines(order.id, repaired);
           queryClient.invalidateQueries({ queryKey: ['order', order.id] });
-          queryClient.invalidateQueries({ queryKey: ['orders'] });
           queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+          // Clear structure key so the next order.medicines snapshot can re-hydrate once.
+          pendingHydrateStructureKeyRef.current = '';
         } catch (err) {
           console.error('Failed to repair fulfilled demand order lines:', err);
           orderDemandRepairAttempted.current = null;
         }
+        return;
       }
 
-      if (cancelled) return;
-
-      setFulfillmentData((prev) => {
-        const repairedMapped = repaired.map((line) =>
-          mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup, order.status)
-        );
-
-        if (
-          order.status === 'Pending' &&
-          localPendingEditsRef.current.orderId === order.id &&
-          localPendingEditsRef.current.dirty
-        ) {
-          const workSource =
-            prev.medicines.length > 0
-              ? prev.medicines
-              : savedDraft?.medicines ?? [];
-          return {
-            ...prev,
-            medicines: mergeFulfillmentWorkIntoLines(repairedMapped, workSource),
-          };
-        }
-
-        return { ...prev, medicines: repairedMapped };
-      });
+      orderDemandRepairAttempted.current = order.id;
     })();
 
     return () => {
@@ -839,16 +885,17 @@ export const OrderDetailsPage: React.FC = () => {
     order?.paidAmount,
     medicines,
     productDemands,
-    purchaseInvoices,
     purchaseInvoicesList,
     purchaseDiscountLookup,
+    fulfillmentInitOrderId,
     queryClient,
   ]);
 
   // Re-apply batch/PI trade discount only while Pending (before fulfill).
-  // After fulfill, saved Disc % (including 0%) must not be overwritten from PI.
+  // Updates Disc % in place — does not mark dirty / does not remount the page.
   useEffect(() => {
     if (!order || order.status !== 'Pending') return;
+    if (fulfillmentInitOrderId !== order.id) return;
 
     setFulfillmentData((prev) => {
       if (!prev.medicines.length) return prev;
@@ -882,18 +929,26 @@ export const OrderDetailsPage: React.FC = () => {
 
       return changed ? { ...prev, medicines: nextMedicines } : prev;
     });
-  }, [purchaseDiscountLookup, order?.status, order?.taxPercentage, medicines]);
+  }, [
+    purchaseDiscountLookup,
+    order?.status,
+    order?.taxPercentage,
+    order?.id,
+    medicines,
+    fulfillmentInitOrderId,
+  ]);
 
-  // Auto-save in-progress fulfillment while Pending (survives navigation to Product Demands).
+  // Auto-save only after a real user edit (fulfillmentDirty), not on catalog remap.
   useEffect(() => {
     if (order?.status !== 'Pending') return;
+    if (!fulfillmentDirty) return;
     if (!localPendingEditsRef.current.dirty) return;
     if (!fulfillmentData.medicines.length) return;
     scheduleFulfillmentDraftSave(fulfillmentData.medicines);
     return () => {
       if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
     };
-  }, [fulfillmentData.medicines, order?.status, scheduleFulfillmentDraftSave]);
+  }, [fulfillmentData.medicines, order?.status, fulfillmentDirty, scheduleFulfillmentDraftSave]);
 
   const allBatchesAssignedForTotals = useMemo(
     () =>
@@ -1226,7 +1281,15 @@ export const OrderDetailsPage: React.FC = () => {
     markFulfillmentDirty,
   ]);
 
-  if (isLoading || (Boolean(orderId) && (medicines === undefined || medicinesLoading))) {
+  // Only block first paint — never swap the whole page on background medicine refetch.
+  const waitingForMedicines =
+    Boolean(orderId) &&
+    Boolean(order) &&
+    (stableMedicineIdsForOrder?.length ?? 0) > 0 &&
+    medicines === undefined &&
+    medicinesLoading;
+
+  if (isLoading || waitingForMedicines) {
     return <Loading message="Loading order details..." />;
   }
 
