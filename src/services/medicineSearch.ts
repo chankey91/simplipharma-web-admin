@@ -24,6 +24,7 @@ function mapLiteToMedicine(raw: Record<string, unknown>): Medicine {
     name: String(raw.name ?? ''),
     category: String(raw.category ?? ''),
     code: raw.code != null ? String(raw.code) : undefined,
+    productId: raw.productId != null ? String(raw.productId) : undefined,
     unit: raw.unit != null ? String(raw.unit) : undefined,
     manufacturer: String(raw.manufacturer ?? ''),
     stock,
@@ -124,11 +125,12 @@ export function deriveSearchMatchTokens(trimmedRawQuery: string): string[] {
   return [parts.join(' ')];
 }
 
-function fieldHaystackLower(m: Medicine): { n: string; c: string; f: string } {
+function fieldHaystackLower(m: Medicine): { n: string; c: string; f: string; p: string } {
   return {
     n: (m.name || '').toLowerCase(),
     c: String(m.code ?? '').toLowerCase(),
     f: (m.manufacturer || '').toLowerCase(),
+    p: String(m.productId ?? '').toLowerCase(),
   };
 }
 
@@ -136,16 +138,18 @@ function fieldHaystackLower(m: Medicine): { n: string; c: string; f: string } {
 export function medicineMatchesSearchInput(m: Medicine, inputValue: string): boolean {
   const tokens = deriveSearchMatchTokens(inputValue);
   if (tokens.length === 0) return true;
-  const { n, c, f } = fieldHaystackLower(m);
-  const hitsToken = (tok: string) => n.includes(tok) || c.includes(tok) || f.includes(tok);
+  const { n, c, f, p } = fieldHaystackLower(m);
+  const hitsToken = (tok: string) =>
+    n.includes(tok) || c.includes(tok) || f.includes(tok) || p.includes(tok);
   return tokens.every(hitsToken);
 }
 
 export function medicineMatchesSearchInputRelaxed(m: Medicine, inputValue: string): boolean {
   const tokens = deriveSearchMatchTokens(inputValue);
   if (tokens.length <= 1) return medicineMatchesSearchInput(m, inputValue);
-  const { n, c, f } = fieldHaystackLower(m);
-  const hitsToken = (tok: string) => n.includes(tok) || c.includes(tok) || f.includes(tok);
+  const { n, c, f, p } = fieldHaystackLower(m);
+  const hitsToken = (tok: string) =>
+    n.includes(tok) || c.includes(tok) || f.includes(tok) || p.includes(tok);
   return tokens.some(hitsToken);
 }
 
@@ -158,6 +162,7 @@ export function rankMedicinesForAutocompleteQuery(medicines: Medicine[], query: 
     const n = (m.name || '').toLowerCase();
     const c = String(m.code ?? '').toLowerCase();
     const f = (m.manufacturer || '').toLowerCase();
+    const p = String(m.productId ?? '').toLowerCase();
 
     if (stems.length > 1) {
       const allInName = stems.every((s) => n.includes(s));
@@ -167,21 +172,23 @@ export function rankMedicinesForAutocompleteQuery(medicines: Medicine[], query: 
         return 1;
       }
       if (stems.some((s) => n.includes(s))) return 2;
-      if (stems.some((s) => c.includes(s) || f.includes(s))) return 3;
+      if (stems.some((s) => p.includes(s) || c.includes(s) || f.includes(s))) return 3;
       return 4;
     }
 
     if (stems.length === 1) {
       const needle = stems[0];
+      if (p === needle || p.startsWith(needle)) return 0;
       if (n.startsWith(needle)) return 0;
       if (n.includes(needle)) return 1;
-      if (c.includes(needle) || f.includes(needle)) return 2;
+      if (p.includes(needle) || c.includes(needle) || f.includes(needle)) return 2;
       return 3;
     }
 
+    if (p === ql || p.startsWith(ql)) return 0;
     if (n.startsWith(ql)) return 0;
     if (n.includes(ql)) return 1;
-    if (c.includes(ql) || f.includes(ql)) return 2;
+    if (p.includes(ql) || c.includes(ql) || f.includes(ql)) return 2;
     return 3;
   };
 

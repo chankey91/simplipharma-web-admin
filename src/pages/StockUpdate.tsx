@@ -275,6 +275,11 @@ export const StockUpdatePage: React.FC = () => {
                     Current Info
                   </Typography>
                   <Typography variant="h6">{selectedMedicine.name}</Typography>
+                  {selectedMedicine.productId ? (
+                    <Typography variant="body2" color="text.secondary">
+                      Product ID: {selectedMedicine.productId}
+                    </Typography>
+                  ) : null}
                   <Typography variant="body2">
                     Current Stock: {selectedMedicine.currentStock ?? selectedMedicine.stock ?? 0}
                   </Typography>

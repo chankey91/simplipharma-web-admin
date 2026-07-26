@@ -297,6 +297,7 @@ function masterFromDoc(
     manufacturer: String(data.manufacturer || ''),
     category: String(data.category || ''),
     code: data.code ? String(data.code) : undefined,
+    productId: data.productId ? String(data.productId) : undefined,
     unit: data.unit ? String(data.unit) : undefined,
     stock,
     currentStock: stock,
@@ -894,6 +895,7 @@ export const updateMedicine = async (
 
   if (updates.name !== undefined) cleanUpdates.name = updates.name;
   if (updates.code !== undefined) cleanUpdates.code = updates.code;
+  if (updates.productId !== undefined) cleanUpdates.productId = updates.productId;
   if (updates.category !== undefined) cleanUpdates.category = updates.category;
   if (updates.unit !== undefined) cleanUpdates.unit = updates.unit;
   if (updates.manufacturer !== undefined) cleanUpdates.manufacturer = updates.manufacturer;
@@ -959,6 +961,7 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
   };
 
   if (medicineData.code) newMedicine.code = medicineData.code;
+  if (medicineData.productId) newMedicine.productId = medicineData.productId;
   if (medicineData.unit) newMedicine.unit = medicineData.unit;
   if (medicineData.description) newMedicine.description = medicineData.description;
   if (medicineData.imageUrl) newMedicine.imageUrl = medicineData.imageUrl;
