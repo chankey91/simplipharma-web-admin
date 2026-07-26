@@ -777,12 +777,25 @@ export const searchMedicinesTypesense = functions
     }
   });
 
+const REINDEX_PROGRESS_DOC = 'ops/typesenseMedicineReindex';
+
+type ReindexProgress = {
+  status?: string;
+  nextStartAfterId?: string | null;
+  cumulativeIndexed?: number;
+  cumulativeScanned?: number;
+  updatedAt?: FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp | string;
+};
+
 /**
- * Chunked reindex — Gen1 callables hard-cap at 540s, so one shot cannot finish ~400k+.
- * Pass `{ startAfterId }` to resume; returns `{ done, nextStartAfterId }` for the client to loop.
+ * Chunked reindex — keep each invoke short (~1–2 min). Long callables (~8 min) often die on the
+ * client as `functions/internal` even when the function returns 200.
+ *
+ * Body: `{ startAfterId?, reset?, maxDocs?, timeBudgetMs? }`
+ * Returns: `{ done, nextStartAfterId, indexed, scanned, cumulativeIndexed, cumulativeScanned }`
  */
 export const adminReindexMedicinesTypesense = functions
-  .runWith({ timeoutSeconds: 540, memory: '2GB' })
+  .runWith({ timeoutSeconds: 300, memory: '2GB' })
   .https.onCall(async (data, context) => {
     try {
       if (!context.auth) {
@@ -800,26 +813,52 @@ export const adminReindexMedicinesTypesense = functions
         );
       }
 
-      const startAfterId =
-        data && typeof data === 'object' && typeof (data as { startAfterId?: unknown }).startAfterId === 'string'
-          ? String((data as { startAfterId: string }).startAfterId).trim()
-          : '';
-      // Leave headroom under the 540s hard kill so we can return a clean resume cursor.
+      const raw = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+      const reset = raw.reset === true;
+      const db = admin.firestore();
+      const progressRef = db.doc(REINDEX_PROGRESS_DOC);
+      const progressSnap = await progressRef.get();
+      const progress = (progressSnap.data() || {}) as ReindexProgress;
+
+      let startAfterId =
+        typeof raw.startAfterId === 'string' ? String(raw.startAfterId).trim() : '';
+      if (!startAfterId && !reset && progress.status === 'in_progress' && progress.nextStartAfterId) {
+        startAfterId = String(progress.nextStartAfterId);
+      }
+      if (reset) {
+        startAfterId = '';
+        await progressRef.set(
+          {
+            status: 'in_progress',
+            nextStartAfterId: null,
+            cumulativeIndexed: 0,
+            cumulativeScanned: 0,
+            startedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            startedBy: context.auth.uid,
+          },
+          { merge: true }
+        );
+      }
+
+      // Short chunks: browsers / Firebase client often drop ~8min callables as "internal".
       const timeBudgetMs = Math.min(
-        500_000,
-        Math.max(
-          60_000,
-          Number((data as { timeBudgetMs?: unknown })?.timeBudgetMs) || 480_000
-        )
+        120_000,
+        Math.max(30_000, Number(raw.timeBudgetMs) || 90_000)
       );
+      const maxDocs = Math.min(50_000, Math.max(1_000, Number(raw.maxDocs) || 12_000));
       const startedAt = Date.now();
+      let cumulativeIndexed = reset ? 0 : Number(progress.cumulativeIndexed) || 0;
+      let cumulativeScanned = reset ? 0 : Number(progress.cumulativeScanned) || 0;
 
       console.log('adminReindexMedicinesTypesense start', {
         uid: context.auth.uid,
         host: getTypesenseConfig()?.host,
         port: getTypesenseConfig()?.port,
         startAfterId: startAfterId || null,
+        reset,
         timeBudgetMs,
+        maxDocs,
       });
 
       if (!startAfterId) {
@@ -834,7 +873,6 @@ export const adminReindexMedicinesTypesense = functions
         batch = [];
       };
 
-      const db = admin.firestore();
       const pageSize = 500;
       let lastId = startAfterId;
       let count = 0;
@@ -843,6 +881,7 @@ export const adminReindexMedicinesTypesense = functions
 
       for (;;) {
         if (Date.now() - startedAt >= timeBudgetMs) break;
+        if (count >= maxDocs) break;
 
         let q: FirebaseFirestore.Query = db
           .collection('medicines')
@@ -862,14 +901,19 @@ export const adminReindexMedicinesTypesense = functions
             count++;
           }
           if (batch.length >= 200) await flush();
+          if (count >= maxDocs) break;
         }
         lastId = snap.docs[snap.docs.length - 1].id;
+        if (count >= maxDocs) break;
         if (snap.size < pageSize) {
           done = true;
           break;
         }
       }
       await flush();
+
+      cumulativeIndexed += count;
+      cumulativeScanned += totalDocs;
 
       let synonymsUpserted = 0;
       if (done) {
@@ -878,6 +922,29 @@ export const adminReindexMedicinesTypesense = functions
         } catch (synErr: any) {
           console.warn('medicine synonyms upsert after reindex failed', synErr?.message || synErr);
         }
+        await progressRef.set(
+          {
+            status: 'done',
+            nextStartAfterId: null,
+            cumulativeIndexed,
+            cumulativeScanned,
+            synonymsUpserted,
+            finishedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } else {
+        await progressRef.set(
+          {
+            status: 'in_progress',
+            nextStartAfterId: lastId || null,
+            cumulativeIndexed,
+            cumulativeScanned,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
 
       console.log('adminReindexMedicinesTypesense chunk done', {
@@ -885,6 +952,7 @@ export const adminReindexMedicinesTypesense = functions
         scanned: totalDocs,
         done,
         nextStartAfterId: done ? null : lastId,
+        cumulativeIndexed,
         elapsedMs: Date.now() - startedAt,
       });
 
@@ -895,6 +963,8 @@ export const adminReindexMedicinesTypesense = functions
         scanned: totalDocs,
         done,
         nextStartAfterId: done ? null : lastId,
+        cumulativeIndexed,
+        cumulativeScanned,
         synonymsUpserted,
       };
     } catch (err: unknown) {
