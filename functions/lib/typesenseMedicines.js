@@ -692,12 +692,16 @@ exports.searchMedicinesTypesense = functions
         throw new functions.https.HttpsError('internal', (err === null || err === void 0 ? void 0 : err.message) || 'Search failed');
     }
 });
+const REINDEX_PROGRESS_DOC = 'ops/typesenseMedicineReindex';
 /**
- * Chunked reindex — Gen1 callables hard-cap at 540s, so one shot cannot finish ~400k+.
- * Pass `{ startAfterId }` to resume; returns `{ done, nextStartAfterId }` for the client to loop.
+ * Chunked reindex — keep each invoke short (~1–2 min). Long callables (~8 min) often die on the
+ * client as `functions/internal` even when the function returns 200.
+ *
+ * Body: `{ startAfterId?, reset?, maxDocs?, timeBudgetMs? }`
+ * Returns: `{ done, nextStartAfterId, indexed, scanned, cumulativeIndexed, cumulativeScanned }`
  */
 exports.adminReindexMedicinesTypesense = functions
-    .runWith({ timeoutSeconds: 540, memory: '2GB' })
+    .runWith({ timeoutSeconds: 300, memory: '2GB' })
     .https.onCall(async (data, context) => {
     var _a, _b;
     try {
@@ -711,18 +715,42 @@ exports.adminReindexMedicinesTypesense = functions
         if (!client) {
             throw new functions.https.HttpsError('failed-precondition', 'Typesense is not configured. Set firebase functions:config:set typesense.host, typesense.api_key, typesense.protocol, typesense.port (http defaults to port 8108 if port omitted!), then firebase deploy --only functions. See functions/TYPESENSE_CONFIG.md.');
         }
-        const startAfterId = data && typeof data === 'object' && typeof data.startAfterId === 'string'
-            ? String(data.startAfterId).trim()
-            : '';
-        // Leave headroom under the 540s hard kill so we can return a clean resume cursor.
-        const timeBudgetMs = Math.min(500000, Math.max(60000, Number(data === null || data === void 0 ? void 0 : data.timeBudgetMs) || 480000));
+        const raw = data && typeof data === 'object' ? data : {};
+        const reset = raw.reset === true;
+        const db = admin.firestore();
+        const progressRef = db.doc(REINDEX_PROGRESS_DOC);
+        const progressSnap = await progressRef.get();
+        const progress = (progressSnap.data() || {});
+        let startAfterId = typeof raw.startAfterId === 'string' ? String(raw.startAfterId).trim() : '';
+        if (!startAfterId && !reset && progress.status === 'in_progress' && progress.nextStartAfterId) {
+            startAfterId = String(progress.nextStartAfterId);
+        }
+        if (reset) {
+            startAfterId = '';
+            await progressRef.set({
+                status: 'in_progress',
+                nextStartAfterId: null,
+                cumulativeIndexed: 0,
+                cumulativeScanned: 0,
+                startedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                startedBy: context.auth.uid,
+            }, { merge: true });
+        }
+        // Short chunks: browsers / Firebase client often drop ~8min callables as "internal".
+        const timeBudgetMs = Math.min(120000, Math.max(30000, Number(raw.timeBudgetMs) || 90000));
+        const maxDocs = Math.min(50000, Math.max(1000, Number(raw.maxDocs) || 12000));
         const startedAt = Date.now();
+        let cumulativeIndexed = reset ? 0 : Number(progress.cumulativeIndexed) || 0;
+        let cumulativeScanned = reset ? 0 : Number(progress.cumulativeScanned) || 0;
         console.log('adminReindexMedicinesTypesense start', {
             uid: context.auth.uid,
             host: (_a = getTypesenseConfig()) === null || _a === void 0 ? void 0 : _a.host,
             port: (_b = getTypesenseConfig()) === null || _b === void 0 ? void 0 : _b.port,
             startAfterId: startAfterId || null,
+            reset,
             timeBudgetMs,
+            maxDocs,
         });
         if (!startAfterId) {
             ensureCollectionPromise = null;
@@ -735,7 +763,6 @@ exports.adminReindexMedicinesTypesense = functions
             await client.collections(exports.TYPESENSE_COLLECTION).documents().import(batch, { action: 'upsert' });
             batch = [];
         };
-        const db = admin.firestore();
         const pageSize = 500;
         let lastId = startAfterId;
         let count = 0;
@@ -743,6 +770,8 @@ exports.adminReindexMedicinesTypesense = functions
         let done = false;
         for (;;) {
             if (Date.now() - startedAt >= timeBudgetMs)
+                break;
+            if (count >= maxDocs)
                 break;
             let q = db
                 .collection('medicines')
@@ -764,14 +793,20 @@ exports.adminReindexMedicinesTypesense = functions
                 }
                 if (batch.length >= 200)
                     await flush();
+                if (count >= maxDocs)
+                    break;
             }
             lastId = snap.docs[snap.docs.length - 1].id;
+            if (count >= maxDocs)
+                break;
             if (snap.size < pageSize) {
                 done = true;
                 break;
             }
         }
         await flush();
+        cumulativeIndexed += count;
+        cumulativeScanned += totalDocs;
         let synonymsUpserted = 0;
         if (done) {
             try {
@@ -780,12 +815,31 @@ exports.adminReindexMedicinesTypesense = functions
             catch (synErr) {
                 console.warn('medicine synonyms upsert after reindex failed', (synErr === null || synErr === void 0 ? void 0 : synErr.message) || synErr);
             }
+            await progressRef.set({
+                status: 'done',
+                nextStartAfterId: null,
+                cumulativeIndexed,
+                cumulativeScanned,
+                synonymsUpserted,
+                finishedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
+        }
+        else {
+            await progressRef.set({
+                status: 'in_progress',
+                nextStartAfterId: lastId || null,
+                cumulativeIndexed,
+                cumulativeScanned,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
         }
         console.log('adminReindexMedicinesTypesense chunk done', {
             indexed: count,
             scanned: totalDocs,
             done,
             nextStartAfterId: done ? null : lastId,
+            cumulativeIndexed,
             elapsedMs: Date.now() - startedAt,
         });
         return {
@@ -795,6 +849,8 @@ exports.adminReindexMedicinesTypesense = functions
             scanned: totalDocs,
             done,
             nextStartAfterId: done ? null : lastId,
+            cumulativeIndexed,
+            cumulativeScanned,
             synonymsUpserted,
         };
     }
