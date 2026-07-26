@@ -2,7 +2,10 @@
 export interface Medicine {
   id: string;
   /**
-   * Canonical business product key (e.g. DRS000001 from master extract, or Legacy_NNNNNN).
+   * Canonical business product key:
+   * - DRS… from master extract migration
+   * - Legacy_NNNNNN for pre-cutover in-use rows
+   * - SPSNNNNNN auto-assigned on admin create / bulk import when no id is provided
    * Firestore document id remains the operational medicineId for orders/batches.
    */
   productId?: string;

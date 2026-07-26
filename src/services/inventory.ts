@@ -18,6 +18,7 @@ import {
 import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
 import { Medicine, StockBatch } from '../types';
 import { standardDiscountFromStockBatch } from '../utils/orderFulfillmentDiscount';
+import { allocateSpsProductId } from '../utils/spsProductId';
 
 /** Top-level collection for on-hand lots (transactional). Master stays on `medicines`. */
 export const MEDICINE_BATCHES_COLLECTION = 'medicineBatches';
@@ -944,10 +945,16 @@ export const setStockBatchNonReturnable = async (
 
 export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promise<string> => {
   const medicineRef = doc(collection(db, 'medicines'));
+  const productId =
+    medicineData.productId && String(medicineData.productId).trim()
+      ? String(medicineData.productId).trim()
+      : await allocateSpsProductId();
+
   const newMedicine: any = {
     name: medicineData.name,
     category: medicineData.category,
     manufacturer: medicineData.manufacturer,
+    productId,
     stock: medicineData.stock || 0,
     currentStock: medicineData.currentStock || medicineData.stock || 0,
     activeBatchCount: 0,
@@ -961,7 +968,6 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
   };
 
   if (medicineData.code) newMedicine.code = medicineData.code;
-  if (medicineData.productId) newMedicine.productId = medicineData.productId;
   if (medicineData.unit) newMedicine.unit = medicineData.unit;
   if (medicineData.description) newMedicine.description = medicineData.description;
   if (medicineData.imageUrl) newMedicine.imageUrl = medicineData.imageUrl;
