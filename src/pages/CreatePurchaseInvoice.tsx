@@ -236,7 +236,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   } = useMedicineSearch(medicineSearchInput, {
     hydrate: false,
     limit: 40,
-    strict: true,
     skipQuery: mainSkip,
   });
 
@@ -245,7 +244,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   } = useMedicineSearch(newMedicineData.name, {
     hydrate: false,
     limit: 40,
-    strict: true,
     enabled: addMedicineDialog,
   });
 

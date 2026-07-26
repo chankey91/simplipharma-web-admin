@@ -64,7 +64,6 @@ const ProductPickList: React.FC<{
   const { medicines: rawHits, loading: searchLoading } = useMedicineSearch(searchInput, {
     hydrate: false,
     limit: 40,
-    strict: true,
   });
   const searchHits = useMemo(
     () => rawHits.filter((m) => !ids.includes(m.id)),
