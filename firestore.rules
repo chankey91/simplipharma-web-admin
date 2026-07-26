@@ -441,6 +441,22 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Sequential SPS###### productId allocator (manual create + bulk import without Product ID).
+    match /counters/{counterId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && counterId == 'spsProductId'
+        && request.resource.data.next is int
+        && request.resource.data.next >= 2;
+      allow update: if signedIn()
+        && counterId == 'spsProductId'
+        && request.resource.data.next is int
+        && resource.data.next is int
+        && request.resource.data.next > resource.data.next
+        && request.resource.data.next - resource.data.next <= 2000;
+      allow delete: if false;
+    }
+
     // ----- In-app support (Phase 1): one thread per auth uid, ticket queue for admins -----
     match /support_threads/{userId} {
       allow read: if signedIn() && (request.auth.uid == userId || isAdminOrOperations());
