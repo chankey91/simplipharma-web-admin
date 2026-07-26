@@ -94,6 +94,7 @@ export const InventoryPage: React.FC = () => {
     loading: searchLoading,
   } = useMedicineSearch(searchTerm, {
     browseWhenEmpty: true,
+    // Typesense-only — productId/HSN come from the index after reindex (no per-page Firestore reads).
     hydrate: false,
     limit: rowsPerPage,
     page,
@@ -474,6 +475,7 @@ export const InventoryPage: React.FC = () => {
           <TableHead>
             <TableRow>
               <SortableTableHeadCell columnId="name" label="Medicine Details" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <TableCell>Product ID</TableCell>
               <SortableTableHeadCell columnId="type" label="Type" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="packaging" label="Packaging" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="manufacturer" label="Manufacturer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -485,7 +487,7 @@ export const InventoryPage: React.FC = () => {
           <TableBody>
             {pageRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>
                     {searchLoading ? 'Loading…' : 'No medicines found'}
                   </Typography>
@@ -503,11 +505,15 @@ export const InventoryPage: React.FC = () => {
                     <Typography variant="body2" fontWeight="bold">
                       {medicine.name}
                     </Typography>
-                    <Typography variant="caption" color="textSecondary" display="block">
-                      {medicine.productId || 'No product ID'}
-                    </Typography>
-                    <Typography variant="caption" color="textSecondary">
-                      {medicine.code ? `HSN ${medicine.code}` : 'No HSN'}
+                    {medicine.code ? (
+                      <Typography variant="caption" color="textSecondary">
+                        HSN {medicine.code}
+                      </Typography>
+                    ) : null}
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                      {medicine.productId || '—'}
                     </Typography>
                   </TableCell>
                   <TableCell>{medicine.category}</TableCell>
