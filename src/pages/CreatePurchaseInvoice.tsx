@@ -938,7 +938,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                       {...params}
                       inputRef={medicineSearchInputElRef}
                       label="Search Medicine"
-                      placeholder="Search by medicine name or manufacturer..."
+                      placeholder="Search by name, product ID, or manufacturer..."
                       size="small"
                       sx={{ minWidth: 300 }}
                       InputProps={{

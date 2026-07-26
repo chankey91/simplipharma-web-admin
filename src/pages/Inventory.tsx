@@ -377,7 +377,7 @@ export const InventoryPage: React.FC = () => {
           <Grid item xs={12} md={6}>
             <TextField
               fullWidth
-              placeholder="Search by name, code, or manufacturer..."
+              placeholder="Search by name, product ID, code, or manufacturer..."
               value={searchTerm}
               onChange={(e) => {
                 const next = e.target.value;
@@ -503,8 +503,11 @@ export const InventoryPage: React.FC = () => {
                     <Typography variant="body2" fontWeight="bold">
                       {medicine.name}
                     </Typography>
+                    <Typography variant="caption" color="textSecondary" display="block">
+                      {medicine.productId || 'No product ID'}
+                    </Typography>
                     <Typography variant="caption" color="textSecondary">
-                      {medicine.code || 'No code'}
+                      {medicine.code ? `HSN ${medicine.code}` : 'No HSN'}
                     </Typography>
                   </TableCell>
                   <TableCell>{medicine.category}</TableCell>

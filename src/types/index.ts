@@ -1,6 +1,11 @@
 // Reuse existing types and extend them
 export interface Medicine {
   id: string;
+  /**
+   * Canonical business product key (e.g. DRS000001 from master extract, or Legacy_NNNNNN).
+   * Firestore document id remains the operational medicineId for orders/batches.
+   */
+  productId?: string;
   /** Often the GST HSN item code — the same HSN may apply to many different products/SKUs. */
   code?: string;
   name: string;
