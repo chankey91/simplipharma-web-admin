@@ -1,13 +1,6 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Order, PurchaseInvoice, ProductDemand, Medicine } from '../types';
-import {
-  billablePaidFromAllocationSums,
-  orderedUnitsFromAllocation,
-  orderLinePhysicalO,
-  orderLineSchemeDisplayPhysical,
-  schemeOrderLineDisplayTotals,
-} from './schemeFulfillment';
 import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
 import { getUserProfile } from '../services/firebase';
@@ -19,15 +12,10 @@ import { tryPromoteFulfilledDemandLine } from './productDemandOrderLine';
 import { formatOrderInvoiceLabel } from './orderDisplay';
 import { sendOrderInvoicePdfToRetailer } from '../services/orderInvoiceEmail';
 import { appAlert } from './appDialog';
-import {
-  buildPurchaseBatchDiscountLookup,
-  resolveOrderLineDiscountPct,
-  resolveOrderLineDisplayDiscountPct,
-  resolveSellDiscountPct,
-  unitPriceFromMrp,
-} from './orderFulfillmentDiscount';
+import { buildPurchaseBatchDiscountLookup } from './orderFulfillmentDiscount';
+import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import { PAYMENT_QR_DATA_URI } from '../assets/paymentQr';
-import { hasBatchAssignment } from './orderTotals';
+import { calculateOrderTotalsFromLines, hasBatchAssignment } from './orderTotals';
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
@@ -150,13 +138,6 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
-  const getSchemePair = (source: any) => {
-    return {
-      paid: source?.schemePaidQty ?? source?.purchaseSchemeDeal,
-      free: source?.schemeFreeQty ?? source?.purchaseSchemeFree,
-    };
-  };
-  
   const productDemandIds = [
     ...new Set(
       order.medicines.map((m) => m.productDemandId).filter((id): id is string => Boolean(id))
@@ -250,78 +231,45 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     console.warn('Failed to load purchase invoices for invoice discount resolution:', error);
   }
   
-  // Calculate totals
-  let totalSubTotal = 0;
-  let totalProductDiscount = 0;
-  let totalGST = 0;
-  const taxableByGstRate = new Map<number, number>();
+  // Same pipeline as Order Details / fulfill / ledger — never reimplement rate/disc/GST here.
+  const fallbackTaxPct = order.taxPercentage || 5;
+  const medicinesCatalog: Medicine[] = [];
+  for (const [medicineId, med] of medicineDetailsMap.entries()) {
+    if (!med) continue;
+    medicinesCatalog.push({ ...(med as Medicine), id: (med as Medicine).id || medicineId });
+  }
+  const totals = calculateOrderTotalsFromLines(
+    invoiceMedicines,
+    medicinesCatalog,
+    fallbackTaxPct,
+    purchaseDiscountLookup,
+    { lockPersistedDiscount: true, invoiceLinesOnly: true }
+  );
 
+  const taxableByGstRate = new Map<number, number>();
   const items = invoiceMedicines.map((item, index) => {
     const medicineDetails = item.medicineId ? medicineDetailsMap.get(item.medicineId) : undefined;
-
-    /** Resolve P/F from batch allocations + inventory (same as fulfillment). */
-    const resolveSchemePF = (
-      allocations: any[] | undefined,
-      batchNumber?: string
-    ): { p?: number; f?: number; totalO: number } => {
-      let p: number | undefined;
-      let f: number | undefined;
-      if (allocations && allocations.length > 0) {
-        for (const allocation of allocations) {
-          const batchFromInventory = medicineDetails?.stockBatches?.find(
-            (b: any) => b.batchNumber === allocation.batchNumber
-          );
-          const allocationScheme = getSchemePair(allocation);
-          const inventoryScheme = getSchemePair(batchFromInventory);
-          const pp = toNumber(allocationScheme.paid ?? inventoryScheme.paid);
-          const ff = toNumber(allocationScheme.free ?? inventoryScheme.free);
-          if (pp > 0 && ff > 0) {
-            p = pp;
-            f = ff;
-            break;
-          }
-        }
-      } else {
-        const stockBatch = medicineDetails?.stockBatches?.find((b: any) => b.batchNumber === batchNumber);
-        const pair = getSchemePair(stockBatch);
-        p = toNumber(pair.paid) || undefined;
-        f = toNumber(pair.free) || undefined;
-      }
-      const totalO = orderLineSchemeDisplayPhysical(item, p, f);
-      return { p, f, totalO };
-    };
-
     const allocs = item.batchAllocations;
-    const { p: schemeP, f: schemeF, totalO } = resolveSchemePF(allocs, item.batchNumber);
+    const e = orderLineInvoiceEconomics(
+      item,
+      medicineDetails,
+      fallbackTaxPct,
+      purchaseDiscountLookup,
+      { lockPersistedDiscount: true }
+    );
 
-    const displayCols = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF);
-
-    let paidQty: number;
-    let freeQty: number;
-    let physicalQty: number;
-
-    if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
-      paidQty = displayCols.billQty;
-      freeQty = displayCols.freeQty;
-      physicalQty = totalO;
-    } else if (allocs && allocs.length > 0) {
-      const sumPaid = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
-      const sumFree = allocs.reduce((s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0), 0);
-      const physicalO = orderLinePhysicalO(item);
-      paidQty = billablePaidFromAllocationSums(item, sumPaid, sumFree);
-      freeQty = sumFree;
-      physicalQty = physicalO;
-    } else {
-      paidQty = toNumber(item.quantity);
-      freeQty =
-        item.freeQuantity !== undefined && item.freeQuantity !== null
-          ? toNumber(item.freeQuantity)
-          : 0;
-      physicalQty = paidQty + freeQty;
-    }
-    const quantity = paidQty;
-    const freeQuantity = freeQty;
-    const totalQty = physicalQty;
+    const quantity = e.paidQty;
+    const freeQuantity = e.freeQty;
+    const totalQty = e.totalO > 0 ? e.totalO : quantity + freeQuantity;
+    const price = e.unitPrice;
+    const gstRate = e.gstRate > 0 ? e.gstRate : fallbackTaxPct;
+    const discountPercentage = e.discountPct;
+    const totalAmount = price * quantity;
+    const discountAmount = discountPercentage > 0 && totalAmount > 0
+      ? (totalAmount * discountPercentage) / 100
+      : 0;
+    const lineTaxable = Math.max(0, totalAmount - discountAmount);
+    taxableByGstRate.set(gstRate, (taxableByGstRate.get(gstRate) || 0) + lineTaxable);
 
     const primaryBatchNumber =
       item.batchNumber || (allocs && allocs.length > 0 ? allocs[0].batchNumber : undefined);
@@ -329,7 +277,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       ? medicineDetails?.stockBatches?.find((b: any) => b.batchNumber === primaryBatchNumber)
       : undefined;
 
-    const firstPositiveFromAllocs = (key: 'mrp' | 'discountPercentage' | 'gstRate' | 'purchasePrice') => {
+    const firstPositiveFromAllocs = (key: 'mrp') => {
       if (!allocs || allocs.length === 0) return 0;
       for (const allocation of allocs) {
         const n = toNumber(allocation?.[key]);
@@ -343,169 +291,6 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     if (mrp <= 0) mrp = toNumber(primaryBatch?.mrp);
     if (mrp <= 0) mrp = toNumber(medicineDetails?.mrp);
 
-    let gstRate =
-      (item as any).gstRate !== undefined
-        ? toNumber((item as any).gstRate)
-        : 0;
-    if (gstRate <= 0) gstRate = firstPositiveFromAllocs('gstRate');
-    if (gstRate <= 0) {
-      gstRate = toNumber(medicineDetails?.gstRate);
-    }
-    if (gstRate <= 0) {
-      gstRate = order.taxPercentage || 5;
-    }
-
-    let discountPercentage = 0;
-    let displayDiscountPercentage = 0;
-    const discountManuallySet = (item as { discountManuallySet?: boolean }).discountManuallySet === true;
-    if (allocs && allocs.length > 0) {
-      discountPercentage = allocs.reduce((best: number, a: any) => {
-        const batchFromInventory = medicineDetails?.stockBatches?.find(
-          (b: any) => b.batchNumber === a.batchNumber
-        );
-        const pct = resolveOrderLineDiscountPct({
-          itemDiscount: (item as any).discountPercentage,
-          allocationDiscount: a.discountPercentage,
-          medicineId: item.medicineId,
-          batchNumber: a.batchNumber,
-          purchaseLookup: purchaseDiscountLookup,
-          batch: batchFromInventory
-            ? {
-                mrp: batchFromInventory.mrp,
-                purchasePrice: batchFromInventory.purchasePrice,
-                discountPercentage: batchFromInventory.discountPercentage,
-                standardDiscount: batchFromInventory.standardDiscount,
-                batchNumber: a.batchNumber,
-              }
-            : undefined,
-          gstRate,
-          discountManuallySet,
-          lockPersistedDiscount: true,
-        });
-        return Math.max(best, pct);
-      }, 0);
-      displayDiscountPercentage = allocs.reduce((best: number, a: any) => {
-        const batchFromInventory = medicineDetails?.stockBatches?.find(
-          (b: any) => b.batchNumber === a.batchNumber
-        );
-        const pct = resolveOrderLineDisplayDiscountPct({
-          itemDiscount: (item as any).discountPercentage,
-          allocationDiscount: a.discountPercentage,
-          medicineId: item.medicineId,
-          batchNumber: a.batchNumber,
-          purchaseLookup: purchaseDiscountLookup,
-          batch: batchFromInventory
-            ? {
-                mrp: batchFromInventory.mrp,
-                purchasePrice: batchFromInventory.purchasePrice,
-                discountPercentage: batchFromInventory.discountPercentage,
-                standardDiscount: batchFromInventory.standardDiscount,
-                batchNumber: a.batchNumber,
-              }
-            : undefined,
-          gstRate,
-          discountManuallySet,
-          lockPersistedDiscount: true,
-        });
-        return Math.max(best, pct);
-      }, 0);
-    } else {
-      discountPercentage = resolveOrderLineDiscountPct({
-        itemDiscount: (item as any).discountPercentage,
-        medicineId: item.medicineId,
-        batchNumber: primaryBatchNumber,
-        purchaseLookup: purchaseDiscountLookup,
-        batch: primaryBatch
-          ? {
-              mrp: primaryBatch.mrp,
-              purchasePrice: primaryBatch.purchasePrice,
-              discountPercentage: primaryBatch.discountPercentage,
-              standardDiscount: primaryBatch.standardDiscount,
-              batchNumber: primaryBatchNumber,
-            }
-          : undefined,
-        gstRate,
-        discountManuallySet,
-        lockPersistedDiscount: true,
-      });
-      displayDiscountPercentage = resolveOrderLineDisplayDiscountPct({
-        itemDiscount: (item as any).discountPercentage,
-        medicineId: item.medicineId,
-        batchNumber: primaryBatchNumber,
-        purchaseLookup: purchaseDiscountLookup,
-        batch: primaryBatch
-          ? {
-              mrp: primaryBatch.mrp,
-              purchasePrice: primaryBatch.purchasePrice,
-              discountPercentage: primaryBatch.discountPercentage,
-              standardDiscount: primaryBatch.standardDiscount,
-              batchNumber: primaryBatchNumber,
-            }
-          : undefined,
-        gstRate,
-        discountManuallySet,
-        lockPersistedDiscount: true,
-      });
-    }
-
-    let price = 0;
-    if (allocs && allocs.length === 1 && toNumber(allocs[0].purchasePrice) > 0) {
-      price = toNumber(allocs[0].purchasePrice);
-    } else if (allocs && allocs.length > 1) {
-      const sumPaid = allocs.reduce((s: number, a: any) => s + toNumber(a.quantity), 0);
-      const sumAmount = allocs.reduce(
-        (s: number, a: any) => s + toNumber(a.purchasePrice) * toNumber(a.quantity),
-        0
-      );
-      if (sumPaid > 0 && sumAmount > 0) price = sumAmount / sumPaid;
-    }
-    if (price <= 0 && allocs && allocs.length === 1 && toNumber(primaryBatch?.purchasePrice) > 0) {
-      price = toNumber(primaryBatch?.purchasePrice);
-    }
-    if (price <= 0) {
-      price = firstPositiveFromAllocs('purchasePrice');
-    }
-    if (price <= 0 && toNumber(item.price) > 0) {
-      price = toNumber(item.price);
-    }
-    if (price <= 0 && mrp > 0) {
-      const sellDisc = resolveSellDiscountPct({
-        batch: primaryBatch
-          ? {
-              mrp,
-              purchasePrice: primaryBatch.purchasePrice,
-              discountPercentage: primaryBatch.discountPercentage,
-              standardDiscount: primaryBatch.standardDiscount,
-              batchNumber: primaryBatchNumber,
-            }
-          : { mrp, purchasePrice: toNumber(item.price) },
-        gstRate,
-        medicineId: item.medicineId,
-        batchNumber: primaryBatchNumber,
-        purchaseLookup: purchaseDiscountLookup,
-      });
-      price = unitPriceFromMrp(mrp, gstRate, sellDisc);
-    }
-    
-    // Total Amount = Price × billable (paid) qty — free units are not charged
-    const totalAmount = price * paidQty;
-    
-    // Discount = Total Amount * discountPercentage / 100
-    const discountAmount = discountPercentage > 0 && totalAmount > 0
-      ? (totalAmount * discountPercentage) / 100
-      : 0;
-    
-    // Item amount in table = Price * Quantity (simple calculation - matches "Total" column)
-    const itemAmount = totalAmount;
-    
-    // Subtotal = Sum of all "Total" column values (Price * Quantity)
-    totalSubTotal += totalAmount;
-    totalProductDiscount += discountAmount;
-    const lineTaxable = Math.max(0, totalAmount - discountAmount);
-    totalGST += (lineTaxable * gstRate) / 100;
-    taxableByGstRate.set(gstRate, (taxableByGstRate.get(gstRate) || 0) + lineTaxable);
-    
-    // Format expiry date
     const resolvedExpiry =
       item.expiryDate ||
       allocs?.[0]?.expiryDate ||
@@ -524,8 +309,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       }
       expDate = format(exp, 'MM/yy');
     }
-    
-    // Get packaging from medicine master data
+
     const packaging = item.medicineId ? (medicineMap.get(item.medicineId) || '-') : '-';
 
     return {
@@ -546,25 +330,28 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       free: freeQuantity > 0 ? freeQuantity.toFixed(2) : '0.00',
       totalQty: totalQty.toFixed(2),
       mrp: mrp > 0 ? mrp.toFixed(2) : '-',
-      rate: price.toFixed(2), // Price is already after discount
-      disc: displayDiscountPercentage > 0 ? displayDiscountPercentage.toFixed(2) : '0.00',
+      rate: price.toFixed(2),
+      disc: discountPercentage > 0 ? discountPercentage.toFixed(2) : '0.00',
       gst: formatInvoiceLineGst(gstRate),
-      amount: itemAmount.toFixed(2),
+      amount: totalAmount.toFixed(2),
       rowClass: '',
     };
   });
-  
-  // Subtotal is sum of all "Total" column values (Price * Quantity).
-  // GST is summed per line using each line's GST % (supports mixed 5% / 18% orders).
-  const amountAfterDiscount = totalSubTotal - totalProductDiscount;
+
+  const amountAfterDiscount = totals.subTotal - totals.totalDiscount;
   const uniqueGstRates = [...taxableByGstRate.keys()].sort((a, b) => a - b);
   const taxPercentage =
-    uniqueGstRates.length === 1 ? uniqueGstRates[0]! : order.taxPercentage || 5;
-  const totalSGST = totalGST / 2;
-  const totalCGST = totalGST / 2;
-  const calculatedTotal = amountAfterDiscount + totalGST;
-  const roundoff = Math.round(calculatedTotal) - calculatedTotal;
-  const grandTotal = Math.round(calculatedTotal);
+    totals.uniformTaxPercentage != null
+      ? totals.uniformTaxPercentage
+      : uniqueGstRates.length === 1
+        ? uniqueGstRates[0]!
+        : fallbackTaxPct;
+  const totalSGST = totals.taxAmount / 2;
+  const totalCGST = totals.taxAmount / 2;
+  const roundoff = totals.roundoff;
+  const grandTotal = totals.grandTotal;
+  const totalSubTotal = totals.subTotal;
+  const totalProductDiscount = totals.totalDiscount;
 
   // Company details
   const company = { ...COMPANY_INVOICE_DETAILS };

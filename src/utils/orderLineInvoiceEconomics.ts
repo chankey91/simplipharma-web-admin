@@ -1,6 +1,7 @@
 /**
- * Same economics as order tax invoice (`getOrderInvoiceHTML` in invoice.ts):
- * billable qty = scheme order-line display bill qty; unit price from PI purchase price when set, else item.price, else MRP formula.
+ * Canonical sales-order line economics for Order Details + GST invoice PDF.
+ * Billable qty = scheme display bill qty; unit price = alloc sell rate → item.price → MRP formula
+ * (never inventory cost PTR). Trade disc via resolveOrderLineDiscountPct.
  */
 import {
   billablePaidFromAllocationSums,
@@ -78,6 +79,8 @@ export type OrderLineInvoiceEconomics = {
   schemeP?: number;
   schemeF?: number;
   paidQty: number;
+  /** Free qty shown on invoice Free column (not charged). */
+  freeQty: number;
   unitPrice: number;
   gstRate: number;
   discountPct: number;
@@ -125,14 +128,22 @@ export function orderLineInvoiceEconomics(
   const totalO = orderLineSchemeDisplayPhysical(item, schemeP, schemeF);
 
   let paidQty: number;
+  let freeQty: number;
   if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
-    paidQty = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF).billQty;
+    const display = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF);
+    paidQty = display.billQty;
+    freeQty = display.freeQty;
   } else if (allocs && allocs.length > 0) {
     const sumPaid = allocs.reduce((s: number, a: any) => s + toNum(a.quantity), 0);
     const sumFree = allocs.reduce((s: number, a: any) => s + toNum(a.allocationFreeQty ?? 0), 0);
     paidQty = billablePaidFromAllocationSums(item, sumPaid, sumFree);
+    freeQty = sumFree;
   } else {
     paidQty = toNum(item.quantity);
+    freeQty =
+      item.freeQuantity !== undefined && item.freeQuantity !== null
+        ? toNum(item.freeQuantity)
+        : 0;
   }
 
   const taxFallback =
@@ -202,6 +213,7 @@ export function orderLineInvoiceEconomics(
     schemeP,
     schemeF,
     paidQty,
+    freeQty,
     unitPrice,
     gstRate,
     discountPct,
