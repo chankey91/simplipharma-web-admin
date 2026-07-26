@@ -63,7 +63,6 @@ export const StockUpdatePage: React.FC = () => {
   const { medicines: searchHits, loading: searchLoading } = useMedicineSearch(searchInput, {
     hydrate: false,
     limit: 40,
-    strict: true,
     skipQuery: skipLabel,
   });
 

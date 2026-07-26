@@ -76,7 +76,6 @@ const ImportMedicinePicker: React.FC<{
   const { medicines: hits, loading } = useMedicineSearch(input, {
     hydrate: false,
     limit: 40,
-    strict: true,
     skipQuery: skipLabel,
   });
 

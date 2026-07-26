@@ -148,7 +148,6 @@ export const ProductDemandsPage: React.FC = () => {
   } = useMedicineSearch(fulfillMedicineSearchInput, {
     hydrate: false,
     limit: 40,
-    strict: true,
     enabled: fulfillOpen,
     skipQuery: fulfillSkip,
   });
