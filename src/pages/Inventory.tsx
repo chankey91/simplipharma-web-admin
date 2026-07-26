@@ -182,21 +182,59 @@ export const InventoryPage: React.FC = () => {
     setReindexing(true);
     setReindexMessage(null);
     try {
+      // Gen1 functions hard-timeout at 540s; loop chunks until the catalog is fully indexed.
       const fn = httpsCallable(functions, 'adminReindexMedicinesTypesense', {
-        timeout: 600000,
+        timeout: 560000,
       });
-      const res = await fn({});
-      const d = res.data as { indexed?: number; totalDocs?: number; ok?: boolean };
+      let startAfterId: string | null = null;
+      let totalIndexed = 0;
+      let totalScanned = 0;
+      let chunk = 0;
+      let synonymsUpserted = 0;
+
+      for (;;) {
+        chunk++;
+        setReindexMessage(
+          `Rebuilding search index… chunk ${chunk}` +
+            (totalIndexed ? ` (${totalIndexed.toLocaleString()} indexed so far)` : '') +
+            ' — keep this tab open.'
+        );
+        const res = await fn(startAfterId ? { startAfterId } : {});
+        const d = res.data as {
+          indexed?: number;
+          totalDocs?: number;
+          scanned?: number;
+          done?: boolean;
+          nextStartAfterId?: string | null;
+          synonymsUpserted?: number;
+        };
+        totalIndexed += d.indexed ?? 0;
+        totalScanned += d.scanned ?? d.totalDocs ?? 0;
+        if (typeof d.synonymsUpserted === 'number') synonymsUpserted = d.synonymsUpserted;
+
+        if (d.done) break;
+        if (!d.nextStartAfterId) {
+          throw new Error('Reindex chunk returned incomplete without a resume cursor');
+        }
+        startAfterId = d.nextStartAfterId;
+      }
+
       setReindexMessage(
-        `Search index updated: ${d.indexed ?? 0} documents indexed (${d.totalDocs ?? 0} Firestore docs scanned).`
+        `Search index updated: ${totalIndexed.toLocaleString()} documents indexed` +
+          ` (${totalScanned.toLocaleString()} Firestore docs scanned, ${chunk} chunk${chunk === 1 ? '' : 's'}` +
+          (synonymsUpserted ? `, ${synonymsUpserted} synonyms` : '') +
+          ').'
       );
       setPage(1);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const err = e as { message?: string; code?: string; details?: unknown };
+      const msg = [err.code, err.message, err.details].filter(Boolean).join(' — ') || String(e);
       const hint =
-        msg.includes('deadline') || msg.includes('DEADLINE')
-          ? ' Large catalogs can take several minutes; the client timeout is now 10 minutes. If this persists, check Functions logs.'
-          : ' Set Typesense config on Cloud Functions and deploy, then try again.';
+        msg.toLowerCase().includes('deadline') || msg.includes('DEADLINE') || msg.toLowerCase().includes('timeout')
+          ? ' Cloud Function hit its time limit mid-catalog — click Rebuild again; progress in Typesense is kept (upsert). Or wait for the chunked rebuild deploy and retry.'
+          : msg.toLowerCase().includes('not configured') || msg.includes('failed-precondition')
+            ? ' Check Typesense host health and Functions config, then retry.'
+            : ' Keep the tab open; large catalogs need several chunks (~8 min each).';
       setReindexMessage(`Search index rebuild failed: ${msg}.${hint}`);
     } finally {
       setReindexing(false);
