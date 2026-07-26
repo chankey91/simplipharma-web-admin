@@ -710,6 +710,19 @@ export const OrderDetailsPage: React.FC = () => {
       return 0;
     })();
 
+    // Include demand fulfillment state so converting product_demand → medicine lines
+    // re-runs when Product Demands load / become fulfilled (batch Assign must appear).
+    const demandSig = JSON.stringify(
+      [...(productDemands || [])]
+        .filter(
+          (d) =>
+            d.orderId === order.id ||
+            (order.medicines || []).some((m) => m.productDemandId === d.id)
+        )
+        .map((d) => [d.id, d.status, d.fulfilledMedicineId || '', d.purchaseInvoiceId || ''])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    );
+
     const structureKey = [
       order.id,
       order.status,
@@ -719,6 +732,7 @@ export const OrderDetailsPage: React.FC = () => {
       String(order.paidAmount ?? ''),
       String(order.taxPercentage ?? ''),
       String(draftUpdatedAtMs),
+      demandSig,
       JSON.stringify(
         (order.medicines || []).map((m) => [
           m.medicineId || '',
@@ -810,10 +824,12 @@ export const OrderDetailsPage: React.FC = () => {
     }
 
     let cancelled = false;
+    const repairAttemptKey = `${order.id}|${demandSig}`;
 
     void (async () => {
-      // Demand-line repair only — do not remount fulfilled UI from async remap (Disc flicker).
+      // Demand-line repair: convert fulfilled product requests → medicine lines (batch Assign).
       if (order.status !== 'Pending') {
+        if (orderDemandRepairAttempted.current === repairAttemptKey) return;
         const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
           rawMedicines,
           order.id,
@@ -822,11 +838,10 @@ export const OrderDetailsPage: React.FC = () => {
           purchaseInvoicesList
         );
         if (cancelled) return;
-        if (changed && orderDemandRepairAttempted.current !== order.id) {
-          orderDemandRepairAttempted.current = order.id;
+        orderDemandRepairAttempted.current = repairAttemptKey;
+        if (changed) {
           try {
             await updateOrderMedicines(order.id, repaired);
-            // Allow one re-hydrate from saved medicines after repair write.
             fulfilledUiFrozenRef.current = null;
             queryClient.invalidateQueries({ queryKey: ['order', order.id] });
             queryClient.invalidateQueries({ queryKey: ['orders'] });
@@ -839,8 +854,8 @@ export const OrderDetailsPage: React.FC = () => {
         return;
       }
 
-      // Pending: repair server lines at most once; do not replace local work from async remap.
-      if (orderDemandRepairAttempted.current === order.id) return;
+      // Pending: re-run when demandSig changes (demands loaded / fulfilled), not on every catalog tick.
+      if (orderDemandRepairAttempted.current === repairAttemptKey) return;
 
       const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
         rawMedicines,
@@ -851,23 +866,39 @@ export const OrderDetailsPage: React.FC = () => {
       );
 
       if (cancelled) return;
+      orderDemandRepairAttempted.current = repairAttemptKey;
+
+      const repairedMapped = repaired.map((line) =>
+        mapRepairedLineToFulfillment(line, medicines, purchaseDiscountLookup, order.status)
+      );
+
+      // Apply converted lines to UI immediately so Assign batch appears for fulfilled demands.
+      setFulfillmentData((prev) => {
+        if (
+          localPendingEditsRef.current.orderId === order.id &&
+          localPendingEditsRef.current.dirty &&
+          prev.medicines.length > 0
+        ) {
+          return {
+            ...prev,
+            medicines: mergeFulfillmentWorkIntoLines(repairedMapped, prev.medicines),
+          };
+        }
+        return { ...prev, medicines: repairedMapped };
+      });
 
       if (changed) {
-        orderDemandRepairAttempted.current = order.id;
         try {
           await updateOrderMedicines(order.id, repaired);
           queryClient.invalidateQueries({ queryKey: ['order', order.id] });
           queryClient.invalidateQueries({ queryKey: ['productDemands'] });
-          // Clear structure key so the next order.medicines snapshot can re-hydrate once.
+          // Allow one follow-up hydrate from the persisted order.medicines snapshot.
           pendingHydrateStructureKeyRef.current = '';
         } catch (err) {
           console.error('Failed to repair fulfilled demand order lines:', err);
           orderDemandRepairAttempted.current = null;
         }
-        return;
       }
-
-      orderDemandRepairAttempted.current = order.id;
     })();
 
     return () => {
