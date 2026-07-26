@@ -83,7 +83,8 @@ function buildTypesenseClient(mode: 'admin' | 'search'): TypesenseClient | null 
   return new Client({
     nodes: [{ host: c.host, port: c.port, protocol: c.protocol as 'http' | 'https' }],
     apiKey: mode === 'search' ? c.searchApiKey : c.apiKey,
-    connectionTimeoutSeconds: 15,
+    // Admin/reindex imports need longer than search; hung host previously surfaced as opaque "internal".
+    connectionTimeoutSeconds: mode === 'admin' ? 60 : 15,
   });
 }
 
@@ -776,10 +777,13 @@ export const searchMedicinesTypesense = functions
     }
   });
 
-/** Paginated reindex — safe for ~800k Firestore masters. */
+/**
+ * Chunked reindex — Gen1 callables hard-cap at 540s, so one shot cannot finish ~400k+.
+ * Pass `{ startAfterId }` to resume; returns `{ done, nextStartAfterId }` for the client to loop.
+ */
 export const adminReindexMedicinesTypesense = functions
-  .runWith({ timeoutSeconds: 540, memory: '1GB' })
-  .https.onCall(async (_data, context) => {
+  .runWith({ timeoutSeconds: 540, memory: '2GB' })
+  .https.onCall(async (data, context) => {
     try {
       if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
@@ -796,8 +800,33 @@ export const adminReindexMedicinesTypesense = functions
         );
       }
 
-      ensureCollectionPromise = null;
-      await ensureCollection(client);
+      const startAfterId =
+        data && typeof data === 'object' && typeof (data as { startAfterId?: unknown }).startAfterId === 'string'
+          ? String((data as { startAfterId: string }).startAfterId).trim()
+          : '';
+      // Leave headroom under the 540s hard kill so we can return a clean resume cursor.
+      const timeBudgetMs = Math.min(
+        500_000,
+        Math.max(
+          60_000,
+          Number((data as { timeBudgetMs?: unknown })?.timeBudgetMs) || 480_000
+        )
+      );
+      const startedAt = Date.now();
+
+      console.log('adminReindexMedicinesTypesense start', {
+        uid: context.auth.uid,
+        host: getTypesenseConfig()?.host,
+        port: getTypesenseConfig()?.port,
+        startAfterId: startAfterId || null,
+        timeBudgetMs,
+      });
+
+      if (!startAfterId) {
+        ensureCollectionPromise = null;
+        await ensureCollection(client);
+      }
+
       let batch: Record<string, unknown>[] = [];
       const flush = async () => {
         if (batch.length === 0) return;
@@ -807,18 +836,24 @@ export const adminReindexMedicinesTypesense = functions
 
       const db = admin.firestore();
       const pageSize = 500;
-      let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+      let lastId = startAfterId;
       let count = 0;
       let totalDocs = 0;
+      let done = false;
 
       for (;;) {
+        if (Date.now() - startedAt >= timeBudgetMs) break;
+
         let q: FirebaseFirestore.Query = db
           .collection('medicines')
           .orderBy(admin.firestore.FieldPath.documentId())
           .limit(pageSize);
-        if (lastDoc) q = q.startAfter(lastDoc);
+        if (lastId) q = q.startAfter(lastId);
         const snap = await q.get();
-        if (snap.empty) break;
+        if (snap.empty) {
+          done = true;
+          break;
+        }
         totalDocs += snap.size;
         for (const doc of snap.docs) {
           const d = firestoreDataToTypesenseDoc(doc.id, doc.data());
@@ -826,21 +861,42 @@ export const adminReindexMedicinesTypesense = functions
             batch.push(d);
             count++;
           }
-          if (batch.length >= 100) await flush();
+          if (batch.length >= 200) await flush();
         }
-        lastDoc = snap.docs[snap.docs.length - 1];
-        if (snap.size < pageSize) break;
+        lastId = snap.docs[snap.docs.length - 1].id;
+        if (snap.size < pageSize) {
+          done = true;
+          break;
+        }
       }
       await flush();
 
       let synonymsUpserted = 0;
-      try {
-        synonymsUpserted = await upsertMedicineSynonyms(client);
-      } catch (synErr: any) {
-        console.warn('medicine synonyms upsert after reindex failed', synErr?.message || synErr);
+      if (done) {
+        try {
+          synonymsUpserted = await upsertMedicineSynonyms(client);
+        } catch (synErr: any) {
+          console.warn('medicine synonyms upsert after reindex failed', synErr?.message || synErr);
+        }
       }
 
-      return { ok: true, indexed: count, totalDocs, synonymsUpserted };
+      console.log('adminReindexMedicinesTypesense chunk done', {
+        indexed: count,
+        scanned: totalDocs,
+        done,
+        nextStartAfterId: done ? null : lastId,
+        elapsedMs: Date.now() - startedAt,
+      });
+
+      return {
+        ok: true,
+        indexed: count,
+        totalDocs,
+        scanned: totalDocs,
+        done,
+        nextStartAfterId: done ? null : lastId,
+        synonymsUpserted,
+      };
     } catch (err: unknown) {
       if (err instanceof functions.https.HttpsError) throw err;
       console.error('adminReindexMedicinesTypesense failed', err);
