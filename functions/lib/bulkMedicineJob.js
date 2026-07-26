@@ -4,6 +4,7 @@ exports.onBulkMedicineJobCreated = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
+const spsProductId_1 = require("./spsProductId");
 function escapeHtmlText(s) {
     return String(s)
         .replace(/&/g, '&amp;')
@@ -153,6 +154,24 @@ exports.onBulkMedicineJobCreated = functions
                 nameToId.set(n, d.id);
             }
         }
+        // Pre-count creates (unique new names in sheet order) and reserve SPS###### ids.
+        const simNames = new Map(nameToId);
+        let createNeeded = 0;
+        for (const m of rows) {
+            const key = m.name.toLowerCase().trim();
+            if (!simNames.has(key)) {
+                createNeeded++;
+                simNames.set(key, '__pending__');
+            }
+        }
+        const spsQueue = [];
+        const ALLOC_CHUNK = 2000;
+        for (let offset = 0; offset < createNeeded; offset += ALLOC_CHUNK) {
+            const chunk = Math.min(ALLOC_CHUNK, createNeeded - offset);
+            const ids = await (0, spsProductId_1.allocateSpsProductIds)(db, chunk);
+            spsQueue.push(...ids);
+        }
+        let spsIdx = 0;
         let writeBatch = db.batch();
         let opCount = 0;
         const flushBatch = async () => {
@@ -182,11 +201,16 @@ exports.onBulkMedicineJobCreated = functions
                     updateCount++;
                 }
                 else {
+                    const productId = spsQueue[spsIdx++];
+                    if (!productId) {
+                        throw new Error('SPS productId pool exhausted');
+                    }
                     const ref = db.collection('medicines').doc();
                     const newDoc = stripUndefined({
                         name: m.name,
                         category: m.category,
                         manufacturer: m.manufacturer,
+                        productId,
                         stock: 0,
                         currentStock: 0,
                         activeBatchCount: 0,
