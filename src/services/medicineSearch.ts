@@ -59,11 +59,17 @@ export type SearchMedicinesOptions = {
   /** Page number (1-based). Used for Inventory browse/search pagination. */
   page?: number;
   /**
-   * Tighter Typesense field set + ranking. Admin pickers pass **true**.
+   * Typesense strictness. When omitted (recommended), matches retailer:
+   * single-token → strict; multi-word → natural (broader prefix/typos/code).
    */
   strict?: boolean;
   matchTokenCount?: number;
   queryMode?: 'strict' | 'natural';
+  /**
+   * Client refine/re-rank on Typesense hits only (no Firestore).
+   * Default: on for typed search, off for browse.
+   */
+  refineResults?: boolean;
   /** When true (and query &lt; 2 chars), browse catalog via q:"*" — do not download Firestore masters. */
   browse?: boolean;
   category?: string;
@@ -204,18 +210,43 @@ export function rankMedicinesForAutocompleteQuery(medicines: Medicine[], query: 
   });
 }
 
+export type MedicineSearchRefineResult = {
+  medicines: Medicine[];
+  /** Typesense hits existed but ALL failed AND-refine — switched to relaxed OR-token gate. */
+  usedRelaxedRefinement: boolean;
+};
+
 /**
- * Light post-filter/rank on Typesense hits only.
- * @deprecated Prefer Typesense ranking; pickers/PDF import trust hit order.
+ * Retailer-aligned post-filter/rank on Typesense hits only (no Firestore fallback).
+ * Match haystack includes name / code / manufacturer / productId.
  */
 export function refineMedicineSearchResults(
   typesenseHits: Medicine[],
   query: string,
   _fallbackCatalog?: Medicine[]
-): Medicine[] {
+): MedicineSearchRefineResult {
   const t = query.trim();
-  if (t.length < 2) return [];
-  return typesenseHits;
+  if (t.length < 2) {
+    return { medicines: [], usedRelaxedRefinement: false };
+  }
+
+  let usedRelaxed = false;
+  const strictFromTs = typesenseHits.filter((m) => medicineMatchesSearchInput(m, t));
+
+  let fromTs: Medicine[];
+  if (strictFromTs.length > 0) {
+    fromTs = strictFromTs;
+  } else if (typesenseHits.length > 0) {
+    fromTs = typesenseHits.filter((m) => medicineMatchesSearchInputRelaxed(m, t));
+    usedRelaxed = fromTs.length > 0;
+  } else {
+    fromTs = [];
+  }
+
+  return {
+    medicines: rankMedicinesForAutocompleteQuery(fromTs, t),
+    usedRelaxedRefinement: usedRelaxed,
+  };
 }
 
 /** Full Typesense search result (pagination + facets). Prefer this for Inventory. */
@@ -231,10 +262,12 @@ export async function searchMedicinesCatalog(
   const hydrate = opts?.hydrate ?? true;
   const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 120);
   const page = Math.min(Math.max(opts?.page ?? 1, 1), 500);
-  const strict = opts?.strict === true;
   const tc = deriveSearchMatchTokens(q);
+  // Retailer default: single-token strict; multi-word natural (broader Typesense recall).
+  const strict = typeof opts?.strict === 'boolean' ? opts.strict : tc.length <= 1;
   const matchTokenCount = opts?.matchTokenCount ?? tc.length;
   const queryMode = opts?.queryMode ?? (strict ? 'strict' : 'natural');
+  const doRefine = opts?.refineResults ?? !browse;
   try {
     const res = await abortable(
       searchMedicinesCallable({
@@ -263,9 +296,13 @@ export async function searchMedicinesCatalog(
       facet_counts?: Record<string, Array<{ value: string; count: number }>>;
       source?: string;
     };
-    const rows = Array.isArray(data.medicines) ? data.medicines : [];
+    const rows = Array.isArray(data.medicines)
+      ? data.medicines.map((r) => mapLiteToMedicine(r as Record<string, unknown>))
+      : [];
+    const medicines = doRefine ? refineMedicineSearchResults(rows, q, []).medicines : rows;
     return {
-      medicines: rows.map((r) => mapLiteToMedicine(r as Record<string, unknown>)),
+      medicines,
+      // Keep Typesense total for pagination; refine only affects the current page rows.
       found: Number(data.found) || rows.length,
       page: Number(data.page) || page,
       facet_counts: data.facet_counts || {},

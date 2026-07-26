@@ -36,8 +36,9 @@ export type UseMedicineSearchState = {
 };
 
 /**
- * Shared Typesense medicine search for admin UIs.
- * Scales to large catalogs — never loads the full Firestore master list.
+ * Shared Typesense medicine search for admin UIs (retailer-aligned recall).
+ * Typesense-only on the hot path — never loads the full Firestore master list.
+ * When `strict` is omitted: single-token → strict; multi-word → natural.
  * Aborts in-flight work on query change / unmount (result ignored; callable may still finish server-side).
  */
 export function useMedicineSearch(
@@ -100,7 +101,8 @@ export function useMedicineSearch(
         hydrate: hydrate ?? false,
         limit: limit ?? 40,
         page,
-        strict: strict ?? true,
+        // Omit strict → retailer rule (single-token strict / multi-word natural).
+        ...(typeof strict === 'boolean' ? { strict } : {}),
         queryMode,
         browse: canBrowse,
         category,

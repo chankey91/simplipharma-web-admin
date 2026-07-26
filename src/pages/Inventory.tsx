@@ -98,7 +98,6 @@ export const InventoryPage: React.FC = () => {
     hydrate: false,
     limit: rowsPerPage,
     page,
-    strict: true,
     category: categoryFilter,
     manufacturer: manufacturerFilter,
     stockFilter,
