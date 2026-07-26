@@ -35,7 +35,12 @@ import {
 } from '../services/homeFeedConfig';
 
 function medicineOptionLabel(m: Medicine): string {
-  const bits = [m.name, m.manufacturer?.trim() || '', m.category ? `(${m.category})` : ''].filter(Boolean);
+  const bits = [
+    m.name,
+    m.productId?.trim() || '',
+    m.manufacturer?.trim() || '',
+    m.category ? `(${m.category})` : '',
+  ].filter(Boolean);
   return bits.join(' — ');
 }
 
@@ -170,7 +175,12 @@ const ProductPickList: React.FC<{
               >
                 <ListItemText
                   primary={`${idx + 1}. ${med ? med.name : id}`}
-                  secondary={med ? [med.manufacturer, med.category].filter(Boolean).join(' • ') || '—' : 'Not found in cache — still saved'}
+                  secondary={
+                    med
+                      ? [med.productId, med.manufacturer, med.category].filter(Boolean).join(' • ') ||
+                        '—'
+                      : 'Not found in cache — still saved'
+                  }
                 />
               </ListItem>
             );

@@ -58,6 +58,7 @@ export const MedicineDetailsPage: React.FC = () => {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editData, setEditData] = useState({
     name: '',
+    productId: '',
     code: '',
     category: '',
     unit: '',
@@ -138,6 +139,7 @@ export const MedicineDetailsPage: React.FC = () => {
     if (medicine && editDialogOpen) {
       setEditData({
         name: medicine.name || '',
+        productId: medicine.productId || '',
         code: medicine.code || '',
         category: medicine.category || '',
         unit: medicine.unit || '',
@@ -266,6 +268,7 @@ export const MedicineDetailsPage: React.FC = () => {
         medicineId: medicine.id,
         updates: {
           name: editData.name,
+          productId: editData.productId || undefined,
           code: editData.code || undefined,
           category: editData.category,
           unit: editData.unit || undefined,
@@ -365,6 +368,10 @@ export const MedicineDetailsPage: React.FC = () => {
                 <Typography variant="body1" fontWeight="medium">{medicine.name}</Typography>
               </Box>
               <Box mb={2}>
+                <Typography variant="caption" color="textSecondary">Product ID</Typography>
+                <Typography variant="body1">{medicine.productId || 'N/A'}</Typography>
+              </Box>
+              <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">Type</Typography>
                 <Typography variant="body1">{medicine.category}</Typography>
               </Box>
@@ -377,7 +384,7 @@ export const MedicineDetailsPage: React.FC = () => {
                 <Typography variant="body1">{medicine.manufacturer}</Typography>
               </Box>
               <Box mb={2}>
-                <Typography variant="caption" color="textSecondary">Item Code</Typography>
+                <Typography variant="caption" color="textSecondary">Item Code (HSN)</Typography>
                 <Typography variant="body1">{medicine.code || 'N/A'}</Typography>
               </Box>
               <Box mb={2}>
@@ -668,7 +675,16 @@ export const MedicineDetailsPage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Item Code"
+                label="Product ID"
+                value={editData.productId}
+                onChange={(e) => setEditData({ ...editData, productId: e.target.value })}
+                helperText="Business key (e.g. DRS000001 or Legacy_000001)"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Item Code (HSN)"
                 value={editData.code}
                 onChange={(e) => setEditData({ ...editData, code: e.target.value })}
               />

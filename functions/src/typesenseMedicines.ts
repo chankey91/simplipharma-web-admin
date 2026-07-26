@@ -90,10 +90,12 @@ function buildTypesenseClient(mode: 'admin' | 'search'): TypesenseClient | null 
 const COLLECTION_FIELDS_BASE = [
   { name: 'name', type: 'string' as const, sort: true },
   { name: 'code', type: 'string' as const, optional: true },
+  /** Business product key (DRS… / Legacy_…) — searchable; not the Firestore doc id. */
+  { name: 'productId', type: 'string' as const, optional: true },
   { name: 'manufacturer', type: 'string' as const, optional: true, facet: true, sort: true },
   { name: 'category', type: 'string' as const, optional: true, facet: true },
   { name: 'price', type: 'float' as const, optional: true },
-  /** Lowercase concat of name/code/mfr/category for middle-token & multi-word recall */
+  /** Lowercase concat of name/code/productId/mfr/category for middle-token & multi-word recall */
   { name: 'search_blob', type: 'string' as const, optional: true },
   /** Denormalized master aggregates â€” required for Inventory browse/filter at scale (no full catalog download). */
   { name: 'stock', type: 'int32' as const, optional: true, sort: true, facet: true },
@@ -104,7 +106,9 @@ const COLLECTION_FIELDS_BASE = [
 ];
 
 const OPTIONAL_SCHEMA_FIELDS = COLLECTION_FIELDS_BASE.filter((f) =>
-  ['search_blob', 'stock', 'currentStock', 'nearestExpiry', 'unit', 'gstRate'].includes(f.name)
+  ['productId', 'search_blob', 'stock', 'currentStock', 'nearestExpiry', 'unit', 'gstRate'].includes(
+    f.name
+  )
 );
 
 /** One ensure per warm instance â€” never on every search (hot path). */
@@ -155,7 +159,14 @@ function toEpochMs(value: unknown): number {
 /** Mirrors mobile/Firestore search helpers: joint text blob for Typesense recall. */
 function buildMedicineSearchBlob(data: FirebaseFirestore.DocumentData | undefined): string {
   if (!data) return '';
-  const parts = [data.name, data.manufacturer, data.company, data.code, data.category]
+  const parts = [
+    data.name,
+    data.manufacturer,
+    data.company,
+    data.code,
+    data.productId,
+    data.category,
+  ]
     .filter((x) => x != null && String(x).trim() !== '')
     .map((x) => String(x).trim());
   return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -180,6 +191,7 @@ function firestoreDataToTypesenseDoc(
     id: medicineId,
     name: String(data.name || ''),
     code: data.code != null ? String(data.code) : '',
+    productId: data.productId != null ? String(data.productId) : '',
     manufacturer: String(data.manufacturer || data.company || ''),
     category: String(data.category || ''),
     price,
@@ -314,6 +326,7 @@ async function parseMedicineLiteFromSnap(
     id: snap.id,
     name: String(data.name || ''),
     code: data.code ? String(data.code) : undefined,
+    productId: data.productId ? String(data.productId) : undefined,
     category: String(data.category || ''),
     unit: data.unit ? String(data.unit) : undefined,
     stock: typeof data.stock === 'number' ? data.stock : parseInt(String(data.stock ?? '0'), 10) || 0,
@@ -380,10 +393,15 @@ function medicinesFromTypesenseHitsOnly(
     const gstRate =
       typeof gstRaw === 'number' ? gstRaw : parseFloat(String(gstRaw ?? 5)) || 5;
     const unitRaw = d.unit;
+    const productIdRaw = d.productId;
     out.push({
       id,
       name: String(d.name || ''),
       code: codeRaw != null && String(codeRaw).trim() !== '' ? String(codeRaw) : undefined,
+      productId:
+        productIdRaw != null && String(productIdRaw).trim() !== ''
+          ? String(productIdRaw)
+          : undefined,
       category: String(d.category || ''),
       manufacturer: String(d.manufacturer || ''),
       price,
@@ -398,19 +416,21 @@ function medicinesFromTypesenseHitsOnly(
 }
 
 function typesenseQueryBy(query: string, strict: boolean): string {
-  if (!strict) return 'search_blob,name,code,manufacturer';
+  if (!strict) return 'search_blob,name,code,productId,manufacturer';
   const t = query.trim();
   const digitsOnly = t.replace(/\D/g, '');
   const hasLetter = /[a-zA-Z]/.test(t);
   const looksNumericLookup = digitsOnly.length >= 2 && !hasLetter;
-  if (looksNumericLookup) return 'search_blob,name,code,manufacturer';
-  return 'search_blob,name,manufacturer';
+  // Always include productId (DRS… / Legacy_… / numeric fragments).
+  if (looksNumericLookup) return 'search_blob,name,code,productId,manufacturer';
+  return 'search_blob,name,productId,manufacturer';
 }
 
 function typesenseQueryByWeights(queryBy: string): string {
   const weights: Record<string, number> = {
     search_blob: 4,
     name: 6,
+    productId: 6,
     code: 5,
     manufacturer: 2,
   };
@@ -502,6 +522,7 @@ async function searchMedicinesWithFallback(
     if (noBlob.query_by) {
       const weights: Record<string, number> = {
         name: 6,
+        productId: 6,
         code: 5,
         manufacturer: 2,
       };
@@ -511,6 +532,23 @@ async function searchMedicinesWithFallback(
         .filter(Boolean);
       noBlob.query_by_weights = parts.map((field) => String(weights[field] ?? 3)).join(',');
       attempts.push(noBlob);
+    }
+  }
+
+  // Before productId schema is patched / reindexed, drop it from query_by.
+  const qb = String(baseParams.query_by || '');
+  if (qb.includes('productId')) {
+    const noProductId: Record<string, unknown> = {
+      ...withNoFacets,
+      query_by: qb
+        .split(',')
+        .map((s) => s.trim())
+        .filter((f) => f && f !== 'productId')
+        .join(','),
+    };
+    if (noProductId.query_by) {
+      noProductId.query_by_weights = typesenseQueryByWeights(String(noProductId.query_by));
+      attempts.push(noProductId);
     }
   }
 

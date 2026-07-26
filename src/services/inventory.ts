@@ -18,6 +18,7 @@ import {
 import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
 import { Medicine, StockBatch } from '../types';
 import { standardDiscountFromStockBatch } from '../utils/orderFulfillmentDiscount';
+import { allocateSpsProductId } from '../utils/spsProductId';
 
 /** Top-level collection for on-hand lots (transactional). Master stays on `medicines`. */
 export const MEDICINE_BATCHES_COLLECTION = 'medicineBatches';
@@ -297,6 +298,7 @@ function masterFromDoc(
     manufacturer: String(data.manufacturer || ''),
     category: String(data.category || ''),
     code: data.code ? String(data.code) : undefined,
+    productId: data.productId ? String(data.productId) : undefined,
     unit: data.unit ? String(data.unit) : undefined,
     stock,
     currentStock: stock,
@@ -894,6 +896,7 @@ export const updateMedicine = async (
 
   if (updates.name !== undefined) cleanUpdates.name = updates.name;
   if (updates.code !== undefined) cleanUpdates.code = updates.code;
+  if (updates.productId !== undefined) cleanUpdates.productId = updates.productId;
   if (updates.category !== undefined) cleanUpdates.category = updates.category;
   if (updates.unit !== undefined) cleanUpdates.unit = updates.unit;
   if (updates.manufacturer !== undefined) cleanUpdates.manufacturer = updates.manufacturer;
@@ -942,10 +945,16 @@ export const setStockBatchNonReturnable = async (
 
 export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promise<string> => {
   const medicineRef = doc(collection(db, 'medicines'));
+  const productId =
+    medicineData.productId && String(medicineData.productId).trim()
+      ? String(medicineData.productId).trim()
+      : await allocateSpsProductId();
+
   const newMedicine: any = {
     name: medicineData.name,
     category: medicineData.category,
     manufacturer: medicineData.manufacturer,
+    productId,
     stock: medicineData.stock || 0,
     currentStock: medicineData.currentStock || medicineData.stock || 0,
     activeBatchCount: 0,

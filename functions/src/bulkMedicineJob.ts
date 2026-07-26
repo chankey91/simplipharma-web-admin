@@ -1,6 +1,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
+import { allocateSpsProductIds } from './spsProductId';
 
 function escapeHtmlText(s: string): string {
   return String(s)
@@ -181,6 +182,25 @@ export const onBulkMedicineJobCreated = functions
         }
       }
 
+      // Pre-count creates (unique new names in sheet order) and reserve SPS###### ids.
+      const simNames = new Map(nameToId);
+      let createNeeded = 0;
+      for (const m of rows) {
+        const key = m.name.toLowerCase().trim();
+        if (!simNames.has(key)) {
+          createNeeded++;
+          simNames.set(key, '__pending__');
+        }
+      }
+      const spsQueue: string[] = [];
+      const ALLOC_CHUNK = 2000;
+      for (let offset = 0; offset < createNeeded; offset += ALLOC_CHUNK) {
+        const chunk = Math.min(ALLOC_CHUNK, createNeeded - offset);
+        const ids = await allocateSpsProductIds(db, chunk);
+        spsQueue.push(...ids);
+      }
+      let spsIdx = 0;
+
       let writeBatch = db.batch();
       let opCount = 0;
 
@@ -211,11 +231,16 @@ export const onBulkMedicineJobCreated = functions
             writeBatch.update(ref, updatePayload as Record<string, unknown>);
             updateCount++;
           } else {
+            const productId = spsQueue[spsIdx++];
+            if (!productId) {
+              throw new Error('SPS productId pool exhausted');
+            }
             const ref = db.collection('medicines').doc();
             const newDoc = stripUndefined({
               name: m.name,
               category: m.category,
               manufacturer: m.manufacturer,
+              productId,
               stock: 0,
               currentStock: 0,
               activeBatchCount: 0,
