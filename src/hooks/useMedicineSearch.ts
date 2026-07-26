@@ -36,9 +36,9 @@ export type UseMedicineSearchState = {
 };
 
 /**
- * Shared Typesense medicine search for admin UIs (retailer-aligned recall).
+ * Shared Typesense medicine search for admin UIs.
  * Typesense-only on the hot path — never loads the full Firestore master list.
- * When `strict` is omitted: single-token → strict; multi-word → natural.
+ * When `strict` is omitted: natural mode (prefix/typos) so "test" finds "Testa…" without Firestore reads.
  * Aborts in-flight work on query change / unmount (result ignored; callable may still finish server-side).
  */
 export function useMedicineSearch(
@@ -71,6 +71,7 @@ export function useMedicineSearch(
   const sortKey = opts?.sortKey;
   const sortDirection = opts?.sortDirection;
   const includeFacets = opts?.includeFacets;
+  const refineResults = opts?.refineResults;
   const skipQuery = opts?.skipQuery;
 
   useEffect(() => {
@@ -101,8 +102,9 @@ export function useMedicineSearch(
         hydrate: hydrate ?? false,
         limit: limit ?? 40,
         page,
-        // Omit strict → retailer rule (single-token strict / multi-word natural).
+        // Omit strict → natural Typesense (prefix) without Firestore reads.
         ...(typeof strict === 'boolean' ? { strict } : {}),
+        ...(typeof refineResults === 'boolean' ? { refineResults } : {}),
         queryMode,
         browse: canBrowse,
         category,
@@ -159,6 +161,7 @@ export function useMedicineSearch(
     sortKey,
     sortDirection,
     includeFacets,
+    refineResults,
     debounceMs,
     skipQuery,
   ]);
