@@ -1408,8 +1408,8 @@ export const OrderDetailsPage: React.FC = () => {
           medicines,
           taxPctForLines,
           purchaseDiscountLookup,
-          // Same rules as the invoice: batch-assigned + verified only.
-          { invoiceLinesOnly: true, requireVerified: true }
+          // Same rules as the invoice PDF: batch-assigned + verified; lock Disc % on lines.
+          { invoiceLinesOnly: true, requireVerified: true, lockPersistedDiscount: true }
         );
         const { subTotal, totalDiscount, taxAmount, grandTotal: totalAmount } = fulfillTotals;
         

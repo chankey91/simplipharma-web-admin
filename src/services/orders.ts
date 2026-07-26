@@ -1118,7 +1118,10 @@ export const recalculateOrderPricing = async (
     taxPct,
     purchaseLookup,
     // Past Pending an invoice exists; totals must match it (batch-assigned lines only).
-    { invoiceLinesOnly: order.status !== 'Pending' }
+    {
+      invoiceLinesOnly: order.status !== 'Pending',
+      lockPersistedDiscount: order.status !== 'Pending',
+    }
   );
 
   const paidAmount = toNum(order.paidAmount);
