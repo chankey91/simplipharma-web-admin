@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -40,6 +40,15 @@ import {
   resolveMedicineAfterPickerSelection,
 } from '../services/medicineSearch';
 import { useMedicineSearch } from '../hooks/useMedicineSearch';
+import {
+  useMedicineResolutionContext,
+  useGroupedMedicineResolveOptions,
+} from '../hooks/useMedicineResolutionContext';
+import {
+  renderMedicineResolveGroup,
+  renderMedicineResolveOption,
+} from '../components/MedicineResolveAutocomplete';
+import type { MedicineResolveOption } from '../services/medicineResolution';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { getTodayDateStringIST } from '../utils/dateTime';
 import { Medicine, PurchaseInvoiceItem } from '../types';
@@ -66,7 +75,7 @@ type ImportRow = {
 
 const newRowId = () => `r-${Math.random().toString(36).slice(2, 11)}`;
 
-/** Per-row Typesense medicine picker (no full catalog download). */
+/** Per-row Typesense medicine picker with pending-order / demand grouping. */
 const ImportMedicinePicker: React.FC<{
   value: Medicine | null | undefined;
   onChange: (m: Medicine | null) => void;
@@ -78,24 +87,47 @@ const ImportMedicinePicker: React.FC<{
     limit: 40,
     skipQuery: skipLabel,
   });
+  const { pendingMedicines, pendingDemands } = useMedicineResolutionContext();
+  const options = useGroupedMedicineResolveOptions({
+    query: input,
+    inventoryHits: hits,
+    pendingMedicines,
+    pendingDemands,
+    selectedMedicine: value || null,
+  });
+
+  const selectedOption = useMemo((): MedicineResolveOption | null => {
+    if (!value) return null;
+    return (
+      options.find((o) => o.medicine?.id === value.id) || {
+        id: value.id,
+        group: 'inventory',
+        groupLabel: '3 · Inventory',
+        label: getMedicinePickerLabel(value),
+        selectable: true,
+        medicine: value,
+      }
+    );
+  }, [value, options]);
 
   useEffect(() => {
     if (value) setInput(getMedicinePickerLabel(value));
   }, [value]);
-
-  const options =
-    value && !hits.some((h) => h.id === value.id) ? [value, ...hits] : hits.length ? hits : value ? [value] : [];
 
   return (
     <Autocomplete
       size="small"
       options={options}
       loading={loading}
-      value={value || null}
+      groupBy={(o) => o.groupLabel}
+      value={selectedOption}
       inputValue={input}
-      getOptionLabel={getMedicinePickerLabel}
+      getOptionLabel={(o) => o.label}
+      getOptionDisabled={(o) => !o.selectable}
       isOptionEqualToValue={(a, b) => a.id === b.id}
       filterOptions={(opts) => opts}
+      renderGroup={renderMedicineResolveGroup}
+      renderOption={renderMedicineResolveOption}
       onInputChange={(_, v, reason) => {
         if (reason === 'input') setInput(v);
         else if (reason === 'clear') {
@@ -104,12 +136,14 @@ const ImportMedicinePicker: React.FC<{
         } else setInput(v);
       }}
       onChange={(_, v) => {
-        if (!v) {
-          onChange(null);
-          setInput('');
+        if (!v || !v.selectable || !v.medicine) {
+          if (!v) {
+            onChange(null);
+            setInput('');
+          }
           return;
         }
-        void resolveMedicineAfterPickerSelection(v, undefined).then((merged) => {
+        void resolveMedicineAfterPickerSelection(v.medicine, undefined).then((merged) => {
           onChange(merged);
           setInput(getMedicinePickerLabel(merged));
         });
@@ -117,7 +151,7 @@ const ImportMedicinePicker: React.FC<{
       renderInput={(params) => (
         <TextField
           {...params}
-          placeholder="Search medicine (Typesense)…"
+          placeholder="Pending · demands · inventory…"
           InputProps={{
             ...params.InputProps,
             endAdornment: (
@@ -138,6 +172,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const { data: vendors } = useVendors();
   const createInvoiceMutation = useCreatePurchaseInvoice();
   const { alert, confirm } = useAppDialog();
+  const { pendingOrderMedicineIds } = useMedicineResolutionContext();
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
@@ -188,7 +223,11 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
       for (const line of rawLines) {
         const parsed = parseProductLineFromRawLine(line);
         if (!parsed) continue;
-        const { medicine, source } = await resolveMedicineForImportLine(parsed);
+        const { medicine, source } = await resolveMedicineForImportLine(
+          parsed,
+          undefined,
+          pendingOrderMedicineIds
+        );
         built.push({
           id: newRowId(),
           raw: line,

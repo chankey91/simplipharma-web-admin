@@ -248,7 +248,8 @@ export function findMedicineByBatchNumber(
 
 export async function resolveMedicineForImportLine(
   parsed: ParsedPdfProductLine,
-  _medicines?: Medicine[]
+  _medicines?: Medicine[],
+  preferredMedicineIds?: Iterable<string>
 ): Promise<{ medicine?: Medicine; source: 'batch' | 'name' | 'none' }> {
   if (parsed.batchNumber) {
     try {
@@ -262,8 +263,10 @@ export async function resolveMedicineForImportLine(
   const q = parsed.productName.trim();
   if (q.length >= 2) {
     try {
+      const { preferMedicineFromHits } = await import('../services/medicineResolution');
       const hits = await searchMedicinesTypesenseAdmin(q, { hydrate: true, limit: 12, strict: true });
-      if (hits[0]) return { medicine: hits[0], source: 'name' };
+      const chosen = preferMedicineFromHits(hits, preferredMedicineIds);
+      if (chosen) return { medicine: chosen, source: 'name' };
     } catch {
       // ignore search failures
     }
