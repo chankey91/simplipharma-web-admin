@@ -2930,6 +2930,11 @@ export const OrderDetailsPage: React.FC = () => {
                           <TableRow sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.12)' : 'rgba(0, 0, 0, 0.04)' }}>
                             <TableCell colSpan={2}>
                               <Typography variant="body2" fontWeight="bold">{item.name || 'Unknown'}</Typography>
+                              {medForLine?.productId ? (
+                                <Typography variant="caption" color="textSecondary" display="block">
+                                  Product ID: {medForLine.productId}
+                                </Typography>
+                              ) : null}
                               {item.notes ? (
                                 <Typography variant="caption" color="textSecondary" display="block">
                                   Remark: {item.notes}
@@ -3215,6 +3220,11 @@ export const OrderDetailsPage: React.FC = () => {
                       <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{item.name || 'Unknown'}</Typography>
+                          {medSingle?.productId ? (
+                            <Typography variant="caption" color="textSecondary" display="block">
+                              Product ID: {medSingle.productId}
+                            </Typography>
+                          ) : null}
                           {item.notes ? (
                             <Typography variant="caption" color="textSecondary" display="block">
                               Remark: {item.notes}
