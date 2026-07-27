@@ -54,6 +54,15 @@ import {
   findMedicineByExactName,
 } from '../services/medicineSearch';
 import { useMedicineSearch } from '../hooks/useMedicineSearch';
+import {
+  useMedicineResolutionContext,
+  useGroupedMedicineResolveOptions,
+} from '../hooks/useMedicineResolutionContext';
+import {
+  renderMedicineResolveGroup,
+  renderMedicineResolveOption,
+} from '../components/MedicineResolveAutocomplete';
+import type { MedicineResolveOption } from '../services/medicineResolution';
 import { getTodayDateStringIST, getYearIST } from '../utils/dateTime';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
@@ -239,6 +248,30 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     skipQuery: mainSkip,
   });
 
+  const { pendingMedicines, pendingDemands } = useMedicineResolutionContext();
+
+  const purchaseMedicineOptions = useGroupedMedicineResolveOptions({
+    query: medicineSearchInput,
+    inventoryHits: medicineSearchHits,
+    pendingMedicines,
+    pendingDemands,
+    selectedMedicine,
+  });
+
+  const selectedResolveOption = useMemo((): MedicineResolveOption | null => {
+    if (!selectedMedicine) return null;
+    return (
+      purchaseMedicineOptions.find((o) => o.medicine?.id === selectedMedicine.id) || {
+        id: selectedMedicine.id,
+        group: 'inventory',
+        groupLabel: '3 · Inventory',
+        label: getMedicinePickerLabel(selectedMedicine),
+        selectable: true,
+        medicine: selectedMedicine,
+      }
+    );
+  }, [selectedMedicine, purchaseMedicineOptions]);
+
   const {
     medicines: addMedicineSearchHits,
   } = useMedicineSearch(newMedicineData.name, {
@@ -252,6 +285,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   }, [medicineSearchHits, rememberMedicines]);
 
   useEffect(() => {
+    rememberMedicines(pendingMedicines);
+  }, [pendingMedicines, rememberMedicines]);
+
+  useEffect(() => {
     rememberMedicines(addMedicineSearchHits);
   }, [addMedicineSearchHits, rememberMedicines]);
 
@@ -263,27 +300,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const focusMedicineSearch = () => {
     window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 100);
   };
-
-  const purchaseMedicineOptions = useMemo(() => {
-    const q = medicineSearchInput.trim();
-
-    if (
-      selectedMedicine &&
-      q === getMedicinePickerLabel(selectedMedicine).trim()
-    ) {
-      return [selectedMedicine];
-    }
-
-    if (q.length >= 2) {
-      const list = medicineSearchHits;
-      if (selectedMedicine && !list.some((m) => m.id === selectedMedicine.id)) {
-        return [selectedMedicine, ...list];
-      }
-      return list;
-    }
-
-    return selectedMedicine ? [selectedMedicine] : [];
-  }, [medicineSearchInput, medicineSearchHits, selectedMedicine]);
 
   const addMedicineOptions = useMemo(() => {
     const q = newMedicineData.name.trim();
@@ -894,8 +910,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 <Autocomplete
                   loading={medicineSearchLoading}
                   options={purchaseMedicineOptions}
-                  getOptionLabel={getMedicinePickerLabel}
-                  value={selectedMedicine}
+                  groupBy={(o) => o.groupLabel}
+                  getOptionLabel={(o) => o.label}
+                  getOptionDisabled={(o) => !o.selectable}
+                  value={selectedResolveOption}
                   inputValue={medicineSearchInput}
                   onInputChange={(_, newInputValue, reason) => {
                     if (reason === 'clear') {
@@ -916,12 +934,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     setMedicineSearchInput(newInputValue);
                   }}
                   onChange={(_, newValue) => {
-                    if (!newValue) {
-                      setSelectedMedicine(null);
-                      setMedicineSearchInput('');
+                    if (!newValue || !newValue.selectable || !newValue.medicine) {
+                      if (!newValue) {
+                        setSelectedMedicine(null);
+                        setMedicineSearchInput('');
+                      }
                       return;
                     }
-                    void resolveMedicineAfterPickerSelection(newValue, undefined).then(
+                    void resolveMedicineAfterPickerSelection(newValue.medicine, undefined).then(
                       (merged) => {
                         rememberMedicine(merged);
                         setSelectedMedicine(merged);
@@ -931,12 +951,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   }}
                   filterOptions={(options) => options}
                   isOptionEqualToValue={(a, b) => a.id === b.id}
+                  renderGroup={renderMedicineResolveGroup}
+                  renderOption={renderMedicineResolveOption}
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       inputRef={medicineSearchInputElRef}
                       label="Search Medicine"
-                      placeholder="Search by name, product ID, or manufacturer..."
+                      placeholder="Pending orders · demands · inventory…"
                       size="small"
                       sx={{ minWidth: 300 }}
                       InputProps={{
