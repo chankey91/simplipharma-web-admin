@@ -10,6 +10,21 @@ import { getTypesenseClient, TYPESENSE_COLLECTION } from './typesenseMedicines';
 
 const DRAFTS = 'purchase_invoice_drafts';
 
+/** Firestore rejects `undefined` field values — drop them recursively. */
+function stripUndefinedDeep<T>(value: T): T {
+  if (value === undefined) return value;
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefinedDeep(item)) as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    out[k] = stripUndefinedDeep(v);
+  }
+  return out as T;
+}
+
 async function assertCanIngest(uid: string): Promise<void> {
   const role = await getUserRole(uid);
   if (isPurchaseOfficerRole(role)) return;
@@ -189,7 +204,7 @@ export const processPurchaseInvoiceDraft = functions
       const extracted = await extractInvoiceFromFile(fileBuf, contentType);
 
       await ref.set(
-        {
+        stripUndefinedDeep({
           status: 'resolving',
           extractionMeta: {
             engine: extracted.engine,
@@ -199,7 +214,7 @@ export const processPurchaseInvoiceDraft = functions
           rawTextPreview: (extracted.rawText || '').slice(0, 8000),
           extractedLines: extracted.lines,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
+        }),
         { merge: true }
       );
 
@@ -222,15 +237,18 @@ export const processPurchaseInvoiceDraft = functions
           matchStatus = candidates.length > 1 && second && second.score >= 0.55 ? 'ambiguous' : 'matched';
         }
 
-        resolvedLines.push({
+        const resolved: Record<string, unknown> = {
           ...line,
           matchStatus,
           matchReason: top?.reason || 'none',
-          medicineId: matchStatus !== 'unmatched' ? top?.medicineId : undefined,
-          medicineName: matchStatus !== 'unmatched' ? top?.medicineName : undefined,
-          productId: matchStatus !== 'unmatched' ? top?.productId : undefined,
           candidates: candidates.slice(0, 5),
-        });
+        };
+        if (matchStatus !== 'unmatched' && top) {
+          resolved.medicineId = top.medicineId;
+          resolved.medicineName = top.medicineName;
+          if (top.productId) resolved.productId = top.productId;
+        }
+        resolvedLines.push(resolved);
       }
 
       const needsReview =
@@ -240,14 +258,14 @@ export const processPurchaseInvoiceDraft = functions
         !vendor.vendorId;
 
       await ref.set(
-        {
+        stripUndefinedDeep({
           status: needsReview ? 'needs_review' : 'ready',
           vendorId: vendor.vendorId || null,
           vendorName: vendor.vendorName || null,
           resolvedLines,
           errors: extracted.message ? [extracted.message] : [],
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
+        }),
         { merge: true }
       );
 

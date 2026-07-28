@@ -110,18 +110,19 @@ export function parseProductLineFromRawLine(line: string): Omit<ExtractedLine, '
   if (nums.length >= 3) mrp = nums[2];
   if (nums.length >= 4 && nums[3] <= 100) discountPercentage = nums[3];
 
-  return {
+  const parsed: Omit<ExtractedLine, 'lineId'> = {
     raw,
     productName,
-    batchNumber: batchNumber || undefined,
-    expiryMmYyyy,
-    quantity,
-    freeQuantity,
-    mrp,
-    purchasePrice,
-    discountPercentage,
     confidence: 0.55,
   };
+  if (batchNumber) parsed.batchNumber = batchNumber;
+  if (expiryMmYyyy) parsed.expiryMmYyyy = expiryMmYyyy;
+  if (quantity !== undefined) parsed.quantity = quantity;
+  if (freeQuantity !== undefined) parsed.freeQuantity = freeQuantity;
+  if (mrp !== undefined) parsed.mrp = mrp;
+  if (purchasePrice !== undefined) parsed.purchasePrice = purchasePrice;
+  if (discountPercentage !== undefined) parsed.discountPercentage = discountPercentage;
+  return parsed;
 }
 
 export function extractPotentialProductLines(fullText: string, maxLines = 150): string[] {
