@@ -337,10 +337,9 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>
-        Upload a <strong>PDF</strong> or <strong>photo (JPG/PNG)</strong>. The system extracts lines,
-        prefers medicines on <strong>pending orders</strong>, then inventory. Review matches before
-        committing. Image OCR needs Functions config <code>ocr.api_key</code> (Google Vision); otherwise
-        add lines manually after upload.
+        Upload a <strong>PDF</strong> or <strong>photo (JPG/PNG)</strong>. Gemini extracts only
+        medicine line items (name, batch, expiry, qty, rates), then prefers medicines on{' '}
+        <strong>pending orders</strong>, then inventory. Review before committing.
       </Alert>
 
       {error && (

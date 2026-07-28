@@ -550,7 +550,7 @@ export interface PurchaseInvoiceDraft {
     size: number;
   };
   extractionMeta?: {
-    engine: 'pdf_text' | 'image_ocr' | 'none';
+    engine: 'gemini' | 'pdf_text' | 'image_ocr' | 'none';
     message?: string;
     model?: string;
   };
