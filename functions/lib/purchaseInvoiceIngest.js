@@ -11,6 +11,23 @@ const panelAuth_1 = require("./panelAuth");
 const purchaseInvoiceExtract_1 = require("./purchaseInvoiceExtract");
 const typesenseMedicines_1 = require("./typesenseMedicines");
 const DRAFTS = 'purchase_invoice_drafts';
+/** Firestore rejects `undefined` field values — drop them recursively. */
+function stripUndefinedDeep(value) {
+    if (value === undefined)
+        return value;
+    if (value === null || typeof value !== 'object')
+        return value;
+    if (Array.isArray(value)) {
+        return value.map((item) => stripUndefinedDeep(item));
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+        if (v === undefined)
+            continue;
+        out[k] = stripUndefinedDeep(v);
+    }
+    return out;
+}
 async function assertCanIngest(uid) {
     const role = await (0, panelAuth_1.getUserRole)(uid);
     if ((0, panelAuth_1.isPurchaseOfficerRole)(role))
@@ -162,7 +179,7 @@ exports.processPurchaseInvoiceDraft = functions
         const bucket = admin.storage().bucket();
         const [fileBuf] = await bucket.file(storagePath).download();
         const extracted = await (0, purchaseInvoiceExtract_1.extractInvoiceFromFile)(fileBuf, contentType);
-        await ref.set({
+        await ref.set(stripUndefinedDeep({
             status: 'resolving',
             extractionMeta: {
                 engine: extracted.engine,
@@ -172,7 +189,7 @@ exports.processPurchaseInvoiceDraft = functions
             rawTextPreview: (extracted.rawText || '').slice(0, 8000),
             extractedLines: extracted.lines,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
+        }), { merge: true });
         const pendingIds = await collectPendingMedicineIds(db);
         const vendor = await matchVendor(db, (_d = extracted.vendorHint) === null || _d === void 0 ? void 0 : _d.gstin, (_e = extracted.vendorHint) === null || _e === void 0 ? void 0 : _e.name);
         const resolvedLines = [];
@@ -187,20 +204,27 @@ exports.processPurchaseInvoiceDraft = functions
             else if (top && top.score >= 0.55) {
                 matchStatus = candidates.length > 1 && second && second.score >= 0.55 ? 'ambiguous' : 'matched';
             }
-            resolvedLines.push(Object.assign(Object.assign({}, line), { matchStatus, matchReason: (top === null || top === void 0 ? void 0 : top.reason) || 'none', medicineId: matchStatus !== 'unmatched' ? top === null || top === void 0 ? void 0 : top.medicineId : undefined, medicineName: matchStatus !== 'unmatched' ? top === null || top === void 0 ? void 0 : top.medicineName : undefined, productId: matchStatus !== 'unmatched' ? top === null || top === void 0 ? void 0 : top.productId : undefined, candidates: candidates.slice(0, 5) }));
+            const resolved = Object.assign(Object.assign({}, line), { matchStatus, matchReason: (top === null || top === void 0 ? void 0 : top.reason) || 'none', candidates: candidates.slice(0, 5) });
+            if (matchStatus !== 'unmatched' && top) {
+                resolved.medicineId = top.medicineId;
+                resolved.medicineName = top.medicineName;
+                if (top.productId)
+                    resolved.productId = top.productId;
+            }
+            resolvedLines.push(resolved);
         }
         const needsReview = extracted.engine === 'none' ||
             resolvedLines.length === 0 ||
             resolvedLines.some((l) => l.matchStatus !== 'matched') ||
             !vendor.vendorId;
-        await ref.set({
+        await ref.set(stripUndefinedDeep({
             status: needsReview ? 'needs_review' : 'ready',
             vendorId: vendor.vendorId || null,
             vendorName: vendor.vendorName || null,
             resolvedLines,
             errors: extracted.message ? [extracted.message] : [],
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
+        }), { merge: true });
         return {
             ok: true,
             draftId,
