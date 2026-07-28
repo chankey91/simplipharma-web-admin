@@ -531,6 +531,16 @@ service cloud.firestore {
       }
     }
 
+    // Phase 1 — invoice ingest drafts (PDF / photo). Commit still uses purchaseInvoices.
+    match /purchase_invoice_drafts/{draftId} {
+      allow read: if isAdminOrOperations() || isPurchaseOfficer();
+      allow create: if (isAdminOrOperations() || isPurchaseOfficer())
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'uploaded';
+      allow update: if isAdminOrOperations() || isPurchaseOfficer();
+      allow delete: if isAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
