@@ -21,6 +21,7 @@ import { PurchaseInvoicesPage } from './pages/PurchaseInvoices';
 import { CreatePurchaseInvoicePage } from './pages/CreatePurchaseInvoice';
 import { ImportPurchaseInvoicePdfPage } from './pages/ImportPurchaseInvoicePdf';
 import { PurchaseInvoiceDetailsPage } from './pages/PurchaseInvoiceDetails';
+import { PurchaseInvoiceIngestPage } from './pages/PurchaseInvoiceIngest';
 import { InventoryPage } from './pages/Inventory';
 import { StockUpdatePage } from './pages/StockUpdate';
 import { MedicineDetailsPage } from './pages/MedicineDetails';
@@ -136,6 +137,8 @@ const router = createBrowserRouter([
   { path: '/purchases', element: withLayout(<PurchaseInvoicesPage />) },
   { path: '/purchases/new', element: withLayout(<CreatePurchaseInvoicePage />) },
   { path: '/purchases/import-pdf', element: withLayout(<ImportPurchaseInvoicePdfPage />) },
+  { path: '/purchases/ingest', element: withLayout(<PurchaseInvoiceIngestPage />) },
+  { path: '/purchases/ingest/:draftId', element: withLayout(<PurchaseInvoiceIngestPage />) },
   { path: '/purchases/:invoiceId', element: withLayout(<PurchaseInvoiceDetailsPage />) },
   { path: '/inventory', element: withLayout(<InventoryPage />) },
   { path: '/inventory/:medicineId', element: withLayout(<MedicineDetailsPage />) },
