@@ -206,9 +206,18 @@ const removeUndefined = (obj: any): any => {
   return obj;
 };
 
+export type CreatePurchaseInvoiceProgress = {
+  phase: 'saving_invoice' | 'updating_stock' | 'done';
+  current: number;
+  total: number;
+  medicineName?: string;
+  batchNumber?: string;
+};
+
 export const createPurchaseInvoice = async (
   invoiceData: Omit<PurchaseInvoice, 'id'>,
-  updateStock: boolean = true
+  updateStock: boolean = true,
+  onProgress?: (progress: CreatePurchaseInvoiceProgress) => void
 ) => {
   // Check invoice number uniqueness
   const isUnique = await checkInvoiceNumberUnique(invoiceData.invoiceNumber);
@@ -309,6 +318,12 @@ export const createPurchaseInvoice = async (
     invoiceDoc.notes = invoiceData.notes;
   }
   
+  onProgress?.({
+    phase: 'saving_invoice',
+    current: 0,
+    total: invoiceData.items.length,
+  });
+
   await setDoc(invoiceRef, invoiceDoc);
   
   // Update medicine stock with purchase batches
@@ -326,6 +341,14 @@ export const createPurchaseInvoice = async (
       }
       itemsByMedicine.get(item.medicineId)!.push(item);
     }
+
+    const stockItems = invoiceData.items.filter((i) => i.medicineId && i.batchNumber);
+    let stockDone = 0;
+    onProgress?.({
+      phase: 'updating_stock',
+      current: 0,
+      total: Math.max(1, stockItems.length),
+    });
     
     // Process each medicine sequentially to avoid race conditions
     for (const [medicineId, items] of itemsByMedicine.entries()) {
@@ -391,13 +414,37 @@ export const createPurchaseInvoice = async (
             batchData.nonReturnable = true;
           }
 
+          onProgress?.({
+            phase: 'updating_stock',
+            current: stockDone,
+            total: Math.max(1, stockItems.length),
+            medicineName: item.medicineName,
+            batchNumber: item.batchNumber,
+          });
+
           console.log(`Updating stock for medicine ${medicineId} with batch data:`, batchData);
           await addStockBatch(medicineId, batchData);
+          stockDone += 1;
+          onProgress?.({
+            phase: 'updating_stock',
+            current: stockDone,
+            total: Math.max(1, stockItems.length),
+            medicineName: item.medicineName,
+            batchNumber: item.batchNumber,
+          });
           console.log(`✓ Stock updated successfully for medicine ${medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
         } catch (error: any) {
           const errorMsg = `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${error.message || error}`;
           console.error(errorMsg, error);
           stockUpdateErrors.push(errorMsg);
+          stockDone += 1;
+          onProgress?.({
+            phase: 'updating_stock',
+            current: stockDone,
+            total: Math.max(1, stockItems.length),
+            medicineName: item.medicineName,
+            batchNumber: item.batchNumber,
+          });
         }
       }
     }
@@ -410,7 +457,12 @@ export const createPurchaseInvoice = async (
       // throw new Error(`Failed to update stock for ${stockUpdateErrors.length} item(s). Please update stock manually.`);
     }
   }
-  
+
+  onProgress?.({
+    phase: 'done',
+    current: invoiceData.items.length,
+    total: Math.max(1, invoiceData.items.length),
+  });
   return invoiceRef.id;
 };
 

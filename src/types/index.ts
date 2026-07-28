@@ -514,6 +514,8 @@ export interface PurchaseInvoiceDraftExtractedLine {
   lineId: string;
   raw?: string;
   productName: string;
+  /** Pack size from invoice when present (e.g. 10 TAB, 15 ML). */
+  packaging?: string;
   batchNumber?: string;
   expiryMmYyyy?: string;
   quantity?: number;

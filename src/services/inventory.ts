@@ -64,10 +64,10 @@ export function normalizeFirestoreDate(val: any): Date | undefined {
 
 function normalizeBatchQuantity(batch: any): number {
   if (typeof batch.quantity === 'number' && !isNaN(batch.quantity)) {
-    return Math.max(0, Math.floor(batch.quantity));
+    return Math.max(0, batch.quantity);
   }
-  const n = parseInt(String(batch.quantity ?? '0'), 10);
-  return isNaN(n) ? 0 : Math.max(0, n);
+  const n = parseFloat(String(batch.quantity ?? '0'));
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
 function parseOptionalPositiveNumber(val: unknown): number | undefined {

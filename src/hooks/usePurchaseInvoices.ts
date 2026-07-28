@@ -9,7 +9,8 @@ import {
   updatePurchaseInvoice,
   updatePurchaseInvoicePayment,
   updateStockForExistingInvoice,
-  updateStockForAllExistingInvoices
+  updateStockForAllExistingInvoices,
+  type CreatePurchaseInvoiceProgress,
 } from '../services/purchaseInvoices';
 import {
   searchPurchaseInvoicesTypesense,
@@ -108,10 +109,15 @@ export const useCreatePurchaseInvoice = () => {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ invoiceData, updateStock }: { 
-      invoiceData: Omit<PurchaseInvoice, 'id'>; 
+    mutationFn: ({
+      invoiceData,
+      updateStock,
+      onProgress,
+    }: {
+      invoiceData: Omit<PurchaseInvoice, 'id'>;
       updateStock?: boolean;
-    }) => createPurchaseInvoice(invoiceData, updateStock ?? true),
+      onProgress?: (progress: CreatePurchaseInvoiceProgress) => void;
+    }) => createPurchaseInvoice(invoiceData, updateStock ?? true, onProgress),
     onSuccess: async () => {
       // Invalidate queries to refresh data
       await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
