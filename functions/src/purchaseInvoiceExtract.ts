@@ -9,6 +9,7 @@ export type ExtractedLine = {
   lineId: string;
   raw?: string;
   productName: string;
+  packaging?: string;
   batchNumber?: string;
   expiryMmYyyy?: string;
   quantity?: number;
@@ -16,6 +17,7 @@ export type ExtractedLine = {
   mrp?: number;
   purchasePrice?: number;
   discountPercentage?: number;
+  gstRate?: number;
   confidence?: number;
 };
 
@@ -39,7 +41,7 @@ function getGeminiModel(): string {
   return (
     (functions.config().gemini && functions.config().gemini.model) ||
     process.env.GOOGLE_GEMINI_MODEL ||
-    'gemini-2.0-flash-001'
+    'gemini-2.5-flash'
   );
 }
 
@@ -53,13 +55,15 @@ Return ONLY valid JSON (no markdown fences) with this exact shape:
   "lines": [
     {
       "productName": string,
+      "packaging": string|null,
       "batchNumber": string|null,
       "expiryMmYyyy": string|null,
       "quantity": number|null,
       "freeQuantity": number|null,
       "mrp": number|null,
       "purchasePrice": number|null,
-      "discountPercentage": number|null
+      "discountPercentage": number|null,
+      "gstRate": number|null
     }
   ]
 }
@@ -67,10 +71,12 @@ Return ONLY valid JSON (no markdown fences) with this exact shape:
 Rules:
 - Include ONLY product/medicine rows from the item table (transactional stock lines).
 - IGNORE completely: seller/buyer names & addresses, phone/email, GSTIN header blocks, IRN/QR, bank details, tax summary (CGST/SGST/IGST totals), grand total, round-off, terms & conditions, signatures, page headers/footers, HSN-only summary rows without a product name.
-- productName = medicine/product name as printed (do not append batch, qty, or prices).
+- productName = medicine/product name as printed (do not append pack, batch, qty, or prices).
+- packaging = pack size / packing as printed when present (e.g. "10 TAB", "15 ML", "1X10", "STRIP", "BOTTLE"). Do NOT put packaging inside productName. Use null if not shown.
 - expiryMmYyyy as MM/YYYY or MM/YY when present on the row.
 - purchasePrice = unit rate / PTR / net rate when present (NOT the line amount).
-- quantity = billed/paid quantity (not free/scheme qty). freeQuantity = free/scheme qty if shown.
+- quantity = billed/paid quantity (not free/scheme qty). freeQuantity = free/scheme qty if shown. Both may be decimals (e.g. 1.5).
+- gstRate = GST % for the line when shown (commonly 5, 12, 18, or 28). Use null if not on the row.
 - If a field is missing or unclear, use null. Never invent medicines that are not on the invoice.
 - Prefer the supplier (seller) GSTIN for vendorHint.gstin when multiple GSTINs appear.`;
 
@@ -131,20 +137,24 @@ function normalizeGeminiLines(rawLines: unknown): ExtractedLine[] {
       productName,
       confidence: 0.85,
     };
+    const packaging = asNonEmptyString(r.packaging);
+    if (packaging) line.packaging = packaging;
     const batch = asNonEmptyString(r.batchNumber);
     if (batch) line.batchNumber = batch;
     const exp = asNonEmptyString(r.expiryMmYyyy);
     if (exp) line.expiryMmYyyy = exp;
     const qty = asFiniteNumber(r.quantity);
-    if (qty !== undefined) line.quantity = Math.max(0, Math.floor(qty));
+    if (qty !== undefined) line.quantity = Math.max(0, qty);
     const free = asFiniteNumber(r.freeQuantity);
-    if (free !== undefined) line.freeQuantity = Math.max(0, Math.floor(free));
+    if (free !== undefined) line.freeQuantity = Math.max(0, free);
     const mrp = asFiniteNumber(r.mrp);
     if (mrp !== undefined) line.mrp = mrp;
     const rate = asFiniteNumber(r.purchasePrice);
     if (rate !== undefined) line.purchasePrice = rate;
     const disc = asFiniteNumber(r.discountPercentage);
     if (disc !== undefined) line.discountPercentage = disc;
+    const gst = asFiniteNumber(r.gstRate);
+    if (gst !== undefined) line.gstRate = gst;
     out.push(line);
   }
   return out;
@@ -436,7 +446,7 @@ export function parseProductLineFromRawLine(line: string): Omit<ExtractedLine, '
   let purchasePrice: number | undefined;
   let discountPercentage: number | undefined;
 
-  if (nums.length >= 1) quantity = Math.max(1, Math.floor(nums[0]));
+  if (nums.length >= 1) quantity = Math.max(0, nums[0]);
   if (nums.length >= 2) purchasePrice = nums[1];
   if (nums.length >= 3) mrp = nums[2];
   if (nums.length >= 4 && nums[3] <= 100) discountPercentage = nums[3];
