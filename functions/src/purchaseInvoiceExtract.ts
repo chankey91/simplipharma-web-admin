@@ -39,7 +39,7 @@ function getGeminiModel(): string {
   return (
     (functions.config().gemini && functions.config().gemini.model) ||
     process.env.GOOGLE_GEMINI_MODEL ||
-    'gemini-2.0-flash'
+    'gemini-2.0-flash-001'
   );
 }
 
@@ -196,14 +196,96 @@ function getGeminiApiKey(): string {
   );
 }
 
+function getGcpProjectId(): string {
+  return (
+    process.env.GCLOUD_PROJECT ||
+    process.env.GCP_PROJECT ||
+    (functions.config().gemini && functions.config().gemini.project) ||
+    ''
+  );
+}
+
+function getVertexLocation(): string {
+  return (
+    (functions.config().gemini && functions.config().gemini.location) ||
+    process.env.GOOGLE_VERTEX_LOCATION ||
+    'us-central1'
+  );
+}
+
+/** Vertex (preferred, Cloud Billing) or AI Studio API key. */
+function isGeminiConfigured(): boolean {
+  return Boolean(getGcpProjectId()) || Boolean(getGeminiApiKey());
+}
+
 type GeminiPart =
   | { text: string }
   | { inline_data: { mime_type: string; data: string } };
 
-async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
+function toVertexParts(parts: GeminiPart[]): Array<Record<string, unknown>> {
+  return parts.map((p) => {
+    if ('text' in p) return { text: p.text };
+    return {
+      inlineData: {
+        mimeType: p.inline_data.mime_type,
+        data: p.inline_data.data,
+      },
+    };
+  });
+}
+
+async function callGeminiVertex(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
+  const projectId = getGcpProjectId();
+  if (!projectId) throw new Error('GCP project id not available for Vertex AI');
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { GoogleAuth } = require('google-auth-library');
+  const auth = new GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+  });
+  const client = await auth.getClient();
+  const accessToken = await client.getAccessToken();
+  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
+  if (!token) throw new Error('Failed to obtain Vertex AI access token');
+
+  const model = getGeminiModel();
+  const location = getVertexLocation();
+  const url =
+    `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}` +
+    `/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: toVertexParts(parts) }],
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+      },
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Vertex Gemini failed (${res.status}): ${errText.slice(0, 500)}`);
+  }
+  const json = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    error?: { message?: string };
+  };
+  if (json.error?.message) throw new Error(json.error.message);
+  const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text.trim()) throw new Error('Vertex Gemini returned empty response');
+  return { text, model: `vertex:${model}` };
+}
+
+async function callGeminiApiKey(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
-    throw new Error('Gemini not configured (set functions config gemini.api_key)');
+    throw new Error('Gemini API key not configured');
   }
   const model = getGeminiModel();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
@@ -223,7 +305,7 @@ async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: s
   });
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Gemini failed (${res.status}): ${errText.slice(0, 400)}`);
+    throw new Error(`Gemini API key failed (${res.status}): ${errText.slice(0, 400)}`);
   }
   const json = (await res.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
@@ -233,6 +315,31 @@ async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: s
   const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
   if (!text.trim()) throw new Error('Gemini returned empty response');
   return { text, model };
+}
+
+async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
+  const errors: string[] = [];
+  if (getGcpProjectId()) {
+    try {
+      return await callGeminiVertex(parts);
+    } catch (e: any) {
+      errors.push(e?.message || String(e));
+      console.error('Vertex Gemini failed:', e?.message || e);
+    }
+  }
+  if (getGeminiApiKey()) {
+    try {
+      return await callGeminiApiKey(parts);
+    } catch (e: any) {
+      errors.push(e?.message || String(e));
+      console.error('Gemini API key failed:', e?.message || e);
+    }
+  }
+  throw new Error(
+    errors.length
+      ? `Gemini unavailable: ${errors.join(' | ')}`
+      : 'Gemini not configured (Vertex project or gemini.api_key)'
+  );
 }
 
 async function extractWithGeminiFromImage(
@@ -449,9 +556,10 @@ export async function extractInvoiceFromFile(
   const ct = (contentType || '').toLowerCase();
   const isPdf = ct.includes('pdf');
   const isImage = ct.startsWith('image/');
-  const geminiReady = Boolean(getGeminiApiKey());
+  const geminiReady = isGeminiConfigured();
 
   if (isImage) {
+    let geminiError = '';
     if (geminiReady) {
       try {
         const gemini = await extractWithGeminiFromImage(buffer, ct);
@@ -460,8 +568,8 @@ export async function extractInvoiceFromFile(
           ...gemini,
         };
       } catch (e: any) {
-        // Fall through to Vision + heuristic
-        console.error('Gemini image extract failed, falling back:', e?.message || e);
+        geminiError = e?.message || String(e);
+        console.error('Gemini image extract failed, falling back:', geminiError);
       }
     }
 
@@ -472,9 +580,9 @@ export async function extractInvoiceFromFile(
           engine: 'none',
           rawText: '',
           lines: [],
-          message: geminiReady
-            ? 'Image extract failed. Add lines manually in review.'
-            : 'Image uploaded. Set gemini.api_key (preferred) or ocr.api_key. Add lines manually in review.',
+          message: geminiError
+            ? `Image extract failed (${geminiError.slice(0, 180)}). Add lines manually in review.`
+            : 'Image uploaded. Vertex/Gemini not available and OCR is not configured. Add lines manually in review.',
         };
       }
       if (geminiReady && ocrText.trim()) {
@@ -487,7 +595,8 @@ export async function extractInvoiceFromFile(
             rawText: ocrText,
           };
         } catch (e: any) {
-          console.error('Gemini text extract failed, falling back:', e?.message || e);
+          geminiError = e?.message || String(e);
+          console.error('Gemini text extract failed, falling back:', geminiError);
         }
       }
       const gstins = findGstinsInText(ocrText);
@@ -497,7 +606,7 @@ export async function extractInvoiceFromFile(
         lines: linesFromText(ocrText),
         vendorHint: { gstin: gstins[0] },
         message: ocrText.trim()
-          ? 'Used heuristic OCR parse (Gemini unavailable). Review lines carefully.'
+          ? `Used heuristic OCR parse (Gemini unavailable${geminiError ? `: ${geminiError.slice(0, 160)}` : ''}). Review lines carefully.`
           : 'OCR returned no text. Add lines manually in review.',
       };
     } catch (e: any) {
