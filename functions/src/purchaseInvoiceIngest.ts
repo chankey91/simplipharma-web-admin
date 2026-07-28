@@ -209,8 +209,11 @@ export const processPurchaseInvoiceDraft = functions
           extractionMeta: {
             engine: extracted.engine,
             message: extracted.message || null,
+            model: extracted.model || null,
           },
           vendorHint: extracted.vendorHint || null,
+          invoiceNumber: extracted.invoiceNumber || null,
+          invoiceDate: extracted.invoiceDate || null,
           rawTextPreview: (extracted.rawText || '').slice(0, 8000),
           extractedLines: extracted.lines,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),

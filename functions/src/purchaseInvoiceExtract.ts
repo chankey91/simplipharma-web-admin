@@ -1,6 +1,7 @@
 /**
- * Invoice text extraction + line parsing for purchase-invoice ingest.
- * PDF: pdf-parse. Images: optional Google Cloud Vision OCR via functions.config().ocr.api_key.
+ * Invoice extraction for purchase-invoice ingest.
+ * Prefer Gemini structured line items (medicine rows only).
+ * Fallback: Vision OCR / pdf-parse text + heuristic line parser.
  */
 import * as functions from 'firebase-functions';
 
@@ -19,17 +20,59 @@ export type ExtractedLine = {
 };
 
 export type ExtractResult = {
-  engine: 'pdf_text' | 'image_ocr' | 'none';
+  engine: 'gemini' | 'pdf_text' | 'image_ocr' | 'none';
   message?: string;
+  model?: string;
   rawText: string;
   lines: ExtractedLine[];
   vendorHint?: { name?: string; gstin?: string };
+  invoiceNumber?: string;
+  invoiceDate?: string;
 };
 
 const HEADERISH =
   /^(s\.?n|sn|#|hsn|gst|cgst|sgst|sub|invoice|bill|total|tax|date|qty|rate|amount|mrp|discount|net|particular|description|item|pack|exp|mfg|batch)/i;
 const GSTIN_REGEX = /([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])/gi;
 const BATCH_LIKE = /^[A-Za-z0-9][A-Za-z0-9./_-]{3,28}$/;
+
+function getGeminiModel(): string {
+  return (
+    (functions.config().gemini && functions.config().gemini.model) ||
+    process.env.GOOGLE_GEMINI_MODEL ||
+    'gemini-2.0-flash'
+  );
+}
+
+const GEMINI_PROMPT = `You extract transactional line items from Indian pharmacy / pharmaceutical wholesale purchase invoices (GST tax invoices).
+
+Return ONLY valid JSON (no markdown fences) with this exact shape:
+{
+  "vendorHint": { "name": string|null, "gstin": string|null },
+  "invoiceNumber": string|null,
+  "invoiceDate": string|null,
+  "lines": [
+    {
+      "productName": string,
+      "batchNumber": string|null,
+      "expiryMmYyyy": string|null,
+      "quantity": number|null,
+      "freeQuantity": number|null,
+      "mrp": number|null,
+      "purchasePrice": number|null,
+      "discountPercentage": number|null
+    }
+  ]
+}
+
+Rules:
+- Include ONLY product/medicine rows from the item table (transactional stock lines).
+- IGNORE completely: seller/buyer names & addresses, phone/email, GSTIN header blocks, IRN/QR, bank details, tax summary (CGST/SGST/IGST totals), grand total, round-off, terms & conditions, signatures, page headers/footers, HSN-only summary rows without a product name.
+- productName = medicine/product name as printed (do not append batch, qty, or prices).
+- expiryMmYyyy as MM/YYYY or MM/YY when present on the row.
+- purchasePrice = unit rate / PTR / net rate when present (NOT the line amount).
+- quantity = billed/paid quantity (not free/scheme qty). freeQuantity = free/scheme qty if shown.
+- If a field is missing or unclear, use null. Never invent medicines that are not on the invoice.
+- Prefer the supplier (seller) GSTIN for vendorHint.gstin when multiple GSTINs appear.`;
 
 function parseExpiryFromLine(line: string): string | undefined {
   const m4 = line.match(/\b(0[1-9]|1[0-2])\/(\d{4})\b/);
@@ -59,6 +102,187 @@ export function findGstinsInText(text: string): string[] {
     if (g.length === 15) seen.add(g);
   }
   return [...seen];
+}
+
+function asFiniteNumber(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function asNonEmptyString(v: unknown): string | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim();
+  return s ? s : undefined;
+}
+
+function normalizeGeminiLines(rawLines: unknown): ExtractedLine[] {
+  if (!Array.isArray(rawLines)) return [];
+  const out: ExtractedLine[] = [];
+  let n = 0;
+  for (const row of rawLines) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const productName = asNonEmptyString(r.productName);
+    if (!productName || productName.length < 2) continue;
+    n += 1;
+    const line: ExtractedLine = {
+      lineId: `L${n}`,
+      productName,
+      confidence: 0.85,
+    };
+    const batch = asNonEmptyString(r.batchNumber);
+    if (batch) line.batchNumber = batch;
+    const exp = asNonEmptyString(r.expiryMmYyyy);
+    if (exp) line.expiryMmYyyy = exp;
+    const qty = asFiniteNumber(r.quantity);
+    if (qty !== undefined) line.quantity = Math.max(0, Math.floor(qty));
+    const free = asFiniteNumber(r.freeQuantity);
+    if (free !== undefined) line.freeQuantity = Math.max(0, Math.floor(free));
+    const mrp = asFiniteNumber(r.mrp);
+    if (mrp !== undefined) line.mrp = mrp;
+    const rate = asFiniteNumber(r.purchasePrice);
+    if (rate !== undefined) line.purchasePrice = rate;
+    const disc = asFiniteNumber(r.discountPercentage);
+    if (disc !== undefined) line.discountPercentage = disc;
+    out.push(line);
+  }
+  return out;
+}
+
+function parseGeminiJson(text: string): {
+  lines: ExtractedLine[];
+  vendorHint?: { name?: string; gstin?: string };
+  invoiceNumber?: string;
+  invoiceDate?: string;
+} {
+  let cleaned = text.trim();
+  const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) cleaned = fence[1].trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) cleaned = cleaned.slice(start, end + 1);
+
+  const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+  const vendorRaw =
+    parsed.vendorHint && typeof parsed.vendorHint === 'object'
+      ? (parsed.vendorHint as Record<string, unknown>)
+      : {};
+  const name = asNonEmptyString(vendorRaw.name);
+  let gstin = asNonEmptyString(vendorRaw.gstin);
+  if (gstin) gstin = normalizeGstin(gstin);
+
+  const vendorHint =
+    name || gstin
+      ? {
+          ...(name ? { name } : {}),
+          ...(gstin ? { gstin } : {}),
+        }
+      : undefined;
+
+  return {
+    lines: normalizeGeminiLines(parsed.lines),
+    vendorHint,
+    invoiceNumber: asNonEmptyString(parsed.invoiceNumber),
+    invoiceDate: asNonEmptyString(parsed.invoiceDate),
+  };
+}
+
+function getGeminiApiKey(): string {
+  return (
+    (functions.config().gemini && functions.config().gemini.api_key) ||
+    process.env.GOOGLE_GEMINI_API_KEY ||
+    ''
+  );
+}
+
+type GeminiPart =
+  | { text: string }
+  | { inline_data: { mime_type: string; data: string } };
+
+async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    throw new Error('Gemini not configured (set functions config gemini.api_key)');
+  }
+  const model = getGeminiModel();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+      },
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini failed (${res.status}): ${errText.slice(0, 400)}`);
+  }
+  const json = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    error?: { message?: string };
+  };
+  if (json.error?.message) throw new Error(json.error.message);
+  const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text.trim()) throw new Error('Gemini returned empty response');
+  return { text, model };
+}
+
+async function extractWithGeminiFromImage(
+  buffer: Buffer,
+  contentType: string
+): Promise<Omit<ExtractResult, 'engine' | 'rawText'> & { rawText: string }> {
+  const mime =
+    contentType && contentType.startsWith('image/')
+      ? contentType
+      : 'image/jpeg';
+  const { text, model } = await callGemini([
+    { text: GEMINI_PROMPT },
+    { inline_data: { mime_type: mime, data: buffer.toString('base64') } },
+  ]);
+  const parsed = parseGeminiJson(text);
+  return {
+    model,
+    rawText: text.slice(0, 8000),
+    lines: parsed.lines,
+    vendorHint: parsed.vendorHint,
+    invoiceNumber: parsed.invoiceNumber,
+    invoiceDate: parsed.invoiceDate,
+    message:
+      parsed.lines.length === 0
+        ? 'Gemini found no medicine line items. Add lines manually in review.'
+        : undefined,
+  };
+}
+
+async function extractWithGeminiFromText(
+  invoiceText: string
+): Promise<Omit<ExtractResult, 'engine' | 'rawText'> & { rawText: string }> {
+  const { text, model } = await callGemini([
+    {
+      text: `${GEMINI_PROMPT}\n\n--- INVOICE TEXT ---\n${invoiceText.slice(0, 60000)}`,
+    },
+  ]);
+  const parsed = parseGeminiJson(text);
+  return {
+    model,
+    rawText: invoiceText,
+    lines: parsed.lines,
+    vendorHint: parsed.vendorHint,
+    invoiceNumber: parsed.invoiceNumber,
+    invoiceDate: parsed.invoiceDate,
+    message:
+      parsed.lines.length === 0
+        ? 'Gemini found no medicine line items. Add lines manually in review.'
+        : undefined,
+  };
 }
 
 export function parseProductLineFromRawLine(line: string): Omit<ExtractedLine, 'lineId'> | null {
@@ -156,7 +380,6 @@ function linesFromText(text: string): ExtractedLine[] {
 }
 
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  // pdf-parse v2 API
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { PDFParse } = require('pdf-parse');
   const parser = new PDFParse({ data: buffer });
@@ -206,6 +429,19 @@ async function extractTextFromImageOcr(buffer: Buffer, contentType: string): Pro
   return String(resp?.fullTextAnnotation?.text || '');
 }
 
+function mergeVendorHint(
+  geminiHint?: { name?: string; gstin?: string },
+  textGstins?: string[]
+): { name?: string; gstin?: string } | undefined {
+  const gstin = geminiHint?.gstin || textGstins?.[0];
+  const name = geminiHint?.name;
+  if (!gstin && !name) return undefined;
+  return {
+    ...(name ? { name } : {}),
+    ...(gstin ? { gstin } : {}),
+  };
+}
+
 export async function extractInvoiceFromFile(
   buffer: Buffer,
   contentType: string
@@ -213,20 +449,22 @@ export async function extractInvoiceFromFile(
   const ct = (contentType || '').toLowerCase();
   const isPdf = ct.includes('pdf');
   const isImage = ct.startsWith('image/');
-
-  if (isPdf) {
-    const rawText = await extractTextFromPdf(buffer);
-    const gstins = findGstinsInText(rawText);
-    return {
-      engine: 'pdf_text',
-      rawText,
-      lines: linesFromText(rawText),
-      vendorHint: { gstin: gstins[0] },
-      message: rawText.trim() ? undefined : 'PDF had little/no extractable text (may be a scan).',
-    };
-  }
+  const geminiReady = Boolean(getGeminiApiKey());
 
   if (isImage) {
+    if (geminiReady) {
+      try {
+        const gemini = await extractWithGeminiFromImage(buffer, ct);
+        return {
+          engine: 'gemini',
+          ...gemini,
+        };
+      } catch (e: any) {
+        // Fall through to Vision + heuristic
+        console.error('Gemini image extract failed, falling back:', e?.message || e);
+      }
+    }
+
     try {
       const ocrText = await extractTextFromImageOcr(buffer, ct);
       if (ocrText == null) {
@@ -234,9 +472,23 @@ export async function extractInvoiceFromFile(
           engine: 'none',
           rawText: '',
           lines: [],
-          message:
-            'Image uploaded. OCR is not configured (set functions config ocr.api_key for Vision). Add lines manually in review.',
+          message: geminiReady
+            ? 'Image extract failed. Add lines manually in review.'
+            : 'Image uploaded. Set gemini.api_key (preferred) or ocr.api_key. Add lines manually in review.',
         };
+      }
+      if (geminiReady && ocrText.trim()) {
+        try {
+          const gemini = await extractWithGeminiFromText(ocrText);
+          return {
+            engine: 'gemini',
+            ...gemini,
+            vendorHint: mergeVendorHint(gemini.vendorHint, findGstinsInText(ocrText)),
+            rawText: ocrText,
+          };
+        } catch (e: any) {
+          console.error('Gemini text extract failed, falling back:', e?.message || e);
+        }
       }
       const gstins = findGstinsInText(ocrText);
       return {
@@ -244,16 +496,49 @@ export async function extractInvoiceFromFile(
         rawText: ocrText,
         lines: linesFromText(ocrText),
         vendorHint: { gstin: gstins[0] },
-        message: ocrText.trim() ? undefined : 'OCR returned no text. Add lines manually in review.',
+        message: ocrText.trim()
+          ? 'Used heuristic OCR parse (Gemini unavailable). Review lines carefully.'
+          : 'OCR returned no text. Add lines manually in review.',
       };
     } catch (e: any) {
       return {
         engine: 'none',
         rawText: '',
         lines: [],
-        message: `Image OCR failed: ${e?.message || String(e)}. Add lines manually in review.`,
+        message: `Image extract failed: ${e?.message || String(e)}. Add lines manually in review.`,
       };
     }
+  }
+
+  if (isPdf) {
+    const rawText = await extractTextFromPdf(buffer);
+    const gstins = findGstinsInText(rawText);
+
+    if (geminiReady && rawText.trim().length >= 40) {
+      try {
+        const gemini = await extractWithGeminiFromText(rawText);
+        return {
+          engine: 'gemini',
+          ...gemini,
+          vendorHint: mergeVendorHint(gemini.vendorHint, gstins),
+          rawText,
+        };
+      } catch (e: any) {
+        console.error('Gemini PDF text extract failed, falling back:', e?.message || e);
+      }
+    }
+
+    return {
+      engine: 'pdf_text',
+      rawText,
+      lines: linesFromText(rawText),
+      vendorHint: { gstin: gstins[0] },
+      message: rawText.trim()
+        ? geminiReady
+          ? 'Used heuristic PDF parse (Gemini failed). Review lines carefully.'
+          : 'PDF text parsed with heuristics. Configure gemini.api_key for better medicine-line extraction.'
+        : 'PDF had little/no extractable text (may be a scan). Photograph the invoice or add lines manually.',
+    };
   }
 
   return {
