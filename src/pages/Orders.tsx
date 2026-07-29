@@ -102,8 +102,8 @@ export const OrdersPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
-  const [fromDateFilter, setFromDateFilter] = useState('');
-  const [toDateFilter, setToDateFilter] = useState('');
+  const [fromDateFilter, setFromDateFilter] = useState(() => getTodayDateStringIST());
+  const [toDateFilter, setToDateFilter] = useState(() => getTodayDateStringIST());
   const [page, setPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingProductSummary, setIsExportingProductSummary] = useState(false);
@@ -149,7 +149,7 @@ export const OrdersPage: React.FC = () => {
   const dateRangeInvalid =
     Boolean(fromDateFilter && toDateFilter && fromDateFilter > toDateFilter);
   const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
-  /** Typesense lacks date filter until functions deploy — use Firestore range + local filter when dates set. */
+  /** Prefer Firestore for any date filter — Typesense can lag behind new orders. */
   const useLocalList = typesenseDisabled || hasDateFilter;
 
   // Primary path: server-side search/filter/sort/pagination via Typesense.
@@ -209,8 +209,11 @@ export const OrdersPage: React.FC = () => {
           order.medicines.some((m) => m.name.toLowerCase().includes(term));
         const matchesStatus =
           !applyStatusFilter || statusFilter === 'All' || order.status === statusFilter;
-        const matchesDate =
-          hasDateFilter || isDateInIstRange(order.orderDate, fromDateFilter, toDateFilter);
+        const matchesDate = isDateInIstRange(
+          order.orderDate,
+          fromDateFilter || undefined,
+          toDateFilter || undefined
+        );
         return matchesSearch && matchesStatus && matchesDate;
       });
     },
@@ -594,22 +597,35 @@ export const OrdersPage: React.FC = () => {
               </Select>
             </FormControl>
           </Grid>
-          {(fromDateFilter || toDateFilter) && (
-            <Grid item xs={12} lg={1}>
+          <Grid item xs={12} sm="auto">
+            <Box display="flex" gap={0.5} alignItems="center" height="100%">
               <Button
-                fullWidth
                 size="small"
                 variant="text"
                 onClick={() => {
-                  setFromDateFilter('');
-                  setToDateFilter('');
+                  const today = getTodayDateStringIST();
+                  setFromDateFilter(today);
+                  setToDateFilter(today);
                   setPage(1);
                 }}
               >
-                Clear dates
+                Today
               </Button>
-            </Grid>
-          )}
+              {(fromDateFilter || toDateFilter) && (
+                <Button
+                  size="small"
+                  variant="text"
+                  onClick={() => {
+                    setFromDateFilter('');
+                    setToDateFilter('');
+                    setPage(1);
+                  }}
+                >
+                  All dates
+                </Button>
+              )}
+            </Box>
+          </Grid>
         </Grid>
 
         {dateRangeInvalid && (
