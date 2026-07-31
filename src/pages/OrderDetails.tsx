@@ -571,6 +571,11 @@ export const OrderDetailsPage: React.FC = () => {
   }>({ open: false, itemIndex: -1 });
   const [replaceSearchInput, setReplaceSearchInput] = useState('');
   const [replaceBusy, setReplaceBusy] = useState(false);
+  const [addProductDialogOpen, setAddProductDialogOpen] = useState(false);
+  const [addProductSearchInput, setAddProductSearchInput] = useState('');
+  const [addProductSelected, setAddProductSelected] = useState<Medicine | null>(null);
+  const [addProductQty, setAddProductQty] = useState('1');
+  const [addProductBusy, setAddProductBusy] = useState(false);
 
   const createMedicineMutation = useCreateMedicine();
   const { medicines: replaceHits, loading: replaceSearchLoading } = useMedicineSearch(
@@ -579,6 +584,14 @@ export const OrderDetailsPage: React.FC = () => {
       hydrate: true,
       limit: 40,
       enabled: replaceProductDialog.open,
+    }
+  );
+  const { medicines: addProductHits, loading: addProductSearchLoading } = useMedicineSearch(
+    addProductSearchInput,
+    {
+      hydrate: true,
+      limit: 40,
+      enabled: addProductDialogOpen,
     }
   );
   
@@ -2354,6 +2367,117 @@ export const OrderDetailsPage: React.FC = () => {
     }
   };
 
+  const openAddProductDialog = () => {
+    if (!order || order.status !== 'Pending') return;
+    setAddProductSearchInput('');
+    setAddProductSelected(null);
+    setAddProductQty('1');
+    setAddProductBusy(false);
+    setAddProductDialogOpen(true);
+  };
+
+  const closeAddProductDialog = () => {
+    setAddProductDialogOpen(false);
+    setAddProductSearchInput('');
+    setAddProductSelected(null);
+    setAddProductQty('1');
+    setAddProductBusy(false);
+  };
+
+  const handleAddProduct = async () => {
+    if (!order || order.status !== 'Pending') return;
+    if (!addProductSelected?.id) {
+      await alert('Select a medicine from the catalog.', { severity: 'warning' });
+      return;
+    }
+    const qty = Math.max(1, Math.floor(toNumber(addProductQty) || 0));
+    if (!Number.isFinite(qty) || qty < 1) {
+      await alert('Enter a quantity of at least 1.', { severity: 'warning' });
+      return;
+    }
+
+    const stock = toNumber(addProductSelected.currentStock ?? addProductSelected.stock);
+    const confirmed = await confirm(
+      `Add "${addProductSelected.name}" × ${qty}` +
+        (stock > 0 ? ` (stock: ${stock})` : ' (no stock yet)') +
+        ` to this order?\n\nPrice comes from the catalog. Assign batches after adding.`,
+      { title: 'Add product', confirmLabel: 'Add' }
+    );
+    if (!confirmed) return;
+
+    setAddProductBusy(true);
+    try {
+      const resolved = await resolveMedicineAfterPickerSelection(addProductSelected, undefined);
+      const unitPrice =
+        toNumber(resolved.salesPrice) ||
+        toNumber(resolved.price) ||
+        toNumber(resolved.mrp) ||
+        0;
+      const gstRate = toNumber(resolved.gstRate) || 5;
+      const mrp = toNumber(resolved.mrp) || undefined;
+
+      const baseLine = {
+        medicineId: resolved.id,
+        name: resolved.name,
+        price: unitPrice,
+        quantity: qty,
+        originalQuantity: qty,
+        freeQuantity: 0,
+        gstRate,
+        mrp,
+        notes: 'Added by admin',
+        batchAllocations: undefined,
+        batchNumber: undefined,
+        verified: false,
+        scannedQRCode: '',
+        batchExpiryDate: undefined,
+        discountManuallySet: false,
+        qtyAdjustedNeedsBatch: true,
+      };
+
+      const withDiscount = applyDefaultDiscountToFulfillmentLine(
+        baseLine,
+        purchaseDiscountLookup,
+        (batchNumber) => findStockBatch(resolved, batchNumber),
+        gstRate
+      );
+
+      const newLine = {
+        ...baseLine,
+        ...withDiscount,
+        medicineId: resolved.id,
+        name: resolved.name,
+        price: unitPrice,
+        quantity: qty,
+        originalQuantity: qty,
+        freeQuantity: 0,
+        notes: 'Added by admin',
+        verified: false,
+        scannedQRCode: '',
+        qtyAdjustedNeedsBatch: true,
+      };
+
+      const newMedicines = [...fulfillmentData.medicines, newLine];
+      markFulfillmentDirty();
+      setFulfillmentData((prev) => ({ ...prev, medicines: newMedicines }));
+
+      await updateOrderMedicines(order.id, newMedicines.map(toPersistedOrderMedicine));
+      scheduleFulfillmentDraftSave(newMedicines);
+      queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      closeAddProductDialog();
+      await alert(
+        `"${resolved.name}" added. Assign batches, then fulfill as usual.`,
+        { severity: 'success' }
+      );
+    } catch (err) {
+      console.error('Failed to add product:', err);
+      await alert('Failed to add product. Please try again.', { severity: 'error' });
+    } finally {
+      setAddProductBusy(false);
+    }
+  };
+
   const renderOrderedQtyControls = (item: any, itemIndex: number) => {
     const orderedQty = getOrderedPhysicalQty(item);
     const showReassignHint = item.qtyAdjustedNeedsBatch === true;
@@ -2845,8 +2969,18 @@ export const OrderDetailsPage: React.FC = () => {
             </Alert>
           )}
           <Paper sx={{ p: 3, mb: 3 }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} gap={1}>
               <Typography variant="h6">Order Items</Typography>
+              {order.status === 'Pending' && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<Add />}
+                  onClick={openAddProductDialog}
+                >
+                  Add product
+                </Button>
+              )}
             </Box>
             <TableContainer>
               <Table>
@@ -4307,6 +4441,91 @@ export const OrderDetailsPage: React.FC = () => {
         <DialogActions>
           <Button onClick={closeReplaceProductDialog} disabled={replaceBusy}>
             Cancel
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add product to Pending order */}
+      <Dialog
+        open={addProductDialogOpen}
+        onClose={() => !addProductBusy && closeAddProductDialog()}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Add product</DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mt: 1, mb: 2 }}>
+            Search the catalog, set quantity, then add the line. Price uses catalog sales price
+            (falls back to list price / MRP). Assign batches after adding.
+          </Alert>
+          <Autocomplete
+            options={addProductHits || []}
+            loading={addProductSearchLoading}
+            filterOptions={(x) => x}
+            value={addProductSelected}
+            getOptionLabel={(o) => {
+              const stock = toNumber(o.currentStock ?? o.stock);
+              return `${getMedicinePickerLabel(o)} · stock ${stock}`;
+            }}
+            isOptionEqualToValue={(a, b) => a.id === b.id}
+            inputValue={addProductSearchInput}
+            onInputChange={(_, v) => setAddProductSearchInput(v)}
+            onChange={(_, v) => setAddProductSelected(v)}
+            renderOption={(props, option) => {
+              const stock = toNumber(option.currentStock ?? option.stock);
+              const unitPrice =
+                toNumber(option.salesPrice) ||
+                toNumber(option.price) ||
+                toNumber(option.mrp) ||
+                0;
+              return (
+                <li {...props} key={option.id}>
+                  <Box>
+                    <Typography variant="body2">{getMedicinePickerLabel(option)}</Typography>
+                    <Typography
+                      variant="caption"
+                      color={stock > 0 ? 'success.main' : 'text.secondary'}
+                    >
+                      Stock: {stock}
+                      {unitPrice > 0 ? ` · ₹${unitPrice.toFixed(2)}` : ''}
+                      {option.manufacturer ? ` · ${option.manufacturer}` : ''}
+                    </Typography>
+                  </Box>
+                </li>
+              );
+            }}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                autoFocus
+                label="Search medicine"
+                placeholder="Type 2+ letters…"
+                helperText="Prefer products with stock &gt; 0"
+              />
+            )}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            type="number"
+            label="Quantity"
+            value={addProductQty}
+            onChange={(e) => setAddProductQty(e.target.value)}
+            inputProps={{ min: 1, step: 1 }}
+            disabled={addProductBusy}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeAddProductDialog} disabled={addProductBusy}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={addProductBusy ? <CircularProgress size={16} color="inherit" /> : <Add />}
+            onClick={() => void handleAddProduct()}
+            disabled={addProductBusy || !addProductSelected}
+          >
+            Add to order
           </Button>
         </DialogActions>
       </Dialog>
