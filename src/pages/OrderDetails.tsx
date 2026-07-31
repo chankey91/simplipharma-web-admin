@@ -51,7 +51,9 @@ import {
   Refresh,
   Add,
   Remove,
+  SwapHoriz,
 } from '@mui/icons-material';
+import Autocomplete from '@mui/material/Autocomplete';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useOrder,
@@ -72,6 +74,9 @@ import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
 import { useMedicinesByIds, useCreateMedicine } from '../hooks/useInventory';
+import { useMedicineSearch } from '../hooks/useMedicineSearch';
+import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { resolveMedicineAfterPickerSelection } from '../services/medicineSearch';
 import { useProductDemandsForOrder } from '../hooks/useProductDemands';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
@@ -188,6 +193,8 @@ const toPersistedOrderMedicine = (line: any): OrderMedicine => {
   if (line.gstRate != null) out.gstRate = toNumber(line.gstRate);
   if (line.mrp != null) out.mrp = toNumber(line.mrp);
   if (line.nonReturnable === true) out.nonReturnable = true;
+  if (line.originalMedicineId) out.originalMedicineId = String(line.originalMedicineId);
+  if (line.originalMedicineName) out.originalMedicineName = String(line.originalMedicineName);
   if (line.productDemandId) {
     out.productDemandId = line.productDemandId;
     out.lineType = 'medicine';
@@ -558,8 +565,22 @@ export const OrderDetailsPage: React.FC = () => {
     manufacturer: '',
     mrp: '',
   });
-  
+  const [replaceProductDialog, setReplaceProductDialog] = useState<{
+    open: boolean;
+    itemIndex: number;
+  }>({ open: false, itemIndex: -1 });
+  const [replaceSearchInput, setReplaceSearchInput] = useState('');
+  const [replaceBusy, setReplaceBusy] = useState(false);
+
   const createMedicineMutation = useCreateMedicine();
+  const { medicines: replaceHits, loading: replaceSearchLoading } = useMedicineSearch(
+    replaceSearchInput,
+    {
+      hydrate: true,
+      limit: 40,
+      enabled: replaceProductDialog.open,
+    }
+  );
   
   const [fulfillmentData, setFulfillmentData] = useState({
     taxPercentage: 5,
@@ -2242,6 +2263,97 @@ export const OrderDetailsPage: React.FC = () => {
     }
   };
 
+  const openReplaceProductDialog = (itemIndex: number) => {
+    const item = fulfillmentData.medicines[itemIndex];
+    if (!item || (item as { lineType?: string }).lineType === 'product_demand') return;
+    setReplaceSearchInput(item.name || '');
+    setReplaceProductDialog({ open: true, itemIndex });
+  };
+
+  const closeReplaceProductDialog = () => {
+    setReplaceProductDialog({ open: false, itemIndex: -1 });
+    setReplaceSearchInput('');
+    setReplaceBusy(false);
+  };
+
+  const handleReplaceProduct = async (replacement: Medicine) => {
+    if (!order || order.status !== 'Pending') return;
+    const itemIndex = replaceProductDialog.itemIndex;
+    const item = fulfillmentData.medicines[itemIndex];
+    if (!item || (item as { lineType?: string }).lineType === 'product_demand') return;
+    if (!replacement?.id) return;
+    if (replacement.id === item.medicineId) {
+      await alert('Select a different medicine than the one already on this line.', {
+        severity: 'warning',
+      });
+      return;
+    }
+
+    const stock = toNumber(replacement.currentStock ?? replacement.stock);
+    const confirmed = await confirm(
+      `Replace "${item.name}" with "${replacement.name}"` +
+        (stock > 0 ? ` (stock: ${stock})` : ' (no stock yet)') +
+        `?\n\nOrdered quantity and price stay the same. Batch assignments will be cleared — assign batches on the new product after replacing.`,
+      { title: 'Replace product', confirmLabel: 'Replace' }
+    );
+    if (!confirmed) return;
+
+    setReplaceBusy(true);
+    try {
+      const resolved = await resolveMedicineAfterPickerSelection(replacement, undefined);
+      const originalMedicineId = item.originalMedicineId || item.medicineId;
+      const originalMedicineName = item.originalMedicineName || item.name;
+      const remarkBase =
+        typeof item.notes === 'string' && item.notes.trim() ? item.notes.trim() : '';
+      const subNote = `Substituted for ${originalMedicineName}`;
+      const notes =
+        remarkBase && !remarkBase.includes(subNote)
+          ? `${remarkBase} · ${subNote}`
+          : remarkBase || subNote;
+
+      const updatedLine = {
+        ...item,
+        medicineId: resolved.id,
+        name: resolved.name,
+        // Keep retailer ordered price; refresh GST from replacement catalog when available.
+        price: toNumber(item.price),
+        gstRate: toNumber(resolved.gstRate) || toNumber(item.gstRate) || 5,
+        mrp: toNumber(resolved.mrp) || toNumber(item.mrp) || undefined,
+        originalMedicineId,
+        originalMedicineName,
+        notes,
+        batchAllocations: undefined,
+        batchNumber: undefined,
+        verified: false,
+        scannedQRCode: '',
+        batchExpiryDate: undefined,
+        discountManuallySet: false,
+        nonReturnable: undefined,
+        qtyAdjustedNeedsBatch: true,
+      };
+
+      const newMedicines = [...fulfillmentData.medicines];
+      newMedicines[itemIndex] = updatedLine;
+      markFulfillmentDirty();
+      setFulfillmentData((prev) => ({ ...prev, medicines: newMedicines }));
+
+      await updateOrderMedicines(order.id, newMedicines.map(toPersistedOrderMedicine));
+      scheduleFulfillmentDraftSave(newMedicines);
+      queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      closeReplaceProductDialog();
+      await alert(
+        `Line updated to "${resolved.name}". Assign batches for the replacement product.`,
+        { severity: 'success' }
+      );
+    } catch (err) {
+      console.error('Failed to replace product:', err);
+      await alert('Failed to replace product. Please try again.', { severity: 'error' });
+    } finally {
+      setReplaceBusy(false);
+    }
+  };
+
   const renderOrderedQtyControls = (item: any, itemIndex: number) => {
     const orderedQty = getOrderedPhysicalQty(item);
     const showReassignHint = item.qtyAdjustedNeedsBatch === true;
@@ -2935,6 +3047,16 @@ export const OrderDetailsPage: React.FC = () => {
                                   Product ID: {medForLine.productId}
                                 </Typography>
                               ) : null}
+                              {(item as OrderMedicine).originalMedicineId &&
+                              (item as OrderMedicine).originalMedicineName ? (
+                                <Chip
+                                  size="small"
+                                  color="info"
+                                  variant="outlined"
+                                  label={`Replaced: was ${(item as OrderMedicine).originalMedicineName}`}
+                                  sx={{ mt: 0.5, height: 22, fontSize: '0.7rem' }}
+                                />
+                              ) : null}
                               {item.notes ? (
                                 <Typography variant="caption" color="textSecondary" display="block">
                                   Remark: {item.notes}
@@ -3016,6 +3138,17 @@ export const OrderDetailsPage: React.FC = () => {
                                     sx={{ minWidth: 'auto', px: 1, fontSize: '0.75rem' }}
                                   >
                                     Edit
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    color="secondary"
+                                    startIcon={<SwapHoriz fontSize="small" />}
+                                    onClick={() => openReplaceProductDialog(index)}
+                                    title="Replace with similar product that has stock"
+                                    sx={{ minWidth: 'auto', px: 1, fontSize: '0.75rem' }}
+                                  >
+                                    Replace
                                   </Button>
                                   <IconButton
                                     size="small"
@@ -3225,6 +3358,16 @@ export const OrderDetailsPage: React.FC = () => {
                               Product ID: {medSingle.productId}
                             </Typography>
                           ) : null}
+                          {(item as OrderMedicine).originalMedicineId &&
+                          (item as OrderMedicine).originalMedicineName ? (
+                            <Chip
+                              size="small"
+                              color="info"
+                              variant="outlined"
+                              label={`Replaced: was ${(item as OrderMedicine).originalMedicineName}`}
+                              sx={{ mt: 0.5, height: 22, fontSize: '0.7rem' }}
+                            />
+                          ) : null}
                           {item.notes ? (
                             <Typography variant="caption" color="textSecondary" display="block">
                               Remark: {item.notes}
@@ -3417,6 +3560,17 @@ export const OrderDetailsPage: React.FC = () => {
                                   ? `${item.batchAllocations.length} Batches`
                                   : 'Assign'
                                 }
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="secondary"
+                                startIcon={<SwapHoriz fontSize="small" />}
+                                onClick={() => openReplaceProductDialog(index)}
+                                title="Replace with similar product that has stock"
+                                sx={{ minWidth: 'auto', px: 1, fontSize: '0.75rem' }}
+                              >
+                                Replace
                               </Button>
                               <IconButton
                                 size="small"
@@ -4073,6 +4227,86 @@ export const OrderDetailsPage: React.FC = () => {
             onClick={handleManualEntry}
           >
             {selectedBatch || manualQRCodeInput ? 'Verify & Assign Batch' : 'Verify Without Batch'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Replace product on Pending order line */}
+      <Dialog
+        open={replaceProductDialog.open}
+        onClose={() => !replaceBusy && closeReplaceProductDialog()}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Replace product</DialogTitle>
+        <DialogContent>
+          {(() => {
+            const current = fulfillmentData.medicines[replaceProductDialog.itemIndex];
+            const currentId = current?.medicineId;
+            const options = (replaceHits || []).filter((m) => m.id !== currentId);
+            return (
+              <>
+                <Alert severity="info" sx={{ mt: 1, mb: 2 }}>
+                  Choose a similar catalog medicine that has stock. Ordered qty and price stay the
+                  same; batch assignments are cleared so you can assign on the replacement.
+                  {current?.name ? (
+                    <>
+                      <br />
+                      Current line: <strong>{current.name}</strong>
+                      {(current as OrderMedicine).originalMedicineName
+                        ? ` (originally ${(current as OrderMedicine).originalMedicineName})`
+                        : ''}
+                    </>
+                  ) : null}
+                </Alert>
+                <Autocomplete
+                  options={options}
+                  loading={replaceSearchLoading}
+                  filterOptions={(x) => x}
+                  getOptionLabel={(o) => {
+                    const stock = toNumber(o.currentStock ?? o.stock);
+                    return `${getMedicinePickerLabel(o)} · stock ${stock}`;
+                  }}
+                  isOptionEqualToValue={(a, b) => a.id === b.id}
+                  inputValue={replaceSearchInput}
+                  onInputChange={(_, v) => setReplaceSearchInput(v)}
+                  onChange={(_, v) => {
+                    if (v) void handleReplaceProduct(v);
+                  }}
+                  renderOption={(props, option) => {
+                    const stock = toNumber(option.currentStock ?? option.stock);
+                    return (
+                      <li {...props} key={option.id}>
+                        <Box>
+                          <Typography variant="body2">{getMedicinePickerLabel(option)}</Typography>
+                          <Typography
+                            variant="caption"
+                            color={stock > 0 ? 'success.main' : 'text.secondary'}
+                          >
+                            Stock: {stock}
+                            {option.manufacturer ? ` · ${option.manufacturer}` : ''}
+                          </Typography>
+                        </Box>
+                      </li>
+                    );
+                  }}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      autoFocus
+                      label="Search medicine"
+                      placeholder="Type 2+ letters…"
+                      helperText="Prefer products with stock &gt; 0"
+                    />
+                  )}
+                />
+              </>
+            );
+          })()}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeReplaceProductDialog} disabled={replaceBusy}>
+            Cancel
           </Button>
         </DialogActions>
       </Dialog>

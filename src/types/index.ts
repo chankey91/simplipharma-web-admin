@@ -102,6 +102,12 @@ export interface OrderMedicine {
   mrp?: number; // MRP for the item
   /** When true, this line was fulfilled from non-returnable stock and must not be returned. */
   nonReturnable?: boolean;
+  /**
+   * When admin replaces the ordered SKU with another catalog medicine (Pending fulfillment).
+   * Keeps audit trail of what the retailer originally ordered.
+   */
+  originalMedicineId?: string;
+  originalMedicineName?: string;
   // NEW: Support multiple batch allocations
   batchAllocations?: Array<{
     batchNumber: string;
@@ -476,4 +482,94 @@ export interface DebitNote {
   status: 'issued';
   createdBy?: string;
   createdAt: Date | any;
+}
+
+/** Phase 1 — purchase invoice ingest drafts (PDF / photo → review → commit). */
+export type PurchaseInvoiceDraftStatus =
+  | 'uploaded'
+  | 'extracting'
+  | 'resolving'
+  | 'needs_review'
+  | 'ready'
+  | 'committing'
+  | 'committed'
+  | 'failed';
+
+export type PurchaseInvoiceDraftMatchStatus =
+  | 'matched'
+  | 'ambiguous'
+  | 'unmatched'
+  | 'demand_only';
+
+export type PurchaseInvoiceDraftMatchReason =
+  | 'pending_order'
+  | 'inventory'
+  | 'demand_name'
+  | 'batch'
+  | 'none';
+
+export interface PurchaseInvoiceDraftCandidate {
+  medicineId: string;
+  medicineName: string;
+  productId?: string;
+  score: number;
+  reason: PurchaseInvoiceDraftMatchReason;
+}
+
+export interface PurchaseInvoiceDraftExtractedLine {
+  lineId: string;
+  raw?: string;
+  productName: string;
+  /** Pack size from invoice when present (e.g. 10 TAB, 15 ML). */
+  packaging?: string;
+  batchNumber?: string;
+  expiryMmYyyy?: string;
+  quantity?: number;
+  freeQuantity?: number;
+  mrp?: number;
+  purchasePrice?: number;
+  discountPercentage?: number;
+  gstRate?: number;
+  confidence?: number;
+}
+
+export interface PurchaseInvoiceDraftResolvedLine extends PurchaseInvoiceDraftExtractedLine {
+  matchStatus: PurchaseInvoiceDraftMatchStatus;
+  matchReason?: PurchaseInvoiceDraftMatchReason;
+  medicineId?: string;
+  medicineName?: string;
+  productId?: string;
+  candidates?: PurchaseInvoiceDraftCandidate[];
+  /** Human override in review UI. */
+  selectedMedicineId?: string;
+  selectedMedicineName?: string;
+}
+
+export interface PurchaseInvoiceDraft {
+  id: string;
+  status: PurchaseInvoiceDraftStatus;
+  createdBy: string;
+  createdAt?: Date | any;
+  updatedAt?: Date | any;
+  sourceFile: {
+    storagePath: string;
+    fileName: string;
+    contentType: string;
+    size: number;
+  };
+  extractionMeta?: {
+    engine: 'gemini' | 'pdf_text' | 'image_ocr' | 'none';
+    message?: string;
+    model?: string;
+  };
+  vendorHint?: { name?: string; gstin?: string };
+  vendorId?: string;
+  vendorName?: string;
+  invoiceNumber?: string;
+  invoiceDate?: string;
+  extractedLines?: PurchaseInvoiceDraftExtractedLine[];
+  resolvedLines?: PurchaseInvoiceDraftResolvedLine[];
+  errors?: string[];
+  purchaseInvoiceId?: string;
+  rawTextPreview?: string;
 }

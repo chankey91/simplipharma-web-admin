@@ -32,6 +32,7 @@ import {
   Receipt,
   PictureAsPdf,
   CloudSync,
+  CameraAlt,
 } from '@mui/icons-material';
 import {
   usePurchaseInvoices,
@@ -248,6 +249,9 @@ export const PurchaseInvoicesPage: React.FC = () => {
           </Button>
           <Button variant="outlined" startIcon={<PictureAsPdf />} onClick={() => navigate('/purchases/import-pdf')}>
             Import PDF
+          </Button>
+          <Button variant="outlined" startIcon={<CameraAlt />} onClick={() => navigate('/purchases/ingest')}>
+            Ingest PDF / photo
           </Button>
           <Button variant="contained" startIcon={<Add />} onClick={() => navigate('/purchases/new')}>
             Add Invoice
