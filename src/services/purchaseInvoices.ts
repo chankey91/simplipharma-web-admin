@@ -1,6 +1,6 @@
 import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where, deleteField } from './firebase';
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem, VendorInvoicePayment } from '../types';
-import { addStockBatch } from './inventory';
+import { addStockBatch, reduceStockFromBatchSoft } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 import { attachStandardDiscountToBatchData } from '../utils/orderFulfillmentDiscount';
 
@@ -560,6 +560,213 @@ export const updatePurchaseInvoice = async (
   }
 
   await updateDoc(invoiceRef, updateData);
+};
+
+function purchaseLinePhysicalQty(item: PurchaseInvoiceItem): number {
+  return (Number(item.quantity) || 0) + (Number(item.freeQuantity) || 0);
+}
+
+function purchaseStockLineKey(item: PurchaseInvoiceItem): string {
+  return `${item.medicineId || ''}||${String(item.batchNumber || '').trim().toLowerCase()}`;
+}
+
+function buildStockBatchPayloadFromPurchaseItem(
+  item: PurchaseInvoiceItem,
+  quantity: number,
+  invoiceDate?: Date | unknown
+): Record<string, unknown> {
+  const batchData: Record<string, unknown> = {
+    batchNumber: item.batchNumber,
+    quantity,
+    purchasePrice: item.purchasePrice || 0,
+  };
+  attachLandedCostToBatchData(batchData, item);
+  if (item.mfgDate) {
+    batchData.mfgDate = item.mfgDate instanceof Date ? item.mfgDate : new Date(item.mfgDate);
+  }
+  if (item.expiryDate) {
+    batchData.expiryDate =
+      item.expiryDate instanceof Date ? item.expiryDate : new Date(item.expiryDate);
+  }
+  if (invoiceDate) {
+    batchData.purchaseDate =
+      invoiceDate instanceof Date ? invoiceDate : new Date(invoiceDate as string | number | Date);
+  }
+  if (item.mrp !== undefined && item.mrp !== null) {
+    const mrp = typeof item.mrp === 'number' ? item.mrp : parseFloat(String(item.mrp));
+    if (!isNaN(mrp)) batchData.mrp = mrp;
+  }
+  if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
+    const d =
+      typeof item.discountPercentage === 'number'
+        ? item.discountPercentage
+        : parseFloat(String(item.discountPercentage));
+    if (!isNaN(d)) batchData.discountPercentage = d;
+  }
+  attachStandardDiscountToBatchData(batchData, item);
+  if (
+    item.schemePaidQty != null &&
+    item.schemeFreeQty != null
+  ) {
+    const sp =
+      typeof item.schemePaidQty === 'number'
+        ? item.schemePaidQty
+        : parseFloat(String(item.schemePaidQty));
+    const sf =
+      typeof item.schemeFreeQty === 'number'
+        ? item.schemeFreeQty
+        : parseFloat(String(item.schemeFreeQty));
+    if (!isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0) {
+      batchData.schemePaidQty = Math.floor(sp);
+      batchData.schemeFreeQty = Math.floor(sf);
+    }
+  }
+  if (item.nonReturnable === true) {
+    batchData.nonReturnable = true;
+  }
+  return batchData;
+}
+
+/**
+ * Apply inventory deltas between previous and new PI lines (qty + free).
+ * Net by medicine+batch so stock stays aligned after admin edits.
+ */
+export async function syncStockForPurchaseInvoiceEdit(
+  oldItems: PurchaseInvoiceItem[],
+  newItems: PurchaseInvoiceItem[],
+  invoiceDate?: Date | unknown,
+  onProgress?: (progress: CreatePurchaseInvoiceProgress) => void
+): Promise<string[]> {
+  type Agg = { qty: number; sample: PurchaseInvoiceItem };
+  const oldMap = new Map<string, Agg>();
+  const newMap = new Map<string, Agg>();
+
+  for (const item of oldItems) {
+    if (!item.medicineId || !item.batchNumber) continue;
+    const key = purchaseStockLineKey(item);
+    const prev = oldMap.get(key);
+    const qty = purchaseLinePhysicalQty(item);
+    if (prev) prev.qty += qty;
+    else oldMap.set(key, { qty, sample: item });
+  }
+  for (const item of newItems) {
+    if (!item.medicineId || !item.batchNumber) continue;
+    const key = purchaseStockLineKey(item);
+    const prev = newMap.get(key);
+    const qty = purchaseLinePhysicalQty(item);
+    if (prev) prev.qty += qty;
+    else newMap.set(key, { qty, sample: item });
+  }
+
+  const keys = new Set([...oldMap.keys(), ...newMap.keys()]);
+  const errors: string[] = [];
+  let done = 0;
+  const total = Math.max(1, keys.size);
+  onProgress?.({ phase: 'updating_stock', current: 0, total });
+
+  for (const key of keys) {
+    const oldAgg = oldMap.get(key);
+    const newAgg = newMap.get(key);
+    const oldQty = oldAgg?.qty ?? 0;
+    const newQty = newAgg?.qty ?? 0;
+    const delta = newQty - oldQty;
+    const sample = newAgg?.sample || oldAgg?.sample;
+    if (!sample?.medicineId || !sample.batchNumber) {
+      done += 1;
+      continue;
+    }
+
+    onProgress?.({
+      phase: 'updating_stock',
+      current: done,
+      total,
+      medicineName: sample.medicineName,
+      batchNumber: sample.batchNumber,
+    });
+
+    try {
+      if (delta < 0) {
+        const { shortfall, available, reduced } = await reduceStockFromBatchSoft(
+          sample.medicineId,
+          sample.batchNumber,
+          -delta
+        );
+        if (shortfall > 0) {
+          errors.push(
+            `${sample.medicineName || sample.medicineId} / ${sample.batchNumber}: ` +
+              `could only reduce ${reduced} of ${-delta} (available ${available}). Invoice qty still saved.`
+          );
+        }
+      } else if (delta > 0) {
+        const batchData = buildStockBatchPayloadFromPurchaseItem(sample, delta, invoiceDate);
+        await addStockBatch(sample.medicineId, batchData as any);
+      } else if (newAgg) {
+        // Same qty — refresh batch metadata from the edited line
+        const batchData = buildStockBatchPayloadFromPurchaseItem(sample, 0, invoiceDate);
+        await addStockBatch(sample.medicineId, batchData as any);
+      }
+    } catch (e: any) {
+      errors.push(
+        `${sample.medicineName || sample.medicineId} / ${sample.batchNumber}: ${e?.message || e}`
+      );
+    }
+
+    done += 1;
+    onProgress?.({
+      phase: 'updating_stock',
+      current: done,
+      total,
+      medicineName: sample.medicineName,
+      batchNumber: sample.batchNumber,
+    });
+  }
+
+  return errors;
+}
+
+/**
+ * Update an existing purchase invoice and sync inventory to match the new lines.
+ * Invoice is always saved; stock sync is best-effort (warnings returned if partial).
+ */
+export const updatePurchaseInvoiceWithStock = async (
+  invoiceId: string,
+  invoiceData: Partial<PurchaseInvoice> & { items: PurchaseInvoiceItem[] },
+  onProgress?: (progress: CreatePurchaseInvoiceProgress) => void
+): Promise<{ stockSyncErrors: string[] }> => {
+  const existing = await getPurchaseInvoiceById(invoiceId);
+  if (!existing) {
+    throw new Error('Invoice not found');
+  }
+
+  onProgress?.({
+    phase: 'saving_invoice',
+    current: 0,
+    total: invoiceData.items.length,
+  });
+
+  await updatePurchaseInvoice(invoiceId, invoiceData);
+
+  onProgress?.({
+    phase: 'updating_stock',
+    current: 0,
+    total: Math.max(1, invoiceData.items.length),
+  });
+
+  const invoiceDate = invoiceData.invoiceDate ?? existing.invoiceDate;
+  const stockSyncErrors = await syncStockForPurchaseInvoiceEdit(
+    existing.items || [],
+    invoiceData.items,
+    invoiceDate,
+    onProgress
+  );
+
+  onProgress?.({
+    phase: 'done',
+    current: invoiceData.items.length,
+    total: Math.max(1, invoiceData.items.length),
+  });
+
+  return { stockSyncErrors };
 };
 
 export const updatePurchaseInvoicePayment = async (

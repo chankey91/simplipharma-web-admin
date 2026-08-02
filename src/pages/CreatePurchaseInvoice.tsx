@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -38,10 +38,11 @@ import {
   Save,
   Search,
   QrCode,
+  Edit,
 } from '@mui/icons-material';
 import { useVendors } from '../hooks/useVendors';
 import { useCreateMedicine, useMedicine } from '../hooks/useInventory';
-import { useCreatePurchaseInvoice, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
+import { useCreatePurchaseInvoice, usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
 import { format } from 'date-fns';
@@ -68,6 +69,7 @@ import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { normalizeFirestoreDate } from '../services/inventory';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { VendorFormDialog } from '../components/VendorFormDialog';
 
 const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
 
@@ -104,10 +106,11 @@ function parseExpiryMmYy(value: string): ExpiryParseResult {
   }
   const year = 2000 + yy;
   const currentYear = getYearIST();
-  if (year < currentYear || year > currentYear + 20) {
+  // Allow past years (editing existing / near-expired stock) and up to +20 years ahead.
+  if (year < currentYear - 10 || year > currentYear + 20) {
     return {
       ok: false,
-      error: `Year must be between ${currentYear} and ${currentYear + 20}`,
+      error: `Year must be between ${currentYear - 10} and ${currentYear + 20}`,
     };
   }
   return { ok: true, month, year };
@@ -115,10 +118,15 @@ function parseExpiryMmYy(value: string): ExpiryParseResult {
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
+  const { invoiceId: editInvoiceId } = useParams<{ invoiceId?: string }>();
+  const isEditMode = Boolean(editInvoiceId);
+  const { data: existingInvoice, isLoading: existingLoading } = usePurchaseInvoice(editInvoiceId || '');
   const { data: vendors } = useVendors();
   const createMedicineMutation = useCreateMedicine();
   const createInvoiceMutation = useCreatePurchaseInvoice();
+  const updateInvoiceMutation = useUpdatePurchaseInvoiceWithStock();
   const { alert, confirm, prompt } = useAppDialog();
+  const hydratedEditRef = useRef<string | null>(null);
 
   /** Session cache of medicines touched this visit — never load the full catalog. */
   const [medicineCache, setMedicineCache] = useState<Record<string, Medicine>>({});
@@ -159,6 +167,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [items, setItems] = useState<PurchaseInvoiceItem[]>([]);
   const [selectedMedicine, setSelectedMedicine] = useState<Medicine | null>(null);
   const [addMedicineDialog, setAddMedicineDialog] = useState(false);
+  const [addVendorDialog, setAddVendorDialog] = useState(false);
+  /** Keeps a just-created vendor selected even before the vendors query refreshes. */
+  const [justCreatedVendor, setJustCreatedVendor] = useState<Vendor | null>(null);
   const [newMedicineData, setNewMedicineData] = useState({
     name: '',
     code: '',
@@ -234,8 +245,36 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     [medicineCache, selectedMedicine, currentItemMedicineFull]
   );
 
-  const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
-  const isSavingInvoice = createInvoiceMutation.isPending;
+  const selectedVendor =
+    (justCreatedVendor?.id === invoiceData.vendorId ? justCreatedVendor : null) ||
+    vendors?.find((v) => v.id === invoiceData.vendorId) ||
+    null;
+  const vendorOptions = useMemo(() => {
+    const list = vendors?.filter((v) => v.isActive !== false) || [];
+    if (selectedVendor && !list.some((v) => v.id === selectedVendor.id)) {
+      return [selectedVendor, ...list];
+    }
+    return list;
+  }, [vendors, selectedVendor]);
+  const isSavingInvoice = createInvoiceMutation.isPending || updateInvoiceMutation.isPending;
+
+  // Prefill create form when editing an existing invoice (header stays locked).
+  useEffect(() => {
+    if (!isEditMode || !existingInvoice?.id) return;
+    if (hydratedEditRef.current === existingInvoice.id) return;
+    hydratedEditRef.current = existingInvoice.id;
+    const invDate =
+      existingInvoice.invoiceDate instanceof Date
+        ? existingInvoice.invoiceDate
+        : new Date(existingInvoice.invoiceDate);
+    setInvoiceData({
+      invoiceNumber: existingInvoice.invoiceNumber || '',
+      vendorId: existingInvoice.vendorId || '',
+      invoiceDate: getTodayDateStringIST(invDate),
+      notes: existingInvoice.notes || '',
+    });
+    setItems(existingInvoice.items || []);
+  }, [isEditMode, existingInvoice]);
 
   const mainSkip =
     selectedMedicine != null ? getMedicinePickerLabel(selectedMedicine) : undefined;
@@ -508,9 +547,34 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const handleSaveItem = async () => {
-    if (!currentItem.medicineId || !currentItem.batchNumber || !currentItem.quantity || 
-        !currentItem.expiryDate || !currentItem.purchasePrice) {
-      await alert('Please fill all required fields', { severity: 'warning' });
+    const qtyRaw = currentItem.quantity;
+    const qtyNum =
+      typeof qtyRaw === 'number' ? qtyRaw : parseFloat(String(qtyRaw ?? '').trim());
+    if (!currentItem.medicineId) {
+      await alert('Medicine is missing on this line. Remove and re-add the item.', { severity: 'warning' });
+      return;
+    }
+    if (!String(currentItem.batchNumber || '').trim()) {
+      await alert('Please enter batch number.', { severity: 'warning' });
+      return;
+    }
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+      await alert('Please enter a valid quantity greater than 0.', { severity: 'warning' });
+      return;
+    }
+    if (!String(currentItem.expiryDate || '').trim()) {
+      await alert('Please enter expiry date (MM/YY).', { severity: 'warning' });
+      return;
+    }
+    const expiryInput = String(currentItem.expiryDate).trim();
+    const medicineId = String(currentItem.medicineId);
+    const batchNumber = String(currentItem.batchNumber || '').trim();
+    const priceNum =
+      typeof currentItem.purchasePrice === 'number'
+        ? currentItem.purchasePrice
+        : parseFloat(String(currentItem.purchasePrice ?? '').trim());
+    if (!Number.isFinite(priceNum) || priceNum < 0) {
+      await alert('Please enter purchase price.', { severity: 'warning' });
       return;
     }
 
@@ -521,7 +585,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     // Parse expiry date from MM/YY format
-    const parsedExpiry = parseExpiryMmYy(currentItem.expiryDate);
+    const parsedExpiry = parseExpiryMmYy(expiryInput);
     if (!parsedExpiry.ok) {
       setExpiryDateError(parsedExpiry.error);
       await alert(parsedExpiry.error, { severity: 'warning' });
@@ -529,7 +593,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
     const { month: expiryMonth, year: expiryYear } = parsedExpiry;
 
-    const quantity = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
+    const quantity = qtyNum;
     const freeQuantity = currentItem.freeQuantity ? (typeof currentItem.freeQuantity === 'number' ? currentItem.freeQuantity : parseFloat(String(currentItem.freeQuantity || '0'))) : 0;
     const spRaw = currentItem.schemePaidQty !== '' && currentItem.schemePaidQty != null
       ? (typeof currentItem.schemePaidQty === 'number' ? currentItem.schemePaidQty : parseFloat(String(currentItem.schemePaidQty)))
@@ -541,10 +605,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       !isNaN(spRaw) && !isNaN(sfRaw) && spRaw > 0 && sfRaw > 0 ? Math.floor(spRaw) : undefined;
     const schemeFreeQty =
       schemePaidQty != null ? Math.floor(sfRaw) : undefined;
-    const purchasePrice = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
+    const purchasePrice = priceNum;
     const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
     // Get GST rate from medicine master data (from selectedMedicine)
-    const selectedMed = lookupMedicine(currentItem.medicineId);
+    const selectedMed = lookupMedicine(medicineId);
     const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
     const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
     
@@ -567,9 +631,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
     // Generate QR code data
     const qrData = JSON.stringify({
-      medicineId: currentItem.medicineId,
+      medicineId,
       medicineName: currentItem.medicineName,
-      batchNumber: currentItem.batchNumber,
+      batchNumber,
       expiryDate: format(expiryDate, 'MM/yy'),
       quantity,
       freeQuantity,
@@ -581,9 +645,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const qrCode = await generateQRCode(qrData);
 
     const newItem: PurchaseInvoiceItem = {
-      medicineId: currentItem.medicineId,
+      medicineId,
       medicineName: currentItem.medicineName || '',
-      batchNumber: currentItem.batchNumber,
+      batchNumber,
       expiryDate,
       quantity,
       freeQuantity: freeQuantity > 0 ? freeQuantity : undefined,
@@ -635,32 +699,37 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const handleEditItem = (index: number) => {
     const item = items[index];
-    const expiryDate = item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate();
-    setExpiryDateError(''); // Clear error when editing
+    if (!item) return;
+    setExpiryDateError('');
+    const gstRate = item.gstRate || 5;
+    const purchasePrice = Number(item.purchasePrice) || 0;
+    const mrp = Number(item.mrp) || 0;
     setCurrentItem({
-      medicineId: item.medicineId,
-      medicineName: item.medicineName,
-      batchNumber: item.batchNumber,
-      expiryDate: format(expiryDate, 'MM/yy'),
-      quantity: item.quantity.toString(),
-      freeQuantity: item.freeQuantity?.toString() || '',
-      schemePaidQty: item.schemePaidQty?.toString() || '',
-      schemeFreeQty: item.schemeFreeQty?.toString() || '',
-      unitPrice: item.unitPrice.toString(),
-      purchasePrice: item.purchasePrice.toString(),
-      mrp: item.mrp?.toString() || '',
-      gstRate: item.gstRate || selectedMedicine?.gstRate || 5, // Use item's GST rate or medicine's default
+      medicineId: item.medicineId || '',
+      medicineName: item.medicineName || '',
+      batchNumber: item.batchNumber || '',
+      expiryDate: formatExpiryMmYy(item.expiryDate),
+      quantity: String(item.quantity ?? ''),
+      freeQuantity: item.freeQuantity != null && item.freeQuantity > 0 ? String(item.freeQuantity) : '',
+      schemePaidQty: item.schemePaidQty != null ? String(item.schemePaidQty) : '',
+      schemeFreeQty: item.schemeFreeQty != null ? String(item.schemeFreeQty) : '',
+      unitPrice: String(item.unitPrice ?? purchasePrice),
+      purchasePrice: String(purchasePrice),
+      mrp: mrp > 0 ? String(mrp) : '',
+      gstRate,
       standardDiscount:
         item.standardDiscount !== undefined && item.standardDiscount !== null
-          ? item.standardDiscount.toString()
-          : calculateStandardDiscountFromMrpAndPurchasePrice(
-              item.mrp || 0,
-              item.purchasePrice || 0,
-              item.gstRate || selectedMedicine?.gstRate || 5
-            ).toFixed(2),
-      discountPercentage: item.discountPercentage?.toString() || '',
+          ? String(item.standardDiscount)
+          : calculateStandardDiscountFromMrpAndPurchasePrice(mrp, purchasePrice, gstRate).toFixed(2),
+      discountPercentage:
+        item.discountPercentage != null && item.discountPercentage > 0
+          ? String(item.discountPercentage)
+          : '',
       nonReturnable: item.nonReturnable === true,
     });
+    // Keep medicine in picker cache so GST / batch helpers work while editing.
+    const cached = lookupMedicine(item.medicineId);
+    if (cached) setSelectedMedicine(cached);
     setItemDialog({ open: true, itemIndex: index });
   };
 
@@ -741,7 +810,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const handleSaveInvoice = async () => {
-    if (savingInvoiceRef.current || createInvoiceMutation.isPending) return;
+    if (
+      savingInvoiceRef.current ||
+      createInvoiceMutation.isPending ||
+      updateInvoiceMutation.isPending
+    ) {
+      return;
+    }
 
     const user = auth.currentUser;
     if (!user) {
@@ -755,16 +830,44 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return;
     }
 
-    const vendorLabel = selectedVendor?.vendorName || 'this vendor';
+    const vendorLabel = selectedVendor?.vendorName || existingInvoice?.vendorName || 'this vendor';
     const confirmed = await confirm(
-      `Save purchase invoice ${invoiceNumber} for ${vendorLabel}?\n\n` +
-        `${items.length} item${items.length === 1 ? '' : 's'} · Grand total ₹${grandTotal.toFixed(2)}\n\n` +
-        `Stock will be updated. This cannot be undone from here.`
+      isEditMode
+        ? `Update purchase invoice ${invoiceNumber} for ${vendorLabel}?\n\n` +
+            `${items.length} item${items.length === 1 ? '' : 's'} · Grand total ₹${grandTotal.toFixed(2)}\n\n` +
+            `Stock will be adjusted to match these lines.`
+        : `Save purchase invoice ${invoiceNumber} for ${vendorLabel}?\n\n` +
+            `${items.length} item${items.length === 1 ? '' : 's'} · Grand total ₹${grandTotal.toFixed(2)}\n\n` +
+            `Stock will be updated. This cannot be undone from here.`
     );
     if (!confirmed) return;
 
     savingInvoiceRef.current = true;
     try {
+      if (isEditMode && editInvoiceId) {
+        const result = await updateInvoiceMutation.mutateAsync({
+          invoiceId: editInvoiceId,
+          invoiceData: {
+            items,
+            subTotal,
+            taxAmount: totalTax,
+            discount: totalDiscount > 0 ? totalDiscount : 0,
+            totalAmount: grandTotal,
+            notes: invoiceData.notes || undefined,
+          },
+        });
+        if (result.stockSyncErrors.length > 0) {
+          await alert(
+            `Invoice updated. Stock note:\n${result.stockSyncErrors.slice(0, 5).join('\n')}`,
+            { severity: 'warning' }
+          );
+        } else {
+          await alert('Invoice and stock updated successfully.', { severity: 'success' });
+        }
+        navigate(`/purchases/${editInvoiceId}`);
+        return;
+      }
+
       await createInvoiceMutation.mutateAsync({
         invoiceData: {
           invoiceNumber,
@@ -786,33 +889,59 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
       navigate('/purchases');
     } catch (error: any) {
-      await alert(error.message || 'Failed to create invoice', { severity: 'error' });
+      await alert(
+        error.message || (isEditMode ? 'Failed to update invoice' : 'Failed to create invoice'),
+        { severity: 'error' }
+      );
     } finally {
       savingInvoiceRef.current = false;
     }
   };
 
+  if (isEditMode && existingLoading) {
+    return <Loading message="Loading invoice..." />;
+  }
+  if (isEditMode && !existingInvoice) {
+    return <Typography color="error">Invoice not found</Typography>;
+  }
+
   return (
     <Box>
       <Breadcrumbs items={[
         { label: 'Purchase Invoices', path: '/purchases' },
-        { label: 'Create Invoice' }
+        ...(isEditMode && editInvoiceId
+          ? [
+              { label: `Invoice #${invoiceData.invoiceNumber || editInvoiceId}`, path: `/purchases/${editInvoiceId}` },
+              { label: 'Edit' },
+            ]
+          : [{ label: 'Create Invoice' }]),
       ]} />
       <Box display="flex" alignItems="center" mb={3}>
-        <IconButton onClick={() => navigate('/purchases')} sx={{ mr: 2 }}>
+        <IconButton
+          onClick={() => navigate(isEditMode && editInvoiceId ? `/purchases/${editInvoiceId}` : '/purchases')}
+          sx={{ mr: 2 }}
+        >
           <ArrowBack />
         </IconButton>
-        <Typography variant="h4">Create Purchase Invoice</Typography>
+        <Typography variant="h4">
+          {isEditMode ? 'Edit Purchase Invoice' : 'Create Purchase Invoice'}
+        </Typography>
         <Box sx={{ flexGrow: 1 }} />
         <Button
           variant="contained"
           startIcon={<Save />}
-          onClick={handleSaveInvoice}
+          onClick={() => void handleSaveInvoice()}
           disabled={isSavingInvoice}
         >
-          {isSavingInvoice ? 'Saving...' : 'Save Invoice'}
+          {isSavingInvoice ? 'Saving...' : isEditMode ? 'Update Invoice' : 'Save Invoice'}
         </Button>
       </Box>
+
+      {isEditMode ? (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Invoice number, date, and vendor are locked. Edit line items below — stock will sync on update.
+        </Alert>
+      ) : null}
 
       <Grid container spacing={3}>
         {/* Left: Invoice Details */}
@@ -826,6 +955,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               placeholder="Enter vendor bill / invoice number"
               value={invoiceData.invoiceNumber}
               onChange={(e) => setInvoiceData({ ...invoiceData, invoiceNumber: e.target.value })}
+              disabled={isEditMode}
               sx={{ mb: 2 }}
             />
             <TextField
@@ -836,27 +966,41 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               value={invoiceData.invoiceDate}
               onChange={(e) => setInvoiceData({ ...invoiceData, invoiceDate: e.target.value })}
               InputLabelProps={{ shrink: true }}
+              disabled={isEditMode}
               sx={{ mb: 2 }}
             />
-            <Autocomplete
-              fullWidth
-              options={vendors?.filter(v => v.isActive !== false) || []}
-              getOptionLabel={(option) => option.vendorName || ''}
-              value={selectedVendor || null}
-              onChange={(event, newValue) => {
-                setInvoiceData({ ...invoiceData, vendorId: newValue?.id || '' });
-              }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Vendor"
-                  required
-                  placeholder="Search vendor..."
-                />
+            <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'flex-start' }}>
+              <Autocomplete
+                fullWidth
+                options={vendorOptions}
+                getOptionLabel={(option) => option.vendorName || ''}
+                value={selectedVendor}
+                onChange={(event, newValue) => {
+                  setJustCreatedVendor(null);
+                  setInvoiceData({ ...invoiceData, vendorId: newValue?.id || '' });
+                }}
+                disabled={isEditMode}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Vendor"
+                    required
+                    placeholder="Search vendor..."
+                  />
+                )}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+              />
+              {!isEditMode && (
+                <Button
+                  variant="outlined"
+                  startIcon={<Add />}
+                  onClick={() => setAddVendorDialog(true)}
+                  sx={{ mt: 0.5, whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  Add Vendor
+                </Button>
               )}
-              sx={{ mb: 2 }}
-              isOptionEqualToValue={(option, value) => option.id === value.id}
-            />
+            </Box>
             {selectedVendor && (
               <Card variant="outlined" sx={{ mb: 2, bgcolor: 'rgba(33, 150, 243, 0.05)' }}>
                 <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
@@ -1023,18 +1167,24 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    items.map((item, index) => (
-                      <TableRow key={index}>
+                    items.map((item, index) => {
+                      const expiryLabel = formatExpiryMmYy(item.expiryDate) || '—';
+                      const qty = Number(item.quantity) || 0;
+                      const freeQty = Number(item.freeQuantity) || 0;
+                      const price = Number(item.purchasePrice) || 0;
+                      const lineTotal = Number(item.totalAmount) || 0;
+                      return (
+                      <TableRow key={`${item.medicineId}-${item.batchNumber}-${index}`}>
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{item.medicineName}</Typography>
                           <Typography variant="caption" color="textSecondary">
-                            Exp: {format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yy')}
+                            Exp: {expiryLabel}
                           </Typography>
                         </TableCell>
                         <TableCell>{item.batchNumber}</TableCell>
-                        <TableCell align="right">{item.quantity}</TableCell>
+                        <TableCell align="right">{qty}</TableCell>
                         <TableCell align="right">
-                          {item.freeQuantity && item.freeQuantity > 0 ? item.freeQuantity : '-'}
+                          {freeQty > 0 ? freeQty : '-'}
                         </TableCell>
                         <TableCell align="center">
                           <Box display="flex" alignItems="center" justifyContent="center" gap={0.5}>
@@ -1060,17 +1210,17 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">
-                            {item.quantity + (item.freeQuantity || 0)}
+                            {qty + freeQty}
                           </Typography>
                         </TableCell>
-                        <TableCell align="right">₹{item.purchasePrice.toFixed(2)}</TableCell>
+                        <TableCell align="right">₹{price.toFixed(2)}</TableCell>
                         <TableCell align="right">
                           {item.gstRate !== undefined ? `${item.gstRate}%` : '-'}
                         </TableCell>
                         <TableCell align="right">
                           {item.discountPercentage !== undefined ? `${item.discountPercentage}%` : '-'}
                         </TableCell>
-                        <TableCell align="right">₹{item.totalAmount.toFixed(2)}</TableCell>
+                        <TableCell align="right">₹{lineTotal.toFixed(2)}</TableCell>
                         <TableCell align="center">
                           {item.qrCode ? (
                             <IconButton 
@@ -1086,15 +1236,28 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell align="center">
-                          <IconButton size="small" onClick={() => handleEditItem(index)}>
-                            <Search />
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            onClick={() => handleEditItem(index)}
+                            title="Edit item"
+                            aria-label="Edit item"
+                          >
+                            <Edit fontSize="small" />
                           </IconButton>
-                          <IconButton size="small" color="error" onClick={() => handleDeleteItem(index)}>
-                            <Delete />
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => handleDeleteItem(index)}
+                            title="Remove item"
+                            aria-label="Remove item"
+                          >
+                            <Delete fontSize="small" />
                           </IconButton>
                         </TableCell>
                       </TableRow>
-                    ))
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -1419,6 +1582,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           <Button onClick={() => setQrCodeDialog({ open: false, qrCode: null, itemName: '' })}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      <VendorFormDialog
+        open={addVendorDialog}
+        onClose={() => setAddVendorDialog(false)}
+        onCreated={(vendor) => {
+          setJustCreatedVendor(vendor);
+          setInvoiceData((prev) => ({ ...prev, vendorId: vendor.id }));
+        }}
+      />
 
       {/* Add Medicine Dialog */}
       <Dialog open={addMedicineDialog} onClose={() => setAddMedicineDialog(false)} maxWidth="sm" fullWidth>

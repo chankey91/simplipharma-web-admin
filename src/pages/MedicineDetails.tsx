@@ -44,6 +44,7 @@ import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
+import { coerceToDate } from '../utils/dateTime';
 import { useAppDialog } from '../context/AppDialogProvider';
 
 export const MedicineDetailsPage: React.FC = () => {
@@ -92,8 +93,8 @@ export const MedicineDetailsPage: React.FC = () => {
     if (!batches?.length) return [];
     const list = [...batches];
     list.sort((a, b) => {
-      const expA = toTimeMs(a.expiryDate instanceof Date ? a.expiryDate : a.expiryDate.toDate());
-      const expB = toTimeMs(b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate());
+      const expA = toTimeMs(a.expiryDate);
+      const expB = toTimeMs(b.expiryDate);
       switch (batchTableSort.sortKey) {
         case 'batchNumber':
           return applyDirection(compareAsc(a.batchNumber, b.batchNumber), batchTableSort.sortDirection);
@@ -546,12 +547,15 @@ export const MedicineDetailsPage: React.FC = () => {
                       }
                       
                       // Calculate expiry status for highlighting
-                      const expiryDate = batch.expiryDate instanceof Date ? batch.expiryDate : batch.expiryDate.toDate();
+                      const expiryDate = coerceToDate(batch.expiryDate);
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
-                      const expiryDateOnly = new Date(expiryDate);
+                      const expiryMs = expiryDate ? expiryDate.getTime() : 0;
+                      const expiryDateOnly = new Date(expiryMs);
                       expiryDateOnly.setHours(0, 0, 0, 0);
-                      const daysUntilExpiry = Math.ceil((expiryDateOnly.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                      const daysUntilExpiry = expiryDate
+                        ? Math.ceil((expiryDateOnly.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+                        : Number.POSITIVE_INFINITY;
                       
                       // Determine row background color based on expiry
                       let rowBgColor = 'inherit';
@@ -583,7 +587,7 @@ export const MedicineDetailsPage: React.FC = () => {
                         <TableCell align="right">{batch.quantity}</TableCell>
                         <TableCell>
                           <Typography variant="body2" color={daysUntilExpiry < 0 ? 'error.main' : daysUntilExpiry <= 30 ? 'warning.main' : 'inherit'}>
-                            {format(expiryDate, 'MM/yy')}
+                            {expiryDate ? format(expiryDate, 'MM/yy') : '—'}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
