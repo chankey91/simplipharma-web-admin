@@ -102,6 +102,12 @@ export interface OrderMedicine {
   mrp?: number; // MRP for the item
   /** When true, this line was fulfilled from non-returnable stock and must not be returned. */
   nonReturnable?: boolean;
+  /**
+   * When admin replaces the ordered SKU with another catalog medicine (Pending fulfillment).
+   * Keeps audit trail of what the retailer originally ordered.
+   */
+  originalMedicineId?: string;
+  originalMedicineName?: string;
   // NEW: Support multiple batch allocations
   batchAllocations?: Array<{
     batchNumber: string;
