@@ -61,6 +61,13 @@ import { getTodayDateStringIST, isDateInIstRange, istDayEndExclusiveMs, istDaySt
 
 const ROWS_PER_PAGE = 10;
 
+/** Inclusive last 7 IST calendar days ending today. */
+function getDefaultOrdersFromDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 6);
+  return getTodayDateStringIST(d);
+}
+
 /** Normalized row shape rendered by the table, sourced from either Typesense or the fallback full list. */
 interface OrderRow {
   id: string;
@@ -102,7 +109,7 @@ export const OrdersPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
-  const [fromDateFilter, setFromDateFilter] = useState(() => getTodayDateStringIST());
+  const [fromDateFilter, setFromDateFilter] = useState(() => getDefaultOrdersFromDate());
   const [toDateFilter, setToDateFilter] = useState(() => getTodayDateStringIST());
   const [page, setPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
@@ -599,6 +606,17 @@ export const OrdersPage: React.FC = () => {
           </Grid>
           <Grid item xs={12} sm="auto">
             <Box display="flex" gap={0.5} alignItems="center" height="100%">
+              <Button
+                size="small"
+                variant="text"
+                onClick={() => {
+                  setFromDateFilter(getDefaultOrdersFromDate());
+                  setToDateFilter(getTodayDateStringIST());
+                  setPage(1);
+                }}
+              >
+                Last 7 days
+              </Button>
               <Button
                 size="small"
                 variant="text"

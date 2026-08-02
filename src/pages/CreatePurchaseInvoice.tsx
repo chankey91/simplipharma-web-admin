@@ -69,6 +69,7 @@ import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { normalizeFirestoreDate } from '../services/inventory';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { VendorFormDialog } from '../components/VendorFormDialog';
 
 const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
 
@@ -166,6 +167,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [items, setItems] = useState<PurchaseInvoiceItem[]>([]);
   const [selectedMedicine, setSelectedMedicine] = useState<Medicine | null>(null);
   const [addMedicineDialog, setAddMedicineDialog] = useState(false);
+  const [addVendorDialog, setAddVendorDialog] = useState(false);
+  /** Keeps a just-created vendor selected even before the vendors query refreshes. */
+  const [justCreatedVendor, setJustCreatedVendor] = useState<Vendor | null>(null);
   const [newMedicineData, setNewMedicineData] = useState({
     name: '',
     code: '',
@@ -241,7 +245,17 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     [medicineCache, selectedMedicine, currentItemMedicineFull]
   );
 
-  const selectedVendor = vendors?.find(v => v.id === invoiceData.vendorId);
+  const selectedVendor =
+    (justCreatedVendor?.id === invoiceData.vendorId ? justCreatedVendor : null) ||
+    vendors?.find((v) => v.id === invoiceData.vendorId) ||
+    null;
+  const vendorOptions = useMemo(() => {
+    const list = vendors?.filter((v) => v.isActive !== false) || [];
+    if (selectedVendor && !list.some((v) => v.id === selectedVendor.id)) {
+      return [selectedVendor, ...list];
+    }
+    return list;
+  }, [vendors, selectedVendor]);
   const isSavingInvoice = createInvoiceMutation.isPending || updateInvoiceMutation.isPending;
 
   // Prefill create form when editing an existing invoice (header stays locked).
@@ -955,26 +969,38 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               disabled={isEditMode}
               sx={{ mb: 2 }}
             />
-            <Autocomplete
-              fullWidth
-              options={vendors?.filter(v => v.isActive !== false) || []}
-              getOptionLabel={(option) => option.vendorName || ''}
-              value={selectedVendor || null}
-              onChange={(event, newValue) => {
-                setInvoiceData({ ...invoiceData, vendorId: newValue?.id || '' });
-              }}
-              disabled={isEditMode}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Vendor"
-                  required
-                  placeholder="Search vendor..."
-                />
+            <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'flex-start' }}>
+              <Autocomplete
+                fullWidth
+                options={vendorOptions}
+                getOptionLabel={(option) => option.vendorName || ''}
+                value={selectedVendor}
+                onChange={(event, newValue) => {
+                  setJustCreatedVendor(null);
+                  setInvoiceData({ ...invoiceData, vendorId: newValue?.id || '' });
+                }}
+                disabled={isEditMode}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Vendor"
+                    required
+                    placeholder="Search vendor..."
+                  />
+                )}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+              />
+              {!isEditMode && (
+                <Button
+                  variant="outlined"
+                  startIcon={<Add />}
+                  onClick={() => setAddVendorDialog(true)}
+                  sx={{ mt: 0.5, whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  Add Vendor
+                </Button>
               )}
-              sx={{ mb: 2 }}
-              isOptionEqualToValue={(option, value) => option.id === value.id}
-            />
+            </Box>
             {selectedVendor && (
               <Card variant="outlined" sx={{ mb: 2, bgcolor: 'rgba(33, 150, 243, 0.05)' }}>
                 <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
@@ -1556,6 +1582,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           <Button onClick={() => setQrCodeDialog({ open: false, qrCode: null, itemName: '' })}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      <VendorFormDialog
+        open={addVendorDialog}
+        onClose={() => setAddVendorDialog(false)}
+        onCreated={(vendor) => {
+          setJustCreatedVendor(vendor);
+          setInvoiceData((prev) => ({ ...prev, vendorId: vendor.id }));
+        }}
+      />
 
       {/* Add Medicine Dialog */}
       <Dialog open={addMedicineDialog} onClose={() => setAddMedicineDialog(false)} maxWidth="sm" fullWidth>

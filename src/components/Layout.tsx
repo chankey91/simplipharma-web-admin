@@ -44,6 +44,7 @@ import {
   HeadsetMic,
   Stars,
   ShoppingBag,
+  ReportProblem,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -73,6 +74,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Fulfillment',
     items: [
       { text: 'Orders', icon: <ShoppingCart />, path: '/orders' },
+      { text: 'Order shortfalls', icon: <ReportProblem />, path: '/order-shortfalls' },
       { text: 'Product demands', icon: <PostAdd />, path: '/product-demands' },
       { text: 'Purchase lists', icon: <ShoppingBag />, path: '/purchase-lists' },
       { text: 'Sales invoices', icon: <Description />, path: '/invoices' },

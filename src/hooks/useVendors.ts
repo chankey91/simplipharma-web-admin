@@ -25,8 +25,14 @@ export const useCreateVendor = () => {
   
   return useMutation({
     mutationFn: (vendorData: Omit<Vendor, 'id'> & { password?: string }) => createVendor(vendorData),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vendors'] });
+    onSuccess: (vendorId, variables) => {
+      const { password: _password, ...rest } = variables;
+      queryClient.setQueryData<Vendor[]>(['vendors'], (old) => {
+        const list = old ? [...old] : [];
+        if (list.some((v) => v.id === vendorId)) return list;
+        return [{ id: vendorId, ...rest } as Vendor, ...list];
+      });
+      void queryClient.invalidateQueries({ queryKey: ['vendors'] });
     }
   });
 };

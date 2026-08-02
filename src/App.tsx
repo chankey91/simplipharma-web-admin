@@ -17,6 +17,7 @@ import { StoresPage } from './pages/Stores';
 import { VendorsPage } from './pages/Vendors';
 import { OrdersPage } from './pages/Orders';
 import { OrderDetailsPage } from './pages/OrderDetails';
+import { OrderShortfallsPage } from './pages/OrderShortfalls';
 import { PurchaseInvoicesPage } from './pages/PurchaseInvoices';
 import { CreatePurchaseInvoicePage } from './pages/CreatePurchaseInvoice';
 import { ImportPurchaseInvoicePdfPage } from './pages/ImportPurchaseInvoicePdf';
@@ -132,6 +133,7 @@ const router = createBrowserRouter([
   { path: '/payment-requests', element: withLayout(<PaymentRequestsPage />) },
   { path: '/vendors', element: withLayout(<VendorsPage />) },
   { path: '/orders', element: withLayout(<OrdersPage />) },
+  { path: '/order-shortfalls', element: withLayout(<OrderShortfallsPage />) },
   { path: '/orders/:orderId', element: withLayout(<OrderDetailsPage />) },
   { path: '/operations', element: withLayout(<OperationsPage />) },
   { path: '/purchases', element: withLayout(<PurchaseInvoicesPage />) },
