@@ -538,7 +538,15 @@ const SalesOfficerRow: React.FC<{
                 </Typography>
               ) : (
                 <Box display="flex" flexWrap="wrap" gap={1}>
-                  {retailers.map((r) => (
+                  {[...retailers]
+                    .sort((a, b) =>
+                      (a.shopName || a.displayName || a.email || '').localeCompare(
+                        b.shopName || b.displayName || b.email || '',
+                        undefined,
+                        { sensitivity: 'base' }
+                      )
+                    )
+                    .map((r) => (
                     <Chip
                       key={r.id}
                       icon={<Store fontSize="small" />}
