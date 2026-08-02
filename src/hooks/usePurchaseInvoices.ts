@@ -7,6 +7,7 @@ import {
   getPurchaseInvoiceById, 
   createPurchaseInvoice, 
   updatePurchaseInvoice,
+  updatePurchaseInvoiceWithStock,
   updatePurchaseInvoicePayment,
   updateStockForExistingInvoice,
   updateStockForAllExistingInvoices,
@@ -147,6 +148,32 @@ export const useUpdatePurchaseInvoice = () => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
     }
+  });
+};
+
+/** Full invoice edit: persist lines/totals and sync inventory qty deltas. */
+export const useUpdatePurchaseInvoiceWithStock = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      invoiceId,
+      invoiceData,
+      onProgress,
+    }: {
+      invoiceId: string;
+      invoiceData: Partial<PurchaseInvoice> & { items: PurchaseInvoice['items'] };
+      onProgress?: (progress: CreatePurchaseInvoiceProgress) => void;
+    }) => updatePurchaseInvoiceWithStock(invoiceId, invoiceData, onProgress),
+    onSuccess: async (_, variables) => {
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
+      await queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      await queryClient.invalidateQueries({ queryKey: ['medicine'] });
+    },
   });
 };
 

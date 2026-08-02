@@ -740,6 +740,43 @@ export const reduceStockFromBatch = async (
   console.log(`✓ Stock reduced successfully`);
 };
 
+/** Reduce up to `quantityToReduce` (or available). Returns how much was actually reduced. */
+export const reduceStockFromBatchSoft = async (
+  medicineId: string,
+  batchNumber: string,
+  quantityToReduce: number
+): Promise<{ reduced: number; available: number; shortfall: number }> => {
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  if (!medicineDoc.exists()) {
+    throw new Error('Medicine not found');
+  }
+
+  const gstRate = parseGstRate(medicineDoc.data());
+  const batches = await loadBatchesForMedicine(
+    medicineId,
+    medicineDoc.data()?.stockBatches,
+    gstRate
+  );
+
+  const key = batchKey(batchNumber);
+  const batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
+  if (batchIndex < 0) {
+    throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
+  }
+
+  const available = Math.max(0, batches[batchIndex].quantity || 0);
+  const reduced = Math.min(available, Math.max(0, quantityToReduce));
+  if (reduced > 0) {
+    batches[batchIndex] = {
+      ...batches[batchIndex],
+      quantity: available - reduced,
+    };
+    await replaceMedicineBatchesDocs(medicineId, batches);
+  }
+  return { reduced, available, shortfall: Math.max(0, quantityToReduce - reduced) };
+};
+
 export const restoreStockToBatch = async (
   medicineId: string,
   batchNumber: string,

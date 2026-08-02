@@ -139,6 +139,7 @@ const router = createBrowserRouter([
   { path: '/purchases/import-pdf', element: withLayout(<ImportPurchaseInvoicePdfPage />) },
   { path: '/purchases/ingest', element: withLayout(<PurchaseInvoiceIngestPage />) },
   { path: '/purchases/ingest/:draftId', element: withLayout(<PurchaseInvoiceIngestPage />) },
+  { path: '/purchases/:invoiceId/edit', element: withLayout(<CreatePurchaseInvoicePage />) },
   { path: '/purchases/:invoiceId', element: withLayout(<PurchaseInvoiceDetailsPage />) },
   { path: '/inventory', element: withLayout(<InventoryPage />) },
   { path: '/inventory/:medicineId', element: withLayout(<MedicineDetailsPage />) },

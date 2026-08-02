@@ -37,8 +37,9 @@ import {
   QrCode,
   Payment,
   AttachMoney,
+  Edit,
 } from '@mui/icons-material';
-import { usePurchaseInvoice, useUpdatePurchaseInvoice, useUpdatePurchaseInvoicePayment, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
+import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useUpdatePurchaseInvoicePayment, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
@@ -53,7 +54,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { invoiceId } = useParams<{ invoiceId: string }>();
   const navigate = useNavigate();
   const { data: invoice, isLoading } = usePurchaseInvoice(invoiceId || '');
-  const updateInvoiceMutation = useUpdatePurchaseInvoice();
+  const updateInvoiceMutation = useUpdatePurchaseInvoiceWithStock();
   const updatePaymentMutation = useUpdatePurchaseInvoicePayment();
   const { lastPurchaseByMedicineId } = useVendorLastPurchases(
     undefined,
@@ -192,17 +193,23 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       throw new Error('Invoice not found');
     }
     const { subTotal, totalDiscount, totalTax, grandTotal } = calculateTotals(updatedItems);
-    await updateInvoiceMutation.mutateAsync({
+    const result = await updateInvoiceMutation.mutateAsync({
       invoiceId: invoice.id,
       invoiceData: {
         items: updatedItems,
         subTotal,
         taxAmount: totalTax,
-        discount: totalDiscount > 0 ? totalDiscount : undefined,
+        discount: totalDiscount > 0 ? totalDiscount : 0,
         totalAmount: grandTotal,
       },
     });
     setItems(updatedItems);
+    if (result.stockSyncErrors.length > 0) {
+      await alert(
+        `Item saved. Stock note:\n${result.stockSyncErrors.slice(0, 5).join('\n')}`,
+        { severity: 'warning' }
+      );
+    }
   };
 
   const handleDeleteItem = async (index: number) => {
@@ -314,6 +321,14 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
         </IconButton>
         <Typography variant="h4">Purchase Invoice #{invoice.invoiceNumber}</Typography>
         <Box sx={{ flexGrow: 1 }} />
+        <Button
+          variant="outlined"
+          startIcon={<Edit />}
+          onClick={() => navigate(`/purchases/${invoice.id}/edit`)}
+          sx={{ mr: 1 }}
+        >
+          Edit Invoice
+        </Button>
         <Button 
           variant="outlined" 
           startIcon={<Print />} 
