@@ -552,6 +552,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       await alert('Please enter expiry date (MM/YY).', { severity: 'warning' });
       return;
     }
+    const expiryInput = String(currentItem.expiryDate).trim();
+    const medicineId = String(currentItem.medicineId);
+    const batchNumber = String(currentItem.batchNumber || '').trim();
     const priceNum =
       typeof currentItem.purchasePrice === 'number'
         ? currentItem.purchasePrice
@@ -568,7 +571,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     // Parse expiry date from MM/YY format
-    const parsedExpiry = parseExpiryMmYy(currentItem.expiryDate);
+    const parsedExpiry = parseExpiryMmYy(expiryInput);
     if (!parsedExpiry.ok) {
       setExpiryDateError(parsedExpiry.error);
       await alert(parsedExpiry.error, { severity: 'warning' });
@@ -591,7 +594,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const purchasePrice = priceNum;
     const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
     // Get GST rate from medicine master data (from selectedMedicine)
-    const selectedMed = lookupMedicine(currentItem.medicineId);
+    const selectedMed = lookupMedicine(medicineId);
     const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
     const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
     
@@ -614,9 +617,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
     // Generate QR code data
     const qrData = JSON.stringify({
-      medicineId: currentItem.medicineId,
+      medicineId,
       medicineName: currentItem.medicineName,
-      batchNumber: currentItem.batchNumber,
+      batchNumber,
       expiryDate: format(expiryDate, 'MM/yy'),
       quantity,
       freeQuantity,
@@ -628,9 +631,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const qrCode = await generateQRCode(qrData);
 
     const newItem: PurchaseInvoiceItem = {
-      medicineId: currentItem.medicineId,
+      medicineId,
       medicineName: currentItem.medicineName || '',
-      batchNumber: currentItem.batchNumber,
+      batchNumber,
       expiryDate,
       quantity,
       freeQuantity: freeQuantity > 0 ? freeQuantity : undefined,
