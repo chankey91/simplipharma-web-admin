@@ -71,7 +71,7 @@ import {
 } from '../hooks/useOrders';
 import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
 import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
-import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
+import { calculateOrderTotalsFromLines, hasBatchAssignment } from '../utils/orderTotals';
 import { prepareFulfilledDemandOrderMedicines } from '../utils/fulfilledDemandOrderContext';
 import { useMedicinesByIds, useCreateMedicine } from '../hooks/useInventory';
 import { useMedicineSearch } from '../hooks/useMedicineSearch';
@@ -1376,12 +1376,31 @@ export const OrderDetailsPage: React.FC = () => {
             );
             return;
           }
+          const readyLines = fulfillmentData.medicines.filter(
+            (m) =>
+              (m as { lineType?: string }).lineType !== 'product_demand' &&
+              Boolean(m.verified) &&
+              hasBatchAssignment(m)
+          );
+          if (readyLines.length === 0) {
+            await alert(
+              'Tick (verify) at least one medicine line with a batch assigned before fulfilling.',
+              { severity: 'warning' }
+            );
+            return;
+          }
+          const medicineLineCount = fulfillmentData.medicines.filter(
+            (m) => (m as { lineType?: string }).lineType !== 'product_demand'
+          ).length;
+          const isPartial = readyLines.length < medicineLineCount;
           setConfirmDialog({
             open: true,
             action: 'fulfill',
-            title: 'Confirm Fulfillment',
-            message:
-              'Are you sure you want to mark this order as fulfilled? This will generate the tax invoice.',
+            title: isPartial ? 'Confirm partial fulfillment' : 'Confirm Fulfillment',
+            message: isPartial
+              ? `Fulfill ${readyLines.length} of ${medicineLineCount} items (green-ticked with batch only).\n\n` +
+                `The tax invoice will include those lines. Unticked items stay on the order as shortfalls.`
+              : 'Are you sure you want to mark this order as fulfilled? This will generate the tax invoice.',
           });
         })();
         break;
@@ -2707,15 +2726,18 @@ export const OrderDetailsPage: React.FC = () => {
           startIcon={<Print />}
           title="Download the tax invoice PDF only (no email)."
           onClick={async () => {
-            // Check if all items have batches assigned (either batchNumber or batchAllocations)
-            const allBatchesAssigned = fulfillmentData.medicines.length > 0 && 
-              fulfillmentData.medicines.every(m => 
-                (m as any).lineType === 'product_demand' ||
-                m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
+            const readyForInvoice = fulfillmentData.medicines.filter(
+              (m) =>
+                (m as { lineType?: string }).lineType !== 'product_demand' &&
+                Boolean(m.medicineId) &&
+                hasBatchAssignment(m)
+            );
+
+            if (readyForInvoice.length === 0 && order.status === 'Pending') {
+              await alert(
+                'Assign a batch to at least one item before generating the invoice PDF.',
+                { severity: 'warning' }
               );
-            
-            if (!allBatchesAssigned && order.status === 'Pending') {
-              await alert('Please assign batches to all items before generating invoice', { severity: 'warning' });
               return;
             }
             
@@ -2729,9 +2751,7 @@ export const OrderDetailsPage: React.FC = () => {
                       (m) =>
                         (m as any).lineType !== 'product_demand' &&
                         Boolean(m.medicineId) &&
-                        (Boolean(m.batchNumber) ||
-                          (Array.isArray(m.batchAllocations) &&
-                            m.batchAllocations.some((a: any) => Boolean(a?.batchNumber))))
+                        hasBatchAssignment(m)
                     )
                     .map((m) => {
                       if ((m as any).lineType === 'product_demand') {
@@ -3725,7 +3745,23 @@ export const OrderDetailsPage: React.FC = () => {
             </TableContainer>
 
             {order.status === 'Pending' && (
-              <Box display="flex" justifyContent="flex-end" mt={3}>
+              <Box display="flex" justifyContent="flex-end" mt={3} flexDirection="column" alignItems="flex-end" gap={1}>
+                {(() => {
+                  const readyCount = fulfillmentData.medicines.filter(
+                    (m) =>
+                      (m as { lineType?: string }).lineType !== 'product_demand' &&
+                      Boolean(m.verified) &&
+                      hasBatchAssignment(m)
+                  ).length;
+                  const medicineCount = fulfillmentData.medicines.filter(
+                    (m) => (m as { lineType?: string }).lineType !== 'product_demand'
+                  ).length;
+                  return readyCount > 0 && readyCount < medicineCount ? (
+                    <Typography variant="caption" color="text.secondary">
+                      Partial fulfill: {readyCount} of {medicineCount} items ready (green tick + batch)
+                    </Typography>
+                  ) : null;
+                })()}
                 <Button
                   variant="contained"
                   size="large"
@@ -3733,8 +3769,11 @@ export const OrderDetailsPage: React.FC = () => {
                   onClick={() => handleAction('fulfill')}
                   disabled={
                     batchStockConflicts.length > 0 ||
-                    !fulfillmentData.medicines.every(
-                      (m) => (m as any).lineType === 'product_demand' || m.verified
+                    !fulfillmentData.medicines.some(
+                      (m) =>
+                        (m as { lineType?: string }).lineType !== 'product_demand' &&
+                        Boolean(m.verified) &&
+                        hasBatchAssignment(m)
                     )
                   }
                 >
