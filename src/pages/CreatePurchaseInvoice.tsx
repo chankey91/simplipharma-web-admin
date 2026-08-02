@@ -755,6 +755,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return;
     }
 
+    const vendorLabel = selectedVendor?.vendorName || 'this vendor';
+    const confirmed = await confirm(
+      `Save purchase invoice ${invoiceNumber} for ${vendorLabel}?\n\n` +
+        `${items.length} item${items.length === 1 ? '' : 's'} · Grand total ₹${grandTotal.toFixed(2)}\n\n` +
+        `Stock will be updated. This cannot be undone from here.`
+    );
+    if (!confirmed) return;
+
     savingInvoiceRef.current = true;
     try {
       await createInvoiceMutation.mutateAsync({
