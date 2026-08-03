@@ -24,6 +24,7 @@ function buildLedgerHtml(ledger: StoreLedgerResult): string {
         <td style="padding:4px 6px;border-bottom:1px solid #ccc;">${e.vchNo}</td>
         <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;">${formatLedgerAmount(e.debit)}</td>
         <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;">${formatLedgerAmount(e.credit)}</td>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;">${formatLedgerAmount(e.balance)}</td>
       </tr>`;
     })
     .join('');
@@ -32,6 +33,7 @@ function buildLedgerHtml(ledger: StoreLedgerResult): string {
     <td colspan="4" style="padding:6px;border-top:2px solid #333;">Closing Balance</td>
     <td style="padding:6px;border-top:2px solid #333;text-align:right;">${ledger.closingBalance > 0 ? formatLedgerAmount(ledger.closingBalance) : ''}</td>
     <td style="padding:6px;border-top:2px solid #333;text-align:right;">${ledger.closingBalance < 0 ? formatLedgerAmount(Math.abs(ledger.closingBalance)) : ''}</td>
+    <td style="padding:6px;border-top:2px solid #333;text-align:right;">${formatLedgerAmount(ledger.closingBalance)}</td>
   </tr>`;
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
@@ -62,6 +64,7 @@ function buildLedgerHtml(ledger: StoreLedgerResult): string {
           <th>Vch No.</th>
           <th class="num">Debit</th>
           <th class="num">Credit</th>
+          <th class="num">Balance</th>
         </tr>
       </thead>
       <tbody>${rows}${closingRow}</tbody>
