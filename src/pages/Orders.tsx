@@ -689,7 +689,7 @@ export const OrdersPage: React.FC = () => {
           <TableHead>
             <TableRow>
               <SortableTableHeadCell columnId="id" label="Order ID" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <SortableTableHeadCell columnId="orderDate" label="Date" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="orderDate" label="Date & Time" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="retailer" label="Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -709,7 +709,7 @@ export const OrdersPage: React.FC = () => {
               rows.map((order) => (
                 <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
                   <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
-                  <TableCell>{format(order.orderDate, 'MMM dd, yyyy')}</TableCell>
+                  <TableCell>{format(order.orderDate, 'MMM dd, yyyy hh:mm a')}</TableCell>
                   <TableCell>{order.storeName}</TableCell>
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
                   <TableCell>{order.itemCount} items</TableCell>
