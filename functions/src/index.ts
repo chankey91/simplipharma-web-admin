@@ -1853,4 +1853,6 @@ export {
   scheduledPurchaseListNoon,
   scheduledPurchaseListAfternoon,
   publishPurchaseListNet,
+  syncPurchaseManufacturerToOrders,
+  onPurchaseListManufacturerSubmit,
 } from './purchaseListJob';

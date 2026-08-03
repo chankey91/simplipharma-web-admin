@@ -48,7 +48,8 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
 import { PurchaseInvoiceItem } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
-import { setStockBatchNonReturnable } from '../services/inventory';
+import { setStockBatchNonReturnable, setStockBatchNrxDrug } from '../services/inventory';
+import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 
 export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { invoiceId } = useParams<{ invoiceId: string }>();
@@ -76,6 +77,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const [currentItem, setCurrentItem] = useState<{
     medicineName: string;
     batchNumber: string;
+    receivedBatchNumber: string;
     quantity: string;
     freeQuantity: string;
     schemePaidQty: string;
@@ -87,9 +89,11 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     gstRate: string;
     discountPercentage: string;
     nonReturnable: boolean;
+    nrxDrug: boolean;
   }>({
     medicineName: '',
     batchNumber: '',
+    receivedBatchNumber: '',
     quantity: '',
     freeQuantity: '',
     schemePaidQty: '',
@@ -101,6 +105,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     gstRate: '',
     discountPercentage: '',
     nonReturnable: false,
+    nrxDrug: false,
   });
 
   useEffect(() => {
@@ -173,6 +178,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     setCurrentItem({
       medicineName: item.medicineName || '',
       batchNumber: item.batchNumber || '',
+      receivedBatchNumber: item.receivedBatchNumber || '',
       quantity: String(item.quantity ?? ''),
       freeQuantity: item.freeQuantity !== undefined ? String(item.freeQuantity) : '',
       schemePaidQty: item.schemePaidQty !== undefined ? String(item.schemePaidQty) : '',
@@ -184,6 +190,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       gstRate: item.gstRate !== undefined ? String(item.gstRate) : '',
       discountPercentage: item.discountPercentage !== undefined ? String(item.discountPercentage) : '',
       nonReturnable: item.nonReturnable === true,
+      nrxDrug: item.nrxDrug === true,
     });
     setItemDialog({ open: true, itemIndex: index });
   };
@@ -250,10 +257,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     const expiryDate = parseDateFromMonthYearInput(currentItem.expiryDate);
 
     const totalAmount = purchasePrice * quantity;
+    const receivedBatchNumber = String(currentItem.receivedBatchNumber || '').trim();
     const updatedItem: PurchaseInvoiceItem = {
       medicineId: oldItem.medicineId,
       medicineName: currentItem.medicineName || oldItem.medicineName,
       batchNumber: currentItem.batchNumber,
+      ...(receivedBatchNumber ? { receivedBatchNumber } : {}),
       quantity,
       purchasePrice,
       unitPrice: purchasePrice,
@@ -268,6 +277,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       ...(discountPercentage !== undefined ? { discountPercentage } : {}),
       ...(oldItem.qrCode ? { qrCode: oldItem.qrCode } : {}),
       ...(currentItem.nonReturnable === true ? { nonReturnable: true } : {}),
+      ...(currentItem.nrxDrug === true ? { nrxDrug: true } : {}),
     };
 
     const updatedItems = [...items];
@@ -275,15 +285,21 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
 
     try {
       await persistItems(updatedItems);
-      if (updatedItem.medicineId && updatedItem.batchNumber) {
+      const stockBatch = purchaseItemStockBatchNumber(updatedItem);
+      if (updatedItem.medicineId && stockBatch) {
         try {
           await setStockBatchNonReturnable(
             updatedItem.medicineId,
-            updatedItem.batchNumber,
+            stockBatch,
             updatedItem.nonReturnable === true
           );
-        } catch (syncErr) {
-          console.warn('Failed to sync non-returnable flag to inventory batch:', syncErr);
+          await setStockBatchNrxDrug(
+            updatedItem.medicineId,
+            stockBatch,
+            updatedItem.nrxDrug === true
+          );
+        } catch (e) {
+          console.warn('Failed to sync batch flags to stock', e);
         }
       }
       setItemDialog({ open: false, itemIndex: null });
@@ -354,11 +370,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>Medicine</TableCell>
-                    <TableCell>Batch</TableCell>
+                    <TableCell>Invoice Batch</TableCell>
+                    <TableCell>Received Batch</TableCell>
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Free Qty</TableCell>
                     <TableCell align="center">Scheme</TableCell>
-                    <TableCell align="center">NR</TableCell>
+                    <TableCell align="center">NR / NRX</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">MRP</TableCell>
                     <TableCell align="right">Price</TableCell>
@@ -389,6 +406,15 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                           </Typography>
                         </TableCell>
                         <TableCell>{item.batchNumber}</TableCell>
+                        <TableCell>
+                          {item.receivedBatchNumber?.trim() ? (
+                            item.receivedBatchNumber
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">
+                              —
+                            </Typography>
+                          )}
+                        </TableCell>
                         <TableCell align="right">{item.quantity}</TableCell>
                         <TableCell align="right">
                           {item.freeQuantity !== undefined && item.freeQuantity !== null && item.freeQuantity > 0 ? item.freeQuantity : '-'}
@@ -409,11 +435,17 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                           </Box>
                         </TableCell>
                         <TableCell align="center">
-                          {item.nonReturnable === true ? (
-                            <Chip size="small" label="NR" color="warning" variant="outlined" title="Non-returnable" />
-                          ) : (
-                            <Typography variant="caption" color="textSecondary">—</Typography>
-                          )}
+                          <Box display="flex" gap={0.5} justifyContent="center" flexWrap="wrap">
+                            {item.nonReturnable === true ? (
+                              <Chip size="small" label="NR" color="warning" variant="outlined" title="Non-returnable" />
+                            ) : null}
+                            {item.nrxDrug === true ? (
+                              <Chip size="small" label="NRX" color="error" variant="outlined" title="NRX drug" />
+                            ) : null}
+                            {item.nonReturnable !== true && item.nrxDrug !== true ? (
+                              <Typography variant="caption" color="textSecondary">—</Typography>
+                            ) : null}
+                          </Box>
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">
@@ -634,9 +666,21 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Batch Number"
+                label="Invoice Batch Number"
                 value={currentItem.batchNumber}
                 onChange={(e) => setCurrentItem({ ...currentItem, batchNumber: e.target.value })}
+                helperText="Batch as printed on the vendor bill"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Received Batch Number"
+                value={currentItem.receivedBatchNumber}
+                onChange={(e) =>
+                  setCurrentItem({ ...currentItem, receivedBatchNumber: e.target.value })
+                }
+                helperText="Physical batch on packs if different (used for stock)"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -759,6 +803,19 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                   />
                 }
                 label="Non-returnable (retailer cannot return this batch)"
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={currentItem.nrxDrug === true}
+                    onChange={(e) =>
+                      setCurrentItem({ ...currentItem, nrxDrug: e.target.checked })
+                    }
+                  />
+                }
+                label="NRX drug (Schedule H / restricted)"
               />
             </Grid>
           </Grid>

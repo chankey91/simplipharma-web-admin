@@ -70,6 +70,7 @@ import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { normalizeFirestoreDate } from '../services/inventory';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { VendorFormDialog } from '../components/VendorFormDialog';
+import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 
 const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
 
@@ -191,6 +192,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     medicineId?: string;
     medicineName?: string;
     batchNumber?: string;
+    receivedBatchNumber?: string;
     expiryDate?: string;
     quantity?: string | number;
     freeQuantity?: string | number;
@@ -203,10 +205,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     standardDiscount?: string | number;
     discountPercentage?: string | number;
     nonReturnable?: boolean;
+    nrxDrug?: boolean;
   }>({
     medicineId: '',
     medicineName: '',
     batchNumber: '',
+    receivedBatchNumber: '',
     expiryDate: '', // MM/YY format
     quantity: '',
     freeQuantity: '',
@@ -219,6 +223,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     standardDiscount: '20',
     discountPercentage: '',
     nonReturnable: false,
+    nrxDrug: false,
   });
   const [expiryDateError, setExpiryDateError] = useState<string>('');
 
@@ -442,22 +447,33 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const existingBatchForCurrentItem = useMemo(
-    () => findExistingStockBatch(currentItem.medicineId, String(currentItem.batchNumber || '')),
+    () =>
+      findExistingStockBatch(
+        currentItem.medicineId,
+        purchaseItemStockBatchNumber({
+          batchNumber: String(currentItem.batchNumber || ''),
+          receivedBatchNumber: String(currentItem.receivedBatchNumber || ''),
+        })
+      ),
     [
       medicineCache,
       selectedMedicine,
       currentItemMedicineFull,
       currentItem.medicineId,
       currentItem.batchNumber,
+      currentItem.receivedBatchNumber,
     ]
   );
 
   /** Fill item fields from inventory when batch already exists for this medicine (quantity unchanged). */
   const applyExistingBatchDetails = () => {
-    const batchNumber = String(currentItem.batchNumber || '').trim();
-    if (!currentItem.medicineId || !batchNumber) return;
+    const stockBatchNumber = purchaseItemStockBatchNumber({
+      batchNumber: String(currentItem.batchNumber || ''),
+      receivedBatchNumber: String(currentItem.receivedBatchNumber || ''),
+    });
+    if (!currentItem.medicineId || !stockBatchNumber) return;
 
-    const batch = findExistingStockBatch(currentItem.medicineId, batchNumber);
+    const batch = findExistingStockBatch(currentItem.medicineId, stockBatchNumber);
     if (!batch) return;
 
     const medicine = lookupMedicine(currentItem.medicineId);
@@ -505,6 +521,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           ? String(Math.floor(Number(batchSchemeFree)))
           : prev.schemeFreeQty,
       nonReturnable: batch.nonReturnable === true,
+      nrxDrug: batch.nrxDrug === true,
       gstRate,
     }));
     setExpiryDateError('');
@@ -520,6 +537,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: selectedMedicine.id,
       medicineName: selectedMedicine.name,
       batchNumber: '',
+      receivedBatchNumber: '',
       expiryDate: '', // MM/YY format
       quantity: '',
       freeQuantity: '',
@@ -532,6 +550,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       standardDiscount: '20',
       discountPercentage: '',
       nonReturnable: false,
+      nrxDrug: false,
     });
     setItemDialog({ open: true, itemIndex: null });
   };
@@ -630,10 +649,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const expiryDate = new Date(expiryYear, expiryMonth - 1, 1);
 
     // Generate QR code data
+    const stockBatchForQr = purchaseItemStockBatchNumber({
+      batchNumber,
+      receivedBatchNumber: String(currentItem.receivedBatchNumber || '').trim() || undefined,
+    });
     const qrData = JSON.stringify({
       medicineId,
       medicineName: currentItem.medicineName,
-      batchNumber,
+      batchNumber: stockBatchForQr,
       expiryDate: format(expiryDate, 'MM/yy'),
       quantity,
       freeQuantity,
@@ -644,10 +667,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     });
     const qrCode = await generateQRCode(qrData);
 
+    const receivedBatchNumber = String(currentItem.receivedBatchNumber || '').trim();
     const newItem: PurchaseInvoiceItem = {
       medicineId,
       medicineName: currentItem.medicineName || '',
       batchNumber,
+      ...(receivedBatchNumber ? { receivedBatchNumber } : {}),
       expiryDate,
       quantity,
       freeQuantity: freeQuantity > 0 ? freeQuantity : undefined,
@@ -663,6 +688,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       totalAmount,
       qrCode: qrCode || undefined,
       ...(currentItem.nonReturnable === true ? { nonReturnable: true } : {}),
+      ...(currentItem.nrxDrug === true ? { nrxDrug: true } : {}),
     };
 
     if (itemDialog.itemIndex !== null) {
@@ -682,6 +708,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: '',
       medicineName: '',
       batchNumber: '',
+      receivedBatchNumber: '',
       expiryDate: '',
       quantity: '',
       freeQuantity: '',
@@ -694,6 +721,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       standardDiscount: '20',
       discountPercentage: '',
       nonReturnable: false,
+      nrxDrug: false,
     });
   };
 
@@ -708,6 +736,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       medicineId: item.medicineId || '',
       medicineName: item.medicineName || '',
       batchNumber: item.batchNumber || '',
+      receivedBatchNumber: item.receivedBatchNumber || '',
       expiryDate: formatExpiryMmYy(item.expiryDate),
       quantity: String(item.quantity ?? ''),
       freeQuantity: item.freeQuantity != null && item.freeQuantity > 0 ? String(item.freeQuantity) : '',
@@ -726,6 +755,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           ? String(item.discountPercentage)
           : '',
       nonReturnable: item.nonReturnable === true,
+      nrxDrug: item.nrxDrug === true,
     });
     // Keep medicine in picker cache so GST / batch helpers work while editing.
     const cached = lookupMedicine(item.medicineId);
@@ -1143,11 +1173,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>Medicine</TableCell>
-                    <TableCell>Batch</TableCell>
+                    <TableCell>Invoice Batch</TableCell>
+                    <TableCell>Received Batch</TableCell>
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Free Qty</TableCell>
                     <TableCell align="center">Scheme</TableCell>
-                    <TableCell align="center">NR</TableCell>
+                    <TableCell align="center">NR / NRX</TableCell>
                     <TableCell align="right">Total Qty</TableCell>
                     <TableCell align="right">Price</TableCell>
                     <TableCell align="right">GST %</TableCell>
@@ -1160,7 +1191,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 <TableBody>
                   {items.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={13} align="center">
+                      <TableCell colSpan={14} align="center">
                         <Typography color="textSecondary" sx={{ py: 2 }}>
                           No items added. Search and add medicines to create invoice.
                         </Typography>
@@ -1182,6 +1213,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                           </Typography>
                         </TableCell>
                         <TableCell>{item.batchNumber}</TableCell>
+                        <TableCell>
+                          {item.receivedBatchNumber?.trim() ? (
+                            item.receivedBatchNumber
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">
+                              —
+                            </Typography>
+                          )}
+                        </TableCell>
                         <TableCell align="right">{qty}</TableCell>
                         <TableCell align="right">
                           {freeQty > 0 ? freeQty : '-'}
@@ -1202,11 +1242,17 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                           </Box>
                         </TableCell>
                         <TableCell align="center">
-                          {item.nonReturnable === true ? (
-                            <Chip size="small" label="NR" color="warning" variant="outlined" title="Non-returnable" />
-                          ) : (
-                            <Typography variant="caption" color="textSecondary">—</Typography>
-                          )}
+                          <Box display="flex" gap={0.5} justifyContent="center" flexWrap="wrap">
+                            {item.nonReturnable === true ? (
+                              <Chip size="small" label="NR" color="warning" variant="outlined" title="Non-returnable" />
+                            ) : null}
+                            {item.nrxDrug === true ? (
+                              <Chip size="small" label="NRX" color="error" variant="outlined" title="NRX drug" />
+                            ) : null}
+                            {item.nonReturnable !== true && item.nrxDrug !== true ? (
+                              <Typography variant="caption" color="textSecondary">—</Typography>
+                            ) : null}
+                          </Box>
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight="medium">
@@ -1282,16 +1328,28 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Batch Number"
+                label="Invoice Batch Number"
                 required
                 value={currentItem.batchNumber}
                 onChange={(e) => setCurrentItem({ ...currentItem, batchNumber: e.target.value })}
                 onBlur={applyExistingBatchDetails}
                 helperText={
                   existingBatchForCurrentItem
-                    ? 'Existing batch — other fields filled from inventory (enter quantity for this bill)'
-                    : 'Enter batch number; if it exists in stock, details auto-fill on blur'
+                    ? 'Existing stock batch found — other fields filled from inventory (enter quantity for this bill)'
+                    : 'Batch as printed on the vendor bill'
                 }
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Received Batch Number"
+                value={currentItem.receivedBatchNumber}
+                onChange={(e) =>
+                  setCurrentItem({ ...currentItem, receivedBatchNumber: e.target.value })
+                }
+                onBlur={applyExistingBatchDetails}
+                helperText="Physical batch on packs if different from invoice (used for stock)"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -1363,6 +1421,17 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   />
                 }
                 label="Non-returnable (retailer cannot return this batch)"
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={currentItem.nrxDrug === true}
+                    onChange={(e) => setCurrentItem({ ...currentItem, nrxDrug: e.target.checked })}
+                  />
+                }
+                label="NRX drug (Schedule H / restricted)"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
