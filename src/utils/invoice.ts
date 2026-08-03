@@ -637,9 +637,9 @@ export const generateOrderInvoice = async (
   document.body.appendChild(element);
   
   try {
-    // Convert HTML to canvas
+    // Convert HTML to canvas (scale 1.5 + JPEG keeps file size down vs scale 2 + PNG)
     const canvas = await html2canvas(element, {
-      scale: 2,
+      scale: 1.5,
       useCORS: true,
       logging: false,
       width: element.scrollWidth,
@@ -647,7 +647,7 @@ export const generateOrderInvoice = async (
     });
     
     // Convert canvas to image
-    const imgData = canvas.toDataURL('image/png');
+    const imgData = canvas.toDataURL('image/jpeg', 0.8);
     
     // Calculate PDF dimensions
     const imgWidth = 210; // A4 width in mm
@@ -660,14 +660,14 @@ export const generateOrderInvoice = async (
     let position = 0;
     
     // Add first page
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
     heightLeft -= pageHeight;
     
     // Add additional pages if needed
     while (heightLeft > 0) {
       position = heightLeft - imgHeight;
       pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
       heightLeft -= pageHeight;
     }
     
