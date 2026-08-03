@@ -3,6 +3,7 @@ import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem, VendorInvoicePayme
 import { addStockBatch, reduceStockFromBatchSoft } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 import { attachStandardDiscountToBatchData } from '../utils/orderFulfillmentDiscount';
+import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 
 function mapVendorPayments(raw: unknown): VendorInvoicePayment[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -283,6 +284,13 @@ export const createPurchaseInvoice = async (
     if (item.nonReturnable === true) {
       cleanedItem.nonReturnable = true;
     }
+    if (item.nrxDrug === true) {
+      cleanedItem.nrxDrug = true;
+    }
+    const receivedBatch = String(item.receivedBatchNumber || '').trim();
+    if (receivedBatch) {
+      cleanedItem.receivedBatchNumber = receivedBatch;
+    }
 
     return cleanedItem;
   });
@@ -362,9 +370,14 @@ export const createPurchaseInvoice = async (
           if (!totalQuantity || totalQuantity <= 0) {
             throw new Error('Invalid quantity');
           }
+
+          const stockBatchNumber = purchaseItemStockBatchNumber(item);
+          if (!stockBatchNumber) {
+            throw new Error('Batch number is missing');
+          }
           
           const batchData: any = {
-            batchNumber: item.batchNumber,
+            batchNumber: stockBatchNumber,
             quantity: totalQuantity, // Use quantity + free quantity
             purchasePrice: item.purchasePrice || 0,
           };
@@ -412,6 +425,14 @@ export const createPurchaseInvoice = async (
           }
           if (item.nonReturnable === true) {
             batchData.nonReturnable = true;
+          }
+          if (item.nrxDrug === true) {
+            batchData.nrxDrug = true;
+          }
+          const invoiceBatch = String(item.batchNumber || '').trim();
+          const receivedBatch = String(item.receivedBatchNumber || '').trim();
+          if (receivedBatch && invoiceBatch && receivedBatch.toLowerCase() !== invoiceBatch.toLowerCase()) {
+            batchData.invoiceBatchNumber = invoiceBatch;
           }
 
           onProgress?.({
@@ -554,6 +575,13 @@ export const updatePurchaseInvoice = async (
       if (item.nonReturnable === true) {
         cleanedItem.nonReturnable = true;
       }
+      if (item.nrxDrug === true) {
+        cleanedItem.nrxDrug = true;
+      }
+      const receivedBatchUpd = String(item.receivedBatchNumber || '').trim();
+      if (receivedBatchUpd) {
+        cleanedItem.receivedBatchNumber = receivedBatchUpd;
+      }
 
       return cleanedItem;
     });
@@ -567,7 +595,7 @@ function purchaseLinePhysicalQty(item: PurchaseInvoiceItem): number {
 }
 
 function purchaseStockLineKey(item: PurchaseInvoiceItem): string {
-  return `${item.medicineId || ''}||${String(item.batchNumber || '').trim().toLowerCase()}`;
+  return `${item.medicineId || ''}||${purchaseItemStockBatchNumber(item).toLowerCase()}`;
 }
 
 function buildStockBatchPayloadFromPurchaseItem(
@@ -575,8 +603,11 @@ function buildStockBatchPayloadFromPurchaseItem(
   quantity: number,
   invoiceDate?: Date | unknown
 ): Record<string, unknown> {
+  const stockBatchNumber = purchaseItemStockBatchNumber(item);
+  const invoiceBatch = String(item.batchNumber || '').trim();
+  const receivedBatch = String(item.receivedBatchNumber || '').trim();
   const batchData: Record<string, unknown> = {
-    batchNumber: item.batchNumber,
+    batchNumber: stockBatchNumber,
     quantity,
     purchasePrice: item.purchasePrice || 0,
   };
@@ -623,6 +654,12 @@ function buildStockBatchPayloadFromPurchaseItem(
   }
   if (item.nonReturnable === true) {
     batchData.nonReturnable = true;
+  }
+  if (item.nrxDrug === true) {
+    batchData.nrxDrug = true;
+  }
+  if (receivedBatch && invoiceBatch && receivedBatch.toLowerCase() !== invoiceBatch.toLowerCase()) {
+    batchData.invoiceBatchNumber = invoiceBatch;
   }
   return batchData;
 }
@@ -675,25 +712,30 @@ export async function syncStockForPurchaseInvoiceEdit(
       done += 1;
       continue;
     }
+    const stockBatchNumber = purchaseItemStockBatchNumber(sample);
+    if (!stockBatchNumber) {
+      done += 1;
+      continue;
+    }
 
     onProgress?.({
       phase: 'updating_stock',
       current: done,
       total,
       medicineName: sample.medicineName,
-      batchNumber: sample.batchNumber,
+      batchNumber: stockBatchNumber,
     });
 
     try {
       if (delta < 0) {
         const { shortfall, available, reduced } = await reduceStockFromBatchSoft(
           sample.medicineId,
-          sample.batchNumber,
+          stockBatchNumber,
           -delta
         );
         if (shortfall > 0) {
           errors.push(
-            `${sample.medicineName || sample.medicineId} / ${sample.batchNumber}: ` +
+            `${sample.medicineName || sample.medicineId} / ${stockBatchNumber}: ` +
               `could only reduce ${reduced} of ${-delta} (available ${available}). Invoice qty still saved.`
           );
         }
@@ -707,7 +749,7 @@ export async function syncStockForPurchaseInvoiceEdit(
       }
     } catch (e: any) {
       errors.push(
-        `${sample.medicineName || sample.medicineId} / ${sample.batchNumber}: ${e?.message || e}`
+        `${sample.medicineName || sample.medicineId} / ${stockBatchNumber}: ${e?.message || e}`
       );
     }
 
@@ -717,7 +759,7 @@ export async function syncStockForPurchaseInvoiceEdit(
       current: done,
       total,
       medicineName: sample.medicineName,
-      batchNumber: sample.batchNumber,
+      batchNumber: stockBatchNumber,
     });
   }
 
@@ -863,61 +905,18 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
         if (!totalQuantity || totalQuantity <= 0) {
           throw new Error('Invalid quantity');
         }
-        
-        const batchData: any = {
-          batchNumber: item.batchNumber,
-          quantity: totalQuantity, // Use quantity + free quantity
-          purchasePrice: item.purchasePrice || 0,
-        };
-        attachLandedCostToBatchData(batchData, item);
-        
-        // Add optional fields only if they exist
-        if (item.mfgDate) {
-          batchData.mfgDate = item.mfgDate instanceof Date ? item.mfgDate : new Date(item.mfgDate);
-        }
-        if (item.expiryDate) {
-          batchData.expiryDate = item.expiryDate instanceof Date ? item.expiryDate : new Date(item.expiryDate);
-        }
-        if (invoice.invoiceDate) {
-          batchData.purchaseDate = invoice.invoiceDate instanceof Date ? invoice.invoiceDate : new Date(invoice.invoiceDate);
-        }
-        if (item.mrp !== undefined && item.mrp !== null) {
-          // Ensure MRP is a number
-          batchData.mrp = typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp);
-          if (isNaN(batchData.mrp)) {
-            console.warn(`Invalid MRP value for item ${item.medicineName}: ${item.mrp}`);
-            delete batchData.mrp;
-          }
-        }
-        if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
-          // Ensure discountPercentage is a number
-          batchData.discountPercentage = typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage));
-          if (isNaN(batchData.discountPercentage)) {
-            console.warn(`Invalid discountPercentage value for item ${item.medicineName}: ${item.discountPercentage}`);
-            delete batchData.discountPercentage;
-          }
-        }
-        attachStandardDiscountToBatchData(batchData, item);
-        if (
-          item.schemePaidQty !== undefined &&
-          item.schemePaidQty !== null &&
-          item.schemeFreeQty !== undefined &&
-          item.schemeFreeQty !== null
-        ) {
-          const sp = typeof item.schemePaidQty === 'number' ? item.schemePaidQty : parseFloat(String(item.schemePaidQty));
-          const sf = typeof item.schemeFreeQty === 'number' ? item.schemeFreeQty : parseFloat(String(item.schemeFreeQty));
-          if (!isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0) {
-            batchData.schemePaidQty = Math.floor(sp);
-            batchData.schemeFreeQty = Math.floor(sf);
-          }
-        }
-        if (item.nonReturnable === true) {
-          batchData.nonReturnable = true;
-        }
+
+        const batchData = buildStockBatchPayloadFromPurchaseItem(
+          item,
+          totalQuantity,
+          invoice.invoiceDate
+        );
 
         console.log(`Updating stock for existing invoice - medicine ${medicineId} with batch data:`, batchData);
-        await addStockBatch(medicineId, batchData);
-        console.log(`✓ Stock updated successfully for medicine ${medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
+        await addStockBatch(medicineId, batchData as any);
+        console.log(
+          `✓ Stock updated successfully for medicine ${medicineId}, batch ${purchaseItemStockBatchNumber(item)}, quantity: ${totalQuantity}`
+        );
       } catch (error: any) {
         const errorMsg = `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${error.message || error}`;
         console.error(errorMsg, error);

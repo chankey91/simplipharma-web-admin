@@ -180,6 +180,10 @@ export function parseStockBatchFromRaw(
       gstRate
     ),
     ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+    ...(batch.nrxDrug === true ? { nrxDrug: true as const } : {}),
+    ...(String(batch.invoiceBatchNumber || '').trim()
+      ? { invoiceBatchNumber: String(batch.invoiceBatchNumber).trim() }
+      : {}),
     ...mapBatchLandedCost(batch),
     ...normalizeSchemeFromBatch(batch),
   };
@@ -237,6 +241,13 @@ export function serializeBatchForFirestore(
   appendSchemeFieldsToFirestoreBatch(firestoreBatch, b);
   if ((b as any).nonReturnable === true) {
     firestoreBatch.nonReturnable = true;
+  }
+  if ((b as any).nrxDrug === true) {
+    firestoreBatch.nrxDrug = true;
+  }
+  const invoiceBatch = String((b as any).invoiceBatchNumber ?? '').trim();
+  if (invoiceBatch) {
+    firestoreBatch.invoiceBatchNumber = invoiceBatch;
   }
 
   return firestoreBatch;
@@ -500,9 +511,14 @@ async function upsertMedicineBatchDoc(
         quantity: nextQty,
         id: existing.id,
         medicineId,
-        // Preserve nonReturnable if either set
+        // Preserve nonReturnable / nrxDrug if either set
         nonReturnable:
           batchInput.nonReturnable === true || existing.nonReturnable === true ? true : undefined,
+        nrxDrug: batchInput.nrxDrug === true || existing.nrxDrug === true ? true : undefined,
+        invoiceBatchNumber:
+          String(batchInput.invoiceBatchNumber || '').trim() ||
+          existing.invoiceBatchNumber ||
+          undefined,
       },
       { docId: existing.id, medicineId, gstRate }
     );
@@ -973,6 +989,40 @@ export const setStockBatchNonReturnable = async (
   } else {
     const { nonReturnable: _n, ...rest } = batches[batchIndex] as StockBatch & {
       nonReturnable?: boolean;
+    };
+    batches[batchIndex] = rest as StockBatch;
+  }
+
+  await replaceMedicineBatchesDocs(medicineId, batches);
+};
+
+/** Toggle NRX flag on an existing inventory batch (used when editing PI lines). */
+export const setStockBatchNrxDrug = async (
+  medicineId: string,
+  batchNumber: string,
+  nrxDrug: boolean
+): Promise<void> => {
+  if (!medicineId || !batchNumber) return;
+
+  const medicineDoc = await getDoc(doc(db, 'medicines', medicineId));
+  if (!medicineDoc.exists()) return;
+
+  const gstRate = parseGstRate(medicineDoc.data());
+  const batches = await loadBatchesForMedicine(
+    medicineId,
+    medicineDoc.data()?.stockBatches,
+    gstRate
+  );
+
+  const key = batchKey(batchNumber);
+  const batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
+  if (batchIndex < 0) return;
+
+  if (nrxDrug) {
+    batches[batchIndex] = { ...batches[batchIndex], nrxDrug: true };
+  } else {
+    const { nrxDrug: _n, ...rest } = batches[batchIndex] as StockBatch & {
+      nrxDrug?: boolean;
     };
     batches[batchIndex] = rest as StockBatch;
   }

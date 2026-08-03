@@ -59,6 +59,11 @@ export interface StockBatch {
   /** Parent medicine id when loaded from medicineBatches. */
   medicineId?: string;
   batchNumber: string;
+  /**
+   * Vendor-bill batch when physical packs used a different number
+   * (PI `batchNumber` vs `receivedBatchNumber`).
+   */
+  invoiceBatchNumber?: string;
   quantity: number;
   expiryDate: Date | any;
   mfgDate?: Date | any;
@@ -66,6 +71,8 @@ export interface StockBatch {
   purchasePrice?: number;
   /** Set from purchase invoice; stock bought as non-returnable cannot be expiry/order returned. */
   nonReturnable?: boolean;
+  /** Schedule H / NRX — restricted sale (from purchase invoice). */
+  nrxDrug?: boolean;
   /** Ex-GST landed cost per strip from PI: (paid cost − line disc) ÷ physical qty */
   landedUnitCostExGst?: number;
   mrp?: number;
@@ -322,7 +329,13 @@ export interface Vendor {
 export interface PurchaseInvoiceItem {
   medicineId: string;
   medicineName: string;
+  /** Batch number printed on the vendor purchase invoice / bill. */
   batchNumber: string;
+  /**
+   * Batch number on physical packs when it differs from the invoice.
+   * Stock is keyed by this when set; otherwise by `batchNumber`.
+   */
+  receivedBatchNumber?: string;
   mfgDate?: Date | any;
   expiryDate: Date | any;
   quantity: number;
@@ -340,6 +353,8 @@ export interface PurchaseInvoiceItem {
   qrCode?: string; // Base64 encoded QR code image
   /** When true, receipts for this PI line carry non-returnable stock (see StockBatch.nonReturnable). */
   nonReturnable?: boolean;
+  /** Schedule H / NRX drug — restricted sale flag on this PI line / stock batch. */
+  nrxDrug?: boolean;
 }
 
 export interface PurchaseInvoice {
