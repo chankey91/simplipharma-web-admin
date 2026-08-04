@@ -109,6 +109,8 @@ export interface OrderMedicine {
   mrp?: number; // MRP for the item
   /** When true, this line was fulfilled from non-returnable stock and must not be returned. */
   nonReturnable?: boolean;
+  /** Schedule H / NRX — copied from stock batch at fulfilment. */
+  nrxDrug?: boolean;
   /**
    * When admin replaces the ordered SKU with another catalog medicine (Pending fulfillment).
    * Keeps audit trail of what the retailer originally ordered.
@@ -130,6 +132,8 @@ export interface OrderMedicine {
     allocationFreeQty?: number;
     /** Copied from stock batch at fulfilment — drives mobile return eligibility. */
     nonReturnable?: boolean;
+    /** Copied from stock batch at fulfilment — NRX / Schedule H. */
+    nrxDrug?: boolean;
   }>;
 }
 
