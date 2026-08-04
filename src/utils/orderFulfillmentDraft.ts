@@ -116,6 +116,7 @@ const WORK_FIELDS = [
   'gstRate',
   'expiryDate',
   'nonReturnable',
+  'nrxDrug',
 ] as const;
 
 function lineIdentityKey(line: OrderMedicine | any): string | null {

@@ -193,6 +193,7 @@ const toPersistedOrderMedicine = (line: any): OrderMedicine => {
   if (line.gstRate != null) out.gstRate = toNumber(line.gstRate);
   if (line.mrp != null) out.mrp = toNumber(line.mrp);
   if (line.nonReturnable === true) out.nonReturnable = true;
+  if (line.nrxDrug === true) out.nrxDrug = true;
   if (line.originalMedicineId) out.originalMedicineId = String(line.originalMedicineId);
   if (line.originalMedicineName) out.originalMedicineName = String(line.originalMedicineName);
   if (line.productDemandId) {
@@ -216,6 +217,7 @@ const toPersistedOrderMedicine = (line: any): OrderMedicine => {
         schemePaidQty: a.schemePaidQty != null ? toNumber(a.schemePaidQty) : undefined,
         schemeFreeQty: a.schemeFreeQty != null ? toNumber(a.schemeFreeQty) : undefined,
         ...(a.nonReturnable === true ? { nonReturnable: true } : {}),
+        ...(a.nrxDrug === true ? { nrxDrug: true } : {}),
       })
     );
   }
@@ -1706,6 +1708,7 @@ export const OrderDetailsPage: React.FC = () => {
             schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
             schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
             ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+            ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
           }];
           newMedicines[scanningItemIndex].freeQuantity = lineSplit.freeQty;
         }
@@ -1807,6 +1810,7 @@ export const OrderDetailsPage: React.FC = () => {
               schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
               schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
               ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+              ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
@@ -1869,6 +1873,7 @@ export const OrderDetailsPage: React.FC = () => {
               schemePaidQty: toNumber(batch.schemePaidQty) || undefined,
               schemeFreeQty: toNumber(batch.schemeFreeQty) || undefined,
               ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+              ...(batch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
@@ -2174,6 +2179,9 @@ export const OrderDetailsPage: React.FC = () => {
           undefined,
         ...((actualBatch as { nonReturnable?: boolean } | undefined)?.nonReturnable === true
           ? { nonReturnable: true as const }
+          : {}),
+        ...((actualBatch as { nrxDrug?: boolean } | undefined)?.nrxDrug === true
+          ? { nrxDrug: true as const }
           : {}),
       };
     });
