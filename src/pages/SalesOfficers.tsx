@@ -30,7 +30,9 @@ import {
   Edit,
   PersonAddAlt,
   LockReset,
+  Place,
 } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import {
   useSalesOfficers,
   useCreateSalesOfficer,
@@ -491,6 +493,7 @@ const SalesOfficerRow: React.FC<{
   onRemoveRetailer,
   assignBusy,
 }) => {
+  const navigate = useNavigate();
   return (
     <>
       <TableRow>
@@ -511,6 +514,15 @@ const SalesOfficerRow: React.FC<{
           <Chip label={retailers.length} size="small" color="primary" variant="outlined" />
         </TableCell>
         <TableCell align="right">
+          <IconButton
+            size="small"
+            aria-label="View SO visits"
+            title="View visits"
+            onClick={() => navigate(`/so-visits?so=${encodeURIComponent(officer.id)}`)}
+            color="secondary"
+          >
+            <Place fontSize="small" />
+          </IconButton>
           <IconButton size="small" aria-label="Edit Sales Officer" onClick={onEdit} color="primary">
             <Edit fontSize="small" />
           </IconButton>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Box,
   Button,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -18,6 +19,11 @@ import {
 import { format } from 'date-fns';
 import { getVisitLogsForRetailer, SoVisitLog } from '../services/visitLogs';
 import { User } from '../types';
+import {
+  formatDistanceMeters,
+  haversineDistanceMeters,
+  visitDistanceStatus,
+} from '../utils/geoDistance';
 
 type Props = {
   open: boolean;
@@ -64,6 +70,17 @@ export const RetailerVisitLogDialog: React.FC<Props> = ({
   }, [open, store?.id]);
 
   const title = store?.shopName || store?.displayName || store?.email || 'Store';
+  const storeLat = store?.location?.latitude;
+  const storeLng = store?.location?.longitude;
+
+  const distanceFor = (log: SoVisitLog): number | null => {
+    if (log.latitude == null || log.longitude == null) return null;
+    if (storeLat == null || storeLng == null) return null;
+    return haversineDistanceMeters(
+      { latitude: log.latitude, longitude: log.longitude },
+      { latitude: storeLat, longitude: storeLng }
+    );
+  };
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -73,6 +90,9 @@ export const RetailerVisitLogDialog: React.FC<Props> = ({
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {store.email}
             {store.storeCode ? ` · ${store.storeCode}` : ''}
+            {storeLat != null && storeLng != null
+              ? ` · Store GPS ${storeLat.toFixed(4)}, ${storeLng.toFixed(4)}`
+              : ' · No store geo-tag'}
           </Typography>
         ) : null}
         {loading ? (
@@ -92,21 +112,40 @@ export const RetailerVisitLogDialog: React.FC<Props> = ({
                 <TableRow>
                   <TableCell>Visited</TableCell>
                   <TableCell>Sales officer</TableCell>
+                  <TableCell>Location check</TableCell>
                   <TableCell>Note</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {logs.map((log) => (
-                  <TableRow key={log.id}>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      {format(log.visitedAt, 'dd MMM yyyy HH:mm')}
-                    </TableCell>
-                    <TableCell>
-                      {salesOfficerNameById[log.salesOfficerId] || log.salesOfficerId || '—'}
-                    </TableCell>
-                    <TableCell>{log.note || '—'}</TableCell>
-                  </TableRow>
-                ))}
+                {logs.map((log) => {
+                  const dist = distanceFor(log);
+                  const status = visitDistanceStatus(dist);
+                  return (
+                    <TableRow key={log.id}>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        {format(log.visitedAt, 'dd MMM yyyy HH:mm')}
+                      </TableCell>
+                      <TableCell>
+                        {salesOfficerNameById[log.salesOfficerId] || log.salesOfficerId || '—'}
+                      </TableCell>
+                      <TableCell>
+                        {status === 'unknown' ? (
+                          <Typography variant="caption" color="text.secondary">
+                            {log.latitude == null ? 'No visit GPS' : 'No store geo-tag'}
+                          </Typography>
+                        ) : (
+                          <Chip
+                            size="small"
+                            label={`${formatDistanceMeters(dist)} · ${status === 'ok' ? 'Near' : 'Far'}`}
+                            color={status === 'ok' ? 'success' : 'warning'}
+                            variant="outlined"
+                          />
+                        )}
+                      </TableCell>
+                      <TableCell>{log.note || '—'}</TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </TableContainer>
