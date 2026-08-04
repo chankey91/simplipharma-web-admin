@@ -23,6 +23,7 @@ import {
   Store,
   ShoppingCart,
   Inventory,
+  Medication,
   Logout,
   Lock,
   Menu as MenuIcon,
@@ -86,6 +87,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Inventory & buying',
     items: [
       { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
+      { text: 'NRX register', icon: <Medication />, path: '/nrx-register' },
       { text: 'Purchase invoices', icon: <Receipt />, path: '/purchases' },
       { text: 'Vendors', icon: <Business />, path: '/vendors' },
       { text: 'Vendor ledger', icon: <AccountBalanceWallet />, path: '/vendor-ledger' },

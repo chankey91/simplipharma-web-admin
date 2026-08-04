@@ -780,6 +780,10 @@ export const fulfillOrder = async (
                 : {}),
               ...(allocation.schemePaidQty ? { schemePaidQty: allocation.schemePaidQty } : {}),
               ...(allocation.schemeFreeQty ? { schemeFreeQty: allocation.schemeFreeQty } : {}),
+              ...(allocation.nonReturnable === true || batch?.nonReturnable === true
+                ? { nonReturnable: true }
+                : {}),
+              ...(allocation.nrxDrug === true || batch?.nrxDrug === true ? { nrxDrug: true } : {}),
               discountPercentage: finalDiscountPct,
             },
           ],
@@ -808,6 +812,9 @@ export const fulfillOrder = async (
         );
         if (allocation.nonReturnable === true || invBatchForNr?.nonReturnable === true) {
           batchItem.nonReturnable = true;
+        }
+        if (allocation.nrxDrug === true || invBatchForNr?.nrxDrug === true) {
+          batchItem.nrxDrug = true;
         }
         if (line.productDemandId) {
           batchItem.productDemandId = line.productDemandId;
@@ -855,7 +862,7 @@ export const fulfillOrder = async (
       if (line.batchAllocations && line.batchAllocations.length === 1) {
         const allocation = line.batchAllocations[0];
         let invBatch:
-          | { purchasePrice?: number; discountPercentage?: number; nonReturnable?: boolean }
+          | { purchasePrice?: number; discountPercentage?: number; nonReturnable?: boolean; nrxDrug?: boolean }
           | undefined;
         if (line.medicineId) {
           try {
@@ -865,6 +872,9 @@ export const fulfillOrder = async (
             );
             if (invBatch?.nonReturnable === true) {
               cleanItem.nonReturnable = true;
+            }
+            if (invBatch?.nrxDrug === true) {
+              cleanItem.nrxDrug = true;
             }
           } catch (error) {
             console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
@@ -904,11 +914,21 @@ export const fulfillOrder = async (
               : {}),
             ...(allocation.schemePaidQty ? { schemePaidQty: allocation.schemePaidQty } : {}),
             ...(allocation.schemeFreeQty ? { schemeFreeQty: allocation.schemeFreeQty } : {}),
+            ...(allocation.nonReturnable === true || invBatch?.nonReturnable === true
+              ? { nonReturnable: true }
+              : {}),
+            ...(allocation.nrxDrug === true || invBatch?.nrxDrug === true ? { nrxDrug: true } : {}),
             discountPercentage: finalDiscountPct,
           },
         ];
         if (allocation.nonReturnable === true) {
           cleanItem.nonReturnable = true;
+        }
+        if (allocation.nrxDrug === true) {
+          cleanItem.nrxDrug = true;
+        }
+        if (line.nrxDrug === true) {
+          cleanItem.nrxDrug = true;
         }
         // ALWAYS include discountPercentage (even if 0) - it's important to preserve this value
         cleanItem.discountPercentage = finalDiscountPct;
@@ -926,6 +946,9 @@ export const fulfillOrder = async (
             );
             if (invBatch?.nonReturnable === true) {
               cleanItem.nonReturnable = true;
+            }
+            if (invBatch?.nrxDrug === true) {
+              cleanItem.nrxDrug = true;
             }
             cleanItem.discountPercentage = resolveLineDiscount(line, undefined, invBatch);
           } catch (error) {
