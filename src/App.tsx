@@ -29,6 +29,7 @@ import { MedicineDetailsPage } from './pages/MedicineDetails';
 import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
 import { SalesOfficersPage } from './pages/SalesOfficers';
+import { SoVisitsPage } from './pages/SoVisits';
 import { OperationsUsersPage } from './pages/OperationsUsers';
 import { OperationsPage } from './pages/Operations';
 import { PendingRetailersPage } from './pages/PendingRetailers';
@@ -151,6 +152,7 @@ const router = createBrowserRouter([
   { path: '/banners', element: withLayout(<BannersPage />) },
   { path: '/home-feed', element: withLayout(<HomeFeedPage />) },
   { path: '/sales-officers', element: withLayout(<SalesOfficersPage />) },
+  { path: '/so-visits', element: withLayout(<SoVisitsPage />) },
   { path: '/operations-users', element: withLayout(<OperationsUsersPage />) },
   { path: '/pending-retailers', element: withLayout(<PendingRetailersPage />) },
   { path: '/expiry-returns', element: withLayout(<ExpiryReturnsPage />) },

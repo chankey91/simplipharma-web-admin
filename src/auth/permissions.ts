@@ -16,6 +16,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/vendor-ledger',
     '/payment-requests',
     '/sales-officers',
+    '/so-visits',
     '/operations-users',
     '/inventory',
     '/purchases',

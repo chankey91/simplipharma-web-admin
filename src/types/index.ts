@@ -280,6 +280,10 @@ export interface User {
   displayName?: string;
   phoneNumber?: string;
   address?: string;
+  /** Town / city (free text). */
+  town?: string;
+  /** District — typically from Madhya Pradesh district list. */
+  district?: string;
   shopName?: string;
   isActive?: boolean;
   createdAt?: Date | any;

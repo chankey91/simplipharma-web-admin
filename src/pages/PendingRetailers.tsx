@@ -233,6 +233,8 @@ export const PendingRetailersPage: React.FC = () => {
                     <Typography><strong>Aadhar:</strong> {selectedRequest.aadharNumber ? '***' + selectedRequest.aadharNumber.slice(-4) : 'N/A'}</Typography>
                     <Typography><strong>Phone:</strong> {selectedRequest.phoneNumber || 'N/A'}</Typography>
                     <Typography><strong>Address:</strong> {selectedRequest.address || 'N/A'}</Typography>
+                    <Typography><strong>Town:</strong> {selectedRequest.town || 'N/A'}</Typography>
+                    <Typography><strong>District:</strong> {selectedRequest.district || 'N/A'}</Typography>
                     {selectedRequest.location && (
                       <Typography><strong>Location:</strong> {selectedRequest.location.latitude?.toFixed(4)}, {selectedRequest.location.longitude?.toFixed(4)}</Typography>
                     )}

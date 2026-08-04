@@ -9,6 +9,19 @@ export interface SoVisitLog {
   note: string;
   visitedAt: Date;
   createdAt?: Date;
+  /** GPS captured when the SO logged the visit. */
+  latitude?: number;
+  longitude?: number;
+  accuracyMeters?: number;
+}
+
+function parseOptionalNumber(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
 }
 
 function parseVisitLogDoc(id: string, data: Record<string, unknown>): SoVisitLog {
@@ -32,19 +45,22 @@ function parseVisitLogDoc(id: string, data: Record<string, unknown>): SoVisitLog
         : createdAtRaw instanceof Date
           ? createdAtRaw
           : undefined,
+    latitude: parseOptionalNumber(data.latitude),
+    longitude: parseOptionalNumber(data.longitude),
+    accuracyMeters: parseOptionalNumber(data.accuracyMeters),
   };
 }
+
+const toSortedDesc = (snap: { docs: { id: string; data: () => Record<string, unknown> }[] }) =>
+  snap.docs
+    .map((d) => parseVisitLogDoc(d.id, d.data()))
+    .sort((a, b) => b.visitedAt.getTime() - a.visitedAt.getTime());
 
 /** Visit logs recorded by sales officers for a retailer store. */
 export const getVisitLogsForRetailer = async (
   retailerId: string,
   limitCount = 80
 ): Promise<SoVisitLog[]> => {
-  const toSorted = (snap: { docs: { id: string; data: () => Record<string, unknown> }[] }) =>
-    snap.docs
-      .map((d) => parseVisitLogDoc(d.id, d.data()))
-      .sort((a, b) => b.visitedAt.getTime() - a.visitedAt.getTime());
-
   try {
     const snap = await getDocs(
       query(
@@ -54,11 +70,77 @@ export const getVisitLogsForRetailer = async (
         limit(limitCount)
       )
     );
-    return toSorted(snap);
+    return toSortedDesc(snap);
   } catch {
     const snap = await getDocs(
       query(collection(db, 'so_visit_logs'), where('retailerId', '==', retailerId), limit(limitCount))
     );
-    return toSorted(snap);
+    return toSortedDesc(snap);
   }
+};
+
+export type VisitLogsQuery = {
+  salesOfficerId?: string;
+  fromMs?: number;
+  toMsExclusive?: number;
+  limitCount?: number;
+};
+
+/**
+ * Load SO visit logs for admin tracking (optional SO + date filters).
+ * Falls back to an unfiltered scan when composite indexes are missing.
+ */
+export const getVisitLogs = async (opts: VisitLogsQuery = {}): Promise<SoVisitLog[]> => {
+  const limitCount = opts.limitCount ?? 500;
+  const soId = opts.salesOfficerId?.trim();
+
+  try {
+    if (soId) {
+      const snap = await getDocs(
+        query(
+          collection(db, 'so_visit_logs'),
+          where('salesOfficerId', '==', soId),
+          orderBy('visitedAt', 'desc'),
+          limit(limitCount)
+        )
+      );
+      return filterVisitLogsByDate(toSortedDesc(snap), opts.fromMs, opts.toMsExclusive);
+    }
+    const snap = await getDocs(
+      query(collection(db, 'so_visit_logs'), orderBy('visitedAt', 'desc'), limit(limitCount))
+    );
+    return filterVisitLogsByDate(toSortedDesc(snap), opts.fromMs, opts.toMsExclusive);
+  } catch {
+    const constraints = soId
+      ? [where('salesOfficerId', '==', soId), limit(limitCount)]
+      : [limit(Math.max(limitCount, 1000))];
+    const snap = await getDocs(query(collection(db, 'so_visit_logs'), ...constraints));
+    return filterVisitLogsByDate(toSortedDesc(snap), opts.fromMs, opts.toMsExclusive);
+  }
+};
+
+function filterVisitLogsByDate(
+  rows: SoVisitLog[],
+  fromMs?: number,
+  toMsExclusive?: number
+): SoVisitLog[] {
+  return rows.filter((r) => {
+    const t = r.visitedAt.getTime();
+    if (fromMs != null && t < fromMs) return false;
+    if (toMsExclusive != null && t >= toMsExclusive) return false;
+    return true;
+  });
+}
+
+/** Latest visit per retailer id (for Stores list). Scans recent logs. */
+export const getLatestVisitByRetailerId = async (
+  limitCount = 2000
+): Promise<Map<string, SoVisitLog>> => {
+  const rows = await getVisitLogs({ limitCount });
+  const map = new Map<string, SoVisitLog>();
+  for (const row of rows) {
+    if (!row.retailerId || map.has(row.retailerId)) continue;
+    map.set(row.retailerId, row);
+  }
+  return map;
 };
