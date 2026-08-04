@@ -23,6 +23,7 @@ import {
   Grid,
   Divider,
   Pagination,
+  Autocomplete,
 } from '@mui/material';
 import {
   Edit,
@@ -36,6 +37,7 @@ import {
   History,
   LockReset,
   Download,
+  Place,
 } from '@mui/icons-material';
 import { RetailerVisitLogDialog } from '../components/RetailerVisitLogDialog';
 import {
@@ -48,6 +50,9 @@ import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore, useSen
 import { useSalesOfficers } from '../hooks/useSalesOfficers';
 import { useStoreNoteStats } from '../hooks/useStoreNoteStats';
 import { useOrderPlacementBlockedRetailerIds } from '../hooks/useOrders';
+import { useQuery } from '@tanstack/react-query';
+import { getLatestVisitByRetailerId } from '../services/visitLogs';
+import { MADHYA_PRADESH_DISTRICTS } from '../constants/madhyaPradeshDistricts';
 import { User } from '../types';
 import { Loading } from '../components/Loading';
 import { OrderPlacementStatusChip } from '../components/OrderPlacementStatusChip';
@@ -61,6 +66,7 @@ import {
 } from '../services/retailerDocuments';
 import { exportRetailersWithSalesOfficers } from '../utils/export';
 import { format } from 'date-fns';
+import { useNavigate } from 'react-router-dom';
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -91,8 +97,14 @@ const generatePassword = () => {
 };
 
 export const StoresPage: React.FC = () => {
+  const navigate = useNavigate();
   const { data: stores, isLoading, error } = useStores();
   const { data: salesOfficers = [] } = useSalesOfficers();
+  const { data: latestVisitByRetailerId } = useQuery({
+    queryKey: ['latestSoVisitsByRetailer'],
+    queryFn: () => getLatestVisitByRetailerId(2500),
+    staleTime: 5 * 60 * 1000,
+  });
   const {
     creditNoteStatsByRetailerId,
     debitNoteStatsByRetailerId,
@@ -135,6 +147,8 @@ export const StoresPage: React.FC = () => {
     shopName: '',
     phoneNumber: '',
     address: '',
+    town: '',
+    district: '',
     email: '',
     licenceNumber: '',
     aadharNumber: '',
@@ -290,6 +304,8 @@ export const StoresPage: React.FC = () => {
       shopName: store.shopName || '',
       phoneNumber: store.phoneNumber || '',
       address: store.address || '',
+      town: store.town || '',
+      district: store.district || '',
       email: store.email || '',
       licenceNumber: store.licenceNumber || '',
       aadharNumber: store.aadharNumber || '',
@@ -457,6 +473,8 @@ export const StoresPage: React.FC = () => {
         shopName: formData.shopName.trim(),
         phoneNumber: formData.phoneNumber.trim() || undefined,
         address: formData.address.trim() || undefined,
+        town: formData.town.trim() || undefined,
+        district: formData.district.trim() || undefined,
         email,
         licenceNumber: lic,
         aadharNumber: aad,
@@ -619,6 +637,9 @@ export const StoresPage: React.FC = () => {
               <SortableTableHeadCell columnId="shopName" label="Shop Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="owner" label="Owner" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="salesOfficer" label="Sales Officer" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <TableCell>Town</TableCell>
+              <TableCell>District</TableCell>
+              <TableCell>Last visit</TableCell>
               <SortableTableHeadCell columnId="licenceNumber" label="Licence No." sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="phoneNumber" label="Contact" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="location" label="Location" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -632,7 +653,7 @@ export const StoresPage: React.FC = () => {
           <TableBody>
             {paginatedStores.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} align="center">
+                <TableCell colSpan={15} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No stores found</Typography>
                 </TableCell>
               </TableRow>
@@ -657,6 +678,24 @@ export const StoresPage: React.FC = () => {
                   {store.salesOfficerId
                     ? salesOfficerNameById[store.salesOfficerId] || store.salesOfficerId
                     : '—'}
+                </TableCell>
+                <TableCell>{store.town || '—'}</TableCell>
+                <TableCell>{store.district || '—'}</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                  {latestVisitByRetailerId?.get(store.id) ? (
+                    <Box>
+                      <Typography variant="body2">
+                        {format(latestVisitByRetailerId.get(store.id)!.visitedAt, 'dd MMM yyyy')}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {format(latestVisitByRetailerId.get(store.id)!.visitedAt, 'HH:mm')}
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">
+                      —
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell>{store.licenceNumber || 'N/A'}</TableCell>
                 <TableCell>{store.phoneNumber || 'N/A'}</TableCell>
@@ -694,9 +733,23 @@ export const StoresPage: React.FC = () => {
                     size="small"
                     onClick={() => handleOpenVisitLog(store)}
                     color="secondary"
-                    title="Visit log"
+                    title="View visit log"
                   >
                     <History />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    onClick={() =>
+                      navigate(
+                        store.salesOfficerId
+                          ? `/so-visits?so=${encodeURIComponent(store.salesOfficerId)}`
+                          : '/so-visits'
+                      )
+                    }
+                    color="primary"
+                    title="All SO visits"
+                  >
+                    <Place />
                   </IconButton>
                   <IconButton size="small" onClick={() => handleOpenEdit(store)} color="primary">
                     <Edit />
@@ -803,6 +856,31 @@ export const StoresPage: React.FC = () => {
                   rows={2}
                   value={formData.address}
                   onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Town"
+                  value={formData.town}
+                  onChange={(e) => setFormData({ ...formData, town: e.target.value })}
+                  placeholder="Town / city"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Autocomplete
+                  options={[...MADHYA_PRADESH_DISTRICTS]}
+                  value={formData.district || null}
+                  onChange={(_, value) =>
+                    setFormData({ ...formData, district: value || '' })
+                  }
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="District (Madhya Pradesh)"
+                      placeholder="Search district…"
+                    />
+                  )}
                 />
               </Grid>
             </Grid>

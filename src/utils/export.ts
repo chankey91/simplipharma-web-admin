@@ -5,26 +5,31 @@ import { getMedicineById } from '../services/inventory';
 import { istDateStampCompact } from './dateTime';
 import { appAlert } from './appDialog';
 
-// Helper function to extract town and district from address
+// Fallback: extract town and district from a free-text address (legacy rows).
 const parseAddress = (address?: string): { town: string; district: string } => {
   if (!address) return { town: 'N/A', district: 'N/A' };
-  
-  // Try to parse address - this is a basic implementation
-  // You may need to adjust based on your address format
-  const addressParts = address.split(',').map(s => s.trim());
+  const addressParts = address.split(',').map((s) => s.trim());
   let town = 'N/A';
   let district = 'N/A';
-  
-  // Common patterns: address usually has town and district
-  // This is a basic parser - adjust based on your data format
   if (addressParts.length >= 2) {
     town = addressParts[addressParts.length - 2] || 'N/A';
     district = addressParts[addressParts.length - 1] || 'N/A';
   } else if (addressParts.length === 1) {
     town = addressParts[0] || 'N/A';
   }
-  
   return { town, district };
+};
+
+// Prefer explicit town/district fields; fall back to parsing address for older records
+const resolveTownDistrict = (
+  store?: Pick<User, 'town' | 'district' | 'address'> | null
+): { town: string; district: string } => {
+  const town = store?.town?.trim();
+  const district = store?.district?.trim();
+  if (town || district) {
+    return { town: town || 'N/A', district: district || 'N/A' };
+  }
+  return parseAddress(store?.address);
 };
 
 export const exportPendingOrdersByStore = async (
@@ -112,7 +117,7 @@ export const exportPendingOrdersByStore = async (
   // Convert to array and sort by store name, then by medicine name
   const rows = Array.from(medicineAggregate.entries())
     .map(([key, data]) => {
-      const { town, district } = parseAddress(data.store?.address);
+      const { town, district } = resolveTownDistrict(data.store);
       return {
         storeCode: data.store?.storeCode || 'na',
         shopName: data.store?.shopName || data.store?.displayName || 'N/A',
@@ -325,6 +330,8 @@ export const exportRetailersWithSalesOfficers = async (
       'Email',
       'Phone',
       'Address',
+      'Town',
+      'District',
       'Licence No.',
       'Aadhar No.',
       'Licence Holder',
@@ -351,6 +358,8 @@ export const exportRetailersWithSalesOfficers = async (
       store.email || '',
       store.phoneNumber || '',
       store.address || store.location?.address || '',
+      store.town || '',
+      store.district || '',
       store.licenceNumber || '',
       store.aadharNumber || '',
       store.licenceHolderName || '',

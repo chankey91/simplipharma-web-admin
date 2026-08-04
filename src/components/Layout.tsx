@@ -31,6 +31,7 @@ import {
   Description,
   Campaign,
   Group,
+  Place,
   Engineering,
   Settings,
   PersonAdd,
@@ -106,6 +107,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Payment requests', icon: <AccountBalanceWallet />, path: '/payment-requests' },
       { text: 'Pending retailers', icon: <PersonAdd />, path: '/pending-retailers' },
       { text: 'Sales officers', icon: <Group />, path: '/sales-officers' },
+      { text: 'SO visits', icon: <Place />, path: '/so-visits' },
     ],
   },
   {

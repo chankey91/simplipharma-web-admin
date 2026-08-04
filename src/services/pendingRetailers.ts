@@ -21,6 +21,8 @@ export interface RetailerRegistrationRequest {
   shopName?: string;
   phoneNumber?: string;
   address?: string;
+  town?: string;
+  district?: string;
   licenceNumber?: string;
   aadharNumber?: string;
   ownerName?: string;
