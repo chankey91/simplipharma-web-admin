@@ -390,6 +390,37 @@ export interface PurchaseInvoice {
   createdBy: string;
 }
 
+/** Line on a purchase return (stock returned to vendor). */
+export interface PurchaseReturnItem {
+  medicineId: string;
+  medicineName: string;
+  batchNumber: string;
+  quantity: number;
+  unitPrice: number;
+  purchasePrice: number;
+  mrp?: number;
+  gstRate?: number;
+  expiryDate?: Date | any;
+  totalAmount: number;
+}
+
+/** Goods returned from warehouse stock to a vendor. */
+export interface PurchaseReturn {
+  id: string;
+  returnNumber: string;
+  vendorId: string;
+  vendorName: string;
+  returnDate: Date | any;
+  items: PurchaseReturnItem[];
+  subTotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  notes?: string;
+  reason?: string;
+  createdAt: Date | any;
+  createdBy: string;
+}
+
 export type ProductDemandStatus = 'pending' | 'fulfilled' | 'rejected';
 
 export interface ProductDemand {

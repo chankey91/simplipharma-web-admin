@@ -1,7 +1,7 @@
 import { endOfDay, startOfDay } from 'date-fns';
-import { PurchaseInvoice, Vendor, VendorInvoicePayment } from '../types';
+import { PurchaseInvoice, PurchaseReturn, Vendor, VendorInvoicePayment } from '../types';
 
-export type VendorLedgerVchType = 'Purchase' | 'Payment' | 'Opening';
+export type VendorLedgerVchType = 'Purchase' | 'Payment' | 'Purchase Return' | 'Opening';
 
 export type VendorLedgerEntry = {
   date: Date;
@@ -142,7 +142,8 @@ export function buildVendorLedger(
   vendor: Vendor | null,
   invoices: PurchaseInvoice[],
   fromDate: Date,
-  toDate: Date
+  toDate: Date,
+  purchaseReturns: PurchaseReturn[] = []
 ): VendorLedgerResult {
   const from = startOfDay(fromDate);
   const to = endOfDay(toDate);
@@ -194,11 +195,37 @@ export function buildVendorLedger(
     }
   }
 
+  for (const ret of purchaseReturns) {
+    const retDate = toLedgerDate(ret.returnDate);
+    const amt = ret.totalAmount ?? 0;
+    if (amt <= 0) continue;
+
+    if (beforeRange(retDate, from)) {
+      openingCredits += amt;
+    } else if (inRange(retDate, from, to)) {
+      periodLines.push({
+        date: retDate,
+        particulars: 'By ',
+        particularsBold: 'PURCHASE RETURN',
+        vchType: 'Purchase Return',
+        vchNo: ret.returnNumber || ret.id,
+        debit: 0,
+        credit: amt,
+      });
+    }
+  }
+
   periodLines.sort((a, b) => {
     const cmp = a.date.getTime() - b.date.getTime();
     if (cmp !== 0) return cmp;
     if (a.vchType === b.vchType) return a.vchNo.localeCompare(b.vchNo);
-    return a.vchType === 'Purchase' ? -1 : 1;
+    const order: Record<string, number> = {
+      Purchase: 0,
+      'Purchase Return': 1,
+      Payment: 2,
+      Opening: 3,
+    };
+    return (order[a.vchType] ?? 9) - (order[b.vchType] ?? 9);
   });
 
   const openingBalance = openingDebits - openingCredits;
