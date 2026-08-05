@@ -46,6 +46,9 @@ import { PaymentRequestsPage } from './pages/PaymentRequests';
 import { SupportTicketsPage } from './pages/SupportTickets';
 import { HomeFeedPage } from './pages/HomeFeed';
 import { PurchaseListsPage } from './pages/PurchaseLists';
+import { PurchaseReturnsPage } from './pages/PurchaseReturns';
+import { CreatePurchaseReturnPage } from './pages/CreatePurchaseReturn';
+import { PurchaseReturnDetailsPage } from './pages/PurchaseReturnDetails';
 import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
@@ -159,6 +162,9 @@ const router = createBrowserRouter([
   { path: '/pending-retailers', element: withLayout(<PendingRetailersPage />) },
   { path: '/expiry-returns', element: withLayout(<ExpiryReturnsPage />) },
   { path: '/order-returns', element: withLayout(<OrderReturnsPage />) },
+  { path: '/purchase-returns', element: withLayout(<PurchaseReturnsPage />) },
+  { path: '/purchase-returns/new', element: withLayout(<CreatePurchaseReturnPage />) },
+  { path: '/purchase-returns/:returnId', element: withLayout(<PurchaseReturnDetailsPage />) },
   { path: '/margin', element: withLayout(<MarginReportPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
   { path: '/purchase-lists', element: withLayout(<PurchaseListsPage />) },

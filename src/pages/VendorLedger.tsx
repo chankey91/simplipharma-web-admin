@@ -22,6 +22,7 @@ import { Download, PictureAsPdf, Search } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useVendors } from '../hooks/useVendors';
 import { useVendorPurchaseInvoices } from '../hooks/usePurchaseInvoices';
+import { useVendorPurchaseReturns } from '../hooks/usePurchaseReturns';
 import { Loading } from '../components/Loading';
 import {
   buildVendorLedger,
@@ -57,6 +58,12 @@ export const VendorLedgerPage: React.FC = () => {
     vendorId,
     { enabled: !!vendorId && generated }
   );
+  const {
+    data: purchaseReturns,
+    isLoading: returnsLoading,
+    isFetching: returnsFetching,
+    refetch: refetchReturns,
+  } = useVendorPurchaseReturns(vendorId, { enabled: !!vendorId && generated });
 
   const selectedVendor = vendors?.find((v) => v.id === vendorId) ?? null;
 
@@ -73,12 +80,12 @@ export const VendorLedgerPage: React.FC = () => {
   }, [vendors, vendorSearch]);
 
   const ledger: VendorLedgerResult | null = useMemo(() => {
-    if (!generated || !vendorId || !invoices) return null;
+    if (!generated || !vendorId || !invoices || !purchaseReturns) return null;
     const from = new Date(fromDate);
     const to = new Date(toDate);
     if (isNaN(from.getTime()) || isNaN(to.getTime()) || from > to) return null;
-    return buildVendorLedger(selectedVendor, invoices, from, to);
-  }, [generated, vendorId, invoices, fromDate, toDate, selectedVendor]);
+    return buildVendorLedger(selectedVendor, invoices, from, to, purchaseReturns);
+  }, [generated, vendorId, invoices, purchaseReturns, fromDate, toDate, selectedVendor]);
 
   const handleGenerate = () => {
     if (!vendorId) {
@@ -98,6 +105,7 @@ export const VendorLedgerPage: React.FC = () => {
     setGenerated(true);
     if (generated) {
       void refetch();
+      void refetchReturns();
     }
   };
 
@@ -233,9 +241,16 @@ export const VendorLedgerPage: React.FC = () => {
         </Grid>
       </Paper>
 
-      {generated && (invoicesLoading || isFetching) && <Loading message="Building ledger..." />}
+      {generated && (invoicesLoading || isFetching || returnsLoading || returnsFetching) && (
+        <Loading message="Building ledger..." />
+      )}
 
-      {generated && !invoicesLoading && !isFetching && ledger && (
+      {generated &&
+        !invoicesLoading &&
+        !isFetching &&
+        !returnsLoading &&
+        !returnsFetching &&
+        ledger && (
         <>
           <Paper sx={{ p: 2, mb: 2 }}>
             <Typography variant="h6" align="center" fontWeight={700}>

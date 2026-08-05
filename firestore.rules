@@ -364,6 +364,11 @@ service cloud.firestore {
       allow write: if isAdminOrOperations();
     }
 
+    match /purchaseReturns/{returnId} {
+      allow read: if signedIn() && isAdminOrOperations();
+      allow write: if isAdminOrOperations();
+    }
+
     match /product_demands/{demandId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
