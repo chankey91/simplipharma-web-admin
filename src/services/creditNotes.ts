@@ -20,6 +20,7 @@ import { addStockBatch, restoreStockToBatch } from './inventory';
 import { generateCreditNoteNumber } from '../utils/invoiceNumber';
 import { getTodayStartIST } from '../utils/dateTime';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
+import { recalculateOrderReturnItemPricing } from '../utils/orderReturnPricing';
 import { CreditNote, CreditNoteLine } from '../types';
 
 type ReturnItemInput = {
@@ -311,9 +312,14 @@ export async function issueCreditNoteForOrderReturn(
     throw new Error(`Batch number missing for return item(s): ${names}. Please capture batch in return request.`);
   }
 
+  // Unit refund = price − disc% + gst% (matches sales invoice billed unit)
+  const priced = recalculateOrderReturnItemPricing(resolvedItems, order);
+  const pricedItems = priced.items;
+  const totalRefundAmount = priced.totalRefundAmount;
+
   const defaultTaxPercentage = order?.taxPercentage ?? 5;
   const { lines, subTotal, taxAmount, taxPercentage } = await buildCreditNoteLines(
-    resolvedItems,
+    pricedItems,
     defaultTaxPercentage
   );
 
@@ -338,8 +344,8 @@ export async function issueCreditNoteForOrderReturn(
     items: lines,
     subTotal: Math.round(subTotal * 100) / 100,
     taxAmount: Math.round(taxAmount * 100) / 100,
-    totalAmount: returnRequest.totalRefundAmount,
-    amount: returnRequest.totalRefundAmount,
+    totalAmount: totalRefundAmount,
+    amount: totalRefundAmount,
     amountUsed: 0,
     taxPercentage,
     status: 'issued',
@@ -353,6 +359,8 @@ export async function issueCreditNoteForOrderReturn(
   batch.update(reqRef, {
     creditNoteId: creditNoteRef.id,
     creditNoteNumber,
+    items: pricedItems,
+    totalRefundAmount,
     updatedAt: serverTimestamp(),
   });
   await batch.commit();
@@ -376,17 +384,21 @@ export const approveOrderReturnRequest = async (
   }
 
   const order = returnRequest.orderId ? await getOrderById(returnRequest.orderId) : null;
-  const resolvedItems = (returnRequest.items || []).map((item) => ({
+  const resolvedItemsRaw = (returnRequest.items || []).map((item) => ({
     ...item,
     batchNumber: resolveItemBatchFromOrder(item, order),
   }));
-  const missingBatchItems = resolvedItems.filter((item) => !normalizeBatchNumber(item.batchNumber));
+  const missingBatchItems = resolvedItemsRaw.filter((item) => !normalizeBatchNumber(item.batchNumber));
   if (missingBatchItems.length > 0) {
     const names = missingBatchItems
       .map((i) => i.medicineName || i.medicineId || 'Unknown item')
       .join(', ');
     throw new Error(`Batch number missing for return item(s): ${names}. Please capture batch in return request.`);
   }
+
+  const priced = recalculateOrderReturnItemPricing(resolvedItemsRaw, order);
+  const resolvedItems = priced.items;
+  const totalRefundAmount = priced.totalRefundAmount;
 
   // Restore inventory back to the original medicine batch on approval.
   // Group by medicine+batch to avoid multiple writes for split rows.
@@ -433,6 +445,8 @@ export const approveOrderReturnRequest = async (
     status: 'approved',
     approvedBy: auth.currentUser?.uid,
     approvedAt: serverTimestamp(),
+    items: resolvedItems,
+    totalRefundAmount,
     updatedAt: serverTimestamp(),
   });
   await approveBatch.commit();
@@ -441,6 +455,7 @@ export const approveOrderReturnRequest = async (
     {
       ...returnRequest,
       items: resolvedItems,
+      totalRefundAmount,
       status: 'approved',
       approvedBy: auth.currentUser?.uid,
     },

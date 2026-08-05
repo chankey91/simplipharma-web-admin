@@ -40,6 +40,7 @@ import {
   PostAdd,
   TrendingUp,
   Undo,
+  AssignmentReturn,
   AccountBalance,
   AccountBalanceWallet,
   Article,
@@ -99,6 +100,7 @@ const MENU_SECTIONS: MenuSection[] = [
     items: [
       { text: 'Order returns', icon: <Undo />, path: '/order-returns' },
       { text: 'Expiry returns', icon: <Archive />, path: '/expiry-returns' },
+      { text: 'Purchase returns', icon: <AssignmentReturn />, path: '/purchase-returns' },
     ],
   },
   {

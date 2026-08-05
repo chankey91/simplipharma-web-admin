@@ -589,32 +589,42 @@ export const getMedicineById = async (medicineId: string): Promise<Medicine | nu
 
 /**
  * Resolve a medicine by on-hand batch number via medicineBatches (scales; no full-catalog scan).
- * Prefers a unique match; if multiple medicines share the batch string, returns the first.
+ * Prefers a unique match; if multiple medicines share the batch string, returns null.
  */
 export const findMedicineByBatchNumberQuery = async (
   batchNumber: string
 ): Promise<Medicine | null> => {
+  const matches = await findMedicinesByBatchNumberQuery(batchNumber);
+  if (matches.length === 1) return matches[0];
+  return null;
+};
+
+/**
+ * All medicines that have an on-hand batch matching the given batch number
+ * (exact match on medicineBatches.batchNumber, case variants tried).
+ */
+export const findMedicinesByBatchNumberQuery = async (
+  batchNumber: string
+): Promise<Medicine[]> => {
   const key = batchNumber.trim();
-  if (!key) return null;
+  if (!key) return [];
   const variants = [...new Set([key, key.toUpperCase(), key.toLowerCase()])];
+  const medicineIds = new Set<string>();
   for (const variant of variants) {
     const snap = await getDocs(
       query(
         collection(db, MEDICINE_BATCHES_COLLECTION),
         where('batchNumber', '==', variant),
-        limit(5)
+        limit(25)
       )
     );
-    if (snap.empty) continue;
-    const medicineIds = [
-      ...new Set(snap.docs.map((d) => String(d.data().medicineId || '')).filter(Boolean)),
-    ];
-    if (medicineIds.length === 0) continue;
-    if (medicineIds.length === 1) return getMedicineById(medicineIds[0]);
-    // Ambiguous batch — skip rather than guess wrong SKU
-    return null;
+    for (const d of snap.docs) {
+      const mid = String(d.data().medicineId || '');
+      if (mid) medicineIds.add(mid);
+    }
   }
-  return null;
+  if (medicineIds.size === 0) return [];
+  return getMedicinesByIdsWithBatches([...medicineIds]);
 };
 
 /** Hydrate specific medicines with batches (order fulfillment). Batched Firestore reads. */

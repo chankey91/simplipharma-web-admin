@@ -156,6 +156,48 @@ export const generateCreditNoteNumber = async (): Promise<string> => {
 };
 
 /**
+ * Generate next purchase return number
+ * Format: SPR + YYYY + MM + 001 (incrementing)
+ */
+export const generatePurchaseReturnNumber = async (): Promise<string> => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const prefix = `SPR${year}${month}`;
+
+  const returnsCol = collection(db, 'purchaseReturns');
+  const q = query(
+    returnsCol,
+    where('returnNumber', '>=', prefix),
+    where('returnNumber', '<', `${prefix}999`),
+    orderBy('returnNumber', 'desc'),
+    limit(1)
+  );
+
+  try {
+    const snapshot = await getDocs(q);
+    if (snapshot.empty) return `${prefix}001`;
+
+    const lastNumber = snapshot.docs[0].data().returnNumber as string;
+    const nextNumber = parseInt(lastNumber.slice(-3), 10) + 1;
+    return `${prefix}${String(nextNumber).padStart(3, '0')}`;
+  } catch (error) {
+    console.warn('Purchase return number query failed, using fallback:', error);
+    const allSnapshot = await getDocs(returnsCol);
+    const matching = allSnapshot.docs
+      .map((docSnap) => docSnap.data().returnNumber as string)
+      .filter((num) => num && num.startsWith(prefix))
+      .sort()
+      .reverse();
+
+    if (matching.length === 0) return `${prefix}001`;
+
+    const nextNumber = parseInt(matching[0].slice(-3), 10) + 1;
+    return `${prefix}${String(nextNumber).padStart(3, '0')}`;
+  }
+};
+
+/**
  * Generate next debit note number
  * Format: SPD + YYYY + MM + 001 (incrementing)
  */
