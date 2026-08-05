@@ -49,6 +49,7 @@ import { PurchaseListsPage } from './pages/PurchaseLists';
 import { PurchaseReturnsPage } from './pages/PurchaseReturns';
 import { CreatePurchaseReturnPage } from './pages/CreatePurchaseReturn';
 import { PurchaseReturnDetailsPage } from './pages/PurchaseReturnDetails';
+import { MedicineDemandPage } from './pages/MedicineDemand';
 import { brandColors } from './theme/brand';
 
 const queryClient = new QueryClient({
@@ -166,6 +167,7 @@ const router = createBrowserRouter([
   { path: '/purchase-returns/new', element: withLayout(<CreatePurchaseReturnPage />) },
   { path: '/purchase-returns/:returnId', element: withLayout(<PurchaseReturnDetailsPage />) },
   { path: '/margin', element: withLayout(<MarginReportPage />) },
+  { path: '/medicine-demand', element: withLayout(<MedicineDemandPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
   { path: '/purchase-lists', element: withLayout(<PurchaseListsPage />) },
 ]);

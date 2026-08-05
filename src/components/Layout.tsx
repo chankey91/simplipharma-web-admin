@@ -39,6 +39,7 @@ import {
   Archive,
   PostAdd,
   TrendingUp,
+  Insights,
   Undo,
   AssignmentReturn,
   AccountBalance,
@@ -116,7 +117,10 @@ const MENU_SECTIONS: MenuSection[] = [
   },
   {
     title: 'Insights',
-    items: [{ text: 'Margin report', icon: <TrendingUp />, path: '/margin' }],
+    items: [
+      { text: 'Margin report', icon: <TrendingUp />, path: '/margin' },
+      { text: 'Medicine demand', icon: <Insights />, path: '/medicine-demand' },
+    ],
   },
   {
     title: 'Marketing',

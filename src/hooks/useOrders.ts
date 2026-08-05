@@ -89,6 +89,20 @@ export const useOrdersInPeriod = (period: 'this_month' | 'last_month' | 'all') =
   });
 };
 
+/** Orders in an explicit millisecond range (stock demand / custom reports). */
+export const useOrdersInDateRange = (
+  startMs: number,
+  endMs: number,
+  options?: { enabled?: boolean }
+) => {
+  return useQuery({
+    queryKey: ['ordersInDateRange', startMs, endMs],
+    queryFn: () => getOrdersInRange(startMs, endMs),
+    enabled: (options?.enabled ?? true) && Number.isFinite(startMs) && Number.isFinite(endMs),
+    staleTime: 60 * 1000,
+  });
+};
+
 /** Orders with outstanding balance (Unpaid/Partial) for the Store Receivables page. */
 export const useReceivableOrders = (options?: { enabled?: boolean }) => {
   return useQuery({
