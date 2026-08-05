@@ -1,10 +1,11 @@
 /**
- * Order-return unit refund pricing.
+ * Order-return unit refund — same economics as the sales invoice:
  *
- * Order line `price` is GST-inclusive (as billed). Correct order:
- * 1. Remove GST → taxable unit
- * 2. Apply trade discount %
- * 3. Apply GST on the discounted taxable
+ * Order line `price` / allocation `purchasePrice` is the **ex-GST** unit rate.
+ * 1. Apply trade discount % on that rate
+ * 2. Then apply GST %
+ *
+ * unitRefund (incl. GST) = price × (1 − disc%/100) × (1 + gst%/100)
  */
 
 function toNum(value: unknown): number {
@@ -19,29 +20,23 @@ export function roundMoney2(n: number): number {
   return Math.round(x * 100) / 100;
 }
 
-/**
- * Tax-inclusive unit refund: strip GST → minus discount → apply GST.
- * Avoids adding GST on top of an already-inclusive unit price.
- */
 export function unitRefundPriceFromOrderLine(params: {
-  /** GST-inclusive unit rate from the order line. */
+  /** Ex-GST unit rate (order line price / allocation sell rate). */
   price: number;
   discountPercentage?: number | null;
   gstRate?: number | null;
   orderTaxPercentage?: number | null;
 }): number {
-  const priceInclGst = toNum(params.price);
-  if (priceInclGst <= 0) return 0;
+  const priceExGst = toNum(params.price);
+  if (priceExGst <= 0) return 0;
 
   const disc = Math.min(100, Math.max(0, toNum(params.discountPercentage)));
   let gst = toNum(params.gstRate);
   if (gst <= 0) gst = toNum(params.orderTaxPercentage);
   if (gst <= 0) gst = 5;
 
-  const gstFactor = 1 + gst / 100;
-  const priceExGst = priceInclGst / gstFactor;
   const afterDiscount = priceExGst * (1 - disc / 100);
-  return roundMoney2(afterDiscount * gstFactor);
+  return roundMoney2(afterDiscount * (1 + gst / 100));
 }
 
 export function unitRefundPriceForOrderMedicine(
@@ -58,32 +53,21 @@ export function unitRefundPriceForOrderMedicine(
   orderTaxPercentage?: number | null
 ): number {
   const base =
-    toNum(med.price) > 0
-      ? toNum(med.price)
-      : toNum(alloc?.purchasePrice) > 0
-        ? toNum(alloc?.purchasePrice)
-        : 0;
+    toNum(alloc?.purchasePrice) > 0
+      ? toNum(alloc?.purchasePrice)
+      : toNum(med.price);
+
   const discount =
     alloc?.discountPercentage !== undefined && alloc?.discountPercentage !== null
       ? toNum(alloc.discountPercentage)
       : toNum(med.discountPercentage);
+
   const gst =
     toNum(alloc?.gstRate) > 0
       ? toNum(alloc?.gstRate)
       : toNum(med.gstRate) > 0
         ? toNum(med.gstRate)
         : undefined;
-
-  // Allocation purchasePrice is typically ex-GST — discount then add GST (no strip).
-  const priceLooksExGst = toNum(med.price) <= 0 && toNum(alloc?.purchasePrice) > 0;
-  if (priceLooksExGst) {
-    const disc = Math.min(100, Math.max(0, discount));
-    let g = toNum(gst);
-    if (g <= 0) g = toNum(orderTaxPercentage);
-    if (g <= 0) g = 5;
-    const afterDiscount = base * (1 - disc / 100);
-    return roundMoney2(afterDiscount * (1 + g / 100));
-  }
 
   return unitRefundPriceFromOrderLine({
     price: base,
