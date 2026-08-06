@@ -674,6 +674,140 @@ export async function backfillCreditNoteById(creditNoteId: string): Promise<Cred
   };
 }
 
+const PRICE_FIX_STATUSES = new Set(['pending_so', 'pending_admin', 'approved']);
+
+export type OrderReturnPriceRecalcResult = {
+  requestId: string;
+  updated: boolean;
+  storedTotal: number;
+  correctTotal: number;
+  creditNoteUpdated: boolean;
+  creditNoteNumber?: string;
+  message?: string;
+};
+
+/**
+ * Rewrite return request (+ linked credit note) amounts using
+ * price × (1 − disc%) × (1 + GST%) from the original order.
+ * Refuses paid / rejected returns.
+ */
+export async function applyOrderReturnPriceRecalculation(
+  requestId: string
+): Promise<OrderReturnPriceRecalcResult> {
+  const reqRef = doc(db, 'order_return_requests', requestId);
+  const reqSnap = await getDoc(reqRef);
+  if (!reqSnap.exists()) {
+    return {
+      requestId,
+      updated: false,
+      storedTotal: 0,
+      correctTotal: 0,
+      creditNoteUpdated: false,
+      message: 'Return request not found',
+    };
+  }
+
+  const returnRequest = parseReturnRequestDoc(reqSnap.id, reqSnap.data() as Record<string, unknown>);
+  const storedTotal = Math.round((returnRequest.totalRefundAmount || 0) * 100) / 100;
+
+  if (!PRICE_FIX_STATUSES.has(returnRequest.status)) {
+    return {
+      requestId,
+      updated: false,
+      storedTotal,
+      correctTotal: storedTotal,
+      creditNoteUpdated: false,
+      message: `Status ${returnRequest.status} is not eligible for auto-fix`,
+    };
+  }
+
+  const order = returnRequest.orderId ? await getOrderById(returnRequest.orderId) : null;
+  if (!order) {
+    return {
+      requestId,
+      updated: false,
+      storedTotal,
+      correctTotal: storedTotal,
+      creditNoteUpdated: false,
+      message: 'Original order not found',
+    };
+  }
+
+  const resolvedItems = (returnRequest.items || []).map((item) => ({
+    ...item,
+    batchNumber: resolveItemBatchFromOrder(item, order),
+  }));
+  const priced = recalculateOrderReturnItemPricing(resolvedItems, order);
+  const correctTotal = priced.totalRefundAmount;
+
+  if (Math.abs(correctTotal - storedTotal) < 0.02) {
+    return {
+      requestId,
+      updated: false,
+      storedTotal,
+      correctTotal,
+      creditNoteUpdated: false,
+      message: 'Already correct',
+    };
+  }
+
+  const defaultTaxPercentage = order.taxPercentage ?? 5;
+  const { lines, subTotal, taxAmount, taxPercentage } = await buildCreditNoteLines(
+    priced.items,
+    defaultTaxPercentage
+  );
+
+  const batch = writeBatch(db);
+  batch.update(
+    reqRef,
+    stripUndefinedDeep({
+      items: priced.items,
+      totalRefundAmount: correctTotal,
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  let creditNoteUpdated = false;
+  let creditNoteNumber = returnRequest.creditNoteNumber;
+
+  const creditNoteId = returnRequest.creditNoteId?.trim();
+  if (creditNoteId) {
+    const noteSnap = await getDoc(doc(db, 'credit_notes', creditNoteId));
+    if (noteSnap.exists()) {
+      const noteData = noteSnap.data() as Record<string, unknown>;
+      batch.update(
+        doc(db, 'credit_notes', creditNoteId),
+        stripUndefinedDeep({
+          items: lines.map(creditNoteLineToFirestore),
+          subTotal: Math.round(subTotal * 100) / 100,
+          taxAmount: Math.round(taxAmount * 100) / 100,
+          taxPercentage,
+          totalAmount: correctTotal,
+          amount: correctTotal,
+          // amountUsed left unchanged (wallet consumption)
+          updatedAt: serverTimestamp(),
+        })
+      );
+      creditNoteUpdated = true;
+      creditNoteNumber = String(noteData.creditNoteNumber || creditNoteNumber || '');
+    }
+  }
+
+  await batch.commit();
+
+  return {
+    requestId,
+    updated: true,
+    storedTotal,
+    correctTotal,
+    creditNoteUpdated,
+    creditNoteNumber,
+    message: creditNoteUpdated
+      ? `Updated return and credit note ${creditNoteNumber}`
+      : 'Updated return request',
+  };
+}
+
 /** Backfill all order-return credit notes that are missing batch or MRP on line items. */
 export async function backfillAllCreditNotes(): Promise<CreditNoteBackfillSummary> {
   const notes = await getAllCreditNotes();

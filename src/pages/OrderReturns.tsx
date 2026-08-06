@@ -29,6 +29,7 @@ import {
   Payment,
   Download,
   PostAdd,
+  FindInPage,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -39,7 +40,12 @@ import {
   OrderReturnRequest,
   OrderReturnStatus,
 } from '../services/orderReturns';
-import { getCreditNoteById } from '../services/creditNotes';
+import {
+  scanOrderReturnsNeedingPriceFix,
+  formatOrderReturnPriceFixRows,
+  type OrderReturnPriceFixScanSummary,
+} from '../services/orderReturnPriceFixScan';
+import { applyOrderReturnPriceRecalculation, getCreditNoteById } from '../services/creditNotes';
 import { sendCreditNotePdfToRetailer } from '../services/creditNoteEmail';
 import { generateCreditNotePdf, generateCreditNotePdfDataUri } from '../utils/creditNote';
 import { useIssueCreditNoteForReturn } from '../hooks/useCreditNotes';
@@ -71,6 +77,12 @@ export const OrderReturnsPage: React.FC = () => {
   const [paymentDate, setPaymentDate] = useState(getTodayDateStringIST());
   const [paymentMethod, setPaymentMethod] = useState('Bank Transfer');
   const [downloadingCreditNote, setDownloadingCreditNote] = useState(false);
+  const [priceScanOpen, setPriceScanOpen] = useState(false);
+  const [priceScanLoading, setPriceScanLoading] = useState(false);
+  const [priceScanApplying, setPriceScanApplying] = useState(false);
+  const [priceScanSummary, setPriceScanSummary] = useState<OrderReturnPriceFixScanSummary | null>(
+    null
+  );
   const issueCreditNoteMutation = useIssueCreditNoteForReturn();
   const { alert, confirm, prompt } = useAppDialog();
 
@@ -284,6 +296,75 @@ export const OrderReturnsPage: React.FC = () => {
 
   const formatAmount = (n: number) => `₹${n?.toLocaleString('en-IN') || '0'}`;
 
+  const handleScanWrongAmounts = async () => {
+    setPriceScanOpen(true);
+    setPriceScanLoading(true);
+    setPriceScanSummary(null);
+    try {
+      const summary = await scanOrderReturnsNeedingPriceFix({ status: 'all' });
+      setPriceScanSummary(summary);
+    } catch (err: unknown) {
+      setPriceScanOpen(false);
+      await alert(err instanceof Error ? err.message : 'Scan failed', { severity: 'error' });
+    } finally {
+      setPriceScanLoading(false);
+    }
+  };
+
+  const handleCopyPriceScan = async () => {
+    if (!priceScanSummary?.candidates.length) return;
+    try {
+      await navigator.clipboard.writeText(formatOrderReturnPriceFixRows(priceScanSummary.candidates));
+      await alert('Copied list to clipboard (tab-separated)', { severity: 'success' });
+    } catch {
+      await alert('Could not copy to clipboard', { severity: 'warning' });
+    }
+  };
+
+  const handleApplyPriceFixes = async () => {
+    const ids =
+      priceScanSummary?.candidates.filter((c) => c.canAutoFix).map((c) => c.id) ?? [];
+    if (!ids.length) return;
+
+    const ok = await confirm(
+      `Recalculate refund amounts for ${ids.length} return(s)? This updates the return request and linked credit note totals (does not re-email PDF).`,
+      { confirmLabel: 'Apply fixes' }
+    );
+    if (!ok) return;
+
+    setPriceScanApplying(true);
+    try {
+      let fixed = 0;
+      const failures: string[] = [];
+      for (const id of ids) {
+        try {
+          const result = await applyOrderReturnPriceRecalculation(id);
+          if (result.updated) fixed += 1;
+          else if (result.message && result.message !== 'Already correct') {
+            failures.push(`${id}: ${result.message}`);
+          }
+        } catch (err: unknown) {
+          failures.push(`${id}: ${err instanceof Error ? err.message : 'failed'}`);
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: ['orderReturns'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNoteTotals'] });
+      const summary = await scanOrderReturnsNeedingPriceFix({ status: 'all' });
+      setPriceScanSummary(summary);
+      await alert(
+        failures.length
+          ? `Fixed ${fixed}. ${failures.length} failed:\n${failures.slice(0, 5).join('\n')}`
+          : `Fixed ${fixed} return(s).`,
+        { severity: failures.length ? 'warning' : 'success' }
+      );
+    } catch (err: unknown) {
+      await alert(err instanceof Error ? err.message : 'Apply failed', { severity: 'error' });
+    } finally {
+      setPriceScanApplying(false);
+    }
+  };
+
   const getStatusColor = (s: string) => {
     switch (s) {
       case 'pending_so':
@@ -306,11 +387,21 @@ export const OrderReturnsPage: React.FC = () => {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3} gap={1} flexWrap="wrap">
         <Typography variant="h4">Order Returns (Delivered)</Typography>
-        <Button variant="outlined" startIcon={<Refresh />} onClick={() => refetch()}>
-          Refresh
-        </Button>
+        <Box display="flex" gap={1} flexWrap="wrap">
+          <Button
+            variant="outlined"
+            color="warning"
+            startIcon={<FindInPage />}
+            onClick={() => void handleScanWrongAmounts()}
+          >
+            Scan wrong amounts
+          </Button>
+          <Button variant="outlined" startIcon={<Refresh />} onClick={() => refetch()}>
+            Refresh
+          </Button>
+        </Box>
       </Box>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -713,6 +804,136 @@ export const OrderReturnsPage: React.FC = () => {
             disabled={!paymentRef.trim() || paymentMutation.isPending}
           >
             {paymentMutation.isPending ? 'Saving...' : 'Record Payment'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={priceScanOpen}
+        onClose={() => !priceScanLoading && !priceScanApplying && setPriceScanOpen(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle>Returns with wrong refund amounts</DialogTitle>
+        <DialogContent>
+          {priceScanLoading || priceScanApplying ? (
+            <Loading
+              message={
+                priceScanApplying
+                  ? 'Applying corrected amounts…'
+                  : 'Scanning order returns against corrected formula…'
+              }
+            />
+          ) : priceScanSummary ? (
+            <>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Scanned {priceScanSummary.scanned} returns ·{' '}
+                <strong>{priceScanSummary.mismatched}</strong> mismatched ·{' '}
+                <strong>{priceScanSummary.canAutoFix}</strong> can auto-fix (pending/approved) ·{' '}
+                <strong>{priceScanSummary.needsReview}</strong> need review (e.g. paid) ·{' '}
+                {priceScanSummary.skippedNoOrder} skipped (no order)
+              </Alert>
+              {priceScanSummary.candidates.length === 0 ? (
+                <Typography color="text.secondary">
+                  No mismatches found — all scanned returns already match the formula.
+                </Typography>
+              ) : (
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Retailer</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Invoice / Order</TableCell>
+                        <TableCell>Credit note</TableCell>
+                        <TableCell align="right">Stored</TableCell>
+                        <TableCell align="right">Correct</TableCell>
+                        <TableCell align="right">Delta</TableCell>
+                        <TableCell>Fix?</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {priceScanSummary.candidates.map((c) => (
+                        <TableRow key={c.id} hover>
+                          <TableCell>
+                            <Typography variant="body2">{c.retailerName}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {c.id}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Chip size="small" label={c.status} color={getStatusColor(c.status) as any} />
+                          </TableCell>
+                          <TableCell>
+                            {c.invoiceNumber}
+                            <Typography variant="caption" display="block" color="text.secondary">
+                              {c.orderId}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>{c.creditNoteNumber || '—'}</TableCell>
+                          <TableCell align="right">{formatAmount(c.storedTotal)}</TableCell>
+                          <TableCell align="right">{formatAmount(c.correctTotal)}</TableCell>
+                          <TableCell align="right">
+                            <Typography
+                              variant="body2"
+                              color={c.delta > 0 ? 'success.main' : 'error.main'}
+                            >
+                              {c.delta > 0 ? '+' : ''}
+                              {formatAmount(c.delta)}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            {c.canAutoFix ? (
+                              <Chip size="small" color="success" label="Yes" />
+                            ) : (
+                              <Chip
+                                size="small"
+                                color="warning"
+                                label="Review"
+                                title={c.reason}
+                              />
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setPriceScanOpen(false)}
+            disabled={priceScanLoading || priceScanApplying}
+          >
+            Close
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => void handleCopyPriceScan()}
+            disabled={
+              priceScanLoading ||
+              priceScanApplying ||
+              !priceScanSummary?.candidates.length
+            }
+          >
+            Copy list
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() => void handleApplyPriceFixes()}
+            disabled={
+              priceScanLoading ||
+              priceScanApplying ||
+              !priceScanSummary?.canAutoFix
+            }
+          >
+            {priceScanApplying
+              ? 'Applying…'
+              : `Apply fixes (${priceScanSummary?.canAutoFix ?? 0})`}
           </Button>
         </DialogActions>
       </Dialog>
