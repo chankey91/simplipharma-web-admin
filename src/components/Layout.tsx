@@ -119,7 +119,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Insights',
     items: [
       { text: 'Margin report', icon: <TrendingUp />, path: '/margin' },
-      { text: 'Medicine demand', icon: <Insights />, path: '/medicine-demand' },
+      { text: 'Top sellers', icon: <Insights />, path: '/medicine-demand' },
     ],
   },
   {
