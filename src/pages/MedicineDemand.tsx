@@ -160,17 +160,17 @@ export const MedicineDemandPage: React.FC = () => {
   const loading = ordersLoading || (medicineIds.length > 0 && medsLoading);
 
   if (loading && !orders) {
-    return <Loading message="Loading medicine demand..." />;
+    return <Loading message="Loading top sellers..." />;
   }
 
   return (
     <Box>
-      <Breadcrumbs items={[{ label: 'Medicine demand' }]} />
+      <Breadcrumbs items={[{ label: 'Top sellers' }]} />
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} flexWrap="wrap" gap={1}>
         <Box>
-          <Typography variant="h5">Medicine demand</Typography>
+          <Typography variant="h5">Top sellers</Typography>
           <Typography variant="body2" color="textSecondary">
-            Top-selling medicines by period — use this to plan stock ahead of purchase
+            Medicines ranked by units sold — use this to plan stock ahead of purchase
           </Typography>
         </Box>
       </Box>

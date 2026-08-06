@@ -209,7 +209,7 @@ export const exportPendingOrdersProductSummary = async (
     return;
   }
 
-  const medicineMap = new Map<string, string>();
+  const medicineMap = new Map<string, { manufacturer: string; currentStock: number }>();
   const allMedicineIds = new Set<string>();
 
   for (const order of orders) {
@@ -222,7 +222,22 @@ export const exportPendingOrdersProductSummary = async (
     if (medicineMap.has(medicineId)) continue;
     try {
       const med = await getMedicineById(medicineId);
-      if (med) medicineMap.set(medicineId, med.manufacturer);
+      if (med) {
+        const fromCurrent =
+          typeof med.currentStock === 'number' && Number.isFinite(med.currentStock)
+            ? med.currentStock
+            : undefined;
+        const fromStock =
+          typeof med.stock === 'number' && Number.isFinite(med.stock) ? med.stock : undefined;
+        const fromBatches = (med.stockBatches || []).reduce(
+          (s, b) => s + (Number(b.quantity) || 0),
+          0
+        );
+        medicineMap.set(medicineId, {
+          manufacturer: med.manufacturer || 'N/A',
+          currentStock: fromCurrent ?? fromStock ?? fromBatches,
+        });
+      }
     } catch (error) {
       console.warn(`Failed to fetch medicine ${medicineId}:`, error);
     }
@@ -235,6 +250,7 @@ export const exportPendingOrdersProductSummary = async (
       medicineName: string;
       manufacturer: string;
       totalQty: number;
+      currentStock: number | null;
       orderNumbers: Set<string>;
     }
   >();
@@ -244,20 +260,25 @@ export const exportPendingOrdersProductSummary = async (
 
     for (const medicine of order.medicines) {
       const key = productAggregateKey(medicine);
-      const manufacturer =
-        medicineMap.get(medicine.medicineId) || medicine.manufacturerName || 'N/A';
+      const medInfo = medicine.medicineId ? medicineMap.get(medicine.medicineId) : undefined;
+      const manufacturer = medInfo?.manufacturer || medicine.manufacturerName || 'N/A';
       const qty = medicine.quantity || 0;
+      const currentStock = medInfo != null ? medInfo.currentStock : null;
 
       const existing = productAggregate.get(key);
       if (existing) {
         existing.totalQty += qty;
         existing.orderNumbers.add(orderNumber);
+        if (existing.currentStock == null && currentStock != null) {
+          existing.currentStock = currentStock;
+        }
       } else {
         productAggregate.set(key, {
           medicineId: medicine.medicineId || '',
           medicineName: medicine.name,
           manufacturer,
           totalQty: qty,
+          currentStock,
           orderNumbers: new Set([orderNumber]),
         });
       }
@@ -269,7 +290,17 @@ export const exportPendingOrdersProductSummary = async (
   );
 
   const excelData: (string | number)[][] = [
-    ['SR', 'Medicine Name', 'Medicine ID', 'Manufacturer', 'Total Quantity', 'Order Count', 'Order Numbers', 'Remark'],
+    [
+      'SR',
+      'Medicine Name',
+      'Medicine ID',
+      'Manufacturer',
+      'Total Quantity',
+      'Current Stock',
+      'Order Count',
+      'Order Numbers',
+      'Remark',
+    ],
   ];
 
   rows.forEach((row, index) => {
@@ -279,6 +310,7 @@ export const exportPendingOrdersProductSummary = async (
       row.medicineId || '—',
       row.manufacturer,
       row.totalQty,
+      row.currentStock != null ? row.currentStock : '—',
       row.orderNumbers.size,
       Array.from(row.orderNumbers).sort().join(', '),
       '',
@@ -293,6 +325,7 @@ export const exportPendingOrdersProductSummary = async (
     { wch: 40 },
     { wch: 28 },
     { wch: 30 },
+    { wch: 14 },
     { wch: 14 },
     { wch: 12 },
     { wch: 40 },
