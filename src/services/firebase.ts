@@ -14,7 +14,7 @@ import {
   getFirestore, 
   initializeFirestore,
   persistentLocalCache,
-  persistentMultipleTabManager,
+  persistentSingleTabManager,
   collection, 
   getDocs, 
   addDoc, 
@@ -51,12 +51,16 @@ export const auth = getAuth(app);
 
 // Enable a persistent IndexedDB cache so real-time listeners can re-attach and
 // repeat/offline reads can be served locally instead of always round-tripping to
-// Firestore. Falls back to the default in-memory cache when IndexedDB is
-// unavailable (e.g. private browsing or unsupported environments).
+// Firestore. Use single-tab manager: multi-tab coordination relies on localStorage
+// and commonly surfaces as FIRESTORE INTERNAL ASSERTION FAILED when storage is
+// full or tabs race (firebase/firebase-js-sdk#8305). Falls back to the default
+// in-memory cache when IndexedDB is unavailable (e.g. private browsing).
 let firestoreDb: ReturnType<typeof getFirestore>;
 try {
   firestoreDb = initializeFirestore(app, {
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    localCache: persistentLocalCache({
+      tabManager: persistentSingleTabManager(undefined),
+    }),
   });
 } catch (err) {
   console.warn('Firestore persistent cache unavailable; using default cache:', err);
