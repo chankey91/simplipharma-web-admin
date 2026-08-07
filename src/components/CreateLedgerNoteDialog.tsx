@@ -33,6 +33,24 @@ type Props = {
 
 const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
 
+/** Parse `<input type="date">` value as local calendar day (avoid UTC shift from `new Date('yyyy-MM-dd')`). */
+function parseLocalDateInput(value: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!m) return new Date(value);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
+}
+
+function mapCreateNoteError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e ?? '');
+  if (/INTERNAL ASSERTION FAILED/i.test(msg) || /Unexpected state/i.test(msg)) {
+    return (
+      'Firestore client crashed (local cache). Reload this page, keep only one admin tab open, then try again. ' +
+      'If it persists, clear site data for this origin and sign in again.'
+    );
+  }
+  return msg || 'Failed to create note';
+}
+
 export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, onCreated }) => {
   const { data: stores = [] } = useStores(open);
   const [retailerId, setRetailerId] = useState('');
@@ -79,7 +97,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
         retailerId,
         totalAmount: parseFloat(totalAmount),
         reason,
-        noteDate: new Date(noteDate),
+        noteDate: parseLocalDateInput(noteDate),
         originalInvoiceNumber: originalInvoiceNumber.trim() || undefined,
         taxPercentage,
       };
@@ -96,7 +114,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
       });
       onClose();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to create note');
+      setError(mapCreateNoteError(e));
     } finally {
       setSaving(false);
     }
@@ -112,7 +130,17 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
           Posted to the store ledger and the retailer&apos;s wallet immediately (no return approval required).
         </Alert>
         {error ? (
-          <Alert severity="error" sx={{ mb: 2 }}>
+          <Alert
+            severity="error"
+            sx={{ mb: 2 }}
+            action={
+              /Firestore client crashed|INTERNAL ASSERTION/i.test(error) ? (
+                <Button color="inherit" size="small" onClick={() => window.location.reload()}>
+                  Reload
+                </Button>
+              ) : undefined
+            }
+          >
             {error}
           </Alert>
         ) : null}
