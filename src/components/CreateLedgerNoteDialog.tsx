@@ -29,6 +29,10 @@ type Props = {
   kind: NoteKind;
   onClose: () => void;
   onCreated: (result: { id: string; documentNumber: string }) => void;
+  /** Prefill medical store (e.g. from Stores → Wallet). */
+  initialRetailerId?: string;
+  /** Hide store search/select when store is already chosen. */
+  lockRetailer?: boolean;
 };
 
 const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
@@ -51,7 +55,14 @@ function mapCreateNoteError(e: unknown): string {
   return msg || 'Failed to create note';
 }
 
-export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, onCreated }) => {
+export const CreateLedgerNoteDialog: React.FC<Props> = ({
+  open,
+  kind,
+  onClose,
+  onCreated,
+  initialRetailerId,
+  lockRetailer,
+}) => {
   const { data: stores = [] } = useStores(open);
   const [retailerId, setRetailerId] = useState('');
   const [storeSearch, setStoreSearch] = useState('');
@@ -65,7 +76,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
 
   useEffect(() => {
     if (!open) return;
-    setRetailerId('');
+    setRetailerId(initialRetailerId?.trim() || '');
     setStoreSearch('');
     setNoteDate(toInputDate(new Date()));
     setTotalAmount('');
@@ -74,7 +85,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
     setOriginalInvoiceNumber('');
     setError('');
     setSaving(false);
-  }, [open, kind]);
+  }, [open, kind, initialRetailerId]);
 
   const filteredStores = useMemo(() => {
     const q = storeSearch.trim().toLowerCase();
@@ -145,35 +156,55 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({ open, kind, onClose, o
           </Alert>
         ) : null}
         <Grid container spacing={2}>
-          <Grid item xs={12}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Search store"
-              value={storeSearch}
-              onChange={(e) => setStoreSearch(e.target.value)}
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <FormControl fullWidth size="small" required>
-              <InputLabel>Medical store</InputLabel>
-              <Select
+          {!lockRetailer ? (
+            <>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Search store"
+                  value={storeSearch}
+                  onChange={(e) => setStoreSearch(e.target.value)}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <FormControl fullWidth size="small" required>
+                  <InputLabel>Medical store</InputLabel>
+                  <Select
+                    label="Medical store"
+                    value={retailerId}
+                    onChange={(e) => setRetailerId(e.target.value)}
+                  >
+                    <MenuItem value="">
+                      <em>Select store</em>
+                    </MenuItem>
+                    {filteredStores.map((s) => (
+                      <MenuItem key={s.id} value={s.id}>
+                        {s.shopName || s.displayName || s.email}
+                        {s.storeCode ? ` (${s.storeCode})` : ''}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+            </>
+          ) : (
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                size="small"
                 label="Medical store"
-                value={retailerId}
-                onChange={(e) => setRetailerId(e.target.value)}
-              >
-                <MenuItem value="">
-                  <em>Select store</em>
-                </MenuItem>
-                {filteredStores.map((s) => (
-                  <MenuItem key={s.id} value={s.id}>
-                    {s.shopName || s.displayName || s.email}
-                    {s.storeCode ? ` (${s.storeCode})` : ''}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Grid>
+                value={
+                  filteredStores.find((s) => s.id === retailerId)?.shopName ||
+                  stores.find((s) => s.id === retailerId)?.shopName ||
+                  stores.find((s) => s.id === retailerId)?.displayName ||
+                  stores.find((s) => s.id === retailerId)?.email ||
+                  retailerId
+                }
+                InputProps={{ readOnly: true }}
+              />
+            </Grid>
+          )}
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth

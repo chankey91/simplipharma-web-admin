@@ -181,6 +181,9 @@ export interface Order {
   paymentMethod?: PaymentMethod; // Cash or Online when payment collected
   transactionId?: string; // For online/bank payments
   payments?: Payment[];
+  creditApplied?: number;
+  /** When wallet credit was applied on this order. */
+  creditAppliedAt?: 'checkout' | 'dispatch' | 'payment';
   timeline: OrderTimelineEvent[];
   // NEW: Dispatch fields
   dispatchDate?: Date | any;
