@@ -38,8 +38,10 @@ import {
   LockReset,
   Download,
   Place,
+  AccountBalanceWallet,
 } from '@mui/icons-material';
 import { RetailerVisitLogDialog } from '../components/RetailerVisitLogDialog';
+import { RetailerWalletDialog } from '../components/RetailerWalletDialog';
 import {
   FormControl,
   InputLabel,
@@ -131,6 +133,7 @@ export const StoresPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
 
   const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
+  const [walletStore, setWalletStore] = useState<User | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
 
@@ -266,6 +269,10 @@ export const StoresPage: React.FC = () => {
 
   const handleOpenVisitLog = (store: User) => {
     setVisitLogStore(store);
+  };
+
+  const handleOpenWallet = (store: User) => {
+    setWalletStore(store);
   };
 
   const handleGrantOrderOverride = async (retailerId: string) => {
@@ -629,7 +636,7 @@ export const StoresPage: React.FC = () => {
         />
       </Box>
 
-      <TableContainer component={Paper}>
+      <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
         <Table>
           <TableHead>
             <TableRow>
@@ -647,7 +654,19 @@ export const StoresPage: React.FC = () => {
               <SortableTableHeadCell columnId="debitNoteTotal" label="Debit notes" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} align="right" />
               <SortableTableHeadCell columnId="isActive" label="Status" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="orderBlocked" label="Ordering" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
-              <TableCell align="right">Actions</TableCell>
+              <TableCell
+                align="right"
+                sx={{
+                  position: 'sticky',
+                  right: 0,
+                  bgcolor: 'background.paper',
+                  zIndex: 2,
+                  boxShadow: '-4px 0 8px rgba(0,0,0,0.06)',
+                  minWidth: 220,
+                }}
+              >
+                Actions
+              </TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -728,7 +747,27 @@ export const StoresPage: React.FC = () => {
                     disabled={grantOverrideMutation.isPending}
                   />
                 </TableCell>
-                <TableCell align="right">
+                <TableCell
+                  align="right"
+                  sx={{
+                    position: 'sticky',
+                    right: 0,
+                    bgcolor: 'background.paper',
+                    zIndex: 1,
+                    boxShadow: '-4px 0 8px rgba(0,0,0,0.06)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="warning"
+                    startIcon={<AccountBalanceWallet />}
+                    onClick={() => handleOpenWallet(store)}
+                    sx={{ mr: 0.5 }}
+                  >
+                    Wallet
+                  </Button>
                   <IconButton
                     size="small"
                     onClick={() => handleOpenVisitLog(store)}
@@ -1102,6 +1141,12 @@ export const StoresPage: React.FC = () => {
         store={visitLogStore}
         salesOfficerNameById={salesOfficerNameById}
         onClose={() => setVisitLogStore(null)}
+      />
+
+      <RetailerWalletDialog
+        open={Boolean(walletStore)}
+        store={walletStore}
+        onClose={() => setWalletStore(null)}
       />
     </Box>
   );
