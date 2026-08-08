@@ -121,6 +121,9 @@ export const StoresPage: React.FC = () => {
   const { alert, confirm, prompt } = useAppDialog();
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [townFilter, setTownFilter] = useState('');
+  const [districtFilter, setDistrictFilter] = useState('');
+  const [salesOfficerFilter, setSalesOfficerFilter] = useState('');
   const [orderBlockedOnly, setOrderBlockedOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
@@ -144,6 +147,35 @@ export const StoresPage: React.FC = () => {
     });
     return m;
   }, [salesOfficers]);
+
+  const townOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of stores || []) {
+      const t = (s.town || '').trim();
+      if (t) set.add(t);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [stores]);
+
+  const districtOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of stores || []) {
+      const d = (s.district || '').trim();
+      if (d) set.add(d);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [stores]);
+
+  const salesOfficerFilterOptions = useMemo(
+    () =>
+      [...salesOfficers]
+        .map((so) => ({
+          id: so.id,
+          label: so.displayName || so.email || so.id,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })),
+    [salesOfficers]
+  );
 
   const emptyFormData = () => ({
     displayName: '',
@@ -178,20 +210,43 @@ export const StoresPage: React.FC = () => {
   };
 
   const filteredStores = useMemo(() => {
-    const q = searchTerm.toLowerCase();
+    const q = searchTerm.trim().toLowerCase();
+    const townQ = townFilter.trim().toLowerCase();
+    const districtQ = districtFilter.trim().toLowerCase();
     return (
       stores?.filter((store) => {
         if (orderBlockedOnly && !blockedRetailerIds.has(store.id)) return false;
+        if (salesOfficerFilter && store.salesOfficerId !== salesOfficerFilter) return false;
+        if (townQ && !(store.town || '').toLowerCase().includes(townQ)) return false;
+        if (districtQ && !(store.district || '').toLowerCase().includes(districtQ)) return false;
         if (!q) return true;
+        const soName = store.salesOfficerId
+          ? (salesOfficerNameById[store.salesOfficerId] || '').toLowerCase()
+          : '';
         return (
           store.shopName?.toLowerCase().includes(q) ||
-          store.email.toLowerCase().includes(q) ||
+          store.email?.toLowerCase().includes(q) ||
           store.displayName?.toLowerCase().includes(q) ||
-          store.storeCode?.toLowerCase().includes(q)
+          store.ownerName?.toLowerCase().includes(q) ||
+          store.storeCode?.toLowerCase().includes(q) ||
+          store.phoneNumber?.toLowerCase().includes(q) ||
+          store.licenceNumber?.toLowerCase().includes(q) ||
+          (store.town || '').toLowerCase().includes(q) ||
+          (store.district || '').toLowerCase().includes(q) ||
+          soName.includes(q)
         );
       }) || []
     );
-  }, [stores, searchTerm, orderBlockedOnly, blockedRetailerIds]);
+  }, [
+    stores,
+    searchTerm,
+    townFilter,
+    districtFilter,
+    salesOfficerFilter,
+    orderBlockedOnly,
+    blockedRetailerIds,
+    salesOfficerNameById,
+  ]);
 
   const sortedStores = useMemo(() => {
     const list = [...filteredStores];
@@ -605,14 +660,13 @@ export const StoresPage: React.FC = () => {
         sx={{ mb: 2 }}
       >
         <TextField
-          fullWidth
-          placeholder="Search stores..."
+          placeholder="Search name, code, phone, town, district, SO…"
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value);
             setPage(1);
           }}
-          sx={{ flex: '1 1 280px', minWidth: 0 }}
+          sx={{ flex: '1 1 260px', minWidth: 0 }}
           InputProps={{
             startAdornment: (
               <InputAdornment position="start">
@@ -620,6 +674,40 @@ export const StoresPage: React.FC = () => {
               </InputAdornment>
             ),
           }}
+        />
+        <Autocomplete
+          size="small"
+          options={townOptions}
+          value={townFilter || null}
+          onChange={(_, value) => {
+            setTownFilter(value || '');
+            setPage(1);
+          }}
+          sx={{ flex: '0 1 160px', minWidth: 140 }}
+          renderInput={(params) => <TextField {...params} label="Town" />}
+        />
+        <Autocomplete
+          size="small"
+          options={districtOptions}
+          value={districtFilter || null}
+          onChange={(_, value) => {
+            setDistrictFilter(value || '');
+            setPage(1);
+          }}
+          sx={{ flex: '0 1 180px', minWidth: 150 }}
+          renderInput={(params) => <TextField {...params} label="District" />}
+        />
+        <Autocomplete
+          size="small"
+          options={salesOfficerFilterOptions}
+          getOptionLabel={(o) => o.label}
+          value={salesOfficerFilterOptions.find((o) => o.id === salesOfficerFilter) || null}
+          onChange={(_, value) => {
+            setSalesOfficerFilter(value?.id || '');
+            setPage(1);
+          }}
+          sx={{ flex: '0 1 220px', minWidth: 180 }}
+          renderInput={(params) => <TextField {...params} label="Sales officer" />}
         />
         <FormControlLabel
           control={
