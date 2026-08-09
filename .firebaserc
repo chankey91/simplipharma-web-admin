@@ -1,7 +1,26 @@
-{
-  "projects": {
-    "default": "simplipharma",
-    "dev": "simplipharma-dev",
-    "prod": "simplipharma"
-  }
+﻿{
+    "projects":  {
+                     "default":  "simplipharma",
+                     "dev":  "simplipharma-dev",
+                     "prod":  "simplipharma"
+                 },
+    "targets":  {
+                    "simplipharma":  {
+                                         "hosting":  {
+                                                         "admin-prod":  [
+                                                                            "simplipharma-admin"
+                                                                        ]
+                                                     }
+                                     },
+                    "simplipharma-dev":  {
+                                             "hosting":  {
+                                                             "admin-dev":  [
+                                                                               "simplipharma-admin-dev"
+                                                                           ]
+                                                         }
+                                         }
+                },
+    "etags":  {
+
+              }
 }
