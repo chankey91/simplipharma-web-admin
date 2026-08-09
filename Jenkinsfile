@@ -17,7 +17,11 @@ pipeline {
                     echo "Detected branch: ${branch}"
 
                     if (branch == 'develop') {
+                        // DEV hosting cut over to Firebase Hosting via GitHub Actions.
+                        // Keep this job disabled in Jenkins UI / reload config from disk.
+                        echo 'Develop hosting deploy moved to GitHub Actions → Firebase Hosting (simplipharma-admin-dev). Skipping Jenkins local deploy.'
                         env.APP_ENV = 'dev'
+                        env.MIGRATED_DEV_HOSTING = 'true'
                         env.DEPLOY_PATH = "/var/www/${env.APP_NAME}-dev"
                         env.NGINX_PORT = '8083'
                         env.NGINX_SITE = "${env.APP_NAME}-dev"
@@ -41,7 +45,15 @@ pipeline {
             }
         }
 
+        stage('Migrated to GitHub Actions') {
+            when { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' }
+            steps {
+                echo 'Skipping Jenkins build/deploy for develop. GitHub Actions workflow deploy-dev.yml publishes to Firebase Hosting.'
+            }
+        }
+
         stage('Setup Node.js') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 script {
                     echo 'Setting up Node.js environment...'
@@ -59,6 +71,7 @@ pipeline {
         }
 
         stage('Install Dependencies') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 echo 'Installing Node.js dependencies...'
                 sh 'npm install'
@@ -66,6 +79,7 @@ pipeline {
         }
 
         stage('Create Environment File') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 echo "Creating .env file for ${env.APP_ENV} (credentials: ${env.FB_CRED_PREFIX}-*)..."
                 script {
@@ -96,6 +110,7 @@ EOF
         }
 
         stage('Build Application') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 echo "Building ${env.APP_ENV} static files..."
                 sh 'npm run build'
@@ -103,6 +118,7 @@ EOF
         }
 
         stage('Create Deployment Directory') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 echo "Creating deployment directory ${env.DEPLOY_PATH}..."
                 sh """
@@ -113,6 +129,7 @@ EOF
         }
 
         stage('Deploy to Server') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 echo "Deploying ${env.APP_ENV} to ${env.DEPLOY_PATH}..."
                 sh """
@@ -132,6 +149,7 @@ EOF
         }
 
         stage('Configure Nginx') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 echo "Configuring Nginx site ${env.NGINX_SITE} on port ${env.NGINX_PORT}..."
                 sh """
@@ -185,6 +203,7 @@ EOFNGINX
         }
 
         stage('Verify Deployment') {
+            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
             steps {
                 echo "Verifying ${env.APP_ENV} deployment..."
                 sh """

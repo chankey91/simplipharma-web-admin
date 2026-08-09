@@ -3,5 +3,14 @@
     "default": "simplipharma",
     "dev": "simplipharma-dev",
     "prod": "simplipharma"
+  },
+  "targets": {
+    "simplipharma-dev": {
+      "hosting": {
+        "admin-dev": [
+          "simplipharma-admin-dev"
+        ]
+      }
+    }
   }
 }
