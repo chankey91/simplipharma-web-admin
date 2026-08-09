@@ -13,6 +13,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { getTypesenseClient } from './typesenseMedicines';
+import { ff } from './functionRegion';
 
 type TypesenseClient = import('typesense').Client;
 
@@ -107,7 +108,7 @@ export function createTypesenseSync(config: TypesenseSyncConfig): TypesenseSyncF
     }
   };
 
-  const onWrite = functions.firestore
+  const onWrite = ff.firestore
     .document(`${config.collectionName}/{docId}`)
     .onWrite(async (change, context) => {
       const docId = context.params.docId as string;
@@ -152,7 +153,7 @@ export function createTypesenseSync(config: TypesenseSyncConfig): TypesenseSyncF
     }
   };
 
-  const search = functions.https.onCall(async (data, context) => {
+  const search = ff.https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
@@ -215,7 +216,7 @@ export function createTypesenseSync(config: TypesenseSyncConfig): TypesenseSyncF
     }
   });
 
-  const reindex = functions
+  const reindex = ff
     .runWith({ timeoutSeconds: 540, memory: '512MB' })
     .https.onCall(async (_data, context) => {
       if (!context.auth) {

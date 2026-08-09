@@ -1,5 +1,6 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
+import { ff } from './functionRegion';
 
 type AggregateRow = {
   key: string;
@@ -346,7 +347,7 @@ async function runScheduledPublish(source: string): Promise<void> {
 }
 
 /** Daily 12:00 Asia/Kolkata — first purchase run from today's pending orders */
-export const scheduledPurchaseListNoon = functions.pubsub
+export const scheduledPurchaseListNoon = ff.pubsub
   .schedule('0 12 * * *')
   .timeZone('Asia/Kolkata')
   .onRun(async () => {
@@ -354,7 +355,7 @@ export const scheduledPurchaseListNoon = functions.pubsub
   });
 
 /** Daily 15:00 Asia/Kolkata — refresh remaining need (excludes already found qty) */
-export const scheduledPurchaseListAfternoon = functions.pubsub
+export const scheduledPurchaseListAfternoon = ff.pubsub
   .schedule('0 15 * * *')
   .timeZone('Asia/Kolkata')
   .onRun(async () => {
@@ -365,7 +366,7 @@ export const scheduledPurchaseListAfternoon = functions.pubsub
  * Admin/operations callable: run the same net publish job on demand
  * (optional date YYYY-MM-DD, defaults to today IST).
  */
-export const publishPurchaseListNet = functions.https.onCall(async (data, context) => {
+export const publishPurchaseListNet = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
   }
@@ -605,7 +606,7 @@ export async function propagateManufacturerAvailability(args: {
 }
 
 /** Callable: purchase officer / admin — sync submitted manufacturer group to retailer orders */
-export const syncPurchaseManufacturerToOrders = functions
+export const syncPurchaseManufacturerToOrders = ff
   .runWith({ timeoutSeconds: 120, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
@@ -658,7 +659,7 @@ export const syncPurchaseManufacturerToOrders = functions
  *
  * Re-sync: bump manufacturerSubmissions[key].syncNonce from the purchase app.
  */
-export const onPurchaseListManufacturerSubmit = functions
+export const onPurchaseListManufacturerSubmit = ff
   .runWith({ timeoutSeconds: 120, memory: '512MB' })
   .firestore.document('purchaseLists/{listId}')
   .onUpdate(async (change, context) => {

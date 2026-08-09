@@ -7,6 +7,7 @@ import * as admin from 'firebase-admin';
 import { assertAdminOrOperations, getUserRole, isPurchaseOfficerRole } from './panelAuth';
 import { extractInvoiceFromFile, normalizeGstin } from './purchaseInvoiceExtract';
 import { getTypesenseClient, TYPESENSE_COLLECTION } from './typesenseMedicines';
+import { ff } from './functionRegion';
 
 const DRAFTS = 'purchase_invoice_drafts';
 
@@ -154,7 +155,7 @@ async function matchVendor(
   return {};
 }
 
-export const processPurchaseInvoiceDraft = functions
+export const processPurchaseInvoiceDraft = ff
   .runWith({ timeoutSeconds: 300, memory: '1GB' })
   .https.onCall(async (data, context) => {
     if (!context.auth?.uid) {

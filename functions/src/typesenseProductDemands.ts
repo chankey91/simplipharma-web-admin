@@ -3,6 +3,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { createTypesenseSync, tsMillis } from './typesenseSync';
 import { getTypesenseClient } from './typesenseMedicines';
+import { ff } from './functionRegion';
 
 const COLLECTION = 'product_demands';
 const SORTABLE = new Set([
@@ -109,7 +110,7 @@ export const onProductDemandWriteTypesense = productDemandSync.onWrite;
 export const adminReindexProductDemandsTypesense = productDemandSync.reindex;
 
 /** Auth-scoped product demand search (retailer / SO / admin). */
-export const searchProductDemandsTypesense = functions.https.onCall(async (data, context) => {
+export const searchProductDemandsTypesense = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
   }

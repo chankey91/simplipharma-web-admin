@@ -2,6 +2,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
 import { allocateSpsProductIds } from './spsProductId';
+import { ff } from './functionRegion';
 
 function escapeHtmlText(s: string): string {
   return String(s)
@@ -102,7 +103,7 @@ function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
  * Processes create/update by medicine name (case-insensitive); stock is not changed.
  * Sends email to notifyEmail when done (success or failure).
  */
-export const onBulkMedicineJobCreated = functions
+export const onBulkMedicineJobCreated = ff
   .runWith({ timeoutSeconds: 540, memory: '1GB' })
   .firestore.document('bulk_medicine_jobs/{jobId}')
   .onCreate(async (snap, context) => {

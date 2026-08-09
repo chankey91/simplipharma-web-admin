@@ -219,7 +219,7 @@ function getVertexLocation(): string {
   return (
     (functions.config().gemini && functions.config().gemini.location) ||
     process.env.GOOGLE_VERTEX_LOCATION ||
-    'us-central1'
+    'asia-south1'
   );
 }
 
