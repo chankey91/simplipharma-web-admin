@@ -13,6 +13,7 @@ import {
   isOperationsRole,
 } from './panelAuth';
 import { buildRetailerWelcomeEmail } from './emailTemplates/retailerWelcomeEmail';
+import { ff } from './functionRegion';
 
 admin.initializeApp();
 
@@ -125,7 +126,7 @@ async function sendSmtpMail(options: {
  * Send password email to vendor (HTTP version with CORS)
  * Alternative to callable function with explicit CORS handling
  */
-export const sendVendorPasswordEmailHttp = functions.https.onRequest(async (req, res) => {
+export const sendVendorPasswordEmailHttp = ff.https.onRequest(async (req, res) => {
   // Handle CORS preflight (OPTIONS request) FIRST - before anything else
   if (req.method === 'OPTIONS') {
     setCorsHeaders(res);
@@ -221,7 +222,7 @@ export const sendVendorPasswordEmailHttp = functions.https.onRequest(async (req,
  * Send password email to vendor
  * Called when a new vendor is created (Callable function - preferred)
  */
-export const sendVendorPasswordEmail = functions.https.onCall(async (data, context) => {
+export const sendVendorPasswordEmail = ff.https.onCall(async (data, context) => {
   try {
     console.log('sendVendorPasswordEmail called with data:', {
       email: data?.email,
@@ -445,7 +446,7 @@ function roleMatchesRequested(existingRole: string | undefined, requestedRole: s
   return existingRole === requestedRole;
 }
 
-export const createStoreUser = functions.https.onCall(async (data, context) => {
+export const createStoreUser = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
@@ -562,7 +563,7 @@ export const createStoreUser = functions.https.onCall(async (data, context) => {
 /**
  * Admin only: update a retailer's login email in Firebase Auth and Firestore.
  */
-export const updateRetailerEmail = functions.https.onCall(async (data, context) => {
+export const updateRetailerEmail = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
@@ -622,7 +623,7 @@ export const updateRetailerEmail = functions.https.onCall(async (data, context) 
 /**
  * Approve retailer registration request: create user account from pending request
  */
-export const approveRetailerRequest = functions.https.onCall(async (data, context) => {
+export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
@@ -738,7 +739,7 @@ export const approveRetailerRequest = functions.https.onCall(async (data, contex
 /**
  * Reject retailer registration: update Firestore and notify retailer + Sales Officer by email.
  */
-export const rejectRetailerRequest = functions.https.onCall(async (data, context) => {
+export const rejectRetailerRequest = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
@@ -850,7 +851,7 @@ export const rejectRetailerRequest = functions.https.onCall(async (data, context
  * When a retailer registration request is created, notify the retailer and the Sales Officer.
  * (Sales Officer registration uses createStoreUser directly; this covers the pending-retailer pipeline.)
  */
-export const onRetailerRegistrationRequestCreated = functions.firestore
+export const onRetailerRegistrationRequestCreated = ff.firestore
   .document('retailer_registration_requests/{requestId}')
   .onCreate(async (snap, context) => {
     const data = snap.data() as Record<string, any>;
@@ -1037,7 +1038,7 @@ async function isActivePanelUserByEmail(email: string): Promise<boolean> {
  * Send password reset link via SMTP (Gmail) for admin / operations panel users.
  * Uses Firebase Admin generatePasswordResetLink + existing smtp.* Functions config.
  */
-export const sendPanelPasswordResetEmail = functions.https.onCall(async (data, context) => {
+export const sendPanelPasswordResetEmail = ff.https.onCall(async (data, context) => {
   let email = String(data?.email || '').trim();
   if (!email && context.auth) {
     try {
@@ -1122,7 +1123,7 @@ export const sendPanelPasswordResetEmail = functions.https.onCall(async (data, c
  * Admin only: send a password reset link to a Sales Officer’s email (mobile app account).
  * Requires SMTP (same as other transactional emails).
  */
-export const sendSalesOfficerPasswordResetEmail = functions.https.onCall(async (data, context) => {
+export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
@@ -1210,7 +1211,7 @@ export const sendSalesOfficerPasswordResetEmail = functions.https.onCall(async (
  * Admin only: send a password reset link to a Purchase Officer’s email (purchase PWA).
  * Requires SMTP (same as other transactional emails).
  */
-export const sendPurchaseOfficerPasswordResetEmail = functions.https.onCall(async (data, context) => {
+export const sendPurchaseOfficerPasswordResetEmail = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
@@ -1299,7 +1300,7 @@ export const sendPurchaseOfficerPasswordResetEmail = functions.https.onCall(asyn
  * The retailer has no self-service reset in the mobile app, so the admin triggers it here.
  * Requires SMTP (same as other transactional emails).
  */
-export const sendRetailerPasswordResetEmail = functions.https.onCall(async (data, context) => {
+export const sendRetailerPasswordResetEmail = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
@@ -1385,7 +1386,7 @@ export const sendRetailerPasswordResetEmail = functions.https.onCall(async (data
 });
 
 /** Notify admins / ops by email when a retailer creates an in-app support ticket (Phase 1). */
-export const onSupportTicketCreated = functions.firestore
+export const onSupportTicketCreated = ff.firestore
   .document('support_tickets/{ticketId}')
   .onCreate(async (snap, context) => {
     const data = snap.data();
@@ -1421,7 +1422,7 @@ export const onSupportTicketCreated = functions.firestore
   });
 
 /** Email the app user when an admin posts a reply in the support thread. */
-export const onSupportThreadAdminMessageCreated = functions.firestore
+export const onSupportThreadAdminMessageCreated = ff.firestore
   .document('support_threads/{userId}/messages/{messageId}')
   .onCreate(async (snap, context) => {
     const msg = snap.data();
@@ -1489,7 +1490,7 @@ function decodeDataUriBase64(payload: string): string {
  * Callable: admin/operations uploads a freshly generated order-invoice PDF; we email it to order.retailerEmail.
  * SMTP must be configured (smtp.user / smtp.password) like other transactional mail.
  */
-export const sendOrderInvoicePdfEmail = functions
+export const sendOrderInvoicePdfEmail = ff
   .runWith({ memory: '512MB', timeoutSeconds: 120 })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
@@ -1697,7 +1698,7 @@ export const sendOrderInvoicePdfEmail = functions
 /**
  * Callable: admin/operations uploads a freshly generated credit-note PDF; we email it to credit_note.retailerEmail.
  */
-export const sendCreditNotePdfEmail = functions
+export const sendCreditNotePdfEmail = ff
   .runWith({ memory: '512MB', timeoutSeconds: 120 })
   .https.onCall(async (data, context) => {
     if (!context.auth) {

@@ -26,6 +26,7 @@ exports.deleteMedicineFromTypesense = deleteMedicineFromTypesense;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const typesenseMedicineSynonyms_1 = require("./typesenseMedicineSynonyms");
+const functionRegion_1 = require("./functionRegion");
 exports.TYPESENSE_COLLECTION = 'medicines';
 function loadTypesenseClientConstructor() {
     var _a;
@@ -209,7 +210,7 @@ async function deleteMedicineFromTypesense(medicineId) {
     }
 }
 /** Firestore sync: index on create/update, remove on delete or soft-delete. */
-exports.onMedicineWriteTypesense = functions.firestore
+exports.onMedicineWriteTypesense = functionRegion_1.ff.firestore
     .document('medicines/{medicineId}')
     .onWrite(async (change, context) => {
     const medicineId = context.params.medicineId;
@@ -566,7 +567,7 @@ function recordMedicineSearchAnalytics(payload) {
  * Authenticated catalog search (Typesense + optional Firestore hydrate).
  * Autocomplete: q length ≥ 2. Inventory browse: `browse: true` → q:"*" + page/filters/facets.
  */
-exports.searchMedicinesTypesense = functions
+exports.searchMedicinesTypesense = functionRegion_1.ff
     .runWith({ minInstances: 1 })
     .https.onCall(async (data, context) => {
     if (!context.auth) {
@@ -700,7 +701,7 @@ const REINDEX_PROGRESS_DOC = 'ops/typesenseMedicineReindex';
  * Body: `{ startAfterId?, reset?, maxDocs?, timeBudgetMs? }`
  * Returns: `{ done, nextStartAfterId, indexed, scanned, cumulativeIndexed, cumulativeScanned }`
  */
-exports.adminReindexMedicinesTypesense = functions
+exports.adminReindexMedicinesTypesense = functionRegion_1.ff
     .runWith({ timeoutSeconds: 300, memory: '2GB' })
     .https.onCall(async (data, context) => {
     var _a, _b;
@@ -869,7 +870,7 @@ exports.adminReindexMedicinesTypesense = functions
     }
 });
 /** Upsert pharma synonym seed into Typesense (admin/ops). Safe to re-run. */
-exports.adminSyncMedicineSynonymsTypesense = functions
+exports.adminSyncMedicineSynonymsTypesense = functionRegion_1.ff
     .runWith({ timeoutSeconds: 120, memory: '256MB' })
     .https.onCall(async (_data, context) => {
     if (!context.auth) {

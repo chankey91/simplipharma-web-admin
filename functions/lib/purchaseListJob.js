@@ -7,6 +7,7 @@ exports.publishNetPurchaseListForDay = publishNetPurchaseListForDay;
 exports.propagateManufacturerAvailability = propagateManufacturerAvailability;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const functionRegion_1 = require("./functionRegion");
 function productAggregateKey(medicine) {
     var _a, _b;
     if ((_a = medicine.medicineId) === null || _a === void 0 ? void 0 : _a.trim())
@@ -273,14 +274,14 @@ async function runScheduledPublish(source) {
     console.log(`[${source}]`, JSON.stringify(result));
 }
 /** Daily 12:00 Asia/Kolkata — first purchase run from today's pending orders */
-exports.scheduledPurchaseListNoon = functions.pubsub
+exports.scheduledPurchaseListNoon = functionRegion_1.ff.pubsub
     .schedule('0 12 * * *')
     .timeZone('Asia/Kolkata')
     .onRun(async () => {
     await runScheduledPublish('scheduled-12');
 });
 /** Daily 15:00 Asia/Kolkata — refresh remaining need (excludes already found qty) */
-exports.scheduledPurchaseListAfternoon = functions.pubsub
+exports.scheduledPurchaseListAfternoon = functionRegion_1.ff.pubsub
     .schedule('0 15 * * *')
     .timeZone('Asia/Kolkata')
     .onRun(async () => {
@@ -290,7 +291,7 @@ exports.scheduledPurchaseListAfternoon = functions.pubsub
  * Admin/operations callable: run the same net publish job on demand
  * (optional date YYYY-MM-DD, defaults to today IST).
  */
-exports.publishPurchaseListNet = functions.https.onCall(async (data, context) => {
+exports.publishPurchaseListNet = functionRegion_1.ff.https.onCall(async (data, context) => {
     var _a;
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
@@ -506,7 +507,7 @@ async function propagateManufacturerAvailability(args) {
     return { updatedOrders, updatedLines, scannedOrders };
 }
 /** Callable: purchase officer / admin — sync submitted manufacturer group to retailer orders */
-exports.syncPurchaseManufacturerToOrders = functions
+exports.syncPurchaseManufacturerToOrders = functionRegion_1.ff
     .runWith({ timeoutSeconds: 120, memory: '512MB' })
     .https.onCall(async (data, context) => {
     var _a;
@@ -553,7 +554,7 @@ exports.syncPurchaseManufacturerToOrders = functions
  *
  * Re-sync: bump manufacturerSubmissions[key].syncNonce from the purchase app.
  */
-exports.onPurchaseListManufacturerSubmit = functions
+exports.onPurchaseListManufacturerSubmit = functionRegion_1.ff
     .runWith({ timeoutSeconds: 120, memory: '512MB' })
     .firestore.document('purchaseLists/{listId}')
     .onUpdate(async (change, context) => {

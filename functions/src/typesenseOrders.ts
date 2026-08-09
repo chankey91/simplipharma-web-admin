@@ -12,6 +12,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { getTypesenseClient } from './typesenseMedicines';
+import { ff } from './functionRegion';
 
 type TypesenseClient = import('typesense').Client;
 
@@ -171,7 +172,7 @@ export async function deleteOrderFromTypesense(orderId: string): Promise<void> {
 }
 
 /** Firestore sync: index on create/update, remove on delete. Errors are swallowed so a Typesense outage never blocks order writes. */
-export const onOrderWriteTypesense = functions.firestore
+export const onOrderWriteTypesense = ff.firestore
   .document('orders/{orderId}')
   .onWrite(async (change, context) => {
     const orderId = context.params.orderId as string;
@@ -280,7 +281,7 @@ function orderDateRangeFilters(fromDate?: string, toDate?: string): string[] {
  * filtered, sorted and paginated, plus global per-status counts for the KPI
  * cards — so the client never downloads the whole `orders` collection.
  */
-export const searchOrdersTypesense = functions.https.onCall(async (data, context) => {
+export const searchOrdersTypesense = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
   }
@@ -373,7 +374,7 @@ async function canReindexOrders(uid: string): Promise<boolean> {
 }
 
 /** One-time / maintenance: full reindex of `orders` from Firestore (admin only). */
-export const adminReindexOrdersTypesense = functions
+export const adminReindexOrdersTypesense = ff
   .runWith({ timeoutSeconds: 540, memory: '512MB' })
   .https.onCall(async (_data, context) => {
     if (!context.auth) {

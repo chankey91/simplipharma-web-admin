@@ -18,6 +18,7 @@ exports.createTypesenseSync = createTypesenseSync;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const typesenseMedicines_1 = require("./typesenseMedicines");
+const functionRegion_1 = require("./functionRegion");
 /** Convert a Firestore Timestamp / date-ish value to epoch milliseconds. */
 function tsMillis(value) {
     if (value == null)
@@ -80,7 +81,7 @@ function createTypesenseSync(config) {
             throw e;
         }
     };
-    const onWrite = functions.firestore
+    const onWrite = functionRegion_1.ff.firestore
         .document(`${config.collectionName}/{docId}`)
         .onWrite(async (change, context) => {
         const docId = context.params.docId;
@@ -116,7 +117,7 @@ function createTypesenseSync(config) {
             return { totalAll: 0, facetCounts };
         }
     };
-    const search = functions.https.onCall(async (data, context) => {
+    const search = functionRegion_1.ff.https.onCall(async (data, context) => {
         if (!context.auth) {
             throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
         }
@@ -167,7 +168,7 @@ function createTypesenseSync(config) {
             throw new functions.https.HttpsError('internal', (err === null || err === void 0 ? void 0 : err.message) || 'Search failed');
         }
     });
-    const reindex = functions
+    const reindex = functionRegion_1.ff
         .runWith({ timeoutSeconds: 540, memory: '512MB' })
         .https.onCall(async (_data, context) => {
         if (!context.auth) {

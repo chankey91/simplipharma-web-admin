@@ -68,7 +68,7 @@ try {
 }
 export const db = firestoreDb;
 export const storage = getStorage(app);
-// Initialize Functions with region (us-central1 is default, but explicit is better)
+// Initialize Functions with region (asia-south1 / Mumbai for India latency)
 export const functions = getFunctions(app, firebaseFunctionsRegion);
 
 // Auth helpers
