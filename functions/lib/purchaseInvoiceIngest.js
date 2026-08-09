@@ -10,6 +10,7 @@ const admin = require("firebase-admin");
 const panelAuth_1 = require("./panelAuth");
 const purchaseInvoiceExtract_1 = require("./purchaseInvoiceExtract");
 const typesenseMedicines_1 = require("./typesenseMedicines");
+const functionRegion_1 = require("./functionRegion");
 const DRAFTS = 'purchase_invoice_drafts';
 /** Firestore rejects `undefined` field values — drop them recursively. */
 function stripUndefinedDeep(value) {
@@ -139,7 +140,7 @@ async function matchVendor(db, gstin, nameHint) {
     }
     return {};
 }
-exports.processPurchaseInvoiceDraft = functions
+exports.processPurchaseInvoiceDraft = functionRegion_1.ff
     .runWith({ timeoutSeconds: 300, memory: '1GB' })
     .https.onCall(async (data, context) => {
     var _a, _b, _c, _d, _e;

@@ -6,6 +6,7 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const typesenseSync_1 = require("./typesenseSync");
 const typesenseMedicines_1 = require("./typesenseMedicines");
+const functionRegion_1 = require("./functionRegion");
 const COLLECTION = 'product_demands';
 const SORTABLE = new Set([
     'docId',
@@ -111,7 +112,7 @@ async function resolveProductDemandScope(uid) {
 exports.onProductDemandWriteTypesense = productDemandSync.onWrite;
 exports.adminReindexProductDemandsTypesense = productDemandSync.reindex;
 /** Auth-scoped product demand search (retailer / SO / admin). */
-exports.searchProductDemandsTypesense = functions.https.onCall(async (data, context) => {
+exports.searchProductDemandsTypesense = functionRegion_1.ff.https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
