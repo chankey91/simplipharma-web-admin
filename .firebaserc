@@ -5,6 +5,13 @@
     "prod": "simplipharma"
   },
   "targets": {
+    "simplipharma": {
+      "hosting": {
+        "admin-prod": [
+          "simplipharma-admin"
+        ]
+      }
+    },
     "simplipharma-dev": {
       "hosting": {
         "admin-dev": [
