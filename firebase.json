@@ -13,7 +13,7 @@
     ]
   },
   "hosting": {
-    "target": "admin-prod",
+    "target": "admin-dev",
     "public": "dist",
     "ignore": [
       "firebase.json",

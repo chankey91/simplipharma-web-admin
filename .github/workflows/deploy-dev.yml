@@ -1,0 +1,95 @@
+name: Deploy Admin DEV (Firebase Hosting)
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: admin-dev-hosting
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: simplipharma-dev
+      WIF_PROVIDER: projects/1060073610069/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+      DEPLOY_SA: github-deployer@simplipharma-dev.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SA }}
+
+      - name: Load Firebase web config secrets
+        id: secrets
+        uses: google-github-actions/get-secretmanager-secrets@v2
+        with:
+          secrets: |-
+            VITE_FIREBASE_API_KEY:simplipharma-dev/vite-firebase-api-key
+            VITE_FIREBASE_AUTH_DOMAIN:simplipharma-dev/vite-firebase-auth-domain
+            VITE_FIREBASE_PROJECT_ID:simplipharma-dev/vite-firebase-project-id
+            VITE_FIREBASE_STORAGE_BUCKET:simplipharma-dev/vite-firebase-storage-bucket
+            VITE_FIREBASE_MESSAGING_SENDER_ID:simplipharma-dev/vite-firebase-messaging-sender-id
+            VITE_FIREBASE_APP_ID:simplipharma-dev/vite-firebase-app-id
+
+      - name: Create .env.dev and build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ steps.secrets.outputs.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ steps.secrets.outputs.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ steps.secrets.outputs.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ steps.secrets.outputs.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ steps.secrets.outputs.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ steps.secrets.outputs.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_FUNCTIONS_REGION: asia-south1
+        run: |
+          # Trim CR/LF that can sneak in from Secret Manager / Windows editors
+          trim() { printf '%s' "$1" | tr -d '\r\n'; }
+          API_KEY=$(trim "$VITE_FIREBASE_API_KEY")
+          AUTH_DOMAIN=$(trim "$VITE_FIREBASE_AUTH_DOMAIN")
+          PROJECT=$(trim "$VITE_FIREBASE_PROJECT_ID")
+          BUCKET=$(trim "$VITE_FIREBASE_STORAGE_BUCKET")
+          SENDER=$(trim "$VITE_FIREBASE_MESSAGING_SENDER_ID")
+          APP_ID=$(trim "$VITE_FIREBASE_APP_ID")
+          REGION=$(trim "$VITE_FIREBASE_FUNCTIONS_REGION")
+
+          printf '%s\n' \
+            "VITE_FIREBASE_API_KEY=${API_KEY}" \
+            "VITE_FIREBASE_AUTH_DOMAIN=${AUTH_DOMAIN}" \
+            "VITE_FIREBASE_PROJECT_ID=${PROJECT}" \
+            "VITE_FIREBASE_STORAGE_BUCKET=${BUCKET}" \
+            "VITE_FIREBASE_MESSAGING_SENDER_ID=${SENDER}" \
+            "VITE_FIREBASE_APP_ID=${APP_ID}" \
+            "VITE_FIREBASE_FUNCTIONS_REGION=${REGION}" \
+            'VITE_APP_NAME=SimpliPharma Admin Panel (Dev)' \
+            'VITE_APP_VERSION=1.0.0' \
+            > .env.dev
+
+          echo "Env project id bytes:"; python3 - <<'PY'
+          from pathlib import Path
+          for line in Path('.env.dev').read_text().splitlines():
+              if line.startswith('VITE_FIREBASE_PROJECT_ID='):
+                  print(repr(line.split('=',1)[1]))
+          PY
+
+          npm ci
+          npm run build:dev
+
+      - name: Deploy to Firebase Hosting
+        run: npx --yes firebase-tools@13 deploy --only hosting:admin-dev --project "${PROJECT_ID}" --non-interactive
