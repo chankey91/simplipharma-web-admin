@@ -1089,6 +1089,11 @@ export const OrderDetailsPage: React.FC = () => {
     [batchStockConflicts]
   );
 
+  const shortfallLines = useMemo(
+    () => fulfillmentData.medicines.filter((m) => isShortfallOrderLine(m)),
+    [fulfillmentData.medicines]
+  );
+
   const taxPctForTotals = order?.taxPercentage || fulfillmentData.taxPercentage || 5;
   const lockDiscAfterFulfill = Boolean(order && order.status !== 'Pending');
   const isPendingFulfillment = order?.status === 'Pending';
@@ -2715,11 +2720,6 @@ export const OrderDetailsPage: React.FC = () => {
       (m as any).lineType === 'product_demand' ||
       m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
     );
-
-  const shortfallLines = useMemo(
-    () => fulfillmentData.medicines.filter((m) => isShortfallOrderLine(m)),
-    [fulfillmentData.medicines]
-  );
 
   const buildWhatsAppItemText = (shortfallsOnly: boolean) =>
     formatOrderItemsWhatsAppList(order.id, fulfillmentData.medicines, {
