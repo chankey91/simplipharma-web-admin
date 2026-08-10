@@ -129,13 +129,26 @@ function isAllocatedInvoiceMedicineLine(item: Order['medicines'][number]): boole
   return hasBatchAssignment(item);
 }
 
-async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepared> {
+async function prepareOrderInvoiceData(
+  order: Order,
+  options?: { purchaseInvoices?: PurchaseInvoice[] }
+): Promise<OrderInvoicePrepared> {
   const invoiceDate = order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate);
 
   const toNumber = (value: unknown): number => {
     if (value === undefined || value === null || value === '') return 0;
     const parsed = typeof value === 'number' ? value : parseFloat(String(value));
     return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const cachedPurchaseInvoices =
+    options?.purchaseInvoices && options.purchaseInvoices.length > 0
+      ? options.purchaseInvoices
+      : null;
+
+  const loadPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
+    if (cachedPurchaseInvoices) return cachedPurchaseInvoices;
+    return getAllPurchaseInvoices();
   };
 
   const productDemandIds = [
@@ -161,7 +174,7 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
       ),
     ];
     const [baseInvoices, meds] = await Promise.all([
-      getAllPurchaseInvoices(),
+      loadPurchaseInvoices(),
       getMedicinesByIdsWithBatches(demandMedicineIds),
     ]);
     mergedInvoices = await collectPurchaseInvoicesForDemands(baseInvoices, relevantDemands);
@@ -183,49 +196,66 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
     .filter((item) => item.lineType !== 'product_demand')
     .filter(isAllocatedInvoiceMedicineLine);
 
-  // Fetch all medicines to get packaging info
+  // Fetch medicines once per unique id (packaging + economics catalog).
   const medicineMap = new Map<string, string>();
   const medicineDetailsMap = new Map<string, any>();
-  await Promise.all(
-    invoiceMedicines.map(async (item) => {
-      if (item.medicineId) {
-        try {
-          const medicine = await getMedicineById(item.medicineId);
-          if (medicine) {
-            medicineDetailsMap.set(item.medicineId, medicine);
-            // Check unit field first
-            let packaging = medicine.unit;
-            
-            // If unit is not available, check description for "Packaging: " pattern
-            if (!packaging && medicine.description) {
-              const packagingMatch = medicine.description.match(/Packaging:\s*(.+)/i);
-              if (packagingMatch && packagingMatch[1]) {
-                packaging = packagingMatch[1].trim();
-              }
-            }
-            
-            if (packaging) {
-              medicineMap.set(item.medicineId, packaging);
-            } else {
-              medicineMap.set(item.medicineId, '-');
-            }
-          } else {
-            medicineMap.set(item.medicineId, '-');
+  const uniqueMedicineIds = [
+    ...new Set(
+      invoiceMedicines
+        .map((item) => item.medicineId)
+        .filter((id): id is string => Boolean(id && String(id).trim()))
+    ),
+  ];
+  if (uniqueMedicineIds.length > 0) {
+    try {
+      const meds = await getMedicinesByIdsWithBatches(uniqueMedicineIds);
+      for (const medicine of meds) {
+        if (!medicine?.id) continue;
+        medicineDetailsMap.set(medicine.id, medicine);
+        let packaging = medicine.unit;
+        if (!packaging && medicine.description) {
+          const packagingMatch = medicine.description.match(/Packaging:\s*(.+)/i);
+          if (packagingMatch && packagingMatch[1]) {
+            packaging = packagingMatch[1].trim();
           }
-        } catch (error) {
-          console.warn(`Failed to fetch medicine ${item.medicineId}:`, error);
-          medicineMap.set(item.medicineId, '-');
         }
-      } else {
-        medicineMap.set('', '-');
+        medicineMap.set(medicine.id, packaging || '-');
       }
-    })
-  );
+      for (const id of uniqueMedicineIds) {
+        if (!medicineDetailsMap.has(id)) medicineMap.set(id, '-');
+      }
+    } catch (error) {
+      console.warn('Failed to batch-fetch medicines for invoice:', error);
+      await Promise.all(
+        uniqueMedicineIds.map(async (medicineId) => {
+          try {
+            const medicine = await getMedicineById(medicineId);
+            if (medicine) {
+              medicineDetailsMap.set(medicineId, medicine);
+              let packaging = medicine.unit;
+              if (!packaging && medicine.description) {
+                const packagingMatch = medicine.description.match(/Packaging:\s*(.+)/i);
+                if (packagingMatch && packagingMatch[1]) {
+                  packaging = packagingMatch[1].trim();
+                }
+              }
+              medicineMap.set(medicineId, packaging || '-');
+            } else {
+              medicineMap.set(medicineId, '-');
+            }
+          } catch (err) {
+            console.warn(`Failed to fetch medicine ${medicineId}:`, err);
+            medicineMap.set(medicineId, '-');
+          }
+        })
+      );
+    }
+  }
 
   let purchaseDiscountLookup = buildPurchaseBatchDiscountLookup([]);
   try {
     const invoicesForDiscount =
-      mergedInvoices.length > 0 ? mergedInvoices : await getAllPurchaseInvoices();
+      mergedInvoices.length > 0 ? mergedInvoices : await loadPurchaseInvoices();
     purchaseDiscountLookup = buildPurchaseBatchDiscountLookup(invoicesForDiscount);
   } catch (error) {
     console.warn('Failed to load purchase invoices for invoice discount resolution:', error);
@@ -434,7 +464,10 @@ async function prepareOrderInvoiceData(order: Order): Promise<OrderInvoicePrepar
   };
 };
 
-const getOrderInvoiceHTML = async (order: Order) => {
+const getOrderInvoiceHTML = async (
+  order: Order,
+  options?: { purchaseInvoices?: PurchaseInvoice[] }
+) => {
   const {
     items,
     summary,
@@ -443,7 +476,7 @@ const getOrderInvoiceHTML = async (order: Order) => {
     company,
     party,
     gstRatePercent,
-  } = await prepareOrderInvoiceData(order);
+  } = await prepareOrderInvoiceData(order, options);
 
   const companyState = resolveInvoiceState();
 
@@ -581,8 +614,11 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
   return `\uFEFF${body}`;
 }
 
-export async function buildOrderInvoiceCsv(order: Order): Promise<string> {
-  const data = await prepareOrderInvoiceData(order);
+export async function buildOrderInvoiceCsv(
+  order: Order,
+  options?: { purchaseInvoices?: PurchaseInvoice[] }
+): Promise<string> {
+  const data = await prepareOrderInvoiceData(order, options);
   return formatOrderInvoiceAsCsv(data);
 }
 
@@ -617,13 +653,18 @@ export type GenerateOrderInvoiceOptions = {
    * Runs after the file download; send happens in the background (promise resolves once PDF saves).
    */
   emailPdfToRetailer?: boolean;
+  /** Reuse cached purchase invoices (avoids a full collection download). */
+  purchaseInvoices?: PurchaseInvoice[];
 };
 
 export const generateOrderInvoice = async (
   order: Order,
   options?: GenerateOrderInvoiceOptions
 ) => {
-  const html = await getOrderInvoiceHTML(order);
+  const prepareOpts = options?.purchaseInvoices?.length
+    ? { purchaseInvoices: options.purchaseInvoices }
+    : undefined;
+  const html = await getOrderInvoiceHTML(order, prepareOpts);
   
   // Create a temporary element to render HTML
   const element = document.createElement('div');
@@ -687,7 +728,7 @@ export const generateOrderInvoice = async (
         const csvFileName = sanitizedOrderInvoiceCsvFileName(order);
         void (async () => {
           try {
-            const csvText = await buildOrderInvoiceCsv(order);
+            const csvText = await buildOrderInvoiceCsv(order, prepareOpts);
             const csvDataUri = csvUtf8ToDataUriBase64(csvText);
             const res = await sendOrderInvoicePdfToRetailer(order.id, dataUri, fileName, {
               csvBase64Uri: csvDataUri,

@@ -474,19 +474,16 @@ async function upsertMedicineBatchDoc(
   batchInput: Omit<StockBatch, 'id'> & { id?: string },
   mode: 'addQty' | 'set'
 ): Promise<StockBatch[]> {
-  const medicineRef = doc(db, 'medicines', medicineId);
-  const medicineDoc = await getDoc(medicineRef);
-  if (!medicineDoc.exists()) {
-    throw new Error('Medicine not found');
-  }
+  return upsertMedicineBatchesDocs(medicineId, [{ batch: batchInput, mode }]);
+}
 
-  const gstRate = parseGstRate(medicineDoc.data());
-  let batches = await loadBatchesForMedicine(
-    medicineId,
-    medicineDoc.data()?.stockBatches,
-    gstRate
-  );
-
+function mergeBatchIntoList(
+  batches: StockBatch[],
+  batchInput: Omit<StockBatch, 'id'> & { id?: string },
+  mode: 'addQty' | 'set',
+  medicineId: string,
+  gstRate: number
+): StockBatch[] {
   const key = batchKey(batchInput.batchNumber);
   const idx = batches.findIndex((b) => batchKey(b.batchNumber) === key);
   const incoming = serializeBatchForFirestore(
@@ -504,14 +501,13 @@ async function upsertMedicineBatchDoc(
         ? normalizeBatchQuantity(existing) + normalizeBatchQuantity(batchInput)
         : normalizeBatchQuantity(batchInput);
 
-    const merged: StockBatch = parseStockBatchFromRaw(
+    batches[idx] = parseStockBatchFromRaw(
       {
         ...serializeBatchForFirestore(existing, medicineId),
         ...incoming,
         quantity: nextQty,
         id: existing.id,
         medicineId,
-        // Preserve nonReturnable / nrxDrug if either set
         nonReturnable:
           batchInput.nonReturnable === true || existing.nonReturnable === true ? true : undefined,
         nrxDrug: batchInput.nrxDrug === true || existing.nrxDrug === true ? true : undefined,
@@ -522,7 +518,6 @@ async function upsertMedicineBatchDoc(
       },
       { docId: existing.id, medicineId, gstRate }
     );
-    batches[idx] = merged;
   } else {
     const newId = batchInput.id || doc(collection(db, MEDICINE_BATCHES_COLLECTION)).id;
     batches.push(
@@ -531,6 +526,33 @@ async function upsertMedicineBatchDoc(
         { docId: newId, medicineId, gstRate }
       )
     );
+  }
+  return batches;
+}
+
+/** Upsert multiple batches on one medicine in a single read/write. */
+export async function upsertMedicineBatchesDocs(
+  medicineId: string,
+  ops: Array<{ batch: Omit<StockBatch, 'id'> & { id?: string }; mode: 'addQty' | 'set' }>
+): Promise<StockBatch[]> {
+  if (!ops.length) return [];
+
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  if (!medicineDoc.exists()) {
+    throw new Error('Medicine not found');
+  }
+
+  const gstRate = parseGstRate(medicineDoc.data());
+  let batches = await loadBatchesForMedicine(
+    medicineId,
+    medicineDoc.data()?.stockBatches,
+    gstRate
+  );
+
+  for (const op of ops) {
+    if (!op.batch?.batchNumber) continue;
+    batches = mergeBatchIntoList(batches, op.batch, op.mode, medicineId, gstRate);
   }
 
   await replaceMedicineBatchesDocs(medicineId, batches);
@@ -719,8 +741,21 @@ export const addStockBatch = async (medicineId: string, batch: Omit<StockBatch, 
   console.log(
     `Adding/merging batch ${batch.batchNumber} qty=${batch.quantity} for medicine ${medicineId}`
   );
-  await upsertMedicineBatchDoc(medicineId, batch, 'addQty');
+  await addStockBatchesToMedicine(medicineId, [batch]);
   console.log(`✓ Medicine ${medicineId} stock batch upserted`);
+};
+
+/** Add/merge multiple purchase batches on one medicine in a single read/write. */
+export const addStockBatchesToMedicine = async (
+  medicineId: string,
+  batches: Array<Omit<StockBatch, 'id'>>,
+  mode: 'addQty' | 'set' = 'addQty'
+): Promise<StockBatch[]> => {
+  const ops = batches
+    .filter((b) => b?.batchNumber)
+    .map((batch) => ({ batch, mode }));
+  if (!ops.length) return [];
+  return upsertMedicineBatchesDocs(medicineId, ops);
 };
 
 export const reduceStockFromBatch = async (
@@ -728,6 +763,19 @@ export const reduceStockFromBatch = async (
   batchNumber: string,
   quantityToReduce: number
 ) => {
+  await reduceStockBatchesFromMedicine(medicineId, [
+    { batchNumber, quantity: quantityToReduce },
+  ]);
+};
+
+/** Reduce multiple batch quantities on one medicine in a single read/write. */
+export const reduceStockBatchesFromMedicine = async (
+  medicineId: string,
+  deductions: Array<{ batchNumber: string; quantity: number }>
+): Promise<StockBatch[]> => {
+  const valid = deductions.filter((d) => d.batchNumber && d.quantity > 0);
+  if (!valid.length) return [];
+
   const medicineRef = doc(db, 'medicines', medicineId);
   const medicineDoc = await getDoc(medicineRef);
   if (!medicineDoc.exists()) {
@@ -741,29 +789,32 @@ export const reduceStockFromBatch = async (
     gstRate
   );
 
-  const key = batchKey(batchNumber);
-  const batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
-  if (batchIndex < 0) {
-    throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
-  }
+  for (const deduction of valid) {
+    const key = batchKey(deduction.batchNumber);
+    const batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
+    if (batchIndex < 0) {
+      throw new Error(`Batch ${deduction.batchNumber} not found for medicine ${medicineId}`);
+    }
 
-  const currentQuantity = batches[batchIndex].quantity || 0;
-  if (currentQuantity < quantityToReduce) {
-    throw new Error(
-      `Insufficient stock in batch ${batchNumber}. Available: ${currentQuantity}, Required: ${quantityToReduce}`
+    const currentQuantity = batches[batchIndex].quantity || 0;
+    if (currentQuantity < deduction.quantity) {
+      throw new Error(
+        `Insufficient stock in batch ${deduction.batchNumber}. Available: ${currentQuantity}, Required: ${deduction.quantity}`
+      );
+    }
+
+    batches[batchIndex] = {
+      ...batches[batchIndex],
+      quantity: currentQuantity - deduction.quantity,
+    };
+    console.log(
+      `Reducing stock for medicine ${medicineId}, batch ${deduction.batchNumber}: ${currentQuantity} - ${deduction.quantity} = ${batches[batchIndex].quantity}`
     );
   }
 
-  batches[batchIndex] = {
-    ...batches[batchIndex],
-    quantity: currentQuantity - quantityToReduce,
-  };
-
-  console.log(
-    `Reducing stock for medicine ${medicineId}, batch ${batchNumber}: ${currentQuantity} - ${quantityToReduce} = ${batches[batchIndex].quantity}`
-  );
   await replaceMedicineBatchesDocs(medicineId, batches);
-  console.log(`✓ Stock reduced successfully`);
+  console.log(`✓ Stock reduced successfully for medicine ${medicineId}`);
+  return batches;
 };
 
 /** Reduce up to `quantityToReduce` (or available). Returns how much was actually reduced. */
@@ -772,6 +823,29 @@ export const reduceStockFromBatchSoft = async (
   batchNumber: string,
   quantityToReduce: number
 ): Promise<{ reduced: number; available: number; shortfall: number }> => {
+  const results = await reduceStockBatchesFromMedicineSoft(medicineId, [
+    { batchNumber, quantity: quantityToReduce },
+  ]);
+  return (
+    results[0] || {
+      batchNumber,
+      reduced: 0,
+      available: 0,
+      shortfall: Math.max(0, quantityToReduce),
+    }
+  );
+};
+
+/** Soft-reduce multiple batches on one medicine in a single read/write. */
+export const reduceStockBatchesFromMedicineSoft = async (
+  medicineId: string,
+  deductions: Array<{ batchNumber: string; quantity: number }>
+): Promise<
+  Array<{ batchNumber: string; reduced: number; available: number; shortfall: number }>
+> => {
+  const valid = deductions.filter((d) => d.batchNumber && d.quantity > 0);
+  if (!valid.length) return [];
+
   const medicineRef = doc(db, 'medicines', medicineId);
   const medicineDoc = await getDoc(medicineRef);
   if (!medicineDoc.exists()) {
@@ -785,22 +859,42 @@ export const reduceStockFromBatchSoft = async (
     gstRate
   );
 
-  const key = batchKey(batchNumber);
-  const batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
-  if (batchIndex < 0) {
-    throw new Error(`Batch ${batchNumber} not found for medicine ${medicineId}`);
+  const results: Array<{
+    batchNumber: string;
+    reduced: number;
+    available: number;
+    shortfall: number;
+  }> = [];
+  let changed = false;
+
+  for (const deduction of valid) {
+    const key = batchKey(deduction.batchNumber);
+    const batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
+    if (batchIndex < 0) {
+      throw new Error(`Batch ${deduction.batchNumber} not found for medicine ${medicineId}`);
+    }
+
+    const available = Math.max(0, batches[batchIndex].quantity || 0);
+    const reduced = Math.min(available, Math.max(0, deduction.quantity));
+    if (reduced > 0) {
+      batches[batchIndex] = {
+        ...batches[batchIndex],
+        quantity: available - reduced,
+      };
+      changed = true;
+    }
+    results.push({
+      batchNumber: deduction.batchNumber,
+      reduced,
+      available,
+      shortfall: Math.max(0, deduction.quantity - reduced),
+    });
   }
 
-  const available = Math.max(0, batches[batchIndex].quantity || 0);
-  const reduced = Math.min(available, Math.max(0, quantityToReduce));
-  if (reduced > 0) {
-    batches[batchIndex] = {
-      ...batches[batchIndex],
-      quantity: available - reduced,
-    };
+  if (changed) {
     await replaceMedicineBatchesDocs(medicineId, batches);
   }
-  return { reduced, available, shortfall: Math.max(0, quantityToReduce - reduced) };
+  return results;
 };
 
 export const restoreStockToBatch = async (

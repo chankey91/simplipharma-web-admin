@@ -92,6 +92,7 @@ export const InventoryPage: React.FC = () => {
     found,
     facet_counts,
     loading: searchLoading,
+    error: searchError,
   } = useMedicineSearch(searchTerm, {
     browseWhenEmpty: true,
     // Typesense-only — productId/HSN come from the index after reindex (no per-page Firestore reads).
@@ -403,6 +404,23 @@ export const InventoryPage: React.FC = () => {
           sx={{ mb: 2 }}
         >
           {reindexMessage}
+        </Alert>
+      )}
+
+      {searchError && !searchLoading && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Inventory search failed (Typesense). The list is empty because the catalog search
+          index could not be queried — this is not a Firestore inventory wipe. Open the browser
+          console for details, then click <strong>Rebuild search index</strong>. If rebuild
+          fails with &quot;not configured&quot;, Typesense host/API key on Cloud Functions need
+          fixing.
+        </Alert>
+      )}
+
+      {!searchError && !searchLoading && found === 0 && searchTerm.trim().length < 2 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Typesense returned 0 medicines. If Firestore still has medicines, click{' '}
+          <strong>Rebuild search index</strong> and keep this tab open until it finishes.
         </Alert>
       )}
 
