@@ -121,10 +121,13 @@ export function mergeWalletCreditNotes(
   fromOrders: ReturnLike[]
 ): WalletCreditNote[] {
   const byReturnKey = new Map<string, WalletCreditNote>();
+  const byCreditNoteNumber = new Set<string>();
   for (const n of dedicated) {
-    if (n.returnRequestId && n.returnType) {
+    if (n.returnRequestId && n.returnType && n.returnType !== 'credit_note') {
       byReturnKey.set(`${n.returnType}:${n.returnRequestId}`, n);
     }
+    const num = (n.creditNoteNumber || '').trim().toLowerCase();
+    if (num) byCreditNoteNumber.add(num);
   }
 
   const out: WalletCreditNote[] = [...dedicated];
@@ -137,6 +140,8 @@ export function mergeWalletCreditNotes(
         ? `${note.returnType}:${note.returnRequestId}`
         : null;
     if (key && byReturnKey.has(key)) return;
+    const num = (note.creditNoteNumber || '').trim().toLowerCase();
+    if (num && byCreditNoteNumber.has(num)) return;
     if (seenIds.has(note.id)) return;
     out.push(note);
     seenIds.add(note.id);

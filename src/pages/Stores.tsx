@@ -48,7 +48,15 @@ import {
   Select,
   MenuItem,
 } from '@mui/material';
-import { useStores, useUpdateStore, useToggleStoreStatus, useCreateStore, useSendRetailerPasswordResetEmail, useGrantOrderBlockOverride } from '../hooks/useStores';
+import {
+  useStores,
+  useUpdateStore,
+  useToggleStoreStatus,
+  useCreateStore,
+  useSendRetailerPasswordResetEmail,
+  useGrantOrderBlockOverride,
+  useBackfillMissingStoreCodes,
+} from '../hooks/useStores';
 import { useSalesOfficers } from '../hooks/useSalesOfficers';
 import { useStoreNoteStats } from '../hooks/useStoreNoteStats';
 import { useOrderPlacementBlockedRetailerIds } from '../hooks/useOrders';
@@ -118,6 +126,7 @@ export const StoresPage: React.FC = () => {
   const toggleStatusMutation = useToggleStoreStatus();
   const resetPasswordMutation = useSendRetailerPasswordResetEmail();
   const grantOverrideMutation = useGrantOrderBlockOverride();
+  const backfillStoreCodesMutation = useBackfillMissingStoreCodes();
   const { alert, confirm, prompt } = useAppDialog();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -615,6 +624,35 @@ export const StoresPage: React.FC = () => {
     }
   };
 
+  const missingStoreCodeCount = useMemo(
+    () => (stores || []).filter((s) => !String(s.storeCode || '').trim()).length,
+    [stores]
+  );
+
+  const handleBackfillStoreCodes = async () => {
+    if (missingStoreCodeCount === 0) {
+      await alert('All stores already have a store code.', { severity: 'info' });
+      return;
+    }
+    const ok = await confirm(
+      `Assign store codes (MS###) to ${missingStoreCodeCount} store(s) that are missing one? Existing codes will not change.`,
+      { title: 'Assign missing store codes' }
+    );
+    if (!ok) return;
+    try {
+      const result = await backfillStoreCodesMutation.mutateAsync();
+      await alert(
+        `Assigned ${result.assigned} store code(s). ${result.skipped} already had codes (${result.scanned} stores scanned).`,
+        { severity: 'success' }
+      );
+    } catch (error: any) {
+      console.error('Store code backfill failed:', error);
+      await alert(`Failed to assign store codes: ${error.message || 'Unknown error'}`, {
+        severity: 'error',
+      });
+    }
+  };
+
   const handleExportRetailers = async () => {
     if (sortedStores.length === 0) {
       await alert('No retailers found to export', { severity: 'warning' });
@@ -637,7 +675,19 @@ export const StoresPage: React.FC = () => {
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Store Management</Typography>
-        <Box display="flex" gap={1}>
+        <Box display="flex" gap={1} flexWrap="wrap">
+          {missingStoreCodeCount > 0 && (
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={() => void handleBackfillStoreCodes()}
+              disabled={backfillStoreCodesMutation.isPending}
+            >
+              {backfillStoreCodesMutation.isPending
+                ? 'Assigning codes…'
+                : `Assign missing codes (${missingStoreCodeCount})`}
+            </Button>
+          )}
           <Button
             variant="outlined"
             startIcon={<Download />}
@@ -1167,8 +1217,14 @@ export const StoresPage: React.FC = () => {
                   label="Store Code"
                   value={formData.storeCode}
                   onChange={(e) => setFormData({ ...formData, storeCode: e.target.value })}
-                  helperText="Leave blank to auto-generate (e.g. MS001)"
-                  disabled={!!editingStore}
+                  helperText={
+                    editingStore
+                      ? formData.storeCode
+                        ? 'Store code is locked after creation'
+                        : 'Missing — will auto-generate (MS###) on save'
+                      : 'Leave blank to auto-generate (e.g. MS001)'
+                  }
+                  disabled={!!editingStore && !!formData.storeCode}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
