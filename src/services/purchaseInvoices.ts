@@ -1,6 +1,9 @@
 import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where, deleteField } from './firebase';
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem, VendorInvoicePayment } from '../types';
-import { addStockBatch, reduceStockFromBatchSoft } from './inventory';
+import {
+  addStockBatchesToMedicine,
+  reduceStockBatchesFromMedicineSoft,
+} from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 import { attachStandardDiscountToBatchData } from '../utils/orderFulfillmentDiscount';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
@@ -337,13 +340,13 @@ export const createPurchaseInvoice = async (
   // Update medicine stock with purchase batches
   if (updateStock) {
     const stockUpdateErrors: string[] = [];
-    
-    // Group items by medicineId to process sequentially per medicine
+
+    // Group items by medicineId — one read/write per medicine, parallel across medicines.
     const itemsByMedicine = new Map<string, typeof invoiceData.items>();
-    
+
     for (const item of invoiceData.items) {
       if (!item.medicineId) continue;
-      
+
       if (!itemsByMedicine.has(item.medicineId)) {
         itemsByMedicine.set(item.medicineId, []);
       }
@@ -357,125 +360,95 @@ export const createPurchaseInvoice = async (
       current: 0,
       total: Math.max(1, stockItems.length),
     });
-    
-    // Process each medicine sequentially to avoid race conditions
-    for (const [medicineId, items] of itemsByMedicine.entries()) {
-      // Process batches for this medicine sequentially
-      for (const item of items) {
+
+    await Promise.all(
+      [...itemsByMedicine.entries()].map(async ([medicineId, items]) => {
+        const batchPayloads: Array<Record<string, unknown>> = [];
+        const labels: string[] = [];
+
+        for (const item of items) {
+          try {
+            if (!item.batchNumber) {
+              throw new Error('Batch number is missing');
+            }
+            const totalQuantity = item.quantity + (item.freeQuantity || 0);
+            if (!totalQuantity || totalQuantity <= 0) {
+              throw new Error('Invalid quantity');
+            }
+            if (!purchaseItemStockBatchNumber(item)) {
+              throw new Error('Batch number is missing');
+            }
+
+            batchPayloads.push(
+              buildStockBatchPayloadFromPurchaseItem(
+                item,
+                totalQuantity,
+                invoiceData.invoiceDate
+              )
+            );
+            labels.push(`${item.medicineName || medicineId} / ${item.batchNumber}`);
+          } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            const errorMsg = `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${msg}`;
+            console.error(errorMsg, error);
+            stockUpdateErrors.push(errorMsg);
+            stockDone += 1;
+            onProgress?.({
+              phase: 'updating_stock',
+              current: stockDone,
+              total: Math.max(1, stockItems.length),
+              medicineName: item.medicineName,
+              batchNumber: item.batchNumber,
+            });
+          }
+        }
+
+        if (!batchPayloads.length) return;
+
         try {
-          if (!item.batchNumber) {
-            throw new Error('Batch number is missing');
-          }
-          const totalQuantity = item.quantity + (item.freeQuantity || 0);
-          if (!totalQuantity || totalQuantity <= 0) {
-            throw new Error('Invalid quantity');
-          }
-
-          const stockBatchNumber = purchaseItemStockBatchNumber(item);
-          if (!stockBatchNumber) {
-            throw new Error('Batch number is missing');
-          }
-          
-          const batchData: any = {
-            batchNumber: stockBatchNumber,
-            quantity: totalQuantity, // Use quantity + free quantity
-            purchasePrice: item.purchasePrice || 0,
-          };
-          attachLandedCostToBatchData(batchData, item);
-          
-          // Add optional fields only if they exist
-          if (item.mfgDate) {
-            batchData.mfgDate = item.mfgDate instanceof Date ? item.mfgDate : new Date(item.mfgDate);
-          }
-          if (item.expiryDate) {
-            batchData.expiryDate = item.expiryDate instanceof Date ? item.expiryDate : new Date(item.expiryDate);
-          }
-          if (invoiceData.invoiceDate) {
-            batchData.purchaseDate = invoiceData.invoiceDate instanceof Date ? invoiceData.invoiceDate : new Date(invoiceData.invoiceDate);
-          }
-          if (item.mrp !== undefined && item.mrp !== null) {
-            // Ensure MRP is a number
-            batchData.mrp = typeof item.mrp === 'number' ? item.mrp : parseFloat(item.mrp);
-            if (isNaN(batchData.mrp)) {
-              console.warn(`Invalid MRP value for item ${item.medicineName}: ${item.mrp}`);
-              delete batchData.mrp;
-            }
-          }
-          if (item.discountPercentage !== undefined && item.discountPercentage !== null) {
-            // Ensure discountPercentage is a number
-            batchData.discountPercentage = typeof item.discountPercentage === 'number' ? item.discountPercentage : parseFloat(String(item.discountPercentage));
-            if (isNaN(batchData.discountPercentage)) {
-              console.warn(`Invalid discountPercentage value for item ${item.medicineName}: ${item.discountPercentage}`);
-              delete batchData.discountPercentage;
-            }
-          }
-          attachStandardDiscountToBatchData(batchData, item);
-          if (
-            item.schemePaidQty !== undefined &&
-            item.schemePaidQty !== null &&
-            item.schemeFreeQty !== undefined &&
-            item.schemeFreeQty !== null
-          ) {
-            const sp = typeof item.schemePaidQty === 'number' ? item.schemePaidQty : parseFloat(String(item.schemePaidQty));
-            const sf = typeof item.schemeFreeQty === 'number' ? item.schemeFreeQty : parseFloat(String(item.schemeFreeQty));
-            if (!isNaN(sp) && !isNaN(sf) && sp > 0 && sf > 0) {
-              batchData.schemePaidQty = Math.floor(sp);
-              batchData.schemeFreeQty = Math.floor(sf);
-            }
-          }
-          if (item.nonReturnable === true) {
-            batchData.nonReturnable = true;
-          }
-          if (item.nrxDrug === true) {
-            batchData.nrxDrug = true;
-          }
-          const invoiceBatch = String(item.batchNumber || '').trim();
-          const receivedBatch = String(item.receivedBatchNumber || '').trim();
-          if (receivedBatch && invoiceBatch && receivedBatch.toLowerCase() !== invoiceBatch.toLowerCase()) {
-            batchData.invoiceBatchNumber = invoiceBatch;
-          }
-
           onProgress?.({
             phase: 'updating_stock',
             current: stockDone,
             total: Math.max(1, stockItems.length),
-            medicineName: item.medicineName,
-            batchNumber: item.batchNumber,
+            medicineName: items[0]?.medicineName,
+            batchNumber: items[0]?.batchNumber,
           });
-
-          console.log(`Updating stock for medicine ${medicineId} with batch data:`, batchData);
-          await addStockBatch(medicineId, batchData);
-          stockDone += 1;
+          console.log(
+            `Updating stock for medicine ${medicineId} with ${batchPayloads.length} batch(es)`
+          );
+          await addStockBatchesToMedicine(medicineId, batchPayloads as any);
+          stockDone += batchPayloads.length;
           onProgress?.({
             phase: 'updating_stock',
             current: stockDone,
             total: Math.max(1, stockItems.length),
-            medicineName: item.medicineName,
-            batchNumber: item.batchNumber,
+            medicineName: items[0]?.medicineName,
+            batchNumber: items[items.length - 1]?.batchNumber,
           });
-          console.log(`✓ Stock updated successfully for medicine ${medicineId}, batch ${item.batchNumber}, quantity: ${totalQuantity}`);
-        } catch (error: any) {
-          const errorMsg = `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${error.message || error}`;
-          console.error(errorMsg, error);
-          stockUpdateErrors.push(errorMsg);
-          stockDone += 1;
+          console.log(`✓ Stock updated successfully for medicine ${medicineId}`);
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : String(error);
+          for (const label of labels) {
+            const errorMsg = `Failed to update stock for ${label}: ${msg}`;
+            console.error(errorMsg, error);
+            stockUpdateErrors.push(errorMsg);
+          }
+          stockDone += batchPayloads.length;
           onProgress?.({
             phase: 'updating_stock',
             current: stockDone,
             total: Math.max(1, stockItems.length),
-            medicineName: item.medicineName,
-            batchNumber: item.batchNumber,
           });
         }
-      }
-    }
-    
-    console.log(`Stock update summary: ${invoiceData.items.length - stockUpdateErrors.length} successful, ${stockUpdateErrors.length} failed`);
-    
+      })
+    );
+
+    console.log(
+      `Stock update summary: ${invoiceData.items.length - stockUpdateErrors.length} successful, ${stockUpdateErrors.length} failed`
+    );
+
     if (stockUpdateErrors.length > 0) {
       console.warn('Some stock updates failed:', stockUpdateErrors);
-      // You could optionally throw an error here if you want to prevent invoice creation on stock update failure
-      // throw new Error(`Failed to update stock for ${stockUpdateErrors.length} item(s). Please update stock manually.`);
     }
   }
 
@@ -701,6 +674,18 @@ export async function syncStockForPurchaseInvoiceEdit(
   const total = Math.max(1, keys.size);
   onProgress?.({ phase: 'updating_stock', current: 0, total });
 
+  // Group deltas by medicine so each SKU is one soft-reduce + one upsert write (in parallel across SKUs).
+  type MedDelta = {
+    medicineId: string;
+    reduces: Array<{ batchNumber: string; quantity: number; sample: PurchaseInvoiceItem }>;
+    upserts: Array<{
+      mode: 'addQty' | 'set';
+      batch: Record<string, unknown>;
+      sample: PurchaseInvoiceItem;
+    }>;
+  };
+  const byMedicine = new Map<string, MedDelta>();
+
   for (const key of keys) {
     const oldAgg = oldMap.get(key);
     const newAgg = newMap.get(key);
@@ -718,50 +703,99 @@ export async function syncStockForPurchaseInvoiceEdit(
       continue;
     }
 
-    onProgress?.({
-      phase: 'updating_stock',
-      current: done,
-      total,
-      medicineName: sample.medicineName,
-      batchNumber: stockBatchNumber,
-    });
-
-    try {
-      if (delta < 0) {
-        const { shortfall, available, reduced } = await reduceStockFromBatchSoft(
-          sample.medicineId,
-          stockBatchNumber,
-          -delta
-        );
-        if (shortfall > 0) {
-          errors.push(
-            `${sample.medicineName || sample.medicineId} / ${stockBatchNumber}: ` +
-              `could only reduce ${reduced} of ${-delta} (available ${available}). Invoice qty still saved.`
-          );
-        }
-      } else if (delta > 0) {
-        const batchData = buildStockBatchPayloadFromPurchaseItem(sample, delta, invoiceDate);
-        await addStockBatch(sample.medicineId, batchData as any);
-      } else if (newAgg) {
-        // Same qty — refresh batch metadata from the edited line
-        const batchData = buildStockBatchPayloadFromPurchaseItem(sample, 0, invoiceDate);
-        await addStockBatch(sample.medicineId, batchData as any);
-      }
-    } catch (e: any) {
-      errors.push(
-        `${sample.medicineName || sample.medicineId} / ${stockBatchNumber}: ${e?.message || e}`
-      );
+    let entry = byMedicine.get(sample.medicineId);
+    if (!entry) {
+      entry = { medicineId: sample.medicineId, reduces: [], upserts: [] };
+      byMedicine.set(sample.medicineId, entry);
     }
 
-    done += 1;
-    onProgress?.({
-      phase: 'updating_stock',
-      current: done,
-      total,
-      medicineName: sample.medicineName,
-      batchNumber: stockBatchNumber,
-    });
+    if (delta < 0) {
+      entry.reduces.push({
+        batchNumber: stockBatchNumber,
+        quantity: -delta,
+        sample,
+      });
+    } else if (delta > 0) {
+      entry.upserts.push({
+        mode: 'addQty',
+        batch: buildStockBatchPayloadFromPurchaseItem(sample, delta, invoiceDate),
+        sample,
+      });
+    } else if (newAgg) {
+      // Same qty — refresh batch metadata only (add 0), do not overwrite on-hand stock.
+      entry.upserts.push({
+        mode: 'addQty',
+        batch: buildStockBatchPayloadFromPurchaseItem(sample, 0, invoiceDate),
+        sample,
+      });
+    } else {
+      done += 1;
+    }
   }
+
+  await Promise.all(
+    [...byMedicine.values()].map(async (entry) => {
+      const labelOf = (sample: PurchaseInvoiceItem, batchNumber: string) =>
+        `${sample.medicineName || sample.medicineId} / ${batchNumber}`;
+
+      onProgress?.({
+        phase: 'updating_stock',
+        current: done,
+        total,
+        medicineName: entry.reduces[0]?.sample.medicineName || entry.upserts[0]?.sample.medicineName,
+        batchNumber:
+          entry.reduces[0]?.batchNumber ||
+          String(entry.upserts[0]?.batch.batchNumber || ''),
+      });
+
+      try {
+        if (entry.reduces.length > 0) {
+          const softResults = await reduceStockBatchesFromMedicineSoft(
+            entry.medicineId,
+            entry.reduces.map((r) => ({
+              batchNumber: r.batchNumber,
+              quantity: r.quantity,
+            }))
+          );
+          for (let i = 0; i < softResults.length; i++) {
+            const r = softResults[i];
+            const sample = entry.reduces[i]?.sample;
+            if (r.shortfall > 0 && sample) {
+              errors.push(
+                `${labelOf(sample, r.batchNumber)}: ` +
+                  `could only reduce ${r.reduced} of ${entry.reduces[i].quantity} (available ${r.available}). Invoice qty still saved.`
+              );
+            }
+          }
+        }
+
+        if (entry.upserts.length > 0) {
+          await addStockBatchesToMedicine(
+            entry.medicineId,
+            entry.upserts.map((u) => u.batch as any),
+            'addQty'
+          );
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const sample =
+          entry.reduces[0]?.sample || entry.upserts[0]?.sample;
+        const batchNumber =
+          entry.reduces[0]?.batchNumber ||
+          String(entry.upserts[0]?.batch.batchNumber || '');
+        errors.push(
+          `${sample ? labelOf(sample, batchNumber) : entry.medicineId}: ${msg}`
+        );
+      }
+
+      done += entry.reduces.length + entry.upserts.length;
+      onProgress?.({
+        phase: 'updating_stock',
+        current: Math.min(done, total),
+        total,
+      });
+    })
+  );
 
   return errors;
 }
@@ -878,63 +912,78 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
   if (!invoice) {
     throw new Error('Invoice not found');
   }
-  
+
   const stockUpdateErrors: string[] = [];
-  
-  // Group items by medicineId to process sequentially per medicine
+
   const itemsByMedicine = new Map<string, typeof invoice.items>();
-  
+
   for (const item of invoice.items) {
     if (!item.medicineId) continue;
-    
+
     if (!itemsByMedicine.has(item.medicineId)) {
       itemsByMedicine.set(item.medicineId, []);
     }
     itemsByMedicine.get(item.medicineId)!.push(item);
   }
-  
-  // Process each medicine sequentially to avoid race conditions
-  for (const [medicineId, items] of itemsByMedicine.entries()) {
-    // Process batches for this medicine sequentially
-    for (const item of items) {
-      try {
-        if (!item.batchNumber) {
-          throw new Error('Batch number is missing');
-        }
-        const totalQuantity = item.quantity + (item.freeQuantity || 0);
-        if (!totalQuantity || totalQuantity <= 0) {
-          throw new Error('Invalid quantity');
-        }
 
-        const batchData = buildStockBatchPayloadFromPurchaseItem(
-          item,
-          totalQuantity,
-          invoice.invoiceDate
-        );
+  await Promise.all(
+    [...itemsByMedicine.entries()].map(async ([medicineId, items]) => {
+      const batchPayloads: Array<Record<string, unknown>> = [];
+      const labels: string[] = [];
 
-        console.log(`Updating stock for existing invoice - medicine ${medicineId} with batch data:`, batchData);
-        await addStockBatch(medicineId, batchData as any);
-        console.log(
-          `✓ Stock updated successfully for medicine ${medicineId}, batch ${purchaseItemStockBatchNumber(item)}, quantity: ${totalQuantity}`
-        );
-      } catch (error: any) {
-        const errorMsg = `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${error.message || error}`;
-        console.error(errorMsg, error);
-        stockUpdateErrors.push(errorMsg);
+      for (const item of items) {
+        try {
+          if (!item.batchNumber) {
+            throw new Error('Batch number is missing');
+          }
+          const totalQuantity = item.quantity + (item.freeQuantity || 0);
+          if (!totalQuantity || totalQuantity <= 0) {
+            throw new Error('Invalid quantity');
+          }
+
+          batchPayloads.push(
+            buildStockBatchPayloadFromPurchaseItem(item, totalQuantity, invoice.invoiceDate)
+          );
+          labels.push(
+            `${item.medicineName || medicineId} / ${purchaseItemStockBatchNumber(item)}`
+          );
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : String(error);
+          stockUpdateErrors.push(
+            `Failed to update stock for ${item.medicineName || medicineId} (${medicineId}): ${msg}`
+          );
+        }
       }
-    }
-  }
-  
+
+      if (!batchPayloads.length) return;
+
+      try {
+        console.log(
+          `Updating stock for existing invoice - medicine ${medicineId} with ${batchPayloads.length} batch(es)`
+        );
+        await addStockBatchesToMedicine(medicineId, batchPayloads as any);
+        console.log(`✓ Stock updated successfully for medicine ${medicineId}`);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        for (const label of labels) {
+          stockUpdateErrors.push(`Failed to update stock for ${label}: ${msg}`);
+        }
+      }
+    })
+  );
+
   const totalItems = invoice.items.length;
   const successful = totalItems - stockUpdateErrors.length;
   const failed = stockUpdateErrors.length;
-  
+
   console.log(`Stock update summary for invoice ${invoiceId}: ${successful} successful, ${failed} failed`);
-  
+
   if (stockUpdateErrors.length > 0) {
-    throw new Error(`Failed to update stock for ${stockUpdateErrors.length} item(s): ${stockUpdateErrors.join('; ')}`);
+    throw new Error(
+      `Failed to update stock for ${stockUpdateErrors.length} item(s): ${stockUpdateErrors.join('; ')}`
+    );
   }
-  
+
   return { successful, failed };
 };
 

@@ -28,6 +28,7 @@ import {
 } from '../services/orders';
 import { getCreditNotesByRetailer } from '../services/creditNotes';
 import { getDebitNotesByRetailer } from '../services/debitNotes';
+import type { PurchaseInvoice } from '../types';
 import { getOrderDashboardStats, getOrderInvoicedAmountTotal } from '../services/orderAggregations';
 import { OrderStatus } from '../types';
 import {
@@ -339,12 +340,15 @@ export const useFulfillOrder = () => {
     mutationFn: ({ 
       orderId, 
       fulfilledBy, 
-      fulfillmentData 
+      fulfillmentData,
+      purchaseInvoices,
     }: { 
       orderId: string; 
       fulfilledBy: string; 
-      fulfillmentData: any 
-    }) => fulfillOrder(orderId, fulfilledBy, fulfillmentData),
+      fulfillmentData: any;
+      /** Cached PI list from Order Details — skips a full collection download. */
+      purchaseInvoices?: PurchaseInvoice[];
+    }) => fulfillOrder(orderId, fulfilledBy, fulfillmentData, { purchaseInvoices }),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });

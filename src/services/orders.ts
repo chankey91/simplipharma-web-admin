@@ -1,7 +1,12 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where } from './firebase';
 import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent, Medicine, PurchaseInvoice, Payment } from '../types';
-import { reduceStockFromBatch, restoreStockToBatch, restoreStockBatchesToMedicine, getMedicineById } from './inventory';
+import {
+  reduceStockBatchesFromMedicine,
+  restoreStockToBatch,
+  restoreStockBatchesToMedicine,
+  getMedicineById,
+} from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
 import { nestedFirestoreTimestamp, serverTimestamp } from '../utils/firestoreTimestamps';
@@ -558,9 +563,17 @@ export const restoreStockForCancelledOrder = async (
   return { stockRestoreErrors };
 };
 
+export type FulfillOrderOptions = {
+  /**
+   * Prefer the Order Details React Query cache so fulfill does not re-download
+   * the full purchaseInvoices collection (often multi-second).
+   */
+  purchaseInvoices?: PurchaseInvoice[];
+};
+
 export const fulfillOrder = async (
-  orderId: string, 
-  fulfilledBy: string, 
+  orderId: string,
+  fulfilledBy: string,
   fulfillmentData: {
     medicines: any[];
     taxAmount: number;
@@ -570,28 +583,56 @@ export const fulfillOrder = async (
     totalAmount: number;
     trayNumber?: string;
     processedBy?: string;
-  }
+  },
+  options?: FulfillOrderOptions
 ) => {
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
   const currentTimeline = orderDoc.data()?.timeline || [];
-  
-  // Generate invoice number if not already set
+
   const order = orderDoc.data() as Order;
-  let invoiceNumber = order.invoiceNumber;
-  if (!invoiceNumber) {
-    try {
-      invoiceNumber = await generateOrderInvoiceNumber();
-      console.log(`Generated invoice number for order ${orderId}: ${invoiceNumber}`);
-    } catch (error) {
-      console.error('Failed to generate invoice number:', error);
-      // Continue without invoice number if generation fails
+
+  // Dedupe medicine reads within this fulfill call.
+  const medicineFetchCache = new Map<string, Medicine | null>();
+  const getMedicineCached = async (medicineId: string): Promise<Medicine | null> => {
+    if (medicineFetchCache.has(medicineId)) {
+      return medicineFetchCache.get(medicineId) ?? null;
     }
-  }
-  
-  // Reduce stock from batches for items that have batch numbers assigned
-  const stockUpdateErrors: string[] = [];
-  
+    const fetched = await getMedicineById(medicineId);
+    medicineFetchCache.set(medicineId, fetched);
+    return fetched;
+  };
+
+  // Aggregate stock deductions per medicine (one read/write each), run in parallel with
+  // invoice-number generation and optional PI fetch.
+  const stockByMedicine = new Map<
+    string,
+    { label: string; batches: Map<string, { batchNumber: string; quantity: number }> }
+  >();
+  const addDeduction = (
+    medicineId: string,
+    label: string,
+    batchNumber: string,
+    quantity: number
+  ) => {
+    if (!medicineId || !batchNumber || quantity <= 0) return;
+    const batchKeyNorm = String(batchNumber).trim().toLowerCase();
+    let entry = stockByMedicine.get(medicineId);
+    if (!entry) {
+      entry = { label, batches: new Map() };
+      stockByMedicine.set(medicineId, entry);
+    }
+    const prev = entry.batches.get(batchKeyNorm);
+    if (prev) {
+      prev.quantity += quantity;
+    } else {
+      entry.batches.set(batchKeyNorm, {
+        batchNumber: String(batchNumber).trim(),
+        quantity,
+      });
+    }
+  };
+
   for (const item of fulfillmentData.medicines) {
     const isUnresolvedDemand =
       item.lineType === 'product_demand' &&
@@ -604,75 +645,90 @@ export const fulfillOrder = async (
         ? { ...item, lineType: 'medicine' as const }
         : item;
     if (!workItem.medicineId || !workItem.quantity) continue;
+    const label = String(workItem.name || workItem.medicineId);
 
-    // Handle new multi-batch allocation structure
     if (workItem.batchAllocations && workItem.batchAllocations.length > 0) {
-      // Process each batch allocation
       for (const allocation of workItem.batchAllocations) {
-        if (allocation.batchNumber && physicalQtyFromAllocation(allocation) > 0) {
-          try {
-            const deductQty = physicalQtyFromAllocation(allocation);
-            await reduceStockFromBatch(
-              workItem.medicineId,
-              allocation.batchNumber,
-              deductQty
-            );
-            console.log(`✓ Stock reduced for medicine ${workItem.medicineId}, batch ${allocation.batchNumber}, quantity: ${deductQty}`);
-          } catch (error: any) {
-            const errorMsg = `Failed to reduce stock for ${workItem.name || workItem.medicineId} (batch ${allocation.batchNumber}): ${error.message || error}`;
-            console.error(errorMsg, error);
-            stockUpdateErrors.push(errorMsg);
-            // Continue with other items even if one fails
-          }
+        const deductQty = physicalQtyFromAllocation(allocation);
+        if (allocation.batchNumber && deductQty > 0) {
+          addDeduction(workItem.medicineId, label, allocation.batchNumber, deductQty);
         }
       }
-    } 
-    // Backward compatibility: Handle single batchNumber
-    else if (workItem.batchNumber) {
-      try {
-        await reduceStockFromBatch(
-          workItem.medicineId,
-          workItem.batchNumber,
-          workItem.quantity
-        );
-        console.log(`✓ Stock reduced for medicine ${workItem.medicineId}, batch ${workItem.batchNumber}, quantity: ${workItem.quantity}`);
-      } catch (error: any) {
-        const errorMsg = `Failed to reduce stock for ${workItem.name || workItem.medicineId} (batch ${workItem.batchNumber}): ${error.message || error}`;
-        console.error(errorMsg, error);
-        stockUpdateErrors.push(errorMsg);
-        // Continue with other items even if one fails
-      }
+    } else if (workItem.batchNumber) {
+      addDeduction(workItem.medicineId, label, workItem.batchNumber, workItem.quantity);
     }
   }
-  
+
+  const stockUpdateErrors: string[] = [];
+
+  const reduceAllStock = async () => {
+    await Promise.all(
+      [...stockByMedicine.entries()].map(async ([medicineId, { label, batches }]) => {
+        try {
+          const updatedBatches = await reduceStockBatchesFromMedicine(medicineId, [
+            ...batches.values(),
+          ]);
+          // Seed cache so line expansion does not re-fetch the same medicine.
+          const existing = medicineFetchCache.get(medicineId);
+          if (existing) {
+            medicineFetchCache.set(medicineId, { ...existing, stockBatches: updatedBatches });
+          } else {
+            medicineFetchCache.set(medicineId, {
+              id: medicineId,
+              stockBatches: updatedBatches,
+            } as Medicine);
+          }
+          console.log(`✓ Stock reduced for medicine ${medicineId} (${batches.size} batch(es))`);
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : String(error);
+          const errorMsg = `Failed to reduce stock for ${label}: ${msg}`;
+          console.error(errorMsg, error);
+          stockUpdateErrors.push(errorMsg);
+        }
+      })
+    );
+  };
+
+  const resolveInvoiceNumber = async (): Promise<string | undefined> => {
+    let invoiceNumber = order.invoiceNumber;
+    if (invoiceNumber) return invoiceNumber;
+    try {
+      invoiceNumber = await generateOrderInvoiceNumber();
+      console.log(`Generated invoice number for order ${orderId}: ${invoiceNumber}`);
+      return invoiceNumber;
+    } catch (error) {
+      console.error('Failed to generate invoice number:', error);
+      return undefined;
+    }
+  };
+
+  const resolvePurchaseLookup = async () => {
+    try {
+      const invoices =
+        options?.purchaseInvoices && options.purchaseInvoices.length > 0
+          ? options.purchaseInvoices
+          : await getAllPurchaseInvoices();
+      return buildPurchaseBatchDiscountLookup(invoices);
+    } catch (error) {
+      console.warn('Failed to load purchase invoices for fulfill discount resolution:', error);
+      return buildPurchaseBatchDiscountLookup([]);
+    }
+  };
+
+  const [, invoiceNumber, purchaseDiscountLookup] = await Promise.all([
+    reduceAllStock(),
+    resolveInvoiceNumber(),
+    resolvePurchaseLookup(),
+  ]);
+
   if (stockUpdateErrors.length > 0) {
     console.warn('Some stock updates failed:', stockUpdateErrors);
-    // Still update the order, but log the errors
   }
-  
+
   // Expand medicines with multiple batchAllocations into separate line items
   // This ensures each batch gets its own line item in the invoice
   const expandedMedicines: any[] = [];
 
-  // Dedupe medicine reads within this fulfill call: the same medicine can appear
-  // across many lines/allocations, so cache each doc read for the duration of the
-  // call instead of re-reading it once per line (N+1 -> 1 per unique medicine).
-  const medicineFetchCache = new Map<string, Medicine | null>();
-  const getMedicineCached = async (medicineId: string): Promise<Medicine | null> => {
-    if (medicineFetchCache.has(medicineId)) {
-      return medicineFetchCache.get(medicineId) ?? null;
-    }
-    const fetched = await getMedicineById(medicineId);
-    medicineFetchCache.set(medicineId, fetched);
-    return fetched;
-  };
-
-  let purchaseDiscountLookup = buildPurchaseBatchDiscountLookup([]);
-  try {
-    purchaseDiscountLookup = buildPurchaseBatchDiscountLookup(await getAllPurchaseInvoices());
-  } catch (error) {
-    console.warn('Failed to load purchase invoices for fulfill discount resolution:', error);
-  }
 
   const toNum = (value: unknown): number => {
     if (value === undefined || value === null || value === '') return 0;

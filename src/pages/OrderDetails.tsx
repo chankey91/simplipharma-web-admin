@@ -1450,6 +1450,10 @@ export const OrderDetailsPage: React.FC = () => {
       return;
     }
 
+    const closeConfirmDialog = () => {
+      setConfirmDialog((prev) => ({ ...prev, open: false }));
+    };
+
     try {
       if (confirmDialog.action === 'fulfill') {
         // Calculate subtotal from items with batches assigned
@@ -1491,15 +1495,22 @@ export const OrderDetailsPage: React.FC = () => {
             totalAmount,
             trayNumber: (trayNumber || order?.trayNumber || '').trim() || undefined,
             processedBy: (processedBy || order?.processedBy || '').trim() || undefined
-          }
+          },
+          // Reuse React Query cache — fulfill must not re-download all purchase invoices.
+          purchaseInvoices: purchaseInvoicesList,
         });
         clearSessionFulfillmentDraft(order.id);
         localPendingEditsRef.current = { orderId: order.id, dirty: false };
         setFulfillmentDirty(false);
+        // Close before success/invoice alerts so MUI dialogs do not stack and block dismiss.
+        closeConfirmDialog();
         try {
           const refreshed = await getOrderById(order.id);
           if (refreshed) {
-            void generateOrderInvoice(refreshed, { emailPdfToRetailer: true }).catch(async (err) => {
+            void generateOrderInvoice(refreshed, {
+              emailPdfToRetailer: true,
+              purchaseInvoices: purchaseInvoicesList,
+            }).catch(async (err) => {
               console.error('Error emailing invoice after fulfill:', err);
               await alert(
                 'Order fulfilled, but the invoice email could not be sent. Download from Print Invoice or check Firebase logs.',
@@ -1523,12 +1534,14 @@ export const OrderDetailsPage: React.FC = () => {
             dispatchNotes: dispatchInfo.notes
           }
         });
+        closeConfirmDialog();
         await alert('Order dispatched successfully!', { severity: 'success' });
       } else if (confirmDialog.action === 'deliver') {
         await deliverOrderMutation.mutateAsync({
           orderId: order.id,
           deliveredBy: user.uid
         });
+        closeConfirmDialog();
         await alert('Order marked as delivered successfully!', { severity: 'success' });
       } else if (confirmDialog.action === 'cancel') {
         if (!cancelReason.trim()) {
@@ -1540,6 +1553,7 @@ export const OrderDetailsPage: React.FC = () => {
           cancelledBy: user.uid,
           reason: cancelReason
         });
+        closeConfirmDialog();
         if (res.stockRestoreErrors.length > 0) {
           await alert(
             `Order cancelled, but some stock could not be restored:\n${res.stockRestoreErrors.slice(0, 3).join('\n')}`,
@@ -1555,6 +1569,7 @@ export const OrderDetailsPage: React.FC = () => {
         });
         localPendingEditsRef.current = { orderId: order.id, dirty: false };
         setFulfillmentDirty(false);
+        closeConfirmDialog();
         if (res.stockRestoreErrors.length > 0) {
           await alert(
             `Order returned to Pending, but some stock could not be restored:\n${res.stockRestoreErrors.slice(0, 3).join('\n')}`,
@@ -1566,8 +1581,9 @@ export const OrderDetailsPage: React.FC = () => {
             { severity: 'success' }
           );
         }
+      } else {
+        closeConfirmDialog();
       }
-      setConfirmDialog({ ...confirmDialog, open: false });
     } catch (error: any) {
       console.error('Action failed:', error);
       await alert(`Failed to ${confirmDialog.action} order: ${error.message || 'Unknown error'}`, { severity: 'error' });
@@ -2845,7 +2861,9 @@ export const OrderDetailsPage: React.FC = () => {
             };
             
             try {
-              generateOrderInvoice(invoiceOrder).catch(async (err) => {
+              generateOrderInvoice(invoiceOrder, {
+                purchaseInvoices: purchaseInvoicesList,
+              }).catch(async (err) => {
                 console.error('Error generating invoice:', err);
                 await alert('Failed to generate invoice. Please try again.', { severity: 'error' });
               });

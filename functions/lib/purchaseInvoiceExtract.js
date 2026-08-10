@@ -182,7 +182,7 @@ function getGcpProjectId() {
 function getVertexLocation() {
     return ((functions.config().gemini && functions.config().gemini.location) ||
         process.env.GOOGLE_VERTEX_LOCATION ||
-        'us-central1');
+        'asia-south1');
 }
 /** Vertex (preferred, Cloud Billing) or AI Studio API key. */
 function isGeminiConfigured() {
