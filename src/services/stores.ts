@@ -1,7 +1,7 @@
-import { collection, getDocs, doc, updateDoc, setDoc, query, where, Timestamp, serverTimestamp, deleteField, db, functions, auth } from './firebase';
+import { collection, getDocs, doc, updateDoc, setDoc, getDoc, query, where, Timestamp, serverTimestamp, deleteField, db, functions, auth } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
-import { generateStoreCode } from '../utils/storeCode';
+import { formatStoreCode, generateStoreCode, getMaxStoreCodeNumber, parseStoreCodeNumber } from '../utils/storeCode';
 import { ORDER_BLOCK_OVERRIDE_MS } from '../utils/retailerPaymentBlock';
 
 function toJsDate(v: unknown): Date | undefined {
@@ -77,6 +77,24 @@ export const updateStore = async (
   ) {
     await updateRetailerEmail(storeId, newEmail);
     cleanData.email = newEmail;
+  }
+
+  // Auto-assign store code when the retailer still has none.
+  const incomingCode =
+    typeof cleanData.storeCode === 'string' ? cleanData.storeCode.trim() : '';
+  if (incomingCode) {
+    cleanData.storeCode = incomingCode;
+  } else {
+    delete cleanData.storeCode;
+    try {
+      const existing = await getDoc(storeRef);
+      const existingCode = String(existing.data()?.storeCode || '').trim();
+      if (!existingCode) {
+        cleanData.storeCode = await generateStoreCode();
+      }
+    } catch (error) {
+      console.error('Failed to auto-generate store code on update:', error);
+    }
   }
 
   if (Object.keys(cleanData).length === 0) {
@@ -283,4 +301,60 @@ export const assignRetailerToSalesOfficer = async (
   } else {
     await updateDoc(storeRef, { salesOfficerId });
   }
+};
+
+export type BackfillStoreCodesResult = {
+  scanned: number;
+  assigned: number;
+  skipped: number;
+  assignments: Array<{ storeId: string; shopName: string; storeCode: string }>;
+};
+
+/**
+ * Assign MS### codes to every retailer missing storeCode (one-shot repair).
+ * Uses a single snapshot so codes stay unique within the run.
+ */
+export const backfillMissingStoreCodes = async (): Promise<BackfillStoreCodesResult> => {
+  const stores = await getAllStores();
+  let max = 0;
+  const missing: User[] = [];
+
+  for (const store of stores) {
+    const code = String(store.storeCode || '').trim();
+    if (!code) {
+      missing.push(store);
+      continue;
+    }
+    const n = parseStoreCodeNumber(code);
+    if (n != null && n > max) max = n;
+  }
+
+  // Prefer live max in case of codes outside this client cache shape.
+  try {
+    const liveMax = await getMaxStoreCodeNumber();
+    if (liveMax > max) max = liveMax;
+  } catch {
+    // keep snapshot max
+  }
+
+  const assignments: BackfillStoreCodesResult['assignments'] = [];
+  let next = max;
+
+  for (const store of missing) {
+    next += 1;
+    const storeCode = formatStoreCode(next);
+    await updateDoc(doc(db, 'users', store.id), { storeCode });
+    assignments.push({
+      storeId: store.id,
+      shopName: store.shopName || store.displayName || store.email || store.id,
+      storeCode,
+    });
+  }
+
+  return {
+    scanned: stores.length,
+    assigned: assignments.length,
+    skipped: stores.length - assignments.length,
+    assignments,
+  };
 };

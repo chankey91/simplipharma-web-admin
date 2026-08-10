@@ -14,6 +14,7 @@ import {
 } from './panelAuth';
 import { buildRetailerWelcomeEmail } from './emailTemplates/retailerWelcomeEmail';
 import { ff } from './functionRegion';
+import { generateNextStoreCode } from './storeCode';
 
 admin.initializeApp();
 
@@ -667,6 +668,18 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       disabled: false,
     });
 
+    let storeCode =
+      typeof req.storeCode === 'string' && req.storeCode.trim()
+        ? req.storeCode.trim()
+        : '';
+    if (!storeCode) {
+      try {
+        storeCode = await generateNextStoreCode();
+      } catch (codeErr) {
+        console.error('approveRetailerRequest: failed to generate store code:', codeErr);
+      }
+    }
+
     const userData: Record<string, any> = {
       uid: userRecord.uid,
       email: cred.email,
@@ -681,7 +694,7 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       licenceHolderName: req.licenceHolderName,
       pan: req.pan,
       gst: req.gst,
-      storeCode: req.storeCode,
+      storeCode: storeCode || undefined,
       salesOfficerId: req.salesOfficerId,
       isActive: true,
       shopImage: req.shopImageUrl || req.shopImage || req.shopPhotoUrl,
@@ -703,13 +716,14 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       reviewedBy: context.auth.uid,
       reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(storeCode ? { storeCode } : {}),
     });
 
     const welcomeMail = buildRetailerWelcomeEmail({
       email: cred.email,
       password: cred.password,
       shopName: req.shopName || req.displayName,
-      storeCode: req.storeCode,
+      storeCode: storeCode || undefined,
       intro: 'Your retailer registration has been approved. Your SimpliPharma account is now active.',
       subject: 'Welcome to SimpliPharma — Your store account is approved',
     });

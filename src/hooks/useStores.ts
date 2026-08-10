@@ -7,6 +7,7 @@ import {
   assignRetailerToSalesOfficer,
   sendRetailerPasswordResetEmail,
   grantOrderBlockOverride,
+  backfillMissingStoreCodes,
 } from '../services/stores';
 import { User } from '../types';
 
@@ -88,6 +89,16 @@ export const useAssignRetailerToSalesOfficer = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] });
       queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });
+    },
+  });
+};
+
+export const useBackfillMissingStoreCodes = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: backfillMissingStoreCodes,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
     },
   });
 };
