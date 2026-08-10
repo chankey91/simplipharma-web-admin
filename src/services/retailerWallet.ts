@@ -142,6 +142,9 @@ function mapDedicatedCreditNote(note: {
   reason?: string;
   type?: string;
   orderReturnRequestId?: string;
+  expiryReturnRequestId?: string;
+  returnRequestId?: string;
+  returnType?: string;
 }): WalletCreditNote | null {
   if (note.ledgerOnly === true) return null;
   const amount = roundMoney2(Number(note.amount) || Number(note.totalAmount) || 0);
@@ -152,10 +155,31 @@ function mapDedicatedCreditNote(note: {
   if (statusRaw === 'cancelled') return null;
   let status: WalletCreditNote['status'] = 'available';
   if (remaining <= 0.01) status = 'fully_used';
-  const returnRequestId = note.orderReturnRequestId;
-  const returnType: WalletCreditNote['returnType'] = returnRequestId
-    ? 'order_return'
-    : 'credit_note';
+
+  const orderReturnRequestId = String(note.orderReturnRequestId || '').trim();
+  const expiryReturnRequestId = String(note.expiryReturnRequestId || '').trim();
+  const legacyReturnRequestId = String(note.returnRequestId || '').trim();
+  const typeRaw = String(note.type || note.returnType || '').trim();
+
+  let returnType: WalletCreditNote['returnType'] = 'credit_note';
+  let returnRequestId: string | undefined;
+  if (orderReturnRequestId) {
+    returnType = 'order_return';
+    returnRequestId = orderReturnRequestId;
+  } else if (expiryReturnRequestId) {
+    returnType = 'expiry_return';
+    returnRequestId = expiryReturnRequestId;
+  } else if (typeRaw === 'order_return' || typeRaw === 'expiry_return') {
+    returnType = typeRaw;
+    returnRequestId = legacyReturnRequestId || undefined;
+  } else if (legacyReturnRequestId) {
+    returnRequestId = legacyReturnRequestId;
+    returnType =
+      note.returnType === 'expiry_return' || note.returnType === 'order_return'
+        ? note.returnType
+        : 'credit_note';
+  }
+
   return {
     id: note.id,
     creditNoteNumber: note.creditNoteNumber || `CN-${note.id.slice(0, 8)}`,
