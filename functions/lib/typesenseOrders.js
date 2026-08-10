@@ -17,6 +17,7 @@ exports.deleteOrderFromTypesense = deleteOrderFromTypesense;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const typesenseMedicines_1 = require("./typesenseMedicines");
+const functionRegion_1 = require("./functionRegion");
 exports.TYPESENSE_ORDERS_COLLECTION = 'orders';
 const ORDER_STATUSES = [
     'Pending',
@@ -158,7 +159,7 @@ async function deleteOrderFromTypesense(orderId) {
     }
 }
 /** Firestore sync: index on create/update, remove on delete. Errors are swallowed so a Typesense outage never blocks order writes. */
-exports.onOrderWriteTypesense = functions.firestore
+exports.onOrderWriteTypesense = functionRegion_1.ff.firestore
     .document('orders/{orderId}')
     .onWrite(async (change, context) => {
     const orderId = context.params.orderId;
@@ -260,7 +261,7 @@ function orderDateRangeFilters(fromDate, toDate) {
  * filtered, sorted and paginated, plus global per-status counts for the KPI
  * cards — so the client never downloads the whole `orders` collection.
  */
-exports.searchOrdersTypesense = functions.https.onCall(async (data, context) => {
+exports.searchOrdersTypesense = functionRegion_1.ff.https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
@@ -343,7 +344,7 @@ async function canReindexOrders(uid) {
     return role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations';
 }
 /** One-time / maintenance: full reindex of `orders` from Firestore (admin only). */
-exports.adminReindexOrdersTypesense = functions
+exports.adminReindexOrdersTypesense = functionRegion_1.ff
     .runWith({ timeoutSeconds: 540, memory: '512MB' })
     .https.onCall(async (_data, context) => {
     if (!context.auth) {

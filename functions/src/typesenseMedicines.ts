@@ -19,6 +19,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { MEDICINE_SYNONYM_SEED } from './typesenseMedicineSynonyms';
+import { ff } from './functionRegion';
 
 export const TYPESENSE_COLLECTION = 'medicines';
 
@@ -236,7 +237,7 @@ export async function deleteMedicineFromTypesense(medicineId: string): Promise<v
 }
 
 /** Firestore sync: index on create/update, remove on delete or soft-delete. */
-export const onMedicineWriteTypesense = functions.firestore
+export const onMedicineWriteTypesense = ff.firestore
   .document('medicines/{medicineId}')
   .onWrite(async (change, context) => {
     const medicineId = context.params.medicineId as string;
@@ -639,7 +640,7 @@ function recordMedicineSearchAnalytics(payload: {
  * Authenticated catalog search (Typesense + optional Firestore hydrate).
  * Autocomplete: q length ≥ 2. Inventory browse: `browse: true` → q:"*" + page/filters/facets.
  */
-export const searchMedicinesTypesense = functions
+export const searchMedicinesTypesense = ff
   .runWith({ minInstances: 1 })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
@@ -794,7 +795,7 @@ type ReindexProgress = {
  * Body: `{ startAfterId?, reset?, maxDocs?, timeBudgetMs? }`
  * Returns: `{ done, nextStartAfterId, indexed, scanned, cumulativeIndexed, cumulativeScanned }`
  */
-export const adminReindexMedicinesTypesense = functions
+export const adminReindexMedicinesTypesense = ff
   .runWith({ timeoutSeconds: 300, memory: '2GB' })
   .https.onCall(async (data, context) => {
     try {
@@ -987,7 +988,7 @@ export const adminReindexMedicinesTypesense = functions
   });
 
 /** Upsert pharma synonym seed into Typesense (admin/ops). Safe to re-run. */
-export const adminSyncMedicineSynonymsTypesense = functions
+export const adminSyncMedicineSynonymsTypesense = ff
   .runWith({ timeoutSeconds: 120, memory: '256MB' })
   .https.onCall(async (_data, context) => {
     if (!context.auth) {

@@ -5,6 +5,7 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 const spsProductId_1 = require("./spsProductId");
+const functionRegion_1 = require("./functionRegion");
 function escapeHtmlText(s) {
     return String(s)
         .replace(/&/g, '&amp;')
@@ -87,7 +88,7 @@ function stripUndefined(obj) {
  * Processes create/update by medicine name (case-insensitive); stock is not changed.
  * Sends email to notifyEmail when done (success or failure).
  */
-exports.onBulkMedicineJobCreated = functions
+exports.onBulkMedicineJobCreated = functionRegion_1.ff
     .runWith({ timeoutSeconds: 540, memory: '1GB' })
     .firestore.document('bulk_medicine_jobs/{jobId}')
     .onCreate(async (snap, context) => {
