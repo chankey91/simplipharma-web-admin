@@ -1,4 +1,4 @@
-pipeline {
+﻿pipeline {
     agent any
 
     environment {
@@ -8,7 +8,7 @@ pipeline {
 
     stages {
         // Code is checked out by "Pipeline script from SCM" (Declarative: Checkout SCM).
-        // Do not re-checkout a fixed branch here — that would break develop deploys.
+        // Do not re-checkout a fixed branch here ΓÇö that would break develop deploys.
 
         stage('Resolve Environment') {
             steps {
@@ -19,15 +19,18 @@ pipeline {
                     if (branch == 'develop') {
                         // DEV hosting cut over to Firebase Hosting via GitHub Actions.
                         // Keep this job disabled in Jenkins UI / reload config from disk.
-                        echo 'Develop hosting deploy moved to GitHub Actions → Firebase Hosting (simplipharma-admin-dev). Skipping Jenkins local deploy.'
+                        echo 'Develop hosting deploy moved to GitHub Actions ΓåÆ Firebase Hosting (simplipharma-admin-dev). Skipping Jenkins local deploy.'
                         env.APP_ENV = 'dev'
-                        env.MIGRATED_DEV_HOSTING = 'true'
+                        env.MIGRATED_HOSTING = 'true'
                         env.DEPLOY_PATH = "/var/www/${env.APP_NAME}-dev"
                         env.NGINX_PORT = '8083'
                         env.NGINX_SITE = "${env.APP_NAME}-dev"
                         env.FB_CRED_PREFIX = 'simplipharma-dev-firebase'
                     } else if (branch == 'main' || branch == 'master') {
+                        // PROD hosting cut over to Firebase Hosting via GitHub Actions.
+                        echo 'Prod hosting deploy moved to GitHub Actions → Firebase Hosting (simplipharma-admin). Skipping Jenkins local deploy.'
                         env.APP_ENV = 'prod'
+                        env.MIGRATED_HOSTING = 'true'
                         env.DEPLOY_PATH = "/var/www/${env.APP_NAME}"
                         env.NGINX_PORT = '8085'
                         env.NGINX_SITE = env.APP_NAME
@@ -46,14 +49,14 @@ pipeline {
         }
 
         stage('Migrated to GitHub Actions') {
-            when { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' }
+            when { environment name: 'MIGRATED_HOSTING', value: 'true' }
             steps {
-                echo 'Skipping Jenkins build/deploy for develop. GitHub Actions workflow deploy-dev.yml publishes to Firebase Hosting.'
+                echo 'Skipping Jenkins build/deploy. GitHub Actions publishes to Firebase Hosting (simplipharma-admin).'
             }
         }
 
         stage('Setup Node.js') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 script {
                     echo 'Setting up Node.js environment...'
@@ -71,7 +74,7 @@ pipeline {
         }
 
         stage('Install Dependencies') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 echo 'Installing Node.js dependencies...'
                 sh 'npm install'
@@ -79,7 +82,7 @@ pipeline {
         }
 
         stage('Create Environment File') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 echo "Creating .env file for ${env.APP_ENV} (credentials: ${env.FB_CRED_PREFIX}-*)..."
                 script {
@@ -110,7 +113,7 @@ EOF
         }
 
         stage('Build Application') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 echo "Building ${env.APP_ENV} static files..."
                 sh 'npm run build'
@@ -118,7 +121,7 @@ EOF
         }
 
         stage('Create Deployment Directory') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 echo "Creating deployment directory ${env.DEPLOY_PATH}..."
                 sh """
@@ -129,7 +132,7 @@ EOF
         }
 
         stage('Deploy to Server') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 echo "Deploying ${env.APP_ENV} to ${env.DEPLOY_PATH}..."
                 sh """
@@ -149,7 +152,7 @@ EOF
         }
 
         stage('Configure Nginx') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 echo "Configuring Nginx site ${env.NGINX_SITE} on port ${env.NGINX_PORT}..."
                 sh """
@@ -188,7 +191,7 @@ server {
         add_header Cache-Control "public, immutable";
     }
 
-    # SPA routing — avoid directory slash redirects
+    # SPA routing ΓÇö avoid directory slash redirects
     location / {
         try_files \\\$uri /index.html;
     }
@@ -203,7 +206,7 @@ EOFNGINX
         }
 
         stage('Verify Deployment') {
-            when { not { environment name: 'MIGRATED_DEV_HOSTING', value: 'true' } }
+            when { not { environment name: 'MIGRATED_HOSTING', value: 'true' } }
             steps {
                 echo "Verifying ${env.APP_ENV} deployment..."
                 sh """
@@ -243,7 +246,7 @@ EOFNGINX
                             sudo systemctl reload nginx
                             echo "Rollback completed successfully"
                         else
-                            echo "Rollback files restored but nginx config is invalid — fix sites-enabled and reload"
+                            echo "Rollback files restored but nginx config is invalid ΓÇö fix sites-enabled and reload"
                         fi
                     fi
                 fi
