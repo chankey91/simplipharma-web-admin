@@ -52,9 +52,10 @@ import {
   Add,
   Remove,
   SwapHoriz,
+  ContentCopy,
 } from '@mui/icons-material';
 import Autocomplete from '@mui/material/Autocomplete';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useOrder,
   useOrdersByStatuses,
@@ -81,7 +82,7 @@ import { useProductDemandsForOrder } from '../hooks/useProductDemands';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useTrays, useOperators, useTraysInUse } from '../hooks/useOperations';
 import { format } from 'date-fns';
-import { auth, doc, updateDoc, db } from '../services/firebase';
+import { auth, doc, updateDoc, db, getDoc } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { ProductDemandImage } from '../components/ProductDemandImage';
@@ -90,6 +91,12 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Medicine, OrderMedicine, OrderStatus, ProductDemand } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
+import {
+  buildWhatsAppUrl,
+  formatOrderItemsWhatsAppList,
+  isShortfallOrderLine,
+  normalizeWhatsAppPhone,
+} from '../utils/orderWhatsAppItems';
 import {
   clearSessionFulfillmentDraft,
   mergeFulfillmentWorkIntoLines,
@@ -391,6 +398,17 @@ export const OrderDetailsPage: React.FC = () => {
   // Only Pending orders need soft batch-reservation scans — skip until we know status is Pending.
   const { data: allOrders } = useOrdersByStatuses(['Pending'], {
     enabled: order?.status === 'Pending',
+  });
+  const { data: retailerPhone } = useQuery({
+    queryKey: ['retailerPhone', order?.retailerId],
+    enabled: Boolean(order?.retailerId),
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const snap = await getDoc(doc(db, 'users', order!.retailerId));
+      if (!snap.exists()) return null;
+      const phone = String((snap.data() as { phoneNumber?: string }).phoneNumber || '').trim();
+      return phone || null;
+    },
   });
   const lineDemandIds = useMemo(
     () =>
@@ -2697,6 +2715,50 @@ export const OrderDetailsPage: React.FC = () => {
       (m as any).lineType === 'product_demand' ||
       m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
     );
+
+  const shortfallLines = useMemo(
+    () => fulfillmentData.medicines.filter((m) => isShortfallOrderLine(m)),
+    [fulfillmentData.medicines]
+  );
+
+  const buildWhatsAppItemText = (shortfallsOnly: boolean) =>
+    formatOrderItemsWhatsAppList(order.id, fulfillmentData.medicines, {
+      shortfallsOnly,
+      storeName: order.retailerName,
+    });
+
+  const copyWhatsAppItemList = async (shortfallsOnly: boolean) => {
+    const text = buildWhatsAppItemText(shortfallsOnly);
+    try {
+      await navigator.clipboard.writeText(text);
+      await alert(
+        shortfallsOnly
+          ? `Copied ${shortfallLines.length} short item name(s) for WhatsApp.`
+          : `Copied ${fulfillmentData.medicines.length} item name(s) for WhatsApp.`,
+        { severity: 'success' }
+      );
+    } catch {
+      await alert('Could not copy to clipboard. Please copy manually.', { severity: 'warning' });
+    }
+  };
+
+  const openRetailerWhatsAppWithItems = async (shortfallsOnly: boolean) => {
+    const text = buildWhatsAppItemText(shortfallsOnly);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // still try to open WhatsApp with encoded text
+    }
+    const phone = normalizeWhatsAppPhone(retailerPhone);
+    if (!phone) {
+      await alert(
+        'Item list copied. This store has no phone number on file — paste into WhatsApp manually.',
+        { severity: 'warning' }
+      );
+      return;
+    }
+    window.open(buildWhatsAppUrl(phone, text), '_blank', 'noopener,noreferrer');
+  };
   
   const taxPercentage = taxPctForTotals;
   const liveBreakdown = orderTotals;
@@ -3045,18 +3107,62 @@ export const OrderDetailsPage: React.FC = () => {
             </Alert>
           )}
           <Paper sx={{ p: 3, mb: 3 }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} gap={1}>
+            <Box
+              display="flex"
+              justifyContent="space-between"
+              alignItems="center"
+              mb={2}
+              gap={1}
+              flexWrap="wrap"
+            >
               <Typography variant="h6">Order Items</Typography>
-              {order.status === 'Pending' && (
+              <Box display="flex" gap={1} flexWrap="wrap">
                 <Button
                   size="small"
                   variant="outlined"
-                  startIcon={<Add />}
-                  onClick={openAddProductDialog}
+                  startIcon={<ContentCopy />}
+                  onClick={() => void copyWhatsAppItemList(false)}
+                  disabled={fulfillmentData.medicines.length === 0}
+                  title="Copy short item names + qty for WhatsApp"
                 >
-                  Add product
+                  Copy names
                 </Button>
-              )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<ContentCopy />}
+                  onClick={() => void copyWhatsAppItemList(true)}
+                  disabled={shortfallLines.length === 0}
+                  title="Copy only unassigned / short items"
+                >
+                  Copy short ({shortfallLines.length})
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="success"
+                  onClick={() => void openRetailerWhatsAppWithItems(shortfallLines.length > 0)}
+                  disabled={fulfillmentData.medicines.length === 0}
+                  title={
+                    retailerPhone
+                      ? `Open WhatsApp to ${retailerPhone}`
+                      : 'Copies list; opens WhatsApp if store phone is on file'
+                  }
+                >
+                  WhatsApp
+                </Button>
+                {order.status === 'Pending' && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<Add />}
+                    onClick={openAddProductDialog}
+                  >
+                    Add product
+                  </Button>
+                )}
+              </Box>
             </Box>
             <TableContainer>
               <Table>
