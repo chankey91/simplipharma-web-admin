@@ -2061,14 +2061,44 @@ export const OrderDetailsPage: React.FC = () => {
       return;
     }
 
-    // Validate total allocated quantity - allow partial fulfillment (must be > 0 and <= required)
+    // Validate total allocated quantity — 0 clears assignment; >0 allows partial fulfill
     const totalAllocated = batchAllocations.reduce(
       (sum: number, a: any) => sum + orderedUnitsFromAllocation(a),
       0
     );
-    
+
     if (totalAllocated === 0) {
-      await alert('Please allocate at least some quantity', { severity: 'warning' });
+      const hadAssignment =
+        Boolean(item.batchNumber) ||
+        (Array.isArray(item.batchAllocations) && item.batchAllocations.length > 0);
+      const ok = await confirm(
+        hadAssignment
+          ? 'Clear batch assignment for this line? It will not be fulfilled until you assign stock again.'
+          : 'No quantity allocated. Save will leave this line without a batch (it will not be fulfilled). Continue?',
+        { title: 'Clear batch allocation', confirmLabel: 'Clear' }
+      );
+      if (!ok) return;
+
+      markFulfillmentDirty();
+      setFulfillmentData((prev) => {
+        const newMedicines = [...prev.medicines];
+        newMedicines[itemIndex] = {
+          ...item,
+          batchAllocations: undefined,
+          batchNumber: undefined,
+          batchExpiryDate: undefined,
+          verified: false,
+          scannedQRCode: '',
+          freeQuantity: 0,
+          quantity: item.originalQuantity || item.quantity || requiredQuantity,
+          discountManuallySet: false,
+          nonReturnable: undefined,
+          qtyAdjustedNeedsBatch: true,
+        };
+        return { ...prev, medicines: newMedicines };
+      });
+      setBatchAllocationDialog({ ...batchAllocationDialog, open: false });
+      setBatchAllocations([]);
       return;
     }
     
@@ -4782,7 +4812,9 @@ export const OrderDetailsPage: React.FC = () => {
             )}
             {batchAllocationDialog.allocatedQuantity === 0 && (
               <Alert severity="info" sx={{ mt: 2 }}>
-                Please allocate at least some quantity to proceed.
+                {batchAllocations.every((a) => (a.availableQuantity || 0) <= 0)
+                  ? 'No stock available on listed batches. You can save with 0 to clear any assignment, or use Replace / wait for stock.'
+                  : 'Allocate quantity above, or save with 0 to clear batch assignment on this line.'}
               </Alert>
             )}
           </Box>
@@ -4793,11 +4825,11 @@ export const OrderDetailsPage: React.FC = () => {
             setBatchAllocations([]);
           }}>Cancel</Button>
           <Button 
-            onClick={handleSaveBatchAllocations}
+            onClick={() => void handleSaveBatchAllocations()}
             variant="contained"
-            disabled={batchAllocationDialog.allocatedQuantity === 0 || batchAllocationDialog.allocatedQuantity > batchAllocationDialog.requiredQuantity}
+            disabled={batchAllocationDialog.allocatedQuantity > batchAllocationDialog.requiredQuantity}
           >
-            Save Allocations
+            {batchAllocationDialog.allocatedQuantity === 0 ? 'Clear / Save 0' : 'Save Allocations'}
           </Button>
         </DialogActions>
       </Dialog>
