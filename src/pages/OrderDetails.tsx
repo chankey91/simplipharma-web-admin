@@ -2721,38 +2721,42 @@ export const OrderDetailsPage: React.FC = () => {
       m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
     );
 
-  const buildWhatsAppItemText = (shortfallsOnly: boolean) =>
+  const buildWhatsAppItemText = () =>
     formatOrderItemsWhatsAppList(order.id, fulfillmentData.medicines, {
-      shortfallsOnly,
       storeName: order.retailerName,
     });
 
-  const copyWhatsAppItemList = async (shortfallsOnly: boolean) => {
-    const text = buildWhatsAppItemText(shortfallsOnly);
+  const copyWhatsAppItemList = async () => {
+    if (shortfallLines.length === 0) {
+      await alert('No short or pending items to copy.', { severity: 'info' });
+      return;
+    }
+    const text = buildWhatsAppItemText();
     try {
       await navigator.clipboard.writeText(text);
-      await alert(
-        shortfallsOnly
-          ? `Copied ${shortfallLines.length} short item name(s) for WhatsApp.`
-          : `Copied ${fulfillmentData.medicines.length} item name(s) for WhatsApp.`,
-        { severity: 'success' }
-      );
+      await alert(`Copied ${shortfallLines.length} short/pending item name(s) for WhatsApp.`, {
+        severity: 'success',
+      });
     } catch {
       await alert('Could not copy to clipboard. Please copy manually.', { severity: 'warning' });
     }
   };
 
-  const openRetailerWhatsAppWithItems = async (shortfallsOnly: boolean) => {
-    const text = buildWhatsAppItemText(shortfallsOnly);
+  const openRetailerWhatsAppWithItems = async () => {
+    if (shortfallLines.length === 0) {
+      await alert('No short or pending items to send.', { severity: 'info' });
+      return;
+    }
+    const text = buildWhatsAppItemText();
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // still try to open WhatsApp with encoded text
+      // still try to open WhatsApp Web with encoded text
     }
     const phone = normalizeWhatsAppPhone(retailerPhone);
     if (!phone) {
       await alert(
-        'Item list copied. This store has no phone number on file — paste into WhatsApp manually.',
+        'Item list copied. This store has no phone number on file — paste into WhatsApp Web manually.',
         { severity: 'warning' }
       );
       return;
@@ -3120,21 +3124,11 @@ export const OrderDetailsPage: React.FC = () => {
                 <Button
                   size="small"
                   variant="outlined"
-                  startIcon={<ContentCopy />}
-                  onClick={() => void copyWhatsAppItemList(false)}
-                  disabled={fulfillmentData.medicines.length === 0}
-                  title="Copy short item names + qty for WhatsApp"
-                >
-                  Copy names
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
                   color="warning"
                   startIcon={<ContentCopy />}
-                  onClick={() => void copyWhatsAppItemList(true)}
+                  onClick={() => void copyWhatsAppItemList()}
                   disabled={shortfallLines.length === 0}
-                  title="Copy only unassigned / short items"
+                  title="Copy not fulfilled / partially fulfilled item names for WhatsApp"
                 >
                   Copy short ({shortfallLines.length})
                 </Button>
@@ -3142,15 +3136,15 @@ export const OrderDetailsPage: React.FC = () => {
                   size="small"
                   variant="contained"
                   color="success"
-                  onClick={() => void openRetailerWhatsAppWithItems(shortfallLines.length > 0)}
-                  disabled={fulfillmentData.medicines.length === 0}
+                  onClick={() => void openRetailerWhatsAppWithItems()}
+                  disabled={shortfallLines.length === 0}
                   title={
                     retailerPhone
-                      ? `Open WhatsApp to ${retailerPhone}`
-                      : 'Copies list; opens WhatsApp if store phone is on file'
+                      ? `Open WhatsApp Web to ${retailerPhone}`
+                      : 'Copies short list; opens WhatsApp Web if store phone is on file'
                   }
                 >
-                  WhatsApp
+                  WhatsApp Web
                 </Button>
                 {order.status === 'Pending' && (
                   <Button
