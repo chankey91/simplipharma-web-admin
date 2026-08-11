@@ -367,10 +367,15 @@ function mapRepairedLineToFulfillment(
       };
   discountPct = withDefaults.discountPercentage ?? toNumber(line.discountPercentage);
 
+  const firstAllocBatch = String(line.batchAllocations?.[0]?.batchNumber || '').trim();
+  const resolvedBatchNumber = String(line.batchNumber || '').trim() || firstAllocBatch || undefined;
+  const hasAllocs = Array.isArray(line.batchAllocations) && line.batchAllocations.length > 0;
+
   return {
     ...withDefaults,
     medicineId: line.medicineId,
-    verified: !!line.batchNumber || !!(line.batchAllocations && line.batchAllocations.length > 0),
+    batchNumber: resolvedBatchNumber,
+    verified: Boolean(resolvedBatchNumber) || hasAllocs,
     scannedQRCode: '',
     batchExpiryDate:
       line.batchAllocations && line.batchAllocations.length > 0
@@ -385,6 +390,23 @@ function mapRepairedLineToFulfillment(
         : computedFreeQuantity,
     originalQuantity: line.originalQuantity || line.quantity,
   };
+}
+
+function assignedBatchLabel(item: {
+  batchNumber?: string;
+  batchAllocations?: Array<{ batchNumber?: string }>;
+}): string | null {
+  const fromAllocs = (item.batchAllocations || [])
+    .map((a) => String(a?.batchNumber || '').trim())
+    .filter(Boolean);
+  if (fromAllocs.length > 0) return [...new Set(fromAllocs)].join(', ');
+  const bn = String(item.batchNumber || '').trim();
+  return bn || null;
+}
+
+function fulfillmentLineKey(item: { medicineId?: string; batchNumber?: string; batchAllocations?: Array<{ batchNumber?: string }> }, index: number): string {
+  const batch = assignedBatchLabel(item) || 'none';
+  return `${item.medicineId || 'line'}-${index}-${batch}`;
 }
 
 export const OrderDetailsPage: React.FC = () => {
@@ -746,11 +768,6 @@ export const OrderDetailsPage: React.FC = () => {
     // remount lines — discount re-apply effect handles Disc % without full reset.
     if (!order || medicines === undefined) return;
 
-    // Fulfilled+: load lines once.
-    if (order.status !== 'Pending' && fulfilledUiFrozenRef.current === order.id) {
-      return;
-    }
-
     const draftUpdatedAtMs = (() => {
       const u = order.fulfillmentDraft?.updatedAt as
         | { toMillis?: () => number }
@@ -793,10 +810,18 @@ export const OrderDetailsPage: React.FC = () => {
           m.productDemandId || '',
           m.quantity ?? '',
           m.batchNumber || '',
+          (m.batchAllocations || [])
+            .map((a) => `${a?.batchNumber || ''}:${a?.quantity ?? ''}`)
+            .join(','),
           m.lineType || '',
         ])
       ),
     ].join('|');
+
+    // Fulfilled+: skip remount only when this snapshot is already on screen.
+    if (order.status !== 'Pending' && fulfilledUiFrozenRef.current === structureKey) {
+      return;
+    }
 
     // Pending already hydrated for this structure — ignore medicines/PI catalog churn.
     if (
@@ -874,7 +899,7 @@ export const OrderDetailsPage: React.FC = () => {
     if (order.status === 'Pending') {
       pendingHydrateStructureKeyRef.current = structureKey;
     } else {
-      fulfilledUiFrozenRef.current = order.id;
+      fulfilledUiFrozenRef.current = structureKey;
     }
 
     let cancelled = false;
@@ -2721,38 +2746,42 @@ export const OrderDetailsPage: React.FC = () => {
       m.batchNumber || (m.batchAllocations && m.batchAllocations.length > 0)
     );
 
-  const buildWhatsAppItemText = (shortfallsOnly: boolean) =>
+  const buildWhatsAppItemText = () =>
     formatOrderItemsWhatsAppList(order.id, fulfillmentData.medicines, {
-      shortfallsOnly,
       storeName: order.retailerName,
     });
 
-  const copyWhatsAppItemList = async (shortfallsOnly: boolean) => {
-    const text = buildWhatsAppItemText(shortfallsOnly);
+  const copyWhatsAppItemList = async () => {
+    if (shortfallLines.length === 0) {
+      await alert('No short or pending items to copy.', { severity: 'info' });
+      return;
+    }
+    const text = buildWhatsAppItemText();
     try {
       await navigator.clipboard.writeText(text);
-      await alert(
-        shortfallsOnly
-          ? `Copied ${shortfallLines.length} short item name(s) for WhatsApp.`
-          : `Copied ${fulfillmentData.medicines.length} item name(s) for WhatsApp.`,
-        { severity: 'success' }
-      );
+      await alert(`Copied ${shortfallLines.length} short/pending item name(s) for WhatsApp.`, {
+        severity: 'success',
+      });
     } catch {
       await alert('Could not copy to clipboard. Please copy manually.', { severity: 'warning' });
     }
   };
 
-  const openRetailerWhatsAppWithItems = async (shortfallsOnly: boolean) => {
-    const text = buildWhatsAppItemText(shortfallsOnly);
+  const openRetailerWhatsAppWithItems = async () => {
+    if (shortfallLines.length === 0) {
+      await alert('No short or pending items to send.', { severity: 'info' });
+      return;
+    }
+    const text = buildWhatsAppItemText();
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // still try to open WhatsApp with encoded text
+      // still try to open WhatsApp Web with encoded text
     }
     const phone = normalizeWhatsAppPhone(retailerPhone);
     if (!phone) {
       await alert(
-        'Item list copied. This store has no phone number on file — paste into WhatsApp manually.',
+        'Item list copied. This store has no phone number on file — paste into WhatsApp Web manually.',
         { severity: 'warning' }
       );
       return;
@@ -3120,21 +3149,11 @@ export const OrderDetailsPage: React.FC = () => {
                 <Button
                   size="small"
                   variant="outlined"
-                  startIcon={<ContentCopy />}
-                  onClick={() => void copyWhatsAppItemList(false)}
-                  disabled={fulfillmentData.medicines.length === 0}
-                  title="Copy short item names + qty for WhatsApp"
-                >
-                  Copy names
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
                   color="warning"
                   startIcon={<ContentCopy />}
-                  onClick={() => void copyWhatsAppItemList(true)}
+                  onClick={() => void copyWhatsAppItemList()}
                   disabled={shortfallLines.length === 0}
-                  title="Copy only unassigned / short items"
+                  title="Copy not fulfilled / partially fulfilled item names for WhatsApp"
                 >
                   Copy short ({shortfallLines.length})
                 </Button>
@@ -3142,15 +3161,15 @@ export const OrderDetailsPage: React.FC = () => {
                   size="small"
                   variant="contained"
                   color="success"
-                  onClick={() => void openRetailerWhatsAppWithItems(shortfallLines.length > 0)}
-                  disabled={fulfillmentData.medicines.length === 0}
+                  onClick={() => void openRetailerWhatsAppWithItems()}
+                  disabled={shortfallLines.length === 0}
                   title={
                     retailerPhone
-                      ? `Open WhatsApp to ${retailerPhone}`
-                      : 'Copies list; opens WhatsApp if store phone is on file'
+                      ? `Open WhatsApp Web to ${retailerPhone}`
+                      : 'Copies short list; opens WhatsApp Web if store phone is on file'
                   }
                 >
-                  WhatsApp
+                  WhatsApp Web
                 </Button>
                 {order.status === 'Pending' && (
                   <Button
@@ -3353,7 +3372,7 @@ export const OrderDetailsPage: React.FC = () => {
                       );
                       
                       return (
-                        <React.Fragment key={item.medicineId || index}>
+                        <React.Fragment key={fulfillmentLineKey(item, index)}>
                           {/* Medicine Header Row */}
                           <TableRow sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.12)' : 'rgba(0, 0, 0, 0.04)' }}>
                             <TableCell colSpan={2}>
@@ -3631,6 +3650,7 @@ export const OrderDetailsPage: React.FC = () => {
                     const hasAssignedBatch =
                       Boolean(item.batchNumber) ||
                       Boolean(item.batchAllocations && item.batchAllocations.length > 0);
+                    const assignedBatches = assignedBatchLabel(item);
                     const canShowPricingColumns = order.status !== 'Pending' || hasAssignedBatch;
                     const displayGstRate =
                       (item.batchAllocations && item.batchAllocations.length === 1
@@ -3641,9 +3661,7 @@ export const OrderDetailsPage: React.FC = () => {
                       toNumber(taxPercentage) ||
                       5;
                     const batchNumberForDisc =
-                      item.batchAllocations?.length === 1
-                        ? item.batchAllocations[0].batchNumber
-                        : item.batchNumber;
+                      item.batchAllocations?.[0]?.batchNumber || item.batchNumber;
                     const batchForDisc = batchNumberForDisc
                       ? findStockBatch(medSingle, batchNumberForDisc)
                       : undefined;
@@ -3666,7 +3684,7 @@ export const OrderDetailsPage: React.FC = () => {
                         })
                       : toNumber(item.discountPercentage);
                     return (
-                      <TableRow key={item.medicineId || index} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
+                      <TableRow key={fulfillmentLineKey(item, index)} sx={{ bgcolor: item.verified ? 'rgba(76, 175, 80, 0.08)' : 'inherit' }}>
                         <TableCell>
                           <Typography variant="body2" fontWeight="medium">{item.name || 'Unknown'}</Typography>
                           {medSingle?.productId ? (
@@ -3710,15 +3728,13 @@ export const OrderDetailsPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell>
-                          {item.batchAllocations && item.batchAllocations.length === 1
-                            ? item.batchAllocations[0].batchNumber
-                            : item.batchNumber
-                              ? item.batchNumber
-                              : (
-                                  <Typography variant="caption" color="textSecondary">
-                                    Not assigned
-                                  </Typography>
-                                )}
+                          {assignedBatches ? (
+                            assignedBatches
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">
+                              Not assigned
+                            </Typography>
+                          )}
                         </TableCell>
                         <TableCell align="right">
                           {order.status === 'Pending' ? (

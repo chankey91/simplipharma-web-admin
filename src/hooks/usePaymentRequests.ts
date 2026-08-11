@@ -41,12 +41,20 @@ export const useApprovePaymentRequest = () => {
       reviewedBy,
       approvedAmount,
       reviewNote,
+      resettle,
     }: {
       requestId: string;
       reviewedBy: string;
       approvedAmount?: number;
       reviewNote?: string;
-    }) => approvePaymentRequest(requestId, { reviewedBy, approvedAmount, reviewNote }),
+      resettle?: boolean;
+    }) =>
+      approvePaymentRequest(requestId, {
+        reviewedBy,
+        approvedAmount,
+        reviewNote,
+        resettle,
+      }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['paymentRequests'] });
       queryClient.invalidateQueries({ queryKey: ['paymentRequestStatusCounts'] });
@@ -56,6 +64,7 @@ export const useApprovePaymentRequest = () => {
       queryClient.invalidateQueries({ queryKey: ['orderPaymentStatuses'] });
       queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
       queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
       if (result?.orderId) {
         queryClient.invalidateQueries({ queryKey: ['order', result.orderId] });
       }

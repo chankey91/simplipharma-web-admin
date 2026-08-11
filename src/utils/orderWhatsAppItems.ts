@@ -1,5 +1,6 @@
 import { formatOrderNumberForDisplay } from './orderDisplay';
 import { hasBatchAssignment } from './orderTotals';
+import { orderedUnitsFromAllocation } from './schemeFulfillment';
 
 export type WhatsAppOrderLine = {
   name?: string;
@@ -9,11 +10,20 @@ export type WhatsAppOrderLine = {
   medicineId?: string;
   lineType?: string;
   batchNumber?: string;
-  batchAllocations?: unknown[];
+  batchAllocations?: Array<{
+    quantity?: number;
+    allocationFreeQty?: number;
+    freeQuantity?: number;
+  }>;
   verified?: boolean;
 };
 
-function lineQty(line: WhatsAppOrderLine): number {
+function lineName(line: WhatsAppOrderLine): string {
+  return String(line.name || '').trim() || 'Unknown item';
+}
+
+/** Ordered / requested physical qty for the line. */
+export function getLineRequiredQty(line: WhatsAppOrderLine): number {
   const original = Number(line.originalQuantity);
   if (Number.isFinite(original) && original > 0) return Math.floor(original);
   const paid = Number(line.quantity) || 0;
@@ -21,52 +31,67 @@ function lineQty(line: WhatsAppOrderLine): number {
   return Math.max(0, Math.floor(paid + free));
 }
 
-function lineName(line: WhatsAppOrderLine): string {
-  return String(line.name || '').trim() || 'Unknown item';
+/** Physical qty currently batch-assigned (0 if none). */
+export function getLineAllocatedQty(line: WhatsAppOrderLine): number {
+  if (line.lineType === 'product_demand') return 0;
+  const allocs = line.batchAllocations;
+  if (Array.isArray(allocs) && allocs.length > 0) {
+    return allocs.reduce((sum, a) => sum + orderedUnitsFromAllocation(a), 0);
+  }
+  if (line.batchNumber) {
+    const paid = Number(line.quantity) || 0;
+    const free = Number(line.freeQuantity) || 0;
+    return Math.max(0, Math.floor(paid + free));
+  }
+  return 0;
 }
 
-/** Lines not ready for fulfill (no batch) — typical shortfall list for retailer WhatsApp. */
+/**
+ * Not fulfilled (no batch) or partially fulfilled (allocated &lt; required).
+ * Product-demand lines always count as short.
+ */
 export function isShortfallOrderLine(line: WhatsAppOrderLine): boolean {
   if (line.lineType === 'product_demand') return true;
-  return !hasBatchAssignment(line as Parameters<typeof hasBatchAssignment>[0]);
+  if (!hasBatchAssignment(line as Parameters<typeof hasBatchAssignment>[0])) return true;
+  const required = getLineRequiredQty(line);
+  const allocated = getLineAllocatedQty(line);
+  return allocated + 0.001 < required;
 }
 
 export function formatOrderItemsWhatsAppList(
   orderId: string,
   lines: WhatsAppOrderLine[],
-  options?: { shortfallsOnly?: boolean; storeName?: string }
+  options?: { storeName?: string }
 ): string {
-  const shortfallsOnly = options?.shortfallsOnly === true;
-  const rows = (lines || [])
-    .filter((l) => lineName(l) !== 'Unknown item' || lineQty(l) > 0)
-    .filter((l) => (shortfallsOnly ? isShortfallOrderLine(l) : true));
+  const rows = (lines || []).filter((l) => isShortfallOrderLine(l));
 
   const headerBits = [
     `Order #${formatOrderNumberForDisplay(orderId)}`,
     options?.storeName?.trim() ? options.storeName.trim() : null,
   ].filter(Boolean);
 
-  const title = shortfallsOnly
-    ? `Short / unavailable items — ${headerBits.join(' · ')}`
-    : `Order items — ${headerBits.join(' · ')}`;
+  const title = `Short / pending items — ${headerBits.join(' · ')}`;
 
   if (rows.length === 0) {
-    return shortfallsOnly
-      ? `${title}\n\n(No short items right now.)`
-      : `${title}\n\n(No items.)`;
+    return `${title}\n\n(No short or pending items right now.)`;
   }
 
   const body = rows
     .map((l, i) => {
-      const qty = lineQty(l);
-      return `${i + 1}. ${lineName(l)}${qty > 0 ? ` — Qty ${qty}` : ''}`;
+      const required = getLineRequiredQty(l);
+      const allocated = getLineAllocatedQty(l);
+      const shortQty = Math.max(0, required - allocated);
+      if (allocated > 0 && shortQty > 0) {
+        return `${i + 1}. ${lineName(l)} — short Qty ${shortQty} (ordered ${required}, allocated ${allocated})`;
+      }
+      return `${i + 1}. ${lineName(l)}${shortQty > 0 ? ` — Qty ${shortQty}` : ''}`;
     })
     .join('\n');
 
   return `${title}\n\n${body}`;
 }
 
-/** Digits-only international number for wa.me (defaults India +91 for 10-digit mobiles). */
+/** Digits-only international number (defaults India +91 for 10-digit mobiles). */
 export function normalizeWhatsAppPhone(raw: string | undefined | null): string | null {
   const digits = String(raw || '').replace(/\D/g, '');
   if (!digits) return null;
@@ -75,6 +100,7 @@ export function normalizeWhatsAppPhone(raw: string | undefined | null): string |
   return null;
 }
 
+/** Always opens WhatsApp Web (not the desktop/mobile app deep link). */
 export function buildWhatsAppUrl(phone: string, text: string): string {
-  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+  return `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(text)}`;
 }

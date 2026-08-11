@@ -184,6 +184,7 @@ export interface Order {
   creditApplied?: number;
   /** When wallet credit was applied on this order. */
   creditAppliedAt?: 'checkout' | 'dispatch' | 'payment';
+  creditAppliedDate?: Date | any;
   timeline: OrderTimelineEvent[];
   // NEW: Dispatch fields
   dispatchDate?: Date | any;
@@ -206,7 +207,7 @@ export interface Order {
 }
 
 export type PaymentStatus = 'Paid' | 'Unpaid' | 'Partial';
-export type PaymentMethod = 'Cash' | 'Online' | 'Card' | 'UPI' | 'Bank Transfer' | 'Cheque';
+export type PaymentMethod = 'Cash' | 'Online' | 'Card' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Wallet';
 export type PaymentReviewStatus = 'none' | 'pending_admin_review' | 'approved' | 'rejected';
 
 export interface Payment {
@@ -236,7 +237,7 @@ export type PaymentRequestStatus =
   | 'rejected'
   | 'cancelled';
 
-export type PaymentRequestMethod = 'cash' | 'online';
+export type PaymentRequestMethod = 'cash' | 'online' | 'wallet';
 
 export interface PaymentRequestCreditApplication {
   creditNoteId: string;
@@ -268,6 +269,8 @@ export interface PaymentRequest {
   reviewedAt?: Date | any;
   reviewNote?: string;
   rejectionReason?: string;
+  approvedAmount?: number;
+  approvedCreditAmount?: number;
   orderTotalSnapshot: number;
   dueBeforeRequestSnapshot: number;
   creditAvailableSnapshot?: number;

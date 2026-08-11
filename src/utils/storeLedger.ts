@@ -55,12 +55,17 @@ function isCashPayment(method?: string): boolean {
   return m === 'CASH';
 }
 
-/** Payment ledger Vch No.: online → transaction id; cash → — */
+function isWalletPayment(method?: string): boolean {
+  const m = (method || '').toUpperCase();
+  return m.includes('WALLET') || m.includes('CREDIT NOTE');
+}
+
+/** Payment ledger Vch No.: online → transaction id; cash/wallet → — */
 export function resolvePaymentVchNo(
   pay: Payment,
   order?: Pick<Order, 'transactionId' | 'invoiceNumber' | 'id'>
 ): string {
-  if (isCashPayment(pay.paymentMethod)) return '-';
+  if (isCashPayment(pay.paymentMethod) || isWalletPayment(pay.paymentMethod)) return '-';
   return pay.transactionId || order?.transactionId || '-';
 }
 
@@ -95,6 +100,9 @@ export function extractStorePaymentCredits(order: LedgerOrder): Payment[] {
 
 function receiptParticulars(method?: string): { text: string; bold: string } {
   const m = (method || 'Cash').toUpperCase();
+  if (isWalletPayment(method)) {
+    return { text: 'By ', bold: 'WALLET' };
+  }
   if (m.includes('ONLINE') || m.includes('UPI') || m.includes('BANK')) {
     return { text: 'By ', bold: 'BANK / ONLINE' };
   }
@@ -203,11 +211,16 @@ export function buildStoreLedger(
     const noteDate = toLedgerDate(note.creditNoteDate);
     const total = note.totalAmount ?? 0;
     if (total <= 0) continue;
+    // Wallet consumption is posted as By WALLET on the invoice — only unused
+    // credit-note balance stays on the ledger so dues are not double-counted.
+    const used = note.ledgerOnly === true ? 0 : Math.max(0, Number(note.amountUsed ?? 0));
+    const unused = Math.max(0, total - used);
+    if (unused <= 0.01) continue;
     const ref = note.creditNoteNumber || note.id;
     const invoiceRef = note.originalInvoiceNumber || note.orderId || '';
 
     if (beforeRange(noteDate, from)) {
-      openingCredits += total;
+      openingCredits += unused;
     } else if (inRange(noteDate, from, to)) {
       periodLines.push({
         date: noteDate,
@@ -216,7 +229,7 @@ export function buildStoreLedger(
         vchType: 'Credit Note',
         vchNo: ref,
         debit: 0,
-        credit: total,
+        credit: unused,
       });
     }
   }
