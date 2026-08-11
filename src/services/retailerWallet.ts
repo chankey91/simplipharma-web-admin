@@ -237,6 +237,11 @@ export async function getRetailerWalletSummary(
         invoiceNumber: o.invoiceNumber,
         creditApplied,
         orderDate: toDate(o.orderDate),
+        creditAppliedAt: (o as { creditAppliedAt?: 'checkout' | 'dispatch' | 'payment' })
+          .creditAppliedAt,
+        creditAppliedDate: toDate(
+          (o as { creditAppliedDate?: unknown }).creditAppliedDate
+        ),
       };
     })
     .filter((o) => o.creditApplied > 0.01);

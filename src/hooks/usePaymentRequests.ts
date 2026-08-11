@@ -64,6 +64,7 @@ export const useApprovePaymentRequest = () => {
       queryClient.invalidateQueries({ queryKey: ['orderPaymentStatuses'] });
       queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
       queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
       if (result?.orderId) {
         queryClient.invalidateQueries({ queryKey: ['order', result.orderId] });
       }
