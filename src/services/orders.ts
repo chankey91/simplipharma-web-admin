@@ -915,7 +915,7 @@ export const fulfillOrder = async (
       
       // Add optional fields only if they exist and are not undefined
       if (line.batchNumber) cleanItem.batchNumber = line.batchNumber;
-      if (line.batchAllocations && line.batchAllocations.length === 1) {
+      if (Array.isArray(line.batchAllocations) && line.batchAllocations.length >= 1) {
         const allocation = line.batchAllocations[0];
         let invBatch:
           | { purchasePrice?: number; discountPercentage?: number; nonReturnable?: boolean; nrxDrug?: boolean }

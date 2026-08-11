@@ -168,24 +168,10 @@ export function buildStoreLedger(
       const payDate = toLedgerDate(pay.paymentDate);
       const amt = pay.amount ?? 0;
       if (amt <= 0) continue;
-      const walletPay = isWalletPayment(pay.paymentMethod);
 
       if (beforeRange(payDate, from)) {
-        // Credit notes are already ledger credits when issued. Wallet applied
-        // against an invoice is a transfer, not extra credit — net opening 0.
-        if (!walletPay) openingCredits += amt;
+        openingCredits += amt;
       } else if (inRange(payDate, from, to)) {
-        if (walletPay) {
-          periodLines.push({
-            date: payDate,
-            particulars: 'To ',
-            particularsBold: `CREDIT NOTE ADJ (${invoiceRef})`,
-            vchType: 'Credit Note',
-            vchNo: '-',
-            debit: amt,
-            credit: 0,
-          });
-        }
         const { text, bold } = receiptParticulars(pay.paymentMethod);
         periodLines.push({
           date: payDate,
@@ -225,11 +211,16 @@ export function buildStoreLedger(
     const noteDate = toLedgerDate(note.creditNoteDate);
     const total = note.totalAmount ?? 0;
     if (total <= 0) continue;
+    // Wallet consumption is posted as By WALLET on the invoice — only unused
+    // credit-note balance stays on the ledger so dues are not double-counted.
+    const used = note.ledgerOnly === true ? 0 : Math.max(0, Number(note.amountUsed ?? 0));
+    const unused = Math.max(0, total - used);
+    if (unused <= 0.01) continue;
     const ref = note.creditNoteNumber || note.id;
     const invoiceRef = note.originalInvoiceNumber || note.orderId || '';
 
     if (beforeRange(noteDate, from)) {
-      openingCredits += total;
+      openingCredits += unused;
     } else if (inRange(noteDate, from, to)) {
       periodLines.push({
         date: noteDate,
@@ -238,7 +229,7 @@ export function buildStoreLedger(
         vchType: 'Credit Note',
         vchNo: ref,
         debit: 0,
-        credit: total,
+        credit: unused,
       });
     }
   }
