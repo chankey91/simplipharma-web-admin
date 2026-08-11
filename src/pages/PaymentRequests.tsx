@@ -37,6 +37,13 @@ const formatCurrency = (n: number) =>
 
 const methodLabel = (method: string) => (method === 'online' ? 'Online' : 'Cash');
 
+function requestedWallet(r: { creditApplications?: { requestedApplyAmount?: number }[] }) {
+  return (r.creditApplications || []).reduce(
+    (sum, a) => sum + Math.max(0, Number(a.requestedApplyAmount || 0)),
+    0
+  );
+}
+
 export const PaymentRequestsPage: React.FC = () => {
   const [tab, setTab] = useState<RequestTab>('pending_admin_review');
   const { data: rows, isLoading, error, refetch } = usePaymentRequestsByStatus(tab);
@@ -48,14 +55,22 @@ export const PaymentRequestsPage: React.FC = () => {
   const { alert } = useAppDialog();
   const [rejectReasonById, setRejectReasonById] = useState<Record<string, string>>({});
 
-  const handleApprove = async (requestId: string) => {
+  const handleApprove = async (requestId: string, resettle = false) => {
     try {
       const result = await approveMutation.mutateAsync({
         requestId,
         reviewedBy: auth.currentUser?.email || auth.currentUser?.uid || 'admin',
+        resettle,
       });
       if (result?.paymentStatus === 'Paid') {
-        await alert('Payment approved. Order is now marked as Paid.', { severity: 'success' });
+        await alert('Payment applied. Order is now marked as Paid.', { severity: 'success' });
+      } else if (result?.paymentStatus === 'Partial') {
+        await alert('Payment applied. Order is partially paid.', { severity: 'success' });
+      } else {
+        await alert(
+          'Request saved, but the invoice is still unpaid. Check wallet credit notes and try Apply to invoice.',
+          { severity: 'warning' }
+        );
       }
     } catch (err: any) {
       await alert(err?.message || 'Failed to approve payment request', { severity: 'error' });
@@ -105,8 +120,9 @@ export const PaymentRequestsPage: React.FC = () => {
       </Box>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Retailer-submitted payment requests for delivered invoices. Approve to post payment on order,
-        or reject with reason.
+        Retailer/SO payment requests for delivered invoices. Approve posts cash/online plus wallet
+        credit. Wallet-only requests show ₹0.00 requested — they still settle the invoice when
+        approved.
       </Typography>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
@@ -122,7 +138,8 @@ export const PaymentRequestsPage: React.FC = () => {
               <TableCell>Invoice</TableCell>
               <TableCell>Retailer</TableCell>
               <TableCell>Method</TableCell>
-              <TableCell align="right">Requested</TableCell>
+              <TableCell align="right">Cash / online</TableCell>
+              <TableCell align="right">Wallet</TableCell>
               <TableCell align="right">Due snapshot</TableCell>
               <TableCell>Transaction / Ref</TableCell>
               <TableCell>Screenshot</TableCell>
@@ -135,7 +152,7 @@ export const PaymentRequestsPage: React.FC = () => {
           <TableBody>
             {(rows ?? []).length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} align="center">
+                <TableCell colSpan={12} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
                     No requests in this status.
                   </Typography>
@@ -157,6 +174,7 @@ export const PaymentRequestsPage: React.FC = () => {
                   </TableCell>
                   <TableCell>{methodLabel(r.method)}</TableCell>
                   <TableCell align="right">{formatCurrency(r.requestedAmount)}</TableCell>
+                  <TableCell align="right">{formatCurrency(requestedWallet(r))}</TableCell>
                   <TableCell align="right">{formatCurrency(r.dueBeforeRequestSnapshot || 0)}</TableCell>
                   <TableCell>{r.transactionId || r.cashReference || '—'}</TableCell>
                   <TableCell>
@@ -231,6 +249,16 @@ export const PaymentRequestsPage: React.FC = () => {
                           Reject
                         </Button>
                       </Box>
+                    ) : r.status === 'approved' &&
+                      (orderPaymentByIdMap?.get(r.orderId) || 'Unpaid') !== 'Paid' ? (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => handleApprove(r.id, true)}
+                        disabled={approveMutation.isPending || rejectMutation.isPending}
+                      >
+                        Apply to invoice
+                      </Button>
                     ) : (
                       '—'
                     )}
