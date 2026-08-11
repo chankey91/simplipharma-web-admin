@@ -268,6 +268,8 @@ export interface PaymentRequest {
   reviewedAt?: Date | any;
   reviewNote?: string;
   rejectionReason?: string;
+  approvedAmount?: number;
+  approvedCreditAmount?: number;
   orderTotalSnapshot: number;
   dueBeforeRequestSnapshot: number;
   creditAvailableSnapshot?: number;
