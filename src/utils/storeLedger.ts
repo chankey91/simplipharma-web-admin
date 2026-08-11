@@ -55,12 +55,17 @@ function isCashPayment(method?: string): boolean {
   return m === 'CASH';
 }
 
-/** Payment ledger Vch No.: online → transaction id; cash → — */
+function isWalletPayment(method?: string): boolean {
+  const m = (method || '').toUpperCase();
+  return m.includes('WALLET') || m.includes('CREDIT NOTE');
+}
+
+/** Payment ledger Vch No.: online → transaction id; cash/wallet → — */
 export function resolvePaymentVchNo(
   pay: Payment,
   order?: Pick<Order, 'transactionId' | 'invoiceNumber' | 'id'>
 ): string {
-  if (isCashPayment(pay.paymentMethod)) return '-';
+  if (isCashPayment(pay.paymentMethod) || isWalletPayment(pay.paymentMethod)) return '-';
   return pay.transactionId || order?.transactionId || '-';
 }
 
@@ -95,6 +100,9 @@ export function extractStorePaymentCredits(order: LedgerOrder): Payment[] {
 
 function receiptParticulars(method?: string): { text: string; bold: string } {
   const m = (method || 'Cash').toUpperCase();
+  if (isWalletPayment(method)) {
+    return { text: 'By ', bold: 'WALLET' };
+  }
   if (m.includes('ONLINE') || m.includes('UPI') || m.includes('BANK')) {
     return { text: 'By ', bold: 'BANK / ONLINE' };
   }
@@ -160,10 +168,24 @@ export function buildStoreLedger(
       const payDate = toLedgerDate(pay.paymentDate);
       const amt = pay.amount ?? 0;
       if (amt <= 0) continue;
+      const walletPay = isWalletPayment(pay.paymentMethod);
 
       if (beforeRange(payDate, from)) {
-        openingCredits += amt;
+        // Credit notes are already ledger credits when issued. Wallet applied
+        // against an invoice is a transfer, not extra credit — net opening 0.
+        if (!walletPay) openingCredits += amt;
       } else if (inRange(payDate, from, to)) {
+        if (walletPay) {
+          periodLines.push({
+            date: payDate,
+            particulars: 'To ',
+            particularsBold: `CREDIT NOTE ADJ (${invoiceRef})`,
+            vchType: 'Credit Note',
+            vchNo: '-',
+            debit: amt,
+            credit: 0,
+          });
+        }
         const { text, bold } = receiptParticulars(pay.paymentMethod);
         periodLines.push({
           date: payDate,

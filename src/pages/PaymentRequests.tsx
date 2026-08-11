@@ -35,7 +35,15 @@ type RequestTab = 'pending_admin_review' | 'approved' | 'rejected';
 const formatCurrency = (n: number) =>
   `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const methodLabel = (method: string) => (method === 'online' ? 'Online' : 'Cash');
+const methodLabel = (
+  method: string,
+  requestedAmount = 0,
+  walletAmount = 0
+) => {
+  if (method === 'wallet' || (requestedAmount <= 0.01 && walletAmount > 0.01)) return 'Wallet';
+  if (method === 'online') return 'Online';
+  return 'Cash';
+};
 
 function requestedWallet(r: { creditApplications?: { requestedApplyAmount?: number }[] }) {
   return (r.creditApplications || []).reduce(
@@ -172,7 +180,7 @@ export const PaymentRequestsPage: React.FC = () => {
                       {r.retailerEmail || r.retailerId}
                     </Typography>
                   </TableCell>
-                  <TableCell>{methodLabel(r.method)}</TableCell>
+                  <TableCell>{methodLabel(r.method, r.requestedAmount, requestedWallet(r))}</TableCell>
                   <TableCell align="right">{formatCurrency(r.requestedAmount)}</TableCell>
                   <TableCell align="right">{formatCurrency(requestedWallet(r))}</TableCell>
                   <TableCell align="right">{formatCurrency(r.dueBeforeRequestSnapshot || 0)}</TableCell>

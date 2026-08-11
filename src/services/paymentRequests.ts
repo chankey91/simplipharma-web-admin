@@ -373,14 +373,15 @@ export const approvePaymentRequest = async (
   const nextDue = roundMoney2(Math.max(0, totalAmount - nextPaid));
   const nextStatus: 'Paid' | 'Partial' | 'Unpaid' =
     nextDue <= 0.01 ? 'Paid' : nextPaid > 0.01 ? 'Partial' : 'Unpaid';
-  const paymentMethod = request.method === 'online' ? 'Online' : 'Cash';
+  const cashMethod = request.method === 'online' ? 'Online' : 'Cash';
+  const paymentMethod = cashToPost > 0.01 ? cashMethod : 'Wallet';
 
   if (cashToPost > 0.01) {
     await addDoc(collection(db, 'orders', request.orderId, 'payments'), {
       orderId: request.orderId,
       amount: cashToPost,
       paymentDate: Timestamp.now(),
-      paymentMethod,
+      paymentMethod: cashMethod,
       transactionId: request.transactionId || request.cashReference || null,
       notes: `Approved payment request ${requestId}`,
       paymentRequestId: requestId,
@@ -394,7 +395,7 @@ export const approvePaymentRequest = async (
       orderId: request.orderId,
       amount: approvedCredit,
       paymentDate: Timestamp.now(),
-      paymentMethod,
+      paymentMethod: 'Wallet',
       notes: `Wallet / credit notes — payment request ${requestId}`,
       paymentRequestId: requestId,
       settlementKind: 'wallet',
@@ -416,6 +417,7 @@ export const approvePaymentRequest = async (
       ? {
           creditApplied: roundMoney2(previousCredit + approvedCredit),
           creditAppliedAt: 'payment',
+          creditAppliedDate: Timestamp.now(),
         }
       : {}),
   });

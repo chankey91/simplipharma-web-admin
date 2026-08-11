@@ -29,6 +29,8 @@ export type WalletOrderDebit = {
   invoiceNumber?: string;
   creditApplied: number;
   orderDate?: Date | null;
+  creditAppliedAt?: 'checkout' | 'dispatch' | 'payment';
+  creditAppliedDate?: Date | null;
 };
 
 export type WalletTxn = {
@@ -178,7 +180,11 @@ export function buildWalletTransactions(
     label: 'Used on invoice',
     ref: o.invoiceNumber?.trim() || o.id,
     amount: Math.max(0, o.creditApplied || 0),
-    at: asDate(o.orderDate),
+    at: asDate(
+      o.creditAppliedAt === 'payment'
+        ? o.creditAppliedDate ?? o.orderDate
+        : o.orderDate
+    ),
   }));
 
   const fromDebits: WalletTxn[] = debitNotes.map((n) => ({
