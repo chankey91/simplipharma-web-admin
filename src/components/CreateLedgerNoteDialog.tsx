@@ -37,11 +37,20 @@ type Props = {
 
 const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
 
-/** Parse `<input type="date">` value as local calendar day (avoid UTC shift from `new Date('yyyy-MM-dd')`). */
+/** Parse `<input type="date">` value as local calendar day with the current wall-clock time. */
 function parseLocalDateInput(value: string): Date {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
   if (!m) return new Date(value);
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
+  const now = new Date();
+  return new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds(),
+  );
 }
 
 function mapCreateNoteError(e: unknown): string {
