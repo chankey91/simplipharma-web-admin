@@ -32,6 +32,15 @@ const resolveTownDistrict = (
   return parseAddress(store?.address);
 };
 
+function resolvePackaging(med?: { unit?: string; description?: string } | null): string {
+  let packaging = med?.unit?.trim();
+  if (!packaging && med?.description) {
+    const match = med.description.match(/Packaging:\s*(.+)/i);
+    if (match?.[1]) packaging = match[1].trim();
+  }
+  return packaging || '—';
+}
+
 export const exportPendingOrdersByStore = async (
   orders: Order[],
   stores: User[],
@@ -47,8 +56,8 @@ export const exportPendingOrdersByStore = async (
     return;
   }
 
-  // Get all medicines with manufacturer info
-  const medicineMap = new Map<string, string>();
+  // Get all medicines with manufacturer + packaging info
+  const medicineMap = new Map<string, { manufacturer: string; packaging: string }>();
   const allMedicineIds = new Set<string>();
   
   // Collect all medicine IDs
@@ -60,13 +69,16 @@ export const exportPendingOrdersByStore = async (
     }
   }
   
-  // Fetch manufacturer info for all medicines
+  // Fetch manufacturer + packaging for all medicines
   for (const medicineId of allMedicineIds) {
     if (!medicineMap.has(medicineId)) {
       try {
         const med = await getMedicineById(medicineId);
         if (med) {
-          medicineMap.set(medicineId, med.manufacturer);
+          medicineMap.set(medicineId, {
+            manufacturer: med.manufacturer || 'N/A',
+            packaging: resolvePackaging(med),
+          });
         }
       } catch (error) {
         console.warn(`Failed to fetch medicine ${medicineId}:`, error);
@@ -82,6 +94,7 @@ export const exportPendingOrdersByStore = async (
     storeId: string;
     medicineName: string;
     manufacturer: string;
+    packaging: string;
     quantity: number;
     orderNumbers: Set<string>;
   }>();
@@ -94,7 +107,9 @@ export const exportPendingOrdersByStore = async (
     const orderNumber = order.invoiceNumber || orderReferenceWithoutInvoice(order.id);
     
     for (const medicine of order.medicines) {
-      const manufacturer = medicineMap.get(medicine.medicineId) || 'N/A';
+      const medInfo = medicine.medicineId ? medicineMap.get(medicine.medicineId) : undefined;
+      const manufacturer = medInfo?.manufacturer || medicine.manufacturerName || 'N/A';
+      const packaging = medInfo?.packaging || medicine.requestedUnit?.trim() || '—';
       const key = `${storeId}|${medicine.name}|${manufacturer}`;
       
       if (medicineAggregate.has(key)) {
@@ -107,6 +122,7 @@ export const exportPendingOrdersByStore = async (
           storeId,
           medicineName: medicine.name,
           manufacturer,
+          packaging,
           quantity: medicine.quantity || 0,
           orderNumbers: new Set([orderNumber])
         });
@@ -125,6 +141,7 @@ export const exportPendingOrdersByStore = async (
         district: district,
         email: data.store?.email || 'N/A',
         medicineName: data.medicineName,
+        packaging: data.packaging,
         quantity: data.quantity,
         manufacturer: data.manufacturer,
         orderNumbers: Array.from(data.orderNumbers).sort().join(', '), // Comma-separated, sorted
@@ -143,7 +160,7 @@ export const exportPendingOrdersByStore = async (
   // Prepare Excel data
   const excelData: any[][] = [
     // Header row
-    ['SR', 'Store Code', 'Shop Name', 'Town Name', 'Distrect', 'Email', 'MEDICINES LIST', 'Quantity', 'Manufacturer', 'Order', 'Remark']
+    ['SR', 'Store Code', 'Shop Name', 'Town Name', 'Distrect', 'Email', 'MEDICINES LIST', 'Packaging', 'Quantity', 'Manufacturer', 'Order', 'Remark']
   ];
 
   // Add data rows
@@ -156,6 +173,7 @@ export const exportPendingOrdersByStore = async (
       row.district,
       row.email,
       row.medicineName,
+      row.packaging,
       row.quantity || '', // Empty if quantity is 0
       row.manufacturer,
       row.orderNumbers, // Comma-separated order numbers
@@ -176,6 +194,7 @@ export const exportPendingOrdersByStore = async (
     { wch: 15 },  // Distrect
     { wch: 30 },  // Email
     { wch: 40 },  // MEDICINES LIST
+    { wch: 18 },  // Packaging
     { wch: 10 },  // Quantity
     { wch: 30 },  // Manufacturer
     { wch: 30 },  // Order
@@ -209,7 +228,7 @@ export const exportPendingOrdersProductSummary = async (
     return;
   }
 
-  const medicineMap = new Map<string, { manufacturer: string; currentStock: number }>();
+  const medicineMap = new Map<string, { manufacturer: string; packaging: string; currentStock: number }>();
   const allMedicineIds = new Set<string>();
 
   for (const order of orders) {
@@ -235,6 +254,7 @@ export const exportPendingOrdersProductSummary = async (
         );
         medicineMap.set(medicineId, {
           manufacturer: med.manufacturer || 'N/A',
+          packaging: resolvePackaging(med),
           currentStock: fromCurrent ?? fromStock ?? fromBatches,
         });
       }
@@ -249,6 +269,7 @@ export const exportPendingOrdersProductSummary = async (
       medicineId: string;
       medicineName: string;
       manufacturer: string;
+      packaging: string;
       totalQty: number;
       currentStock: number | null;
       orderNumbers: Set<string>;
@@ -262,6 +283,7 @@ export const exportPendingOrdersProductSummary = async (
       const key = productAggregateKey(medicine);
       const medInfo = medicine.medicineId ? medicineMap.get(medicine.medicineId) : undefined;
       const manufacturer = medInfo?.manufacturer || medicine.manufacturerName || 'N/A';
+      const packaging = medInfo?.packaging || medicine.requestedUnit?.trim() || '—';
       const qty = medicine.quantity || 0;
       const currentStock = medInfo != null ? medInfo.currentStock : null;
 
@@ -277,6 +299,7 @@ export const exportPendingOrdersProductSummary = async (
           medicineId: medicine.medicineId || '',
           medicineName: medicine.name,
           manufacturer,
+          packaging,
           totalQty: qty,
           currentStock,
           orderNumbers: new Set([orderNumber]),
@@ -295,6 +318,7 @@ export const exportPendingOrdersProductSummary = async (
       'Medicine Name',
       'Medicine ID',
       'Manufacturer',
+      'Packaging',
       'Total Quantity',
       'Current Stock',
       'Order Count',
@@ -309,6 +333,7 @@ export const exportPendingOrdersProductSummary = async (
       row.medicineName,
       row.medicineId || '—',
       row.manufacturer,
+      row.packaging,
       row.totalQty,
       row.currentStock != null ? row.currentStock : '—',
       row.orderNumbers.size,
@@ -325,6 +350,7 @@ export const exportPendingOrdersProductSummary = async (
     { wch: 40 },
     { wch: 28 },
     { wch: 30 },
+    { wch: 18 },
     { wch: 14 },
     { wch: 14 },
     { wch: 12 },
