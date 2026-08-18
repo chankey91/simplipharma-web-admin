@@ -33,7 +33,7 @@ async function assertCanIngest(uid) {
     const role = await (0, panelAuth_1.getUserRole)(uid);
     if ((0, panelAuth_1.isPurchaseOfficerRole)(role))
         return;
-    await (0, panelAuth_1.assertAdminOrOperations)(uid);
+    await (0, panelAuth_1.assertCanWriteModule)(uid, 'purchases');
 }
 async function collectPendingMedicineIds(db) {
     var _a;

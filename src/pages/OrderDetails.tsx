@@ -139,6 +139,7 @@ import {
 } from '../utils/orderFulfillmentDiscount';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContext';
+import { useAuth } from '../context/AuthContext';
 import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
 
@@ -414,6 +415,8 @@ export const OrderDetailsPage: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { alert, confirm, prompt } = useAppDialog();
+  const { canWrite } = useAuth();
+  const canEditOrders = canWrite('orders');
   const { setGuardActive, allowNextNavigation, guardedNavigate, confirmLeaveIfNeeded } =
     useFulfillmentLeaveGuard();
   const { data: order, isLoading } = useOrder(orderId || '');
@@ -509,7 +512,7 @@ export const OrderDetailsPage: React.FC = () => {
 
   const persistFulfillmentDraft = useCallback(
     async (meds: any[], taxPct?: number) => {
-      if (!order?.id || order.status !== 'Pending') return;
+      if (!canEditOrders || !order?.id || order.status !== 'Pending') return;
       const payload = {
         medicines: serializeDraftMedicines(meds),
         taxPercentage: taxPct ?? order.taxPercentage ?? 5,
@@ -518,12 +521,12 @@ export const OrderDetailsPage: React.FC = () => {
       await saveOrderFulfillmentDraft(order.id, payload);
       // Do not invalidate order lists here — that refetch remounted Pending UI / conflict checks.
     },
-    [order?.id, order?.status, order?.taxPercentage]
+    [canEditOrders, order?.id, order?.status, order?.taxPercentage]
   );
 
   const scheduleFulfillmentDraftSave = useCallback(
     (meds: any[]) => {
-      if (!order?.id || order.status !== 'Pending') return;
+      if (!canEditOrders || !order?.id || order.status !== 'Pending') return;
       if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = setTimeout(() => {
         void persistFulfillmentDraft(meds).catch((err) =>
@@ -531,7 +534,7 @@ export const OrderDetailsPage: React.FC = () => {
         );
       }, 600);
     },
-    [order?.id, order?.status, persistFulfillmentDraft]
+    [canEditOrders, order?.id, order?.status, persistFulfillmentDraft]
   );
 
   const { data: trays, isError: traysQueryError, error: traysQueryErr, isFetching: traysFetching } = useTrays();
@@ -918,7 +921,7 @@ export const OrderDetailsPage: React.FC = () => {
         );
         if (cancelled) return;
         orderDemandRepairAttempted.current = repairAttemptKey;
-        if (changed) {
+        if (changed && canEditOrders) {
           try {
             await updateOrderMedicines(order.id, repaired);
             fulfilledUiFrozenRef.current = null;
@@ -966,7 +969,7 @@ export const OrderDetailsPage: React.FC = () => {
         return { ...prev, medicines: repairedMapped };
       });
 
-      if (changed) {
+      if (changed && canEditOrders) {
         try {
           await updateOrderMedicines(order.id, repaired);
           queryClient.invalidateQueries({ queryKey: ['order', order.id] });
@@ -999,6 +1002,7 @@ export const OrderDetailsPage: React.FC = () => {
     purchaseDiscountLookup,
     fulfillmentInitOrderId,
     queryClient,
+    canEditOrders,
   ]);
 
   // Re-apply batch/PI trade discount only while Pending (before fulfill).
@@ -1171,6 +1175,7 @@ export const OrderDetailsPage: React.FC = () => {
 
   // Auto-restore when cancel never put stock back (failed restore, or retailer/SO cancel after fulfill).
   useEffect(() => {
+    if (!canEditOrders) return;
     if (!order?.id || order.status !== 'Cancelled') return;
     if (order.stockRestoredOnCancel === true) return;
     if (autoStockRestoreRef.current === order.id) return;
@@ -1204,9 +1209,10 @@ export const OrderDetailsPage: React.FC = () => {
       });
     // Intentionally omit mutation object from deps — run once per order id.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [order?.id, order?.status, order?.stockRestoredOnCancel, order?.cancelReason, alert]);
+  }, [canEditOrders, order?.id, order?.status, order?.stockRestoredOnCancel, order?.cancelReason, alert]);
 
   useEffect(() => {
+    if (!canEditOrders) return;
     if (!order?.id) return;
     if (order.status === 'Cancelled') return;
     if (!medicines?.length) return;
@@ -1274,6 +1280,7 @@ export const OrderDetailsPage: React.FC = () => {
     allBatchesAssignedForTotals,
     medicines,
     queryClient,
+    canEditOrders,
   ]);
 
   const handleResyncDemandLinesFromPi = useCallback(async () => {
@@ -2691,6 +2698,13 @@ export const OrderDetailsPage: React.FC = () => {
         : 0;
 
     if (order?.status === 'Pending') {
+      if (!canEditOrders) {
+        return (
+          <Typography variant={allocation ? 'caption' : 'body2'}>
+            {discountPct}%
+          </Typography>
+        );
+      }
       return (
         <TextField
           size="small"
@@ -2806,6 +2820,7 @@ export const OrderDetailsPage: React.FC = () => {
       ? liveBreakdown.grandTotal
       : toNumber(order.totalAmount);
   const effectiveDueAmount = Math.max(0, effectiveOrderTotal - (order.paidAmount ?? 0));
+  const showPendingActions = order.status === 'Pending' && canEditOrders;
 
   return (
     <Box>
@@ -2819,7 +2834,7 @@ export const OrderDetailsPage: React.FC = () => {
         </IconButton>
         <Typography variant="h4">Order #{formatOrderNumberForDisplay(order.id)}</Typography>
         <Box sx={{ flexGrow: 1 }} />
-        {hasFulfilledProductDemands && (
+        {hasFulfilledProductDemands && canEditOrders && (
           <Button
             variant="outlined"
             color="primary"
@@ -2830,7 +2845,7 @@ export const OrderDetailsPage: React.FC = () => {
             {resyncingDemandLines ? 'Syncing PI…' : 'Sync from purchase invoice'}
           </Button>
         )}
-        {canRecalculatePricing && (
+        {canRecalculatePricing && canEditOrders && (
           <Button
             variant="outlined"
             startIcon={recalculatingPricing ? <CircularProgress size={18} /> : <Refresh />}
@@ -2842,7 +2857,7 @@ export const OrderDetailsPage: React.FC = () => {
             Recalculate pricing
           </Button>
         )}
-        {order.status === 'Order Fulfillment' && (
+        {canEditOrders && order.status === 'Order Fulfillment' && (
           <Button
             variant="outlined"
             color="warning"
@@ -2855,7 +2870,7 @@ export const OrderDetailsPage: React.FC = () => {
             Un-fulfill
           </Button>
         )}
-        {order.status !== 'Cancelled' && order.status !== 'In Transit' && order.status !== 'Delivered' && (
+        {canEditOrders && order.status !== 'Cancelled' && order.status !== 'In Transit' && order.status !== 'Delivered' && (
           <Button
             variant="outlined"
             color="error"
@@ -3094,6 +3109,7 @@ export const OrderDetailsPage: React.FC = () => {
                   <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
                     <strong>Processed By:</strong> {order.processedBy || processedBy || 'Not assigned'}
                   </Typography>
+                  {canEditOrders && (
                   <Button
                     size="small"
                     variant="outlined"
@@ -3107,6 +3123,7 @@ export const OrderDetailsPage: React.FC = () => {
                   >
                     {(order.trayNumber || order.processedBy || trayNumber || processedBy) ? 'Change' : 'Assign'}
                   </Button>
+                  )}
                 </Box>
               </CardContent>
             </Card>
@@ -3171,7 +3188,7 @@ export const OrderDetailsPage: React.FC = () => {
                 >
                   WhatsApp Web
                 </Button>
-                {order.status === 'Pending' && (
+                {showPendingActions && (
                   <Button
                     size="small"
                     variant="outlined"
@@ -3197,7 +3214,7 @@ export const OrderDetailsPage: React.FC = () => {
                     <TableCell align="right">GST %</TableCell>
                     <TableCell align="right">Disc %</TableCell>
                     <TableCell align="right">Total</TableCell>
-                    {order.status === 'Pending' && <TableCell align="center">Actions</TableCell>}
+                    {showPendingActions && <TableCell align="center">Actions</TableCell>}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -3206,7 +3223,7 @@ export const OrderDetailsPage: React.FC = () => {
                       return null;
                     }
                     if ((item as any).lineType === 'product_demand') {
-                      const colSpan = order.status === 'Pending' ? 11 : 10;
+                      const colSpan = showPendingActions ? 11 : 10;
                       const pid = (item as OrderMedicine).productDemandId;
                       const dDoc = pid ? demandById.get(pid) : undefined;
                       const isRejected = dDoc?.status === 'rejected';
@@ -3290,7 +3307,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 No inventory batch on this line — map the product in Product requests when ready.
                               </Typography>
                             ) : null}
-                            {showFulfill ? (
+                            {showFulfill && canEditOrders ? (
                               <Button
                                 size="small"
                                 variant="contained"
@@ -3451,7 +3468,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 ₹{lineInvoiceAmt.toFixed(2)}
                               </Typography>
                             </TableCell>
-                            {order.status === 'Pending' && (
+                            {showPendingActions && (
                               <TableCell align="center">
                                 <Box display="flex" gap={0.5} justifyContent="center">
                                   <IconButton
@@ -3588,7 +3605,7 @@ export const OrderDetailsPage: React.FC = () => {
                                     ₹{batchTotal.toFixed(2)}
                                   </Typography>
                                 </TableCell>
-                                {order.status === 'Pending' && <TableCell />}
+                                {showPendingActions && <TableCell />}
                               </TableRow>
                             );
                           })}
@@ -3867,7 +3884,7 @@ export const OrderDetailsPage: React.FC = () => {
                             ? `₹${orderLineAmountAfterDiscount(item, medSingle, taxPercentage, purchaseDiscountLookup, { lockPersistedDiscount: order.status !== 'Pending' }).toFixed(2)}`
                             : <Typography variant="caption" color="textSecondary">-</Typography>}
                         </TableCell>
-                        {order.status === 'Pending' && (
+                        {showPendingActions && (
                           <TableCell align="center">
                             <Box display="flex" gap={0.5} justifyContent="center">
                               <IconButton
@@ -3922,7 +3939,7 @@ export const OrderDetailsPage: React.FC = () => {
               </Table>
             </TableContainer>
 
-            {order.status === 'Pending' && (
+            {showPendingActions && (
               <Box display="flex" justifyContent="flex-end" mt={3} flexDirection="column" alignItems="flex-end" gap={1}>
                 {(() => {
                   const readyCount = fulfillmentData.medicines.filter(
@@ -4049,7 +4066,7 @@ export const OrderDetailsPage: React.FC = () => {
                 </Box>
 
                 {/* Actions - only when dispatched */}
-                {(order.status === 'In Transit' || order.status === 'Delivered') && (
+                {(order.status === 'In Transit' || order.status === 'Delivered') && canEditOrders && (
                   <>
                     {order.paymentReviewStatus === 'pending_admin_review' ? (
                       <Alert severity="warning" sx={{ mb: 1 }}>
@@ -4135,7 +4152,7 @@ export const OrderDetailsPage: React.FC = () => {
         {/* Shipping Info */}
         <Grid item xs={12} md={4}>
 
-          {order.status === 'Order Fulfillment' && (
+          {order.status === 'Order Fulfillment' && canEditOrders && (
             <Paper sx={{ p: 3 }}>
               <Typography variant="h6" gutterBottom>Shipping Details</Typography>
               <TextField
@@ -4185,6 +4202,7 @@ export const OrderDetailsPage: React.FC = () => {
               <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>Tracking Number:</Typography>
               <Typography variant="body1" gutterBottom>{order.trackingNumber}</Typography>
               
+              {canEditOrders && (
               <Button
                 fullWidth
                 variant="contained"
@@ -4194,6 +4212,7 @@ export const OrderDetailsPage: React.FC = () => {
               >
                 Mark as Delivered
               </Button>
+              )}
             </Paper>
           )}
 

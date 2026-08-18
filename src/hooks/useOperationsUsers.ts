@@ -3,8 +3,9 @@ import {
   getOperationsUsers,
   createOperationsUser,
   updateOperationsUserProfile,
+  type CreatePanelUserInput,
 } from '../services/operationsUsers';
-import { User } from '../types';
+import type { UpdatePanelUserProfile } from '../services/operationsUsers';
 
 export const useOperationsUsers = () => {
   return useQuery({
@@ -19,8 +20,7 @@ export const useOperationsUsers = () => {
 export const useCreateOperationsUser = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: Partial<User> & { email: string; initialPassword: string }) =>
-      createOperationsUser(data),
+    mutationFn: (data: CreatePanelUserInput) => createOperationsUser(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['operationsUsers'] });
     },
@@ -30,10 +30,8 @@ export const useCreateOperationsUser = () => {
 export const useUpdateOperationsUserProfile = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: {
-      userId: string;
-      data: { displayName?: string; phoneNumber?: string; isActive?: boolean };
-    }) => updateOperationsUserProfile(args.userId, args.data),
+    mutationFn: (args: { userId: string; data: UpdatePanelUserProfile }) =>
+      updateOperationsUserProfile(args.userId, args.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['operationsUsers'] });
     },

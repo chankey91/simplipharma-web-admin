@@ -29,12 +29,14 @@ type Props = {
   open: boolean;
   store: User | null;
   onClose: () => void;
+  /** Hide credit/debit posting. */
+  readOnly?: boolean;
 };
 
 const formatAmount = (n: number) =>
   `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose }) => {
+export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, readOnly }) => {
   const retailerId = store?.id || '';
   const { data, isLoading, error, refetch, isFetching } = useRetailerWallet(retailerId, open);
   const invalidateWallet = useInvalidateRetailerWallet();
@@ -97,6 +99,7 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose }) 
                     {formatAmount(data?.available ?? 0)}
                   </Typography>
                 </Box>
+                {!readOnly ? (
                 <Box display="flex" gap={1} flexWrap="wrap">
                   <Button variant="outlined" color="success" onClick={() => setLedgerKind('credit')}>
                     Credit
@@ -105,6 +108,7 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose }) 
                     Debit
                   </Button>
                 </Box>
+                ) : null}
               </Box>
 
               <Alert severity="info" sx={{ mb: 2 }}>
@@ -214,14 +218,16 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose }) 
         </DialogActions>
       </Dialog>
 
-      <CreateLedgerNoteDialog
-        open={ledgerKind != null}
-        kind={ledgerKind ?? 'debit'}
-        initialRetailerId={retailerId}
-        lockRetailer
-        onClose={() => setLedgerKind(null)}
-        onCreated={handleNoteCreated}
-      />
+      {!readOnly ? (
+        <CreateLedgerNoteDialog
+          open={ledgerKind != null}
+          kind={ledgerKind ?? 'debit'}
+          initialRetailerId={retailerId}
+          lockRetailer
+          onClose={() => setLedgerKind(null)}
+          onCreated={handleNoteCreated}
+        />
+      ) : null}
     </>
   );
 };

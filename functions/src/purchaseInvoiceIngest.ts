@@ -4,7 +4,7 @@
  */
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import { assertAdminOrOperations, getUserRole, isPurchaseOfficerRole } from './panelAuth';
+import { assertCanWriteModule, getUserRole, isPurchaseOfficerRole } from './panelAuth';
 import { extractInvoiceFromFile, normalizeGstin } from './purchaseInvoiceExtract';
 import { getTypesenseClient, TYPESENSE_COLLECTION } from './typesenseMedicines';
 import { ff } from './functionRegion';
@@ -29,7 +29,7 @@ function stripUndefinedDeep<T>(value: T): T {
 async function assertCanIngest(uid: string): Promise<void> {
   const role = await getUserRole(uid);
   if (isPurchaseOfficerRole(role)) return;
-  await assertAdminOrOperations(uid);
+  await assertCanWriteModule(uid, 'purchases');
 }
 
 async function collectPendingMedicineIds(

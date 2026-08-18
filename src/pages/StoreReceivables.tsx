@@ -47,6 +47,7 @@ import {
 } from '../utils/retailerPaymentBlock';
 import { Order } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useAuth } from '../context/AuthContext';
 
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -59,6 +60,8 @@ const paymentChipColor = (status?: string): 'success' | 'warning' | 'error' | 'd
 };
 
 export const StoreReceivablesPage: React.FC = () => {
+  const { canWrite } = useAuth();
+  const canEditReceivables = canWrite('receivables');
   const { data: orders, isLoading: ordersLoading } = useReceivableOrders();
   const { data: stores, isLoading: storesLoading } = useStores();
   const grantOverrideMutation = useGrantOrderBlockOverride();
@@ -372,7 +375,7 @@ export const StoreReceivablesPage: React.FC = () => {
                       overdue={overdueRetailerIds.has(row.retailerId)}
                       overrideUntil={overrideUntilByRetailerId.get(row.retailerId)}
                       onGrantOverride={handleGrantOrderOverride}
-                      disabled={grantOverrideMutation.isPending}
+                      disabled={grantOverrideMutation.isPending || !canEditReceivables}
                     />
                   </TableCell>
                   <TableCell align="right">{row.orderCount}</TableCell>

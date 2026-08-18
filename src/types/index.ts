@@ -283,7 +283,19 @@ export interface User {
   id: string;
   uid: string;
   email: string;
-  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations' | 'purchaseOfficer';
+  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations' | 'purchaseOfficer' | 'office';
+  /** Custom sidebar paths for office/operations panel users. */
+  menuPaths?: string[];
+  /** Per-module write flags (office default: stores/receivables/orders false). */
+  writeAccess?: {
+    stores?: boolean;
+    receivables?: boolean;
+    orders?: boolean;
+    purchases?: boolean;
+    inventory?: boolean;
+  };
+  /** After login; office defaults to /stores. */
+  homePath?: string;
   firstName?: string;
   lastName?: string;
   salesOfficerId?: string; // For retailers: which Sales Officer manages them

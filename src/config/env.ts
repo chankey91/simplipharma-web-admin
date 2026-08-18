@@ -27,7 +27,7 @@ export const firebaseConfig: FirebaseWebConfig = {
 };
 
 export const firebaseFunctionsRegion =
-  import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
+  import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'asia-south1';
 
 /** Build a 1st-gen Cloud Functions HTTPS URL for the active Firebase project. */
 export function getCloudFunctionUrl(functionName: string): string {

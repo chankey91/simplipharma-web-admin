@@ -18,6 +18,7 @@ const nodemailer = require("nodemailer");
 const panelAuth_1 = require("./panelAuth");
 const retailerWelcomeEmail_1 = require("./emailTemplates/retailerWelcomeEmail");
 const functionRegion_1 = require("./functionRegion");
+const storeCode_1 = require("./storeCode");
 admin.initializeApp();
 // Helper function to set CORS headers
 const setCorsHeaders = (res) => {
@@ -367,6 +368,7 @@ async function sendStoreUserWelcomeEmail(options) {
               <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
               <p>Your ${accountLabel} account has been created.</p>
               ${role === 'operations' ? '<p>Sign in to the SimpliPharma Operations panel to manage orders, inventory, purchases, and warehouse tasks.</p>' : ''}
+              ${role === 'office' ? '<p>Sign in to the SimpliPharma panel to view stores, receivables, and orders, and to manage purchase invoices and inventory.</p>' : ''}
               <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <p><strong>Email:</strong> ${email}</p>
                 <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
@@ -391,6 +393,8 @@ function roleMatchesRequested(existingRole, requestedRole) {
         return (0, panelAuth_1.isSalesOfficerRole)(existingRole);
     if (requestedRole === 'operations')
         return (0, panelAuth_1.isOperationsRole)(existingRole);
+    if (requestedRole === 'office')
+        return (0, panelAuth_1.isOfficeRole)(existingRole);
     return existingRole === requestedRole;
 }
 exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context) => {
@@ -402,12 +406,19 @@ exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context)
     if (!email || !password) {
         throw new functions.https.HttpsError('invalid-argument', 'Email and password are required');
     }
-    const role = (storeData === null || storeData === void 0 ? void 0 : storeData.role) || 'retailer';
-    const displayName = (storeData === null || storeData === void 0 ? void 0 : storeData.displayName) || (storeData === null || storeData === void 0 ? void 0 : storeData.shopName) || email;
-    const allowedRoles = ['retailer', 'salesOfficer', 'operations', 'purchaseOfficer'];
-    if (!allowedRoles.includes(role)) {
-        throw new functions.https.HttpsError('invalid-argument', `Invalid role: ${role}`);
+    const roleKey = String((storeData === null || storeData === void 0 ? void 0 : storeData.role) || 'retailer').trim().toLowerCase();
+    const roleByKey = {
+        retailer: 'retailer',
+        salesofficer: 'salesOfficer',
+        operations: 'operations',
+        office: 'office',
+        purchaseofficer: 'purchaseOfficer',
+    };
+    const role = roleByKey[roleKey];
+    if (!role) {
+        throw new functions.https.HttpsError('invalid-argument', `Invalid role: ${(storeData === null || storeData === void 0 ? void 0 : storeData.role) || 'retailer'}`);
     }
+    const displayName = (storeData === null || storeData === void 0 ? void 0 : storeData.displayName) || (storeData === null || storeData === void 0 ? void 0 : storeData.shopName) || email;
     try {
         if (role === 'purchaseOfficer') {
             await (0, panelAuth_1.assertAdminOrOperations)(context.auth.uid);
@@ -423,9 +434,11 @@ exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context)
         ? 'Sales Officer'
         : role === 'operations'
             ? 'Operations'
-            : role === 'purchaseOfficer'
-                ? 'Purchase Officer'
-                : 'store';
+            : role === 'office'
+                ? 'Office'
+                : role === 'purchaseOfficer'
+                    ? 'Purchase Officer'
+                    : 'store';
     try {
         let userRecord;
         let reprovisioned = false;
@@ -580,6 +593,17 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
             emailVerified: false,
             disabled: false,
         });
+        let storeCode = typeof req.storeCode === 'string' && req.storeCode.trim()
+            ? req.storeCode.trim()
+            : '';
+        if (!storeCode) {
+            try {
+                storeCode = await (0, storeCode_1.generateNextStoreCode)();
+            }
+            catch (codeErr) {
+                console.error('approveRetailerRequest: failed to generate store code:', codeErr);
+            }
+        }
         const userData = {
             uid: userRecord.uid,
             email: cred.email,
@@ -594,7 +618,7 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
             licenceHolderName: req.licenceHolderName,
             pan: req.pan,
             gst: req.gst,
-            storeCode: req.storeCode,
+            storeCode: storeCode || undefined,
             salesOfficerId: req.salesOfficerId,
             isActive: true,
             shopImage: req.shopImageUrl || req.shopImage || req.shopPhotoUrl,
@@ -609,17 +633,12 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
                 delete userData[k];
         }
         await admin.firestore().collection('users').doc(userRecord.uid).set(userData);
-        await reqRef.update({
-            status: 'approved',
-            reviewedBy: context.auth.uid,
-            reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        await reqRef.update(Object.assign({ status: 'approved', reviewedBy: context.auth.uid, reviewedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, (storeCode ? { storeCode } : {})));
         const welcomeMail = (0, retailerWelcomeEmail_1.buildRetailerWelcomeEmail)({
             email: cred.email,
             password: cred.password,
             shopName: req.shopName || req.displayName,
-            storeCode: req.storeCode,
+            storeCode: storeCode || undefined,
             intro: 'Your retailer registration has been approved. Your SimpliPharma account is now active.',
             subject: 'Welcome to SimpliPharma — Your store account is approved',
         });
@@ -955,14 +974,14 @@ exports.sendPanelPasswordResetEmail = functionRegion_1.ff.https.onCall(async (da
     if (!email) {
         throw new functions.https.HttpsError('invalid-argument', 'Email is required');
     }
-    const genericMessage = 'If this email is registered for the admin or operations panel, you will receive a reset link shortly.';
+    const genericMessage = 'If this email is registered for the admin, operations, or office panel, you will receive a reset link shortly.';
     const isPanelUser = await isActivePanelUserByEmail(email);
     if (!isPanelUser) {
         return { success: true, message: genericMessage, emailSent: false };
     }
     if (context.auth) {
         const callerRole = await (0, panelAuth_1.getUserRole)(context.auth.uid);
-        if (!(0, panelAuth_1.isAdminOrOperationsRole)(callerRole)) {
+        if (!(0, panelAuth_1.isPanelRole)(callerRole)) {
             throw new functions.https.HttpsError('permission-denied', 'Panel access required');
         }
         const caller = await admin.auth().getUser(context.auth.uid);
