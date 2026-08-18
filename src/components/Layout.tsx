@@ -56,7 +56,7 @@ import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { brandColors } from '../theme/brand';
 import { useAuth } from '../context/AuthContext';
 import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContext';
-import { ROLE_MENU_PATHS, getPanelTitle, type PanelRole } from '../auth/permissions';
+import { getPanelTitle } from '../auth/permissions';
 import { AdminNotificationBell } from './AdminNotificationBell';
 import { useAdminNotifications } from '../hooks/useAdminNotifications';
 
@@ -139,8 +139,8 @@ const MENU_SECTIONS: MenuSection[] = [
   },
 ];
 
-function menuSectionsForRole(role: PanelRole): MenuSection[] {
-  const allowed = new Set(ROLE_MENU_PATHS[role]);
+function menuSectionsForPaths(allowedPaths: string[]): MenuSection[] {
+  const allowed = new Set(allowedPaths);
   return MENU_SECTIONS.map((section) => ({
     ...section,
     items: section.items.filter((item) => allowed.has(item.path)),
@@ -155,7 +155,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const [settingsAnchor, setSettingsAnchor] = useState<null | HTMLElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { panelRole } = useAuth();
+  const { panelRole, permissions } = useAuth();
   const { guardedNavigate } = useFulfillmentLeaveGuard();
   const { notifications, unreadCount, loading: notificationsLoading, markAllSeen } =
     useAdminNotifications(panelRole);
@@ -172,8 +172,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   }, [panelRole]);
 
   const menuSections = useMemo(
-    () => (panelRole ? menuSectionsForRole(panelRole) : []),
-    [panelRole]
+    () => (permissions ? menuSectionsForPaths(permissions.menuPaths) : []),
+    [permissions]
   );
 
   const panelTitle = panelRole ? getPanelTitle(panelRole) : 'Panel';

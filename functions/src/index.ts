@@ -11,6 +11,7 @@ import {
   isPurchaseOfficerRole,
   isRetailerRole,
   isOperationsRole,
+  isOfficeRole,
 } from './panelAuth';
 import { buildRetailerWelcomeEmail } from './emailTemplates/retailerWelcomeEmail';
 import { ff } from './functionRegion';
@@ -424,6 +425,7 @@ async function sendStoreUserWelcomeEmail(options: {
               <h2 style="color: #2196F3;">Welcome to SimpliPharma!</h2>
               <p>Your ${accountLabel} account has been created.</p>
               ${role === 'operations' ? '<p>Sign in to the SimpliPharma Operations panel to manage orders, inventory, purchases, and warehouse tasks.</p>' : ''}
+              ${role === 'office' ? '<p>Sign in to the SimpliPharma panel to view stores, receivables, and orders, and to manage purchase invoices and inventory.</p>' : ''}
               <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <p><strong>Email:</strong> ${email}</p>
                 <p><strong>Password:</strong> <code style="background: white; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
@@ -444,6 +446,7 @@ function roleMatchesRequested(existingRole: string | undefined, requestedRole: s
   if (requestedRole === 'retailer') return isRetailerRole(existingRole);
   if (requestedRole === 'salesOfficer') return isSalesOfficerRole(existingRole);
   if (requestedRole === 'operations') return isOperationsRole(existingRole);
+  if (requestedRole === 'office') return isOfficeRole(existingRole);
   return existingRole === requestedRole;
 }
 
@@ -457,13 +460,19 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('invalid-argument', 'Email and password are required');
   }
 
-  const role = storeData?.role || 'retailer';
-  const displayName = storeData?.displayName || storeData?.shopName || email;
-
-  const allowedRoles = ['retailer', 'salesOfficer', 'operations', 'purchaseOfficer'];
-  if (!allowedRoles.includes(role)) {
-    throw new functions.https.HttpsError('invalid-argument', `Invalid role: ${role}`);
+  const roleKey = String(storeData?.role || 'retailer').trim().toLowerCase();
+  const roleByKey: Record<string, string> = {
+    retailer: 'retailer',
+    salesofficer: 'salesOfficer',
+    operations: 'operations',
+    office: 'office',
+    purchaseofficer: 'purchaseOfficer',
+  };
+  const role = roleByKey[roleKey];
+  if (!role) {
+    throw new functions.https.HttpsError('invalid-argument', `Invalid role: ${storeData?.role || 'retailer'}`);
   }
+  const displayName = storeData?.displayName || storeData?.shopName || email;
 
   try {
     if (role === 'purchaseOfficer') {
@@ -483,9 +492,11 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
       ? 'Sales Officer'
       : role === 'operations'
         ? 'Operations'
-        : role === 'purchaseOfficer'
-          ? 'Purchase Officer'
-          : 'store';
+        : role === 'office'
+          ? 'Office'
+          : role === 'purchaseOfficer'
+            ? 'Purchase Officer'
+            : 'store';
 
   try {
     let userRecord: admin.auth.UserRecord;
@@ -1067,7 +1078,7 @@ export const sendPanelPasswordResetEmail = ff.https.onCall(async (data, context)
   }
 
   const genericMessage =
-    'If this email is registered for the admin or operations panel, you will receive a reset link shortly.';
+    'If this email is registered for the admin, operations, or office panel, you will receive a reset link shortly.';
 
   const isPanelUser = await isActivePanelUserByEmail(email);
   if (!isPanelUser) {
@@ -1076,7 +1087,7 @@ export const sendPanelPasswordResetEmail = ff.https.onCall(async (data, context)
 
   if (context.auth) {
     const callerRole = await getUserRole(context.auth.uid);
-    if (!isAdminOrOperationsRole(callerRole)) {
+    if (!isPanelRole(callerRole)) {
       throw new functions.https.HttpsError('permission-denied', 'Panel access required');
     }
     const caller = await admin.auth().getUser(context.auth.uid);

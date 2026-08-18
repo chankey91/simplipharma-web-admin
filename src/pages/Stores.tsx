@@ -70,6 +70,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useAuth } from '../context/AuthContext';
 import {
   checkLicenseAndAadharUnique,
   resolveRetailerImageUrl,
@@ -108,6 +109,8 @@ const generatePassword = () => {
 
 export const StoresPage: React.FC = () => {
   const navigate = useNavigate();
+  const { canWrite, canAccessPath } = useAuth();
+  const canEditStores = canWrite('stores');
   const { data: stores, isLoading, error } = useStores();
   const { data: salesOfficers = [] } = useSalesOfficers();
   const { data: latestVisitByRetailerId } = useQuery({
@@ -676,7 +679,7 @@ export const StoresPage: React.FC = () => {
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Store Management</Typography>
         <Box display="flex" gap={1} flexWrap="wrap">
-          {missingStoreCodeCount > 0 && (
+          {canEditStores && missingStoreCodeCount > 0 && (
             <Button
               variant="outlined"
               color="warning"
@@ -696,9 +699,11 @@ export const StoresPage: React.FC = () => {
           >
             {isExporting ? 'Exporting…' : 'Export'}
           </Button>
+          {canEditStores && (
           <Button variant="contained" startIcon={<Add />} onClick={handleOpenCreate}>
             Add Store
           </Button>
+          )}
         </Box>
       </Box>
 
@@ -882,7 +887,7 @@ export const StoresPage: React.FC = () => {
                     overdue={overdueRetailerIds.has(store.id)}
                     overrideUntil={store.orderBlockOverrideUntil}
                     onGrantOverride={handleGrantOrderOverride}
-                    disabled={grantOverrideMutation.isPending}
+                    disabled={grantOverrideMutation.isPending || !canEditStores}
                   />
                 </TableCell>
                 <TableCell
@@ -925,9 +930,12 @@ export const StoresPage: React.FC = () => {
                     }
                     color="primary"
                     title="All SO visits"
+                    disabled={!canAccessPath('/so-visits')}
                   >
                     <Place />
                   </IconButton>
+                  {canEditStores && (
+                    <>
                   <IconButton size="small" onClick={() => handleOpenEdit(store)} color="primary">
                     <Edit />
                   </IconButton>
@@ -938,6 +946,8 @@ export const StoresPage: React.FC = () => {
                   >
                     {store.isActive !== false ? <CheckCircle /> : <Cancel />}
                   </IconButton>
+                    </>
+                  )}
                 </TableCell>
               </TableRow>
               ))
@@ -1291,6 +1301,7 @@ export const StoresPage: React.FC = () => {
         open={Boolean(walletStore)}
         store={walletStore}
         onClose={() => setWalletStore(null)}
+        readOnly={!canEditStores}
       />
     </Box>
   );

@@ -10,7 +10,7 @@ import {
   CircularProgress,
   Link,
 } from '@mui/material';
-import { login, onAuthChange, getUserPanelRole } from '../services/firebase';
+import { login, onAuthChange, getUserPanelPermissions } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
 import { BrandLogo } from '../components/BrandLogo';
 import { ChangePasswordDialog } from '../components/ChangePasswordDialog';
@@ -27,9 +27,9 @@ export const LoginPage: React.FC = () => {
     const unsubscribe = onAuthChange(async (user) => {
       if (user) {
         try {
-          const role = await getUserPanelRole(user.uid);
-          if (role) {
-            navigate('/');
+          const perms = await getUserPanelPermissions(user.uid);
+          if (perms) {
+            navigate(perms.homePath || '/');
           }
         } catch (err) {
           console.error('Error checking panel access:', err);
@@ -47,12 +47,12 @@ export const LoginPage: React.FC = () => {
 
     try {
       const userCredential = await login(email, password);
-      const role = await getUserPanelRole(userCredential.user.uid);
+      const perms = await getUserPanelPermissions(userCredential.user.uid);
 
-      if (role) {
-        navigate('/');
+      if (perms) {
+        navigate(perms.homePath || '/');
       } else {
-        setError('Access denied. Admin or operations privileges required.');
+        setError('Access denied. Admin, operations, or office privileges required.');
       }
     } catch (err: unknown) {
       console.error('Login error:', err);

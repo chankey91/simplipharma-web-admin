@@ -229,6 +229,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const [medicineSearchInput, setMedicineSearchInput] = useState('');
   const medicineSearchInputElRef = useRef<HTMLInputElement | null>(null);
+  const invoiceBatchInputElRef = useRef<HTMLInputElement | null>(null);
   const savingInvoiceRef = useRef(false);
 
   // Batches for the line being edited (master list has no stockBatches).
@@ -340,6 +341,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const t = window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    if (!itemDialog.open) return;
+    const t = window.setTimeout(() => invoiceBatchInputElRef.current?.focus(), 50);
+    return () => window.clearTimeout(t);
+  }, [itemDialog.open]);
 
   const focusMedicineSearch = () => {
     window.setTimeout(() => medicineSearchInputElRef.current?.focus(), 100);
@@ -1316,6 +1323,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       <Dialog
         open={itemDialog.open}
         disableRestoreFocus
+        disableAutoFocus
+        TransitionProps={{
+          onEntered: () => invoiceBatchInputElRef.current?.focus(),
+        }}
         onClose={() => {
         setItemDialog({ open: false, itemIndex: null });
         setExpiryDateError(''); // Clear error when dialog closes
@@ -1328,6 +1339,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
+                autoFocus
+                inputRef={invoiceBatchInputElRef}
                 label="Invoice Batch Number"
                 required
                 value={currentItem.batchNumber}

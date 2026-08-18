@@ -47,6 +47,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import type { PaymentStatus } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 const ROWS_PER_PAGE = 10;
 
@@ -80,6 +81,9 @@ const sortKeyToField = (key: string): string => {
 
 export const PurchaseInvoicesPage: React.FC = () => {
   const navigate = useNavigate();
+  const { canWrite, panelRole } = useAuth();
+  const canEditPurchases = canWrite('purchases');
+  const canReindexPurchases = panelRole === 'admin' || panelRole === 'operations';
 
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
@@ -238,6 +242,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Purchase Invoice Management</Typography>
         <Box display="flex" gap={1}>
+          {canReindexPurchases && (
           <Button
             variant="outlined"
             color="secondary"
@@ -247,6 +252,9 @@ export const PurchaseInvoicesPage: React.FC = () => {
           >
             {reindexing ? 'Indexing…' : 'Rebuild search index'}
           </Button>
+          )}
+          {canEditPurchases && (
+            <>
           <Button variant="outlined" startIcon={<PictureAsPdf />} onClick={() => navigate('/purchases/import-pdf')}>
             Import PDF
           </Button>
@@ -256,6 +264,8 @@ export const PurchaseInvoicesPage: React.FC = () => {
           <Button variant="contained" startIcon={<Add />} onClick={() => navigate('/purchases/new')}>
             Add Invoice
           </Button>
+            </>
+          )}
         </Box>
       </Box>
 

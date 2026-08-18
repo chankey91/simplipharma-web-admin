@@ -40,6 +40,23 @@ service cloud.firestore {
       );
     }
 
+    function isOffice() {
+      return hasUserDoc() && (
+        userRole() == 'office' ||
+        userRole() == 'Office'
+      );
+    }
+
+    function hasWrite(module) {
+      return hasUserDoc()
+        && 'writeAccess' in get(userDocPath()).data
+        && get(userDocPath()).data.writeAccess[module] == true;
+    }
+
+    function officeCanWrite(module) {
+      return isOffice() && hasWrite(module);
+    }
+
     function isPurchaseOfficer() {
       return hasUserDoc() && (
         userRole() == 'purchaseOfficer' ||
@@ -69,6 +86,7 @@ service cloud.firestore {
 
     function canModifyOrder(orderId) {
       return isAdminOrOperations()
+        || officeCanWrite('orders')
         || orderRetailerId(orderId) == request.auth.uid
         || (isSalesOfficer() && retailerAssignedToSO(orderRetailerId(orderId)));
     }
@@ -117,6 +135,7 @@ service cloud.firestore {
         request.auth.uid == resource.data.retailerId
         || resource.data.salesOfficerId == request.auth.uid
         || isAdminOrOperations()
+        || isOffice()
         || isSalesOfficer()
         || retailerAssignedToSO(resource.data.retailerId)
       );
@@ -124,6 +143,7 @@ service cloud.firestore {
       // Retailers create their own orders. SO proxy requires assigned retailer + salesOfficerId = actor.
       allow create: if signedIn() && (
         isAdminOrOperations()
+        || officeCanWrite('orders')
         || request.auth.uid == request.resource.data.retailerId
         || (
           isSalesOfficer()
@@ -135,6 +155,7 @@ service cloud.firestore {
 
       allow update: if signedIn() && (
         isAdminOrOperations()
+        || officeCanWrite('orders')
         || (
           resource.data.retailerId == request.auth.uid
           && request.resource.data.retailerId == resource.data.retailerId
@@ -171,6 +192,7 @@ service cloud.firestore {
         request.auth.uid == userId
         || isAdminOrSalesOfficer()
         || isOperations()
+        || isOffice()
         || (
           resource.data.role == 'retailer'
           && resource.data.salesOfficerId == request.auth.uid
@@ -182,6 +204,11 @@ service cloud.firestore {
         || (
           isOperations()
           && resource.data.role == 'purchaseOfficer'
+        )
+        || (
+          isOffice()
+          && resource.data.role == 'retailer'
+          && (hasWrite('stores') || hasWrite('receivables'))
         )
       );
     }
@@ -243,20 +270,22 @@ service cloud.firestore {
     match /credit_notes/{noteId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
+        || isOffice()
         || resource.data.retailerId == request.auth.uid
         || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
-      allow create, update: if isAdminOrOperations();
+      allow create, update: if isAdminOrOperations() || officeCanWrite('stores');
       allow delete: if false;
     }
 
     match /debit_notes/{noteId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
+        || isOffice()
         || resource.data.retailerId == request.auth.uid
         || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
-      allow create, update: if isAdminOrOperations();
+      allow create, update: if isAdminOrOperations() || officeCanWrite('stores');
       allow delete: if false;
     }
 
@@ -342,6 +371,7 @@ service cloud.firestore {
       allow read: if signedIn() && (
         resource.data.salesOfficerId == request.auth.uid
         || isAdminOrOperations()
+        || isOffice()
       );
       allow create: if signedIn() && (
         request.resource.data.salesOfficerId == request.auth.uid
@@ -356,12 +386,12 @@ service cloud.firestore {
 
     match /vendors/{vendorId} {
       allow read: if signedIn();
-      allow write: if isAdminOrOperations();
+      allow write: if isAdminOrOperations() || officeCanWrite('purchases');
     }
 
     match /purchaseInvoices/{invoiceId} {
-      allow read: if signedIn() && (isAdminOrOperations() || isSalesOfficer());
-      allow write: if isAdminOrOperations();
+      allow read: if signedIn() && (isAdminOrOperations() || isSalesOfficer() || isOffice());
+      allow write: if isAdminOrOperations() || officeCanWrite('purchases');
     }
 
     match /purchaseReturns/{returnId} {
@@ -372,6 +402,7 @@ service cloud.firestore {
     match /product_demands/{demandId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
+        || isOffice()
         || resource.data.retailerId == request.auth.uid
         || (
           isSalesOfficer()
@@ -538,11 +569,11 @@ service cloud.firestore {
 
     // Phase 1 — invoice ingest drafts (PDF / photo). Commit still uses purchaseInvoices.
     match /purchase_invoice_drafts/{draftId} {
-      allow read: if isAdminOrOperations() || isPurchaseOfficer();
-      allow create: if (isAdminOrOperations() || isPurchaseOfficer())
+      allow read: if isAdminOrOperations() || isPurchaseOfficer() || isOffice();
+      allow create: if (isAdminOrOperations() || isPurchaseOfficer() || officeCanWrite('purchases'))
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.status == 'uploaded';
-      allow update: if isAdminOrOperations() || isPurchaseOfficer();
+      allow update: if isAdminOrOperations() || isPurchaseOfficer() || officeCanWrite('purchases');
       allow delete: if isAdmin();
     }
 

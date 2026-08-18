@@ -104,3 +104,81 @@ export function isDateInIstRange(
   if (toDate && t >= istDayEndExclusiveMs(toDate)) return false;
   return true;
 }
+
+/** `yyyy-MM-ddTHH:mm` in IST for `<input type="datetime-local">`. */
+export function formatIstDateTimeLocal(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
+}
+
+/** Parse datetime-local value as IST. Returns epoch ms, or null if invalid. */
+export function parseIstDateTimeLocal(value: string): number | null {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const ms = new Date(`${match[1]}T${match[2]}:${match[3] || '00'}+05:30`).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Current 24-hour IST window aligned to noon: last 12:00 through next 12:00.
+ * Before noon → yesterday 12:00 to today 12:00; from noon onward → today 12:00 to tomorrow 12:00.
+ */
+export function getDefaultNoonToNoonRangeIST(now: Date = new Date()): {
+  fromDateTime: string;
+  toDateTime: string;
+} {
+  const today = getTodayDateStringIST(now);
+  const noonTodayMs = new Date(`${today}T12:00:00+05:30`).getTime();
+  const fromMs = now.getTime() >= noonTodayMs ? noonTodayMs : noonTodayMs - 24 * 60 * 60 * 1000;
+  const toMs = fromMs + 24 * 60 * 60 * 1000;
+  return {
+    fromDateTime: formatIstDateTimeLocal(new Date(fromMs)),
+    toDateTime: formatIstDateTimeLocal(new Date(toMs)),
+  };
+}
+
+/** Inclusive last 7 noon-aligned IST days ending at the current 12:00–12:00 window. */
+export function getDefaultOrdersFilterRangeIST(now: Date = new Date()): {
+  fromDateTime: string;
+  toDateTime: string;
+} {
+  const current = getDefaultNoonToNoonRangeIST(now);
+  const fromMs = parseIstDateTimeLocal(current.fromDateTime);
+  if (fromMs == null) return current;
+  return {
+    fromDateTime: formatIstDateTimeLocal(new Date(fromMs - 6 * 24 * 60 * 60 * 1000)),
+    toDateTime: current.toDateTime,
+  };
+}
+
+/** True when orderDate falls in [fromDateTime, toDateTime) IST datetime-local values. */
+export function isDateInIstDateTimeRange(
+  orderDate: unknown,
+  fromDateTime?: string,
+  toDateTime?: string
+): boolean {
+  if (!fromDateTime && !toDateTime) return true;
+  const d = coerceToDate(orderDate);
+  if (!d) return false;
+  const t = d.getTime();
+  if (fromDateTime) {
+    const start = parseIstDateTimeLocal(fromDateTime);
+    if (start != null && t < start) return false;
+  }
+  if (toDateTime) {
+    const end = parseIstDateTimeLocal(toDateTime);
+    if (end != null && t >= end) return false;
+  }
+  return true;
+}

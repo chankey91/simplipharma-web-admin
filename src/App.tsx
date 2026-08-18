@@ -1,11 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { createBrowserRouter, RouterProvider, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { onAuthChange, getUserPanelRole } from './services/firebase';
-import { canAccessPath, type PanelRole } from './auth/permissions';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppDialogProvider } from './context/AppDialogProvider';
 import { FulfillmentLeaveGuardProvider } from './context/FulfillmentLeaveGuardContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -84,28 +82,8 @@ const theme = createTheme({
 });
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [loading, setLoading] = useState(true);
-  const [panelRole, setPanelRole] = useState<PanelRole | null>(null);
+  const { loading, panelRole, homePath, canAccessPath } = useAuth();
   const location = useLocation();
-
-  useEffect(() => {
-    const unsubscribe = onAuthChange(async (user) => {
-      if (user) {
-        try {
-          const role = await getUserPanelRole(user.uid);
-          setPanelRole(role);
-        } catch (error) {
-          console.error('Error checking panel access:', error);
-          setPanelRole(null);
-        }
-      } else {
-        setPanelRole(null);
-      }
-      setLoading(false);
-    });
-
-    return unsubscribe;
-  }, []);
 
   if (loading) {
     return <Loading message="Checking authentication..." />;
@@ -115,8 +93,8 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     return <Navigate to="/login" replace />;
   }
 
-  if (!canAccessPath(panelRole, location.pathname)) {
-    return <Navigate to="/" replace />;
+  if (!canAccessPath(location.pathname)) {
+    return <Navigate to={homePath} replace />;
   }
 
   return <>{children}</>;

@@ -47,11 +47,15 @@ import { ref as storageRef, uploadBytes } from 'firebase/storage';
 import { auth, db, storage, functions } from '../services/firebase';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { canWrite, panelRole } = useAuth();
+  const canEditInventory = canWrite('inventory');
+  const canReindexInventory = panelRole === 'admin' || panelRole === 'operations';
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
@@ -377,6 +381,7 @@ export const InventoryPage: React.FC = () => {
           >
             Download Template
           </Button>
+          {canReindexInventory && (
           <Button
             variant="outlined"
             color="secondary"
@@ -387,6 +392,8 @@ export const InventoryPage: React.FC = () => {
           >
             {reindexing ? 'Indexing…' : 'Rebuild search index'}
           </Button>
+          )}
+          {canEditInventory && (
           <Button
             variant="contained"
             startIcon={<Upload />}
@@ -394,6 +401,7 @@ export const InventoryPage: React.FC = () => {
           >
             Bulk Upload Medicines
           </Button>
+          )}
         </Box>
       </Box>
 

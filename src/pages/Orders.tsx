@@ -41,7 +41,7 @@ import {
 import { useOrders, useOrdersSearch, useCancelOrder } from '../hooks/useOrders';
 import { useQuery } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
-import { getOrdersByStatus, getOrdersInRange } from '../services/orders';
+import { getOrdersInRange } from '../services/orders';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
@@ -55,18 +55,17 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useAuth } from '../context/AuthContext';
 import type { OrderSearchParams } from '../services/orderSearch';
 import { reindexOrdersTypesense } from '../services/orderSearch';
-import { getTodayDateStringIST, isDateInIstRange, istDayEndExclusiveMs, istDayStartMs } from '../utils/dateTime';
+import {
+  getDefaultNoonToNoonRangeIST,
+  getDefaultOrdersFilterRangeIST,
+  isDateInIstDateTimeRange,
+  parseIstDateTimeLocal,
+} from '../utils/dateTime';
 
 const ROWS_PER_PAGE = 10;
-
-/** Inclusive last 7 IST calendar days ending today. */
-function getDefaultOrdersFromDate(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 6);
-  return getTodayDateStringIST(d);
-}
 
 /** Normalized row shape rendered by the table, sourced from either Typesense or the fallback full list. */
 interface OrderRow {
@@ -104,13 +103,20 @@ export const OrdersPage: React.FC = () => {
   const cancelOrderMutation = useCancelOrder();
   const navigate = useNavigate();
   const { alert } = useAppDialog();
+  const { canWrite, panelRole } = useAuth();
+  const canEditOrders = canWrite('orders');
+  const canReindexOrders = panelRole === 'admin' || panelRole === 'operations';
   const { data: stores } = useStores();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
-  const [fromDateFilter, setFromDateFilter] = useState(() => getDefaultOrdersFromDate());
-  const [toDateFilter, setToDateFilter] = useState(() => getTodayDateStringIST());
+  const [fromDateFilter, setFromDateFilter] = useState(
+    () => getDefaultOrdersFilterRangeIST().fromDateTime
+  );
+  const [toDateFilter, setToDateFilter] = useState(
+    () => getDefaultOrdersFilterRangeIST().toDateTime
+  );
   const [page, setPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingProductSummary, setIsExportingProductSummary] = useState(false);
@@ -123,10 +129,15 @@ export const OrdersPage: React.FC = () => {
     orderId: '',
     reason: '',
   });
+  const [pendingExportDialog, setPendingExportDialog] = useState({
+    open: false,
+    fromDateTime: '',
+    toDateTime: '',
+  });
   const [productSummaryDialog, setProductSummaryDialog] = useState({
     open: false,
-    fromDate: getTodayDateStringIST(),
-    toDate: getTodayDateStringIST(),
+    fromDateTime: '',
+    toDateTime: '',
   });
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
@@ -153,8 +164,13 @@ export const OrdersPage: React.FC = () => {
     return () => clearTimeout(t);
   }, [searchTerm]);
 
-  const dateRangeInvalid =
-    Boolean(fromDateFilter && toDateFilter && fromDateFilter > toDateFilter);
+  const fromFilterMs = fromDateFilter ? parseIstDateTimeLocal(fromDateFilter) : null;
+  const toFilterMs = toDateFilter ? parseIstDateTimeLocal(toDateFilter) : null;
+  const dateRangeInvalid = Boolean(
+    fromDateFilter &&
+      toDateFilter &&
+      (fromFilterMs == null || toFilterMs == null || fromFilterMs >= toFilterMs)
+  );
   const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
   /** Prefer Firestore for any date filter — Typesense can lag behind new orders. */
   const useLocalList = typesenseDisabled || hasDateFilter;
@@ -167,8 +183,8 @@ export const OrdersPage: React.FC = () => {
     sortOrder: sortDirection,
     page,
     perPage: ROWS_PER_PAGE,
-    ...(fromDateFilter && !dateRangeInvalid ? { fromDate: fromDateFilter } : {}),
-    ...(toDateFilter && !dateRangeInvalid ? { toDate: toDateFilter } : {}),
+    ...(fromDateFilter && !dateRangeInvalid ? { fromDate: fromDateFilter.slice(0, 10) } : {}),
+    ...(toDateFilter && !dateRangeInvalid ? { toDate: toDateFilter.slice(0, 10) } : {}),
   };
   const {
     data: searchData,
@@ -185,10 +201,10 @@ export const OrdersPage: React.FC = () => {
   const dateRangeBounds = useMemo(() => {
     if (!hasDateFilter) return null;
     return {
-      startMs: fromDateFilter ? istDayStartMs(fromDateFilter) : 0,
-      endMsExclusive: toDateFilter ? istDayEndExclusiveMs(toDateFilter) : undefined,
+      startMs: fromFilterMs ?? 0,
+      endMsExclusive: toFilterMs ?? undefined,
     };
-  }, [hasDateFilter, fromDateFilter, toDateFilter]);
+  }, [hasDateFilter, fromFilterMs, toFilterMs]);
 
   const { data: rangedOrders, isLoading: rangeLoading } = useQuery({
     queryKey: ['ordersInRange', dateRangeBounds?.startMs, dateRangeBounds?.endMsExclusive],
@@ -216,7 +232,7 @@ export const OrdersPage: React.FC = () => {
           order.medicines.some((m) => m.name.toLowerCase().includes(term));
         const matchesStatus =
           !applyStatusFilter || statusFilter === 'All' || order.status === statusFilter;
-        const matchesDate = isDateInIstRange(
+        const matchesDate = isDateInIstDateTimeRange(
           order.orderDate,
           fromDateFilter || undefined,
           toDateFilter || undefined
@@ -318,8 +334,6 @@ export const OrdersPage: React.FC = () => {
     Delivered: statusCounts['Delivered'] ?? 0,
     Cancelled: statusCounts['Cancelled'] ?? 0,
   };
-  const pendingOrderCount = ordersByStatus.Pending;
-
   const requestSortResetPage = (key: string) => {
     requestSort(key);
     setPage(1);
@@ -362,15 +376,52 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
+  const parseExportDateTimeRange = async (
+    fromDateTime: string,
+    toDateTime: string
+  ): Promise<{ startMs: number; endMs: number } | null> => {
+    if (!fromDateTime || !toDateTime) {
+      await alert('Please select both From and To date & time', { severity: 'warning' });
+      return null;
+    }
+    const startMs = parseIstDateTimeLocal(fromDateTime);
+    const endMs = parseIstDateTimeLocal(toDateTime);
+    if (startMs == null || endMs == null) {
+      await alert('Please enter valid From and To date & time', { severity: 'warning' });
+      return null;
+    }
+    if (startMs >= endMs) {
+      await alert('From must be before To', { severity: 'warning' });
+      return null;
+    }
+    return { startMs, endMs };
+  };
+
   const handleExportPendingOrders = async () => {
+    const range = await parseExportDateTimeRange(
+      pendingExportDialog.fromDateTime,
+      pendingExportDialog.toDateTime
+    );
+    if (!range) return;
+
     setIsExporting(true);
     try {
-      const pendingOrders = await getOrdersByStatus('Pending');
+      const ordersInRange = await getOrdersInRange(range.startMs, range.endMs);
+      const pendingOrders = ordersInRange.filter((o) => o.status === 'Pending');
       if (pendingOrders.length === 0) {
-        await alert('No pending orders to export', { severity: 'warning' });
+        await alert('No pending orders found in the selected date & time range', {
+          severity: 'warning',
+        });
         return;
       }
-      await exportPendingOrdersByStore(pendingOrders, stores || []);
+      const fromStamp = pendingExportDialog.fromDateTime.replace(/[-:T]/g, '');
+      const toStamp = pendingExportDialog.toDateTime.replace(/[-:T]/g, '');
+      await exportPendingOrdersByStore(
+        pendingOrders,
+        stores || [],
+        `pending-orders-by-store-${fromStamp}-${toStamp}`
+      );
+      setPendingExportDialog((prev) => ({ ...prev, open: false }));
       await alert('Excel file generated successfully!', { severity: 'success' });
     } catch (error: any) {
       console.error('Error exporting orders:', error);
@@ -381,33 +432,25 @@ export const OrdersPage: React.FC = () => {
   };
 
   const handleExportPendingProductSummary = async () => {
-    const { fromDate, toDate } = productSummaryDialog;
-    if (!fromDate || !toDate) {
-      await alert('Please select both From and To dates', { severity: 'warning' });
-      return;
-    }
-    if (fromDate > toDate) {
-      await alert('From date must be on or before To date', { severity: 'warning' });
-      return;
-    }
+    const { fromDateTime, toDateTime } = productSummaryDialog;
+    const range = await parseExportDateTimeRange(fromDateTime, toDateTime);
+    if (!range) return;
 
     setIsExportingProductSummary(true);
     try {
-      // Inclusive IST calendar range: [from 00:00, day after to 00:00)
-      const startMs = new Date(`${fromDate}T00:00:00+05:30`).getTime();
-      const endMs =
-        new Date(`${toDate}T00:00:00+05:30`).getTime() + 24 * 60 * 60 * 1000;
-      const ordersInRange = await getOrdersInRange(startMs, endMs);
+      const ordersInRange = await getOrdersInRange(range.startMs, range.endMs);
       const pendingInRange = ordersInRange.filter((o) => o.status === 'Pending');
 
       if (pendingInRange.length === 0) {
-        await alert('No pending orders found in the selected date range', {
+        await alert('No pending orders found in the selected date & time range', {
           severity: 'warning',
         });
         return;
       }
 
-      const filename = `pending-orders-product-summary-${fromDate.replace(/-/g, '')}-${toDate.replace(/-/g, '')}`;
+      const fromStamp = fromDateTime.replace(/[-:T]/g, '');
+      const toStamp = toDateTime.replace(/[-:T]/g, '');
+      const filename = `pending-orders-product-summary-${fromStamp}-${toStamp}`;
       await exportPendingOrdersProductSummary(pendingInRange, filename);
       setProductSummaryDialog((prev) => ({ ...prev, open: false }));
       await alert('Product summary Excel file generated successfully!', {
@@ -423,7 +466,8 @@ export const OrdersPage: React.FC = () => {
   };
 
   const handlePublishPurchaseList = async () => {
-    const { fromDate, toDate } = productSummaryDialog;
+    const fromDate = productSummaryDialog.fromDateTime.slice(0, 10);
+    const toDate = productSummaryDialog.toDateTime.slice(0, 10);
     if (!fromDate || !toDate) {
       await alert('Please select both From and To dates', { severity: 'warning' });
       return;
@@ -493,6 +537,7 @@ export const OrdersPage: React.FC = () => {
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Orders Management</Typography>
+        {canReindexOrders && (
         <Button
           variant="outlined"
           color="secondary"
@@ -502,6 +547,7 @@ export const OrdersPage: React.FC = () => {
         >
           {reindexing ? 'Indexing…' : 'Rebuild search index'}
         </Button>
+        )}
       </Box>
 
       {reindexMessage && (
@@ -537,7 +583,7 @@ export const OrdersPage: React.FC = () => {
       {/* Filters & exports */}
       <Paper sx={{ p: 2, mb: 2 }}>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} lg={4}>
+          <Grid item xs={12} lg={3}>
             <TextField
               fullWidth
               size="small"
@@ -556,35 +602,37 @@ export const OrdersPage: React.FC = () => {
               }}
             />
           </Grid>
-          <Grid item xs={6} sm={4} md={3} lg={2}>
+          <Grid item xs={12} sm={6} md={4} lg={3}>
             <TextField
               fullWidth
               size="small"
               label="From"
-              type="date"
+              type="datetime-local"
               value={fromDateFilter}
               onChange={(e) => {
                 setFromDateFilter(e.target.value);
                 setPage(1);
               }}
               InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 60 }}
             />
           </Grid>
-          <Grid item xs={6} sm={4} md={3} lg={2}>
+          <Grid item xs={12} sm={6} md={4} lg={3}>
             <TextField
               fullWidth
               size="small"
               label="To"
-              type="date"
+              type="datetime-local"
               value={toDateFilter}
               onChange={(e) => {
                 setToDateFilter(e.target.value);
                 setPage(1);
               }}
               InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 60 }}
             />
           </Grid>
-          <Grid item xs={12} sm={4} md={6} lg={3}>
+          <Grid item xs={12} sm={6} md={4} lg={3}>
             <FormControl fullWidth size="small">
               <InputLabel>Status</InputLabel>
               <Select
@@ -610,8 +658,9 @@ export const OrdersPage: React.FC = () => {
                 size="small"
                 variant="text"
                 onClick={() => {
-                  setFromDateFilter(getDefaultOrdersFromDate());
-                  setToDateFilter(getTodayDateStringIST());
+                  const range = getDefaultOrdersFilterRangeIST();
+                  setFromDateFilter(range.fromDateTime);
+                  setToDateFilter(range.toDateTime);
                   setPage(1);
                 }}
               >
@@ -621,9 +670,9 @@ export const OrdersPage: React.FC = () => {
                 size="small"
                 variant="text"
                 onClick={() => {
-                  const today = getTodayDateStringIST();
-                  setFromDateFilter(today);
-                  setToDateFilter(today);
+                  const range = getDefaultNoonToNoonRangeIST();
+                  setFromDateFilter(range.fromDateTime);
+                  setToDateFilter(range.toDateTime);
                   setPage(1);
                 }}
               >
@@ -648,7 +697,7 @@ export const OrdersPage: React.FC = () => {
 
         {dateRangeInvalid && (
           <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
-            From date must be on or before To date.
+            From must be before To.
           </Typography>
         )}
 
@@ -659,8 +708,13 @@ export const OrdersPage: React.FC = () => {
             variant="outlined"
             size="small"
             startIcon={<Download />}
-            onClick={handleExportPendingOrders}
-            disabled={pendingOrderCount === 0 || isExporting || isExportingProductSummary}
+            onClick={() =>
+              setPendingExportDialog({
+                open: true,
+                ...getDefaultNoonToNoonRangeIST(),
+              })
+            }
+            disabled={isExporting || isExportingProductSummary}
           >
             {isExporting ? 'Exporting…' : 'Export Pending Orders'}
           </Button>
@@ -671,8 +725,7 @@ export const OrdersPage: React.FC = () => {
             onClick={() =>
               setProductSummaryDialog({
                 open: true,
-                fromDate: getTodayDateStringIST(),
-                toDate: getTodayDateStringIST(),
+                ...getDefaultNoonToNoonRangeIST(),
               })
             }
             disabled={isExporting || isExportingProductSummary}
@@ -739,7 +792,7 @@ export const OrdersPage: React.FC = () => {
                     >
                       <Visibility />
                     </IconButton>
-                    {order.status !== 'Cancelled' && order.status !== 'Delivered' && (
+                    {canEditOrders && order.status !== 'Cancelled' && order.status !== 'Delivered' && (
                       <IconButton
                         size="small"
                         color="error"
@@ -805,6 +858,66 @@ export const OrdersPage: React.FC = () => {
       </Dialog>
 
       <Dialog
+        open={pendingExportDialog.open}
+        onClose={() =>
+          !isExporting && setPendingExportDialog((prev) => ({ ...prev, open: false }))
+        }
+      >
+        <DialogTitle>Export Pending Orders</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Choose the order date &amp; time range (IST). Defaults to one day from 12:00 to 12:00.
+          </Typography>
+          <Box display="flex" gap={2} flexWrap="wrap" sx={{ pt: 1 }}>
+            <TextField
+              label="From"
+              type="datetime-local"
+              value={pendingExportDialog.fromDateTime}
+              onChange={(e) =>
+                setPendingExportDialog((prev) => ({ ...prev, fromDateTime: e.target.value }))
+              }
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 60 }}
+              disabled={isExporting}
+              sx={{ minWidth: 240 }}
+            />
+            <TextField
+              label="To"
+              type="datetime-local"
+              value={pendingExportDialog.toDateTime}
+              onChange={(e) =>
+                setPendingExportDialog((prev) => ({ ...prev, toDateTime: e.target.value }))
+              }
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 60 }}
+              disabled={isExporting}
+              sx={{ minWidth: 240 }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setPendingExportDialog((prev) => ({ ...prev, open: false }))}
+            disabled={isExporting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<Download />}
+            onClick={() => void handleExportPendingOrders()}
+            disabled={
+              isExporting ||
+              !pendingExportDialog.fromDateTime ||
+              !pendingExportDialog.toDateTime
+            }
+          >
+            {isExporting ? 'Exporting…' : 'Download Excel'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
         open={productSummaryDialog.open}
         onClose={() =>
           !isExportingProductSummary &&
@@ -815,32 +928,35 @@ export const OrdersPage: React.FC = () => {
         <DialogTitle>Product Summary</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Choose the order date range for Excel download. Publish uses net remaining need for the
-            selected To date (subtracts quantities already found by the Purchase Officer). Open lists
-            are superseded. Scheduled auto-publish runs daily at 12:00 and 15:00 IST.
+            Choose the order date &amp; time range for Excel download (IST; defaults to one day from
+            12:00 to 12:00). Publish uses net remaining need for the selected To calendar date
+            (subtracts quantities already found by the Purchase Officer). Open lists are superseded.
+            Scheduled auto-publish runs daily at 12:00 and 15:00 IST.
           </Typography>
           <Box display="flex" gap={2} flexWrap="wrap" sx={{ pt: 1 }}>
             <TextField
               label="From"
-              type="date"
-              value={productSummaryDialog.fromDate}
+              type="datetime-local"
+              value={productSummaryDialog.fromDateTime}
               onChange={(e) =>
-                setProductSummaryDialog((prev) => ({ ...prev, fromDate: e.target.value }))
+                setProductSummaryDialog((prev) => ({ ...prev, fromDateTime: e.target.value }))
               }
               InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 60 }}
               disabled={isExportingProductSummary || isPublishingPurchaseList}
-              sx={{ minWidth: 180 }}
+              sx={{ minWidth: 240 }}
             />
             <TextField
               label="To"
-              type="date"
-              value={productSummaryDialog.toDate}
+              type="datetime-local"
+              value={productSummaryDialog.toDateTime}
               onChange={(e) =>
-                setProductSummaryDialog((prev) => ({ ...prev, toDate: e.target.value }))
+                setProductSummaryDialog((prev) => ({ ...prev, toDateTime: e.target.value }))
               }
               InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 60 }}
               disabled={isExportingProductSummary || isPublishingPurchaseList}
-              sx={{ minWidth: 180 }}
+              sx={{ minWidth: 240 }}
             />
           </Box>
         </DialogContent>
@@ -858,8 +974,8 @@ export const OrdersPage: React.FC = () => {
             disabled={
               isExportingProductSummary ||
               isPublishingPurchaseList ||
-              !productSummaryDialog.fromDate ||
-              !productSummaryDialog.toDate
+              !productSummaryDialog.fromDateTime ||
+              !productSummaryDialog.toDateTime
             }
           >
             {isExportingProductSummary ? 'Exporting...' : 'Download Excel'}
@@ -871,8 +987,8 @@ export const OrdersPage: React.FC = () => {
             disabled={
               isExportingProductSummary ||
               isPublishingPurchaseList ||
-              !productSummaryDialog.fromDate ||
-              !productSummaryDialog.toDate
+              !productSummaryDialog.fromDateTime ||
+              !productSummaryDialog.toDateTime
             }
           >
             {isPublishingPurchaseList ? 'Publishing...' : 'Publish to Purchase App'}

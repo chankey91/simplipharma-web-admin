@@ -1,6 +1,8 @@
 import * as admin from 'firebase-admin';
 
-export type PanelRole = 'admin' | 'operations';
+export type PanelRole = 'admin' | 'operations' | 'office';
+
+export type WriteModule = 'stores' | 'receivables' | 'orders' | 'purchases' | 'inventory';
 
 export async function getUserRole(uid: string): Promise<string | undefined> {
   const userDoc = await admin.firestore().collection('users').doc(uid).get();
@@ -15,12 +17,16 @@ export function isOperationsRole(role: string | undefined): boolean {
   return role === 'operations' || role === 'Operations';
 }
 
+export function isOfficeRole(role: string | undefined): boolean {
+  return role === 'office' || role === 'Office';
+}
+
 export function isAdminOrOperationsRole(role: string | undefined): boolean {
   return isAdminRole(role) || isOperationsRole(role);
 }
 
 export function isPanelRole(role: string | undefined): boolean {
-  return isAdminOrOperationsRole(role);
+  return isAdminOrOperationsRole(role) || isOfficeRole(role);
 }
 
 export function isSalesOfficerRole(role: string | undefined): boolean {
@@ -45,6 +51,16 @@ export async function assertAdminOrOperations(uid: string): Promise<void> {
 export async function assertAdmin(uid: string): Promise<void> {
   const role = await getUserRole(uid);
   if (!isAdminRole(role)) {
+    throw new Error('PERMISSION_DENIED');
+  }
+}
+
+/** Admin/operations always pass. Office passes only when writeAccess[module] is true. */
+export async function assertCanWriteModule(uid: string, module: WriteModule): Promise<void> {
+  const userDoc = await admin.firestore().collection('users').doc(uid).get();
+  const role = userDoc.exists ? String(userDoc.data()?.role || '') : undefined;
+  if (isAdminOrOperationsRole(role)) return;
+  if (!isOfficeRole(role) || userDoc.data()?.writeAccess?.[module] !== true) {
     throw new Error('PERMISSION_DENIED');
   }
 }
