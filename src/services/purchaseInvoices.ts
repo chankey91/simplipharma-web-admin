@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where, deleteField } from './firebase';
+import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where, deleteField, deleteDoc } from './firebase';
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem, VendorInvoicePayment } from '../types';
 import {
   addStockBatchesToMedicine,
@@ -842,6 +842,28 @@ export const updatePurchaseInvoiceWithStock = async (
     total: Math.max(1, invoiceData.items.length),
   });
 
+  return { stockSyncErrors };
+};
+
+/**
+ * Delete a purchase bill and remove the stock it added (qty + free qty per batch).
+ * Uses soft reduce so already-sold units are skipped; remaining on-hand is reverted.
+ */
+export const deletePurchaseInvoice = async (
+  invoiceId: string
+): Promise<{ stockSyncErrors: string[] }> => {
+  const existing = await getPurchaseInvoiceById(invoiceId);
+  if (!existing) {
+    throw new Error('Invoice not found');
+  }
+
+  const stockSyncErrors = await syncStockForPurchaseInvoiceEdit(
+    existing.items || [],
+    [],
+    existing.invoiceDate
+  );
+
+  await deleteDoc(doc(db, 'purchaseInvoices', invoiceId));
   return { stockSyncErrors };
 };
 

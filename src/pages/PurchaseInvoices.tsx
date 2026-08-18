@@ -33,11 +33,13 @@ import {
   PictureAsPdf,
   CloudSync,
   CameraAlt,
+  Delete,
 } from '@mui/icons-material';
 import {
   usePurchaseInvoices,
   usePurchaseInvoicesSearch,
   usePurchaseInvoiceAmountTotal,
+  useDeletePurchaseInvoice,
 } from '../hooks/usePurchaseInvoices';
 import { reindexPurchaseInvoicesTypesense } from '../services/purchaseInvoiceSearch';
 import { format } from 'date-fns';
@@ -48,6 +50,7 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import type { PaymentStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const ROWS_PER_PAGE = 10;
 
@@ -84,6 +87,8 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const { canWrite, panelRole } = useAuth();
   const canEditPurchases = canWrite('purchases');
   const canReindexPurchases = panelRole === 'admin' || panelRole === 'operations';
+  const { alert, confirm } = useAppDialog();
+  const deleteInvoiceMutation = useDeletePurchaseInvoice();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
@@ -229,6 +234,28 @@ export const PurchaseInvoicesPage: React.FC = () => {
       setReindexMessage(`Search index rebuild failed: ${msg}.`);
     } finally {
       setReindexing(false);
+    }
+  };
+
+  const handleDeleteInvoice = async (invoice: InvoiceRow) => {
+    const ok = await confirm(
+      `Delete purchase bill #${invoice.invoiceNumber}? Stock added from this bill will be removed from inventory. Units already sold cannot be fully reverted. This cannot be undone.`,
+      { destructive: true }
+    );
+    if (!ok) return;
+    try {
+      const result = await deleteInvoiceMutation.mutateAsync(invoice.id);
+      if (result.stockSyncErrors.length > 0) {
+        await alert(
+          `Bill deleted. Some stock could not be fully reverted:\n${result.stockSyncErrors.slice(0, 5).join('\n')}`,
+          { severity: 'warning' }
+        );
+      } else {
+        await alert('Purchase bill deleted and stock reverted.', { severity: 'success' });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete purchase bill';
+      await alert(message, { severity: 'error' });
     }
   };
 
@@ -400,6 +427,18 @@ export const PurchaseInvoicesPage: React.FC = () => {
                     <IconButton size="small" onClick={() => {/* Print invoice */}}>
                       <Receipt />
                     </IconButton>
+                    {canEditPurchases && (
+                      <IconButton
+                        size="small"
+                        color="error"
+                        disabled={deleteInvoiceMutation.isPending}
+                        onClick={() => void handleDeleteInvoice(invoice)}
+                        title="Delete bill"
+                        aria-label="Delete bill"
+                      >
+                        <Delete />
+                      </IconButton>
+                    )}
                   </TableCell>
                 </TableRow>
               ))

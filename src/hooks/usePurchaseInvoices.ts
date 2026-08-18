@@ -8,6 +8,7 @@ import {
   createPurchaseInvoice, 
   updatePurchaseInvoice,
   updatePurchaseInvoiceWithStock,
+  deletePurchaseInvoice,
   updatePurchaseInvoicePayment,
   updateStockForExistingInvoice,
   updateStockForAllExistingInvoices,
@@ -148,6 +149,26 @@ export const useUpdatePurchaseInvoice = () => {
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseInvoice', variables.invoiceId] });
     }
+  });
+};
+
+/** Delete a purchase bill and revert inventory qty added by its lines. */
+export const useDeletePurchaseInvoice = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (invoiceId: string) => deletePurchaseInvoice(invoiceId),
+    onSuccess: async (_, invoiceId) => {
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['payablePurchaseInvoices'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoicesSearch'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseInvoiceAmountTotal'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchaseLastByMedicine'] });
+      await queryClient.invalidateQueries({ queryKey: ['vendorPurchaseInvoices'] });
+      await queryClient.removeQueries({ queryKey: ['purchaseInvoice', invoiceId] });
+      await queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      await queryClient.invalidateQueries({ queryKey: ['medicine'] });
+    },
   });
 };
 
