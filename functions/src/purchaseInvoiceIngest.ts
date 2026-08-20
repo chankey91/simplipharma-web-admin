@@ -156,7 +156,7 @@ async function matchVendor(
 }
 
 export const processPurchaseInvoiceDraft = ff
-  .runWith({ timeoutSeconds: 300, memory: '1GB' })
+  .runWith({ minInstances: 0, timeoutSeconds: 300, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth?.uid) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');

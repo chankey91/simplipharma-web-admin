@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions';
+import { getAppConfigValue } from '../runtimeConfig';
 
 const BRAND = {
   teal: '#00A89C',
@@ -43,8 +43,9 @@ function escapeHtml(s: string): string {
 
 /** Public retailer web/app landing page; override via `app.retailer_landing_url`. */
 export function getRetailerLandingUrl(): string {
-  const cfg = functions.config().app as { retailer_landing_url?: string } | undefined;
-  const base = (cfg?.retailer_landing_url || DEFAULT_RETAILER_LANDING_URL).trim();
+  const base = (
+    getAppConfigValue('retailer_landing_url', 'APP_RETAILER_LANDING_URL') || DEFAULT_RETAILER_LANDING_URL
+  ).trim();
   return base.replace(/\/$/, '');
 }
 

@@ -141,7 +141,7 @@ async function matchVendor(db, gstin, nameHint) {
     return {};
 }
 exports.processPurchaseInvoiceDraft = functionRegion_1.ff
-    .runWith({ timeoutSeconds: 300, memory: '1GB' })
+    .runWith({ minInstances: 0, timeoutSeconds: 300, memory: '512MB' })
     .https.onCall(async (data, context) => {
     var _a, _b, _c, _d, _e;
     if (!((_a = context.auth) === null || _a === void 0 ? void 0 : _a.uid)) {
