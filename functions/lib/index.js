@@ -19,6 +19,7 @@ const panelAuth_1 = require("./panelAuth");
 const retailerWelcomeEmail_1 = require("./emailTemplates/retailerWelcomeEmail");
 const functionRegion_1 = require("./functionRegion");
 const storeCode_1 = require("./storeCode");
+const runtimeConfig_1 = require("./runtimeConfig");
 admin.initializeApp();
 // Helper function to set CORS headers
 const setCorsHeaders = (res) => {
@@ -30,25 +31,24 @@ const setCorsHeaders = (res) => {
 };
 // SMTP Configuration
 const getTransporter = () => {
-    const config = functions.config().smtp;
-    if (!config || !config.user || !config.password) {
-        throw new Error('SMTP configuration not found. Please set smtp.user and smtp.password using firebase functions:config:set');
+    const config = (0, runtimeConfig_1.getSmtpConfig)();
+    if (!config) {
+        throw new Error('SMTP configuration not found. Set SMTP_USER/SMTP_PASSWORD in functions/.env.<project> (or legacy smtp.user / smtp.password).');
     }
-    const host = config.host || 'smtp.zoho.in';
-    const port = Number(config.port) || 587;
+    const { host, port, user, password } = config;
     console.log('Creating SMTP transporter with config:', {
         host,
         port,
-        user: config.user,
-        hasPassword: !!config.password
+        user,
+        hasPassword: !!password,
     });
     return nodemailer.createTransport({
         host,
         port,
         secure: false, // true for 465, false for other ports
         auth: {
-            user: config.user,
-            pass: config.password,
+            user,
+            pass: password,
         },
         debug: true, // Enable debug output
         logger: true, // Log to console
@@ -82,9 +82,9 @@ function escapeHtmlText(s) {
 async function sendSmtpMail(options) {
     var _a;
     try {
-        const smtpConfig = functions.config().smtp;
-        if (!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) || !(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
-            console.warn('sendSmtpMail: smtp.user or smtp.password missing in Functions config');
+        const smtpConfig = (0, runtimeConfig_1.getSmtpConfig)();
+        if (!smtpConfig) {
+            console.warn('sendSmtpMail: SMTP_USER/SMTP_PASSWORD missing (env or functions.config smtp.*)');
             return { ok: false, error: 'SMTP not configured' };
         }
         const transporter = getTransporter();
@@ -144,8 +144,8 @@ exports.sendVendorPasswordEmailHttp = functionRegion_1.ff.https.onRequest(async 
             return;
         }
         // Check SMTP configuration
-        const smtpConfig = functions.config().smtp;
-        if (!smtpConfig || !smtpConfig.user || !smtpConfig.password) {
+        const smtpConfig = (0, runtimeConfig_1.getSmtpConfig)();
+        if (!smtpConfig) {
             res.status(500).json({ error: 'SMTP configuration not found' });
             return;
         }
@@ -231,15 +231,15 @@ exports.sendVendorPasswordEmail = functionRegion_1.ff.https.onCall(async (data, 
             throw new functions.https.HttpsError('invalid-argument', 'Email, password, and vendorName are required');
         }
         // Check SMTP configuration
-        const smtpConfig = functions.config().smtp;
+        const smtpConfig = (0, runtimeConfig_1.getSmtpConfig)();
         console.log('SMTP Config check:', {
             hasConfig: !!smtpConfig,
             hasUser: !!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user),
             hasPassword: !!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password),
             user: (smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) || 'NOT SET'
         });
-        if (!smtpConfig || !smtpConfig.user || !smtpConfig.password) {
-            const errorMsg = 'SMTP configuration not found. Please set smtp.user and smtp.password using: firebase functions:config:set smtp.user="your-email" smtp.password="your-password"';
+        if (!smtpConfig) {
+            const errorMsg = 'SMTP configuration not found. Set SMTP_USER/SMTP_PASSWORD in functions/.env.<project> (or legacy smtp.user / smtp.password).';
             console.error(errorMsg);
             throw new functions.https.HttpsError('failed-precondition', errorMsg);
         }
@@ -354,8 +354,8 @@ async function sendStoreUserWelcomeEmail(options) {
             }
             return mailResult.ok;
         }
-        const smtpConfig = functions.config().smtp;
-        if (!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) || !(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
+        const smtpConfig = (0, runtimeConfig_1.getSmtpConfig)();
+        if (!smtpConfig) {
             return false;
         }
         const transporter = getTransporter();
@@ -783,8 +783,8 @@ exports.onRetailerRegistrationRequestCreated = functionRegion_1.ff.firestore
     const requestId = context.params.requestId;
     const retailerEmail = String(data.email || data.retailerEmail || data.contactEmail || '').trim();
     const shopLabel = data.shopName || data.displayName || 'your pharmacy';
-    const smtpConfig = functions.config().smtp;
-    if (!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) || !(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
+    const smtpConfig = (0, runtimeConfig_1.getSmtpConfig)();
+    if (!smtpConfig) {
         console.warn('onRetailerRegistrationRequestCreated: SMTP not configured, skipping notification emails');
         return null;
     }
@@ -838,7 +838,7 @@ exports.onRetailerRegistrationRequestCreated = functionRegion_1.ff.firestore
             console.error('onRetailerRegistrationRequestCreated: failed to load Sales Officer', e === null || e === void 0 ? void 0 : e.message);
         }
     }
-    const adminNotify = smtpConfig.admin_notify ? String(smtpConfig.admin_notify).trim() : '';
+    const adminNotify = smtpConfig.adminNotify ? String(smtpConfig.adminNotify).trim() : '';
     if (adminNotify) {
         const adminMail = await sendSmtpMail({
             to: adminNotify,
@@ -860,24 +860,19 @@ exports.onRetailerRegistrationRequestCreated = functionRegion_1.ff.firestore
     return null;
 });
 function getPanelLoginUrl() {
-    const cfg = functions.config().app;
-    const base = ((cfg === null || cfg === void 0 ? void 0 : cfg.panel_url) || 'http://localhost:3001').replace(/\/$/, '');
+    const base = ((0, runtimeConfig_1.getAppConfigValue)('panel_url', 'APP_PANEL_URL') || 'http://localhost:3001').replace(/\/$/, '');
     return base.endsWith('/login') ? base : `${base}/login`;
 }
 /** Continue URL after Firebase password reset for Sales Officer (mobile); configurable via `app.so_password_reset_continue_url`. */
 function getSalesOfficerPasswordResetContinueUrl() {
-    var _a;
-    const cfg = functions.config().app;
-    const custom = (_a = cfg === null || cfg === void 0 ? void 0 : cfg.so_password_reset_continue_url) === null || _a === void 0 ? void 0 : _a.trim();
+    const custom = (0, runtimeConfig_1.getAppConfigValue)('so_password_reset_continue_url', 'APP_SO_PASSWORD_RESET_CONTINUE_URL');
     if (custom)
         return custom.replace(/\/$/, '');
     return getPanelLoginUrl();
 }
 /** Continue URL after reset for Purchase Officer app; configurable via `app.po_password_reset_continue_url`. */
 function getPurchaseOfficerPasswordResetContinueUrl() {
-    var _a;
-    const cfg = functions.config().app;
-    const custom = (_a = cfg === null || cfg === void 0 ? void 0 : cfg.po_password_reset_continue_url) === null || _a === void 0 ? void 0 : _a.trim();
+    const custom = (0, runtimeConfig_1.getAppConfigValue)('po_password_reset_continue_url', 'APP_PO_PASSWORD_RESET_CONTINUE_URL');
     if (custom)
         return custom.replace(/\/$/, '');
     return getPanelLoginUrl();
@@ -900,23 +895,19 @@ async function generatePasswordResetLinkWithFallback(email, continueUrl, logLabe
 }
 /** Continue URL after Firebase password reset for a retailer (mobile app); configurable via `app.retailer_password_reset_continue_url`. */
 function getRetailerPasswordResetContinueUrl() {
-    var _a;
-    const cfg = functions.config().app;
-    const custom = (_a = cfg === null || cfg === void 0 ? void 0 : cfg.retailer_password_reset_continue_url) === null || _a === void 0 ? void 0 : _a.trim();
+    const custom = (0, runtimeConfig_1.getAppConfigValue)('retailer_password_reset_continue_url', 'APP_RETAILER_PASSWORD_RESET_CONTINUE_URL');
     if (custom)
         return custom.replace(/\/$/, '');
     return getPanelLoginUrl();
 }
 function getPanelSupportInboxUrl() {
-    const cfg = functions.config().app;
-    let base = ((cfg === null || cfg === void 0 ? void 0 : cfg.panel_url) || 'http://localhost:3001').replace(/\/$/, '');
+    let base = ((0, runtimeConfig_1.getAppConfigValue)('panel_url', 'APP_PANEL_URL') || 'http://localhost:3001').replace(/\/$/, '');
     base = base.replace(/\/login$/i, '');
     return `${base}/support`;
 }
 /** Optional override: `firebase functions:config:set support.notify_emails="a@x.com,b@x.com"` */
 async function collectSupportNotifyEmails() {
-    const cfg = functions.config().support;
-    const fromConfig = String((cfg === null || cfg === void 0 ? void 0 : cfg.notify_emails) || '')
+    const fromConfig = String((0, runtimeConfig_1.getSupportNotifyEmails)() || '')
         .split(/[,;\s]+/)
         .map((s) => s.trim())
         .filter((s) => s.includes('@'));
@@ -1350,7 +1341,7 @@ function decodeDataUriBase64(payload) {
  * SMTP must be configured (smtp.user / smtp.password) like other transactional mail.
  */
 exports.sendOrderInvoicePdfEmail = functionRegion_1.ff
-    .runWith({ memory: '512MB', timeoutSeconds: 120 })
+    .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 120 })
     .https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
@@ -1497,7 +1488,7 @@ exports.sendOrderInvoicePdfEmail = functionRegion_1.ff
  * Callable: admin/operations uploads a freshly generated credit-note PDF; we email it to credit_note.retailerEmail.
  */
 exports.sendCreditNotePdfEmail = functionRegion_1.ff
-    .runWith({ memory: '512MB', timeoutSeconds: 120 })
+    .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 120 })
     .https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');

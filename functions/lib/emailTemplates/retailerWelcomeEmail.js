@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getRetailerLandingUrl = getRetailerLandingUrl;
 exports.buildRetailerWelcomeEmail = buildRetailerWelcomeEmail;
-const functions = require("firebase-functions");
+const runtimeConfig_1 = require("../runtimeConfig");
 const BRAND = {
     teal: '#00A89C',
     navy: '#0D1B4D',
@@ -42,8 +42,7 @@ function escapeHtml(s) {
 }
 /** Public retailer web/app landing page; override via `app.retailer_landing_url`. */
 function getRetailerLandingUrl() {
-    const cfg = functions.config().app;
-    const base = ((cfg === null || cfg === void 0 ? void 0 : cfg.retailer_landing_url) || DEFAULT_RETAILER_LANDING_URL).trim();
+    const base = ((0, runtimeConfig_1.getAppConfigValue)('retailer_landing_url', 'APP_RETAILER_LANDING_URL') || DEFAULT_RETAILER_LANDING_URL).trim();
     return base.replace(/\/$/, '');
 }
 function buildRetailerWelcomeEmail(params) {

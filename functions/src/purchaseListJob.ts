@@ -347,16 +347,18 @@ async function runScheduledPublish(source: string): Promise<void> {
 }
 
 /** Daily 12:00 Asia/Kolkata — first purchase run from today's pending orders */
-export const scheduledPurchaseListNoon = ff.pubsub
-  .schedule('0 12 * * *')
+export const scheduledPurchaseListNoon = ff
+  .runWith({ minInstances: 0, memory: '512MB', timeoutSeconds: 540 })
+  .pubsub.schedule('0 12 * * *')
   .timeZone('Asia/Kolkata')
   .onRun(async () => {
     await runScheduledPublish('scheduled-12');
   });
 
 /** Daily 15:00 Asia/Kolkata — refresh remaining need (excludes already found qty) */
-export const scheduledPurchaseListAfternoon = ff.pubsub
-  .schedule('0 15 * * *')
+export const scheduledPurchaseListAfternoon = ff
+  .runWith({ minInstances: 0, memory: '512MB', timeoutSeconds: 540 })
+  .pubsub.schedule('0 15 * * *')
   .timeZone('Asia/Kolkata')
   .onRun(async () => {
     await runScheduledPublish('scheduled-15');
@@ -366,7 +368,9 @@ export const scheduledPurchaseListAfternoon = ff.pubsub
  * Admin/operations callable: run the same net publish job on demand
  * (optional date YYYY-MM-DD, defaults to today IST).
  */
-export const publishPurchaseListNet = ff.https.onCall(async (data, context) => {
+export const publishPurchaseListNet = ff
+  .runWith({ minInstances: 0, memory: '512MB', timeoutSeconds: 540 })
+  .https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
   }
@@ -607,7 +611,7 @@ export async function propagateManufacturerAvailability(args: {
 
 /** Callable: purchase officer / admin — sync submitted manufacturer group to retailer orders */
 export const syncPurchaseManufacturerToOrders = ff
-  .runWith({ timeoutSeconds: 120, memory: '512MB' })
+  .runWith({ minInstances: 0, timeoutSeconds: 120, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
@@ -660,7 +664,7 @@ export const syncPurchaseManufacturerToOrders = ff
  * Re-sync: bump manufacturerSubmissions[key].syncNonce from the purchase app.
  */
 export const onPurchaseListManufacturerSubmit = ff
-  .runWith({ timeoutSeconds: 120, memory: '512MB' })
+  .runWith({ minInstances: 0, timeoutSeconds: 120, memory: '512MB' })
   .firestore.document('purchaseLists/{listId}')
   .onUpdate(async (change, context) => {
     const before = change.before.data() || {};

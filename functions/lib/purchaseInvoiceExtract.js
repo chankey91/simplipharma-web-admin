@@ -10,14 +10,12 @@ exports.extractInvoiceFromFile = extractInvoiceFromFile;
  * Prefer Gemini structured line items (medicine rows only).
  * Fallback: Vision OCR / pdf-parse text + heuristic line parser.
  */
-const functions = require("firebase-functions");
+const runtimeConfig_1 = require("./runtimeConfig");
 const HEADERISH = /^(s\.?n|sn|#|hsn|gst|cgst|sgst|sub|invoice|bill|total|tax|date|qty|rate|amount|mrp|discount|net|particular|description|item|pack|exp|mfg|batch)/i;
 const GSTIN_REGEX = /([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])/gi;
 const BATCH_LIKE = /^[A-Za-z0-9][A-Za-z0-9./_-]{3,28}$/;
 function getGeminiModel() {
-    return ((functions.config().gemini && functions.config().gemini.model) ||
-        process.env.GOOGLE_GEMINI_MODEL ||
-        'gemini-2.5-flash');
+    return (0, runtimeConfig_1.getGeminiModel)();
 }
 const GEMINI_PROMPT = `You extract transactional line items from Indian pharmacy / pharmaceutical wholesale purchase invoices (GST tax invoices).
 
@@ -169,20 +167,13 @@ function parseGeminiJson(text) {
     };
 }
 function getGeminiApiKey() {
-    return ((functions.config().gemini && functions.config().gemini.api_key) ||
-        process.env.GOOGLE_GEMINI_API_KEY ||
-        '');
+    return (0, runtimeConfig_1.getGeminiApiKey)() || '';
 }
 function getGcpProjectId() {
-    return (process.env.GCLOUD_PROJECT ||
-        process.env.GCP_PROJECT ||
-        (functions.config().gemini && functions.config().gemini.project) ||
-        '');
+    return (0, runtimeConfig_1.getGeminiProject)() || '';
 }
 function getVertexLocation() {
-    return ((functions.config().gemini && functions.config().gemini.location) ||
-        process.env.GOOGLE_VERTEX_LOCATION ||
-        'asia-south1');
+    return (0, runtimeConfig_1.getGeminiLocation)();
 }
 /** Vertex (preferred, Cloud Billing) or AI Studio API key. */
 function isGeminiConfigured() {
@@ -464,9 +455,7 @@ async function extractTextFromPdf(buffer) {
 }
 async function extractTextFromImageOcr(buffer, contentType) {
     var _a, _b, _c;
-    const apiKey = (functions.config().ocr && functions.config().ocr.api_key) ||
-        process.env.GOOGLE_VISION_API_KEY ||
-        '';
+    const apiKey = (0, runtimeConfig_1.getVisionApiKey)() || '';
     if (!apiKey)
         return null;
     const b64 = buffer.toString('base64');

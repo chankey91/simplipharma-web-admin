@@ -15,6 +15,9 @@ dist-ssr
 .env.production
 .env.development
 .env.*.local
+functions/.env
+functions/.env.*
+!functions/.env.example
 
 # Firebase credentials
 firebase-service-account.json

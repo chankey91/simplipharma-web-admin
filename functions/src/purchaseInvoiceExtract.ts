@@ -3,7 +3,13 @@
  * Prefer Gemini structured line items (medicine rows only).
  * Fallback: Vision OCR / pdf-parse text + heuristic line parser.
  */
-import * as functions from 'firebase-functions';
+import {
+  getGeminiApiKey as resolveGeminiApiKey,
+  getGeminiLocation,
+  getGeminiModel as resolveGeminiModel,
+  getGeminiProject,
+  getVisionApiKey,
+} from './runtimeConfig';
 
 export type ExtractedLine = {
   lineId: string;
@@ -38,11 +44,7 @@ const GSTIN_REGEX = /([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])/gi;
 const BATCH_LIKE = /^[A-Za-z0-9][A-Za-z0-9./_-]{3,28}$/;
 
 function getGeminiModel(): string {
-  return (
-    (functions.config().gemini && functions.config().gemini.model) ||
-    process.env.GOOGLE_GEMINI_MODEL ||
-    'gemini-2.5-flash'
-  );
+  return resolveGeminiModel();
 }
 
 const GEMINI_PROMPT = `You extract transactional line items from Indian pharmacy / pharmaceutical wholesale purchase invoices (GST tax invoices).
@@ -199,28 +201,15 @@ function parseGeminiJson(text: string): {
 }
 
 function getGeminiApiKey(): string {
-  return (
-    (functions.config().gemini && functions.config().gemini.api_key) ||
-    process.env.GOOGLE_GEMINI_API_KEY ||
-    ''
-  );
+  return resolveGeminiApiKey() || '';
 }
 
 function getGcpProjectId(): string {
-  return (
-    process.env.GCLOUD_PROJECT ||
-    process.env.GCP_PROJECT ||
-    (functions.config().gemini && functions.config().gemini.project) ||
-    ''
-  );
+  return getGeminiProject() || '';
 }
 
 function getVertexLocation(): string {
-  return (
-    (functions.config().gemini && functions.config().gemini.location) ||
-    process.env.GOOGLE_VERTEX_LOCATION ||
-    'asia-south1'
-  );
+  return getGeminiLocation();
 }
 
 /** Vertex (preferred, Cloud Billing) or AI Studio API key. */
@@ -513,10 +502,7 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 }
 
 async function extractTextFromImageOcr(buffer: Buffer, contentType: string): Promise<string | null> {
-  const apiKey =
-    (functions.config().ocr && functions.config().ocr.api_key) ||
-    process.env.GOOGLE_VISION_API_KEY ||
-    '';
+  const apiKey = getVisionApiKey() || '';
   if (!apiKey) return null;
 
   const b64 = buffer.toString('base64');

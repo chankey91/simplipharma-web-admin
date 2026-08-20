@@ -1,8 +1,8 @@
-import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
 import { allocateSpsProductIds } from './spsProductId';
 import { ff } from './functionRegion';
+import { getSmtpConfig } from './runtimeConfig';
 
 function escapeHtmlText(s: string): string {
   return String(s)
@@ -18,14 +18,14 @@ async function sendBulkJobMail(
   html: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const smtpConfig = functions.config().smtp;
-    if (!smtpConfig?.user || !smtpConfig?.password) {
+    const smtpConfig = getSmtpConfig();
+    if (!smtpConfig) {
       console.warn('bulkMedicineJob: SMTP not configured');
       return { ok: false, error: 'SMTP not configured' };
     }
     const transporter = nodemailer.createTransport({
-      host: smtpConfig.host || 'smtp.zoho.in',
-      port: Number(smtpConfig.port) || 587,
+      host: smtpConfig.host,
+      port: smtpConfig.port,
       secure: false,
       auth: { user: smtpConfig.user, pass: smtpConfig.password },
     });
@@ -104,7 +104,7 @@ function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
  * Sends email to notifyEmail when done (success or failure).
  */
 export const onBulkMedicineJobCreated = ff
-  .runWith({ timeoutSeconds: 540, memory: '1GB' })
+  .runWith({ minInstances: 0, timeoutSeconds: 540, memory: '1GB' })
   .firestore.document('bulk_medicine_jobs/{jobId}')
   .onCreate(async (snap, context) => {
     const jobId = context.params.jobId;

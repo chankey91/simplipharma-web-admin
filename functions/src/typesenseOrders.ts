@@ -13,6 +13,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { getTypesenseClient } from './typesenseMedicines';
 import { ff } from './functionRegion';
+import { typesenseDocsEqual } from './runtimeConfig';
 
 type TypesenseClient = import('typesense').Client;
 
@@ -172,13 +173,21 @@ export async function deleteOrderFromTypesense(orderId: string): Promise<void> {
 }
 
 /** Firestore sync: index on create/update, remove on delete. Errors are swallowed so a Typesense outage never blocks order writes. */
-export const onOrderWriteTypesense = ff.firestore
-  .document('orders/{orderId}')
+export const onOrderWriteTypesense = ff
+  .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+  .firestore.document('orders/{orderId}')
   .onWrite(async (change, context) => {
     const orderId = context.params.orderId as string;
     try {
       if (!change.after.exists) {
         await deleteOrderFromTypesense(orderId);
+        return;
+      }
+      const beforeDoc = change.before.exists
+        ? firestoreDataToOrderDoc(orderId, change.before.data())
+        : null;
+      const afterDoc = firestoreDataToOrderDoc(orderId, change.after.data());
+      if (typesenseDocsEqual(beforeDoc, afterDoc)) {
         return;
       }
       await upsertOrderInTypesense(orderId, change.after.data());
@@ -281,7 +290,9 @@ function orderDateRangeFilters(fromDate?: string, toDate?: string): string[] {
  * filtered, sorted and paginated, plus global per-status counts for the KPI
  * cards — so the client never downloads the whole `orders` collection.
  */
-export const searchOrdersTypesense = ff.https.onCall(async (data, context) => {
+export const searchOrdersTypesense = ff
+  .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+  .https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
   }
@@ -375,7 +386,7 @@ async function canReindexOrders(uid: string): Promise<boolean> {
 
 /** One-time / maintenance: full reindex of `orders` from Firestore (admin only). */
 export const adminReindexOrdersTypesense = ff
-  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .runWith({ minInstances: 0, timeoutSeconds: 540, memory: '512MB' })
   .https.onCall(async (_data, context) => {
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
