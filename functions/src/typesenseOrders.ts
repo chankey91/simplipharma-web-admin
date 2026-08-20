@@ -235,7 +235,7 @@ async function resolveOrderSearchScope(uid: string): Promise<OrderSearchScope | 
   const userDoc = await admin.firestore().collection('users').doc(uid).get();
   if (!userDoc.exists) return null;
   const role = String(userDoc.data()?.role || '');
-  if (role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations') {
+  if (role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations' || role === 'office' || role === 'Office') {
     return { kind: 'all' };
   }
   if (role === 'retailer') {

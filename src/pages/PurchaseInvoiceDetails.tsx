@@ -39,7 +39,7 @@ import {
   AttachMoney,
   Edit,
 } from '@mui/icons-material';
-import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useUpdatePurchaseInvoicePayment, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
+import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useUpdatePurchaseInvoicePayment, useVendorLastPurchases, useDeletePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { format } from 'date-fns';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
@@ -48,6 +48,7 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
 import { PurchaseInvoiceItem } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useAuth } from '../context/AuthContext';
 import { setStockBatchNonReturnable, setStockBatchNrxDrug } from '../services/inventory';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 
@@ -57,6 +58,9 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { data: invoice, isLoading } = usePurchaseInvoice(invoiceId || '');
   const updateInvoiceMutation = useUpdatePurchaseInvoiceWithStock();
   const updatePaymentMutation = useUpdatePurchaseInvoicePayment();
+  const deleteInvoiceMutation = useDeletePurchaseInvoice();
+  const { canWrite } = useAuth();
+  const canEditPurchases = canWrite('purchases');
   const { lastPurchaseByMedicineId } = useVendorLastPurchases(
     undefined,
     invoice?.id,
@@ -232,6 +236,30 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     }
   };
 
+  const handleDeleteInvoice = async () => {
+    if (!invoice) return;
+    const ok = await confirm(
+      `Delete purchase bill #${invoice.invoiceNumber}? Stock added from this bill will be removed from inventory. Units already sold cannot be fully reverted. This cannot be undone.`,
+      { destructive: true }
+    );
+    if (!ok) return;
+    try {
+      const result = await deleteInvoiceMutation.mutateAsync(invoice.id);
+      if (result.stockSyncErrors.length > 0) {
+        await alert(
+          `Bill deleted. Some stock could not be fully reverted:\n${result.stockSyncErrors.slice(0, 5).join('\n')}`,
+          { severity: 'warning' }
+        );
+      } else {
+        await alert('Purchase bill deleted and stock reverted.', { severity: 'success' });
+      }
+      navigate('/purchases');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to delete purchase bill';
+      await alert(message, { severity: 'error' });
+    }
+  };
+
   const handleSaveItem = async () => {
     if (itemDialog.itemIndex === null) return;
     if (!currentItem.batchNumber || !currentItem.quantity || !currentItem.purchasePrice || !currentItem.expiryDate) {
@@ -345,6 +373,18 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
         >
           Edit Invoice
         </Button>
+        {canEditPurchases && (
+          <Button
+            variant="outlined"
+            color="error"
+            startIcon={<Delete />}
+            onClick={() => void handleDeleteInvoice()}
+            disabled={deleteInvoiceMutation.isPending}
+            sx={{ mr: 1 }}
+          >
+            {deleteInvoiceMutation.isPending ? 'Deleting…' : 'Delete Bill'}
+          </Button>
+        )}
         <Button 
           variant="outlined" 
           startIcon={<Print />} 

@@ -36,7 +36,12 @@ import {
   deleteField
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
-import { canAccessPanel, type PanelRole } from '../auth/permissions';
+import {
+  buildPanelPermissions,
+  canAccessPanel,
+  type PanelPermissions,
+  type PanelRole,
+} from '../auth/permissions';
 import { firebaseConfig, firebaseFunctionsRegion } from '../config/env';
 
 if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
@@ -158,8 +163,15 @@ export const getUserProfile = async (userId: string): Promise<{ id: string; role
   return null;
 };
 
-/** Web panel access: admin or operations. Does not auto-create profiles. */
+/** Web panel access: admin, operations, or office. Does not auto-create profiles. */
 export const getUserPanelRole = async (userId: string): Promise<PanelRole | null> => {
+  const perms = await getUserPanelPermissions(userId);
+  return perms?.role ?? null;
+};
+
+export const getUserPanelPermissions = async (
+  userId: string
+): Promise<PanelPermissions | null> => {
   try {
     const profile = await getUserProfile(userId);
     if (!profile?.role || !canAccessPanel(profile.role)) {
@@ -168,9 +180,13 @@ export const getUserPanelRole = async (userId: string): Promise<PanelRole | null
     if (profile.isActive === false) {
       return null;
     }
-    return profile.role;
+    return buildPanelPermissions(profile.role as PanelRole, {
+      menuPaths: profile.menuPaths,
+      writeAccess: profile.writeAccess,
+      homePath: profile.homePath,
+    });
   } catch (error) {
-    console.error('Error checking panel role:', error);
+    console.error('Error checking panel permissions:', error);
     return null;
   }
 };
