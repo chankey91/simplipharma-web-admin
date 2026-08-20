@@ -14,6 +14,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { getTypesenseClient } from './typesenseMedicines';
 import { ff } from './functionRegion';
+import { typesenseDocsEqual } from './runtimeConfig';
 
 type TypesenseClient = import('typesense').Client;
 
@@ -108,13 +109,21 @@ export function createTypesenseSync(config: TypesenseSyncConfig): TypesenseSyncF
     }
   };
 
-  const onWrite = ff.firestore
-    .document(`${config.collectionName}/{docId}`)
+  const onWrite = ff
+    .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+    .firestore.document(`${config.collectionName}/{docId}`)
     .onWrite(async (change, context) => {
       const docId = context.params.docId as string;
       try {
         if (!change.after.exists) {
           await remove(docId);
+          return;
+        }
+        const beforeDoc = change.before.exists
+          ? config.buildDoc(docId, change.before.data())
+          : null;
+        const afterDoc = config.buildDoc(docId, change.after.data());
+        if (typesenseDocsEqual(beforeDoc, afterDoc)) {
           return;
         }
         await upsert(docId, change.after.data());
@@ -153,7 +162,9 @@ export function createTypesenseSync(config: TypesenseSyncConfig): TypesenseSyncF
     }
   };
 
-  const search = ff.https.onCall(async (data, context) => {
+  const search = ff
+    .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+    .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
@@ -217,7 +228,7 @@ export function createTypesenseSync(config: TypesenseSyncConfig): TypesenseSyncF
   });
 
   const reindex = ff
-    .runWith({ timeoutSeconds: 540, memory: '512MB' })
+    .runWith({ minInstances: 0, timeoutSeconds: 540, memory: '512MB' })
     .https.onCall(async (_data, context) => {
       if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');

@@ -112,7 +112,9 @@ async function resolveProductDemandScope(uid) {
 exports.onProductDemandWriteTypesense = productDemandSync.onWrite;
 exports.adminReindexProductDemandsTypesense = productDemandSync.reindex;
 /** Auth-scoped product demand search (retailer / SO / admin). */
-exports.searchProductDemandsTypesense = functionRegion_1.ff.https.onCall(async (data, context) => {
+exports.searchProductDemandsTypesense = functionRegion_1.ff
+    .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+    .https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }

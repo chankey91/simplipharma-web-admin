@@ -268,7 +268,7 @@ export async function searchMedicinesCatalog(
   if (!browse && q.length < 2) {
     return { medicines: [], found: 0, page: 1, facet_counts: {}, source: 'typesense' };
   }
-  const hydrate = opts?.hydrate ?? true;
+  const hydrate = opts?.hydrate ?? false;
   const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 120);
   const page = Math.min(Math.max(opts?.page ?? 1, 1), 500);
   const tc = deriveSearchMatchTokens(q);
@@ -331,7 +331,7 @@ export async function searchMedicinesTypesenseAdmin(
 ): Promise<Medicine[]> {
   const result = await searchMedicinesCatalog(query, {
     ...opts,
-    hydrate: opts?.hydrate ?? true,
+    hydrate: opts?.hydrate ?? false,
     browse: false,
   });
   return result.medicines;

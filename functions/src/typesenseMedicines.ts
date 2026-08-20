@@ -20,51 +20,25 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { MEDICINE_SYNONYM_SEED } from './typesenseMedicineSynonyms';
 import { ff } from './functionRegion';
+import {
+  getTypesenseRuntimeConfig,
+  typesenseDocsEqual,
+  type TypesenseRuntimeConfig,
+} from './runtimeConfig';
 
 export const TYPESENSE_COLLECTION = 'medicines';
 
 type TypesenseClient = import('typesense').Client;
 
 function loadTypesenseClientConstructor(): typeof import('typesense').default.Client {
-  // Lazy require â€” avoids slow cold load during Firebase deploy discovery
+  // Lazy require — avoids slow cold load during Firebase deploy discovery
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Typesense = require('typesense');
   return (Typesense.default ?? Typesense).Client;
 }
 
-type TypesenseRuntimeConfig = {
-  host: string;
-  apiKey: string;
-  searchApiKey: string;
-  protocol: string;
-  port: number;
-};
-
 function getTypesenseConfig(): TypesenseRuntimeConfig | null {
-  const cfg = functions.config().typesense as
-    | {
-        host?: string;
-        api_key?: string;
-        search_api_key?: string;
-        protocol?: string;
-        port?: string;
-      }
-    | undefined;
-  if (!cfg?.host || !cfg?.api_key) {
-    return null;
-  }
-  const protocol = (cfg.protocol || 'https').replace(/:$/, '');
-  const defaultPort = protocol === 'https' ? '443' : '8108';
-  const port = parseInt(String(cfg.port || defaultPort), 10) || (protocol === 'https' ? 443 : 8108);
-  const apiKey = String(cfg.api_key).trim();
-  const searchApiKey = String(cfg.search_api_key || cfg.api_key).trim();
-  return {
-    host: String(cfg.host).trim(),
-    apiKey,
-    searchApiKey,
-    protocol,
-    port,
-  };
+  return getTypesenseRuntimeConfig();
 }
 
 /** Admin/master key — upsert, delete, reindex, synonyms. */
@@ -237,8 +211,9 @@ export async function deleteMedicineFromTypesense(medicineId: string): Promise<v
 }
 
 /** Firestore sync: index on create/update, remove on delete or soft-delete. */
-export const onMedicineWriteTypesense = ff.firestore
-  .document('medicines/{medicineId}')
+export const onMedicineWriteTypesense = ff
+  .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+  .firestore.document('medicines/{medicineId}')
   .onWrite(async (change, context) => {
     const medicineId = context.params.medicineId as string;
     try {
@@ -249,6 +224,13 @@ export const onMedicineWriteTypesense = ff.firestore
       const data = change.after.data();
       if (data?.deleted === true) {
         await deleteMedicineFromTypesense(medicineId);
+        return;
+      }
+      const beforeDoc = change.before.exists
+        ? firestoreDataToTypesenseDoc(medicineId, change.before.data())
+        : null;
+      const afterDoc = firestoreDataToTypesenseDoc(medicineId, data);
+      if (typesenseDocsEqual(beforeDoc, afterDoc)) {
         return;
       }
       await upsertMedicineInTypesense(medicineId, data);
@@ -278,7 +260,7 @@ async function parseMedicineLiteFromSnap(
         : parseFloat(String(data.mrp))
       : undefined;
 
-  // Prefer embedded stockBatches; if empty, try medicineBatches collection (post-split).
+  // Prefer embedded stockBatches; only hit medicineBatches when the master doc has none (post-split).
   let rawBatches = Array.isArray(data.stockBatches) ? data.stockBatches : [];
   if (rawBatches.length === 0) {
     try {
@@ -598,7 +580,7 @@ async function upsertMedicineSynonyms(client: TypesenseClient): Promise<number> 
   return upserted;
 }
 
-/** Structured log + best-effort daily Firestore counters (never blocks search). */
+/** Structured log + best-effort sampled daily Firestore counters (never blocks search). */
 function recordMedicineSearchAnalytics(payload: {
   browse: boolean;
   queryLen: number;
@@ -614,6 +596,10 @@ function recordMedicineSearchAnalytics(payload: {
       ...payload,
     })
   );
+  // Sample ~10% of searches into Firestore; scale increments so daily totals stay approximate.
+  const SAMPLE_RATE = 0.1;
+  const SAMPLE_WEIGHT = 10;
+  if (Math.random() >= SAMPLE_RATE) return;
   const day = new Date().toISOString().slice(0, 10);
   void admin
     .firestore()
@@ -623,10 +609,12 @@ function recordMedicineSearchAnalytics(payload: {
       {
         day,
         collection: 'medicines',
-        searches: admin.firestore.FieldValue.increment(1),
-        emptySearches: admin.firestore.FieldValue.increment(payload.empty ? 1 : 0),
-        browseSearches: admin.firestore.FieldValue.increment(payload.browse ? 1 : 0),
-        latencyMsSum: admin.firestore.FieldValue.increment(payload.latencyMs),
+        searches: admin.firestore.FieldValue.increment(SAMPLE_WEIGHT),
+        emptySearches: admin.firestore.FieldValue.increment(payload.empty ? SAMPLE_WEIGHT : 0),
+        browseSearches: admin.firestore.FieldValue.increment(payload.browse ? SAMPLE_WEIGHT : 0),
+        latencyMsSum: admin.firestore.FieldValue.increment(payload.latencyMs * SAMPLE_WEIGHT),
+        sampled: true,
+        sampleRate: SAMPLE_RATE,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -641,7 +629,7 @@ function recordMedicineSearchAnalytics(payload: {
  * Autocomplete: q length ≥ 2. Inventory browse: `browse: true` → q:"*" + page/filters/facets.
  */
 export const searchMedicinesTypesense = ff
-  .runWith({ minInstances: 1 })
+  .runWith({ minInstances: 0, memory: '512MB', timeoutSeconds: 60 })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
@@ -653,7 +641,8 @@ export const searchMedicinesTypesense = ff
     const limit = Math.min(Math.max(Number(data.limit) || 50, 1), 120);
     const strict = data.strict === true;
     const broad = isBroadRetailSearch(strict, data.queryMode);
-    const hydrate = data.hydrate !== false;
+    // Opt-in Firestore hydrate (Typesense index is enough for list/autocomplete).
+    const hydrate = data.hydrate === true;
     const includeFacets = data.includeFacets === true;
     const startedAt = Date.now();
 
@@ -796,7 +785,7 @@ type ReindexProgress = {
  * Returns: `{ done, nextStartAfterId, indexed, scanned, cumulativeIndexed, cumulativeScanned }`
  */
 export const adminReindexMedicinesTypesense = ff
-  .runWith({ timeoutSeconds: 300, memory: '2GB' })
+  .runWith({ minInstances: 0, timeoutSeconds: 300, memory: '1GB' })
   .https.onCall(async (data, context) => {
     try {
       if (!context.auth) {
@@ -989,7 +978,7 @@ export const adminReindexMedicinesTypesense = ff
 
 /** Upsert pharma synonym seed into Typesense (admin/ops). Safe to re-run. */
 export const adminSyncMedicineSynonymsTypesense = ff
-  .runWith({ timeoutSeconds: 120, memory: '256MB' })
+  .runWith({ minInstances: 0, timeoutSeconds: 120, memory: '256MB' })
   .https.onCall(async (_data, context) => {
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Sign in required');

@@ -1,11 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.onBulkMedicineJobCreated = void 0;
-const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 const spsProductId_1 = require("./spsProductId");
 const functionRegion_1 = require("./functionRegion");
+const runtimeConfig_1 = require("./runtimeConfig");
 function escapeHtmlText(s) {
     return String(s)
         .replace(/&/g, '&amp;')
@@ -15,14 +15,14 @@ function escapeHtmlText(s) {
 }
 async function sendBulkJobMail(to, subject, html) {
     try {
-        const smtpConfig = functions.config().smtp;
-        if (!(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.user) || !(smtpConfig === null || smtpConfig === void 0 ? void 0 : smtpConfig.password)) {
+        const smtpConfig = (0, runtimeConfig_1.getSmtpConfig)();
+        if (!smtpConfig) {
             console.warn('bulkMedicineJob: SMTP not configured');
             return { ok: false, error: 'SMTP not configured' };
         }
         const transporter = nodemailer.createTransport({
-            host: smtpConfig.host || 'smtp.zoho.in',
-            port: Number(smtpConfig.port) || 587,
+            host: smtpConfig.host,
+            port: smtpConfig.port,
             secure: false,
             auth: { user: smtpConfig.user, pass: smtpConfig.password },
         });
@@ -89,7 +89,7 @@ function stripUndefined(obj) {
  * Sends email to notifyEmail when done (success or failure).
  */
 exports.onBulkMedicineJobCreated = functionRegion_1.ff
-    .runWith({ timeoutSeconds: 540, memory: '1GB' })
+    .runWith({ minInstances: 0, timeoutSeconds: 540, memory: '1GB' })
     .firestore.document('bulk_medicine_jobs/{jobId}')
     .onCreate(async (snap, context) => {
     var _a;

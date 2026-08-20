@@ -19,6 +19,7 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const typesenseMedicines_1 = require("./typesenseMedicines");
 const functionRegion_1 = require("./functionRegion");
+const runtimeConfig_1 = require("./runtimeConfig");
 /** Convert a Firestore Timestamp / date-ish value to epoch milliseconds. */
 function tsMillis(value) {
     if (value == null)
@@ -81,13 +82,21 @@ function createTypesenseSync(config) {
             throw e;
         }
     };
-    const onWrite = functionRegion_1.ff.firestore
-        .document(`${config.collectionName}/{docId}`)
+    const onWrite = functionRegion_1.ff
+        .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+        .firestore.document(`${config.collectionName}/{docId}`)
         .onWrite(async (change, context) => {
         const docId = context.params.docId;
         try {
             if (!change.after.exists) {
                 await remove(docId);
+                return;
+            }
+            const beforeDoc = change.before.exists
+                ? config.buildDoc(docId, change.before.data())
+                : null;
+            const afterDoc = config.buildDoc(docId, change.after.data());
+            if ((0, runtimeConfig_1.typesenseDocsEqual)(beforeDoc, afterDoc)) {
                 return;
             }
             await upsert(docId, change.after.data());
@@ -117,7 +126,9 @@ function createTypesenseSync(config) {
             return { totalAll: 0, facetCounts };
         }
     };
-    const search = functionRegion_1.ff.https.onCall(async (data, context) => {
+    const search = functionRegion_1.ff
+        .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+        .https.onCall(async (data, context) => {
         if (!context.auth) {
             throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
         }
@@ -169,7 +180,7 @@ function createTypesenseSync(config) {
         }
     });
     const reindex = functionRegion_1.ff
-        .runWith({ timeoutSeconds: 540, memory: '512MB' })
+        .runWith({ minInstances: 0, timeoutSeconds: 540, memory: '512MB' })
         .https.onCall(async (_data, context) => {
         if (!context.auth) {
             throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
