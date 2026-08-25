@@ -301,6 +301,10 @@ export interface User {
   salesOfficerId?: string; // For retailers: which Sales Officer manages them
   displayName?: string;
   phoneNumber?: string;
+  /** Sales Officer: IMEI / device identifier used by the mobile app. */
+  deviceId?: string;
+  /** Sales Officer: photo of the work device (optional). */
+  devicePhoto?: string;
   address?: string;
   /** Town / city (free text). */
   town?: string;

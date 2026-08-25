@@ -28,6 +28,7 @@ import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
 import { SalesOfficersPage } from './pages/SalesOfficers';
 import { SoVisitsPage } from './pages/SoVisits';
+import { DailyPerformancePage } from './pages/DailyPerformance';
 import { NrxRegisterPage } from './pages/NrxRegister';
 import { OperationsUsersPage } from './pages/OperationsUsers';
 import { OperationsPage } from './pages/Operations';
@@ -136,6 +137,7 @@ const router = createBrowserRouter([
   { path: '/home-feed', element: withLayout(<HomeFeedPage />) },
   { path: '/sales-officers', element: withLayout(<SalesOfficersPage />) },
   { path: '/so-visits', element: withLayout(<SoVisitsPage />) },
+  { path: '/daily-performance', element: withLayout(<DailyPerformancePage />) },
   { path: '/nrx-register', element: withLayout(<NrxRegisterPage />) },
   { path: '/operations-users', element: withLayout(<OperationsUsersPage />) },
   { path: '/pending-retailers', element: withLayout(<PendingRetailersPage />) },

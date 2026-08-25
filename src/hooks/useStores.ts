@@ -84,8 +84,15 @@ export const useSendRetailerPasswordResetEmail = () => {
 export const useAssignRetailerToSalesOfficer = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: { retailerUserId: string; salesOfficerId: string | null }) =>
-      assignRetailerToSalesOfficer(args.retailerUserId, args.salesOfficerId),
+    mutationFn: async (args: {
+      retailerUserId: string | string[];
+      salesOfficerId: string | null;
+    }) => {
+      const ids = Array.isArray(args.retailerUserId) ? args.retailerUserId : [args.retailerUserId];
+      for (const id of ids) {
+        await assignRetailerToSalesOfficer(id, args.salesOfficerId);
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] });
       queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });

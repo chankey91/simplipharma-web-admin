@@ -1,5 +1,6 @@
-import { collection, getDocs, query, where, doc, updateDoc, db, functions } from './firebase';
+import { collection, getDocs, query, where, doc, updateDoc, deleteField, db, functions, auth, storage } from './firebase';
 import { httpsCallable } from 'firebase/functions';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { User } from '../types';
 
 export const getSalesOfficers = async (): Promise<User[]> => {
@@ -54,16 +55,52 @@ export const createSalesOfficer = async (
   return data.uid || data.id;
 };
 
+export type SalesOfficerProfileUpdate = {
+  displayName?: string;
+  phoneNumber?: string;
+  town?: string;
+  district?: string;
+  deviceId?: string;
+  devicePhoto?: string;
+};
+
+const MAX_DEVICE_PHOTO_BYTES = 5 * 1024 * 1024;
+
+export const uploadSalesOfficerDevicePhoto = async (file: File): Promise<string> => {
+  if (!auth.currentUser?.uid) {
+    throw new Error('You must be signed in to upload a device photo.');
+  }
+  if (file.size > MAX_DEVICE_PHOTO_BYTES) {
+    throw new Error('Device photo must be 5 MB or smaller.');
+  }
+  const safeName = file.name.replace(/[^\w.\-]+/g, '_').slice(0, 80) || 'device.jpg';
+  const uid = auth.currentUser.uid;
+  const fileRef = ref(storage, `sales_officer_docs/${uid}/device/${Date.now()}_${safeName}`);
+  await uploadBytes(fileRef, file, { contentType: file.type || 'image/jpeg' });
+  return getDownloadURL(fileRef);
+};
+
 /** Update Sales Officer profile fields on `users/{salesOfficerId}` (not email — that is Auth). */
 export const updateSalesOfficerProfile = async (
   salesOfficerId: string,
-  data: { displayName?: string; phoneNumber?: string }
+  data: SalesOfficerProfileUpdate
 ): Promise<void> => {
   const ref = doc(db, 'users', salesOfficerId);
-  const payload: Record<string, string> = {};
-  if (data.displayName !== undefined) payload.displayName = data.displayName.trim();
-  if (data.phoneNumber !== undefined) payload.phoneNumber = data.phoneNumber.trim();
-  if (Object.keys(payload).length === 0) return;  
+  const payload: Record<string, string | ReturnType<typeof deleteField>> = {};
+  const setTrimmed = (key: keyof SalesOfficerProfileUpdate, required: boolean) => {
+    if (data[key] === undefined) return;
+    const value = String(data[key] ?? '').trim();
+    if (value) payload[key] = value;
+    else if (!required) payload[key] = deleteField();
+    else payload[key] = '';
+  };
+  setTrimmed('displayName', false);
+  setTrimmed('phoneNumber', true);
+  setTrimmed('town', true);
+  setTrimmed('district', true);
+  setTrimmed('deviceId', true);
+  setTrimmed('devicePhoto', false);
+  if (Object.keys(payload).length === 0) return;
   await updateDoc(ref, payload);
 };
 

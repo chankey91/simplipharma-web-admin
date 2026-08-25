@@ -131,6 +131,32 @@ export const getPurchaseInvoiceById = async (invoiceId: string): Promise<Purchas
   return mapPurchaseInvoiceDoc(invoiceDoc);
 };
 
+/** Purchase invoices whose invoiceDate falls in [startMs, endMs). */
+export const getPurchaseInvoicesInRange = async (
+  startMs: number,
+  endMs?: number
+): Promise<PurchaseInvoice[]> => {
+  const invoicesCol = collection(db, 'purchaseInvoices');
+  const constraints = [where('invoiceDate', '>=', Timestamp.fromMillis(startMs))];
+  if (endMs != null) constraints.push(where('invoiceDate', '<', Timestamp.fromMillis(endMs)));
+  try {
+    const snapshot = await getDocs(
+      query(invoicesCol, ...constraints, orderBy('invoiceDate', 'desc'))
+    );
+    return snapshot.docs.map((d) => mapPurchaseInvoiceDoc(d));
+  } catch (error) {
+    console.warn('getPurchaseInvoicesInRange query failed, falling back to full scan:', error);
+    const all = await getAllPurchaseInvoices();
+    return all.filter((inv) => {
+      const t =
+        inv.invoiceDate instanceof Date
+          ? inv.invoiceDate.getTime()
+          : new Date(inv.invoiceDate as string | number).getTime();
+      return t >= startMs && (endMs == null || t < endMs);
+    });
+  }
+};
+
 /** Resolve PI by Firestore id or human-readable invoice number (as stored on product demands). */
 export const getPurchaseInvoiceByReference = async (
   reference: string
