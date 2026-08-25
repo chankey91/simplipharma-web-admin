@@ -31,6 +31,7 @@ import {
   PersonAddAlt,
   LockReset,
   Place,
+  PhotoCamera,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -46,6 +47,8 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { MADHYA_PRADESH_DISTRICTS } from '../constants/madhyaPradeshDistricts';
+import { uploadSalesOfficerDevicePhoto } from '../services/salesOfficers';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -56,7 +59,30 @@ const generatePassword = () => {
   return password;
 };
 
+const emptyOfficerForm = () => ({
+  email: '',
+  displayName: '',
+  phoneNumber: '',
+  town: '',
+  district: '',
+  deviceId: '',
+  devicePhoto: '',
+  password: generatePassword(),
+});
+
+function retailerLocationLabel(r: User): string {
+  return [r.town, r.district].map((s) => String(s || '').trim()).filter(Boolean).join(', ');
+}
+
+function retailerOptionLabel(r: User): string {
+  const name = r.shopName || r.displayName || r.email || r.id;
+  const loc = retailerLocationLabel(r);
+  const code = r.storeCode?.trim();
+  return [code, name, loc].filter(Boolean).join(' · ');
+}
+
 export const SalesOfficersPage: React.FC = () => {
+  const navigate = useNavigate();
   const { data: salesOfficers, isLoading, error } = useSalesOfficers();
   const { data: allRetailers } = useStores();
   const createMutation = useCreateSalesOfficer();
@@ -66,22 +92,26 @@ export const SalesOfficersPage: React.FC = () => {
 
   const [openDialog, setOpenDialog] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [formData, setFormData] = useState({
-    email: '',
-    displayName: '',
-    phoneNumber: '',
-    password: '',
-  });
+  const [formData, setFormData] = useState(emptyOfficerForm);
 
   const resetPasswordMutation = useSendSalesOfficerPasswordResetEmail();
 
   const [editOpen, setEditOpen] = useState(false);
   const [editOfficer, setEditOfficer] = useState<User | null>(null);
-  const [editForm, setEditForm] = useState({ displayName: '', phoneNumber: '' });
+  const [editForm, setEditForm] = useState({
+    displayName: '',
+    phoneNumber: '',
+    town: '',
+    district: '',
+    deviceId: '',
+    devicePhoto: '',
+  });
+  const [createDevicePhotoFile, setCreateDevicePhotoFile] = useState<File | null>(null);
+  const [editDevicePhotoFile, setEditDevicePhotoFile] = useState<File | null>(null);
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForSoId, setAssignForSoId] = useState<string | null>(null);
-  const [assignPick, setAssignPick] = useState<User | null>(null);
+  const [assignPicks, setAssignPicks] = useState<User[]>([]);
 
   const soNameById = useMemo(() => {
     const m: Record<string, string> = {};
@@ -127,37 +157,95 @@ export const SalesOfficersPage: React.FC = () => {
   }, [salesOfficers, allRetailers, sortKey, sortDirection]);
 
   const handleOpenCreate = () => {
-    setFormData({
-      email: '',
-      displayName: '',
-      phoneNumber: '',
-      password: generatePassword(),
-    });
+    setFormData(emptyOfficerForm());
+    setCreateDevicePhotoFile(null);
     setOpenDialog(true);
   };
 
   const handleOpenEdit = (officer: User) => {
     setEditOfficer(officer);
+    setEditDevicePhotoFile(null);
     setEditForm({
       displayName: officer.displayName || '',
       phoneNumber: officer.phoneNumber || '',
+      town: officer.town || '',
+      district: officer.district || '',
+      deviceId: officer.deviceId || '',
+      devicePhoto: officer.devicePhoto || '',
     });
     setEditOpen(true);
   };
 
+  const pickDevicePhoto = (
+    kind: 'create' | 'edit',
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      void alert('Device photo must be 5 MB or smaller', { severity: 'warning' });
+      event.target.value = '';
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    if (kind === 'create') {
+      setCreateDevicePhotoFile(file);
+      setFormData((prev) => ({ ...prev, devicePhoto: previewUrl }));
+    } else {
+      setEditDevicePhotoFile(file);
+      setEditForm((prev) => ({ ...prev, devicePhoto: previewUrl }));
+    }
+    event.target.value = '';
+  };
+
+  const clearDevicePhoto = (kind: 'create' | 'edit') => {
+    if (kind === 'create') {
+      setCreateDevicePhotoFile(null);
+      setFormData((prev) => ({ ...prev, devicePhoto: '' }));
+    } else {
+      setEditDevicePhotoFile(null);
+      setEditForm((prev) => ({ ...prev, devicePhoto: '' }));
+    }
+  };
+
   const handleSaveEdit = async () => {
     if (!editOfficer) return;
+    if (!editForm.phoneNumber.trim()) {
+      await alert('Sales Officer phone is required', { severity: 'warning' });
+      return;
+    }
+    if (!editForm.town.trim()) {
+      await alert('Town is required', { severity: 'warning' });
+      return;
+    }
+    if (!editForm.district.trim()) {
+      await alert('District is required', { severity: 'warning' });
+      return;
+    }
+    if (!editForm.deviceId.trim()) {
+      await alert('Device ID is required', { severity: 'warning' });
+      return;
+    }
     try {
+      let devicePhoto = editForm.devicePhoto.trim();
+      if (editDevicePhotoFile) {
+        devicePhoto = await uploadSalesOfficerDevicePhoto(editDevicePhotoFile);
+      }
       await updateProfileMutation.mutateAsync({
         salesOfficerId: editOfficer.id,
         data: {
           displayName: editForm.displayName.trim(),
           phoneNumber: editForm.phoneNumber.trim(),
+          town: editForm.town.trim(),
+          district: editForm.district.trim(),
+          deviceId: editForm.deviceId.trim(),
+          devicePhoto,
         },
       });
       await alert('Sales Officer updated.', { severity: 'success' });
       setEditOpen(false);
       setEditOfficer(null);
+      setEditDevicePhotoFile(null);
     } catch (err: any) {
       await alert(err.message || 'Failed to update', { severity: 'error' });
     }
@@ -182,24 +270,26 @@ export const SalesOfficersPage: React.FC = () => {
 
   const handleOpenAssign = (soId: string) => {
     setAssignForSoId(soId);
-    setAssignPick(null);
+    setAssignPicks([]);
     setAssignOpen(true);
   };
 
   const handleConfirmAssign = async () => {
-    if (!assignForSoId || !assignPick) return;
+    if (!assignForSoId || assignPicks.length === 0) return;
     try {
       await assignMutation.mutateAsync({
-        retailerUserId: assignPick.id,
+        retailerUserId: assignPicks.map((r) => r.id),
         salesOfficerId: assignForSoId,
       });
-      await alert(
-        `${assignPick.shopName || assignPick.displayName || assignPick.email} assigned to this Sales Officer.`,
-        { severity: 'success' }
-      );
+      const names = assignPicks
+        .slice(0, 3)
+        .map((r) => r.shopName || r.displayName || r.email)
+        .join(', ');
+      const extra = assignPicks.length > 3 ? ` and ${assignPicks.length - 3} more` : '';
+      await alert(`${names}${extra} assigned to this Sales Officer.`, { severity: 'success' });
       setAssignOpen(false);
       setAssignForSoId(null);
-      setAssignPick(null);
+      setAssignPicks([]);
     } catch (err: any) {
       await alert(err.message || 'Failed to assign retailer', { severity: 'error' });
     }
@@ -230,15 +320,39 @@ export const SalesOfficersPage: React.FC = () => {
       await alert('Email is required', { severity: 'warning' });
       return;
     }
+    if (!formData.phoneNumber.trim()) {
+      await alert('Sales Officer phone is required', { severity: 'warning' });
+      return;
+    }
+    if (!formData.town.trim()) {
+      await alert('Town is required', { severity: 'warning' });
+      return;
+    }
+    if (!formData.district.trim()) {
+      await alert('District is required', { severity: 'warning' });
+      return;
+    }
+    if (!formData.deviceId.trim()) {
+      await alert('Device ID is required', { severity: 'warning' });
+      return;
+    }
     if (!formData.password || formData.password.length < 6) {
       await alert('Password must be at least 6 characters', { severity: 'warning' });
       return;
     }
     try {
+      let devicePhoto: string | undefined;
+      if (createDevicePhotoFile) {
+        devicePhoto = await uploadSalesOfficerDevicePhoto(createDevicePhotoFile);
+      }
       await createMutation.mutateAsync({
         email: formData.email.trim(),
         displayName: formData.displayName.trim() || undefined,
-        phoneNumber: formData.phoneNumber.trim() || undefined,
+        phoneNumber: formData.phoneNumber.trim(),
+        town: formData.town.trim(),
+        district: formData.district.trim(),
+        deviceId: formData.deviceId.trim(),
+        devicePhoto,
         initialPassword: formData.password,
       });
       await alert('Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).', { severity: 'success' });
@@ -259,7 +373,7 @@ export const SalesOfficersPage: React.FC = () => {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3} flexWrap="wrap" gap={1}>
         <Typography variant="h4">Sales Officers</Typography>
         <Button variant="contained" startIcon={<Add />} onClick={handleOpenCreate}>
           Add Sales Officer
@@ -338,12 +452,60 @@ export const SalesOfficersPage: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
               />
             </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Sales Officer phone"
+                required
+                value={formData.phoneNumber}
+                onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                Device photo (optional)
+                <input type="file" hidden accept="image/*" onChange={(e) => pickDevicePhoto('create', e)} />
+              </Button>
+              {formData.devicePhoto && (
+                <Box sx={{ mt: 1, textAlign: 'center' }}>
+                  <img
+                    src={formData.devicePhoto}
+                    alt="Device preview"
+                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                  />
+                  <Button size="small" color="error" onClick={() => clearDevicePhoto('create')} sx={{ mt: 0.5 }}>
+                    Remove
+                  </Button>
+                </Box>
+              )}
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Town"
+                required
+                value={formData.town}
+                onChange={(e) => setFormData({ ...formData, town: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Autocomplete
+                options={[...MADHYA_PRADESH_DISTRICTS]}
+                value={formData.district || null}
+                onChange={(_, value) => setFormData({ ...formData, district: value || '' })}
+                renderInput={(params) => (
+                  <TextField {...params} label="District (Madhya Pradesh)" required placeholder="Search district…" />
+                )}
+              />
+            </Grid>
             <Grid item xs={12}>
               <TextField
                 fullWidth
-                label="Phone Number"
-                value={formData.phoneNumber}
-                onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+                label="Device ID"
+                required
+                value={formData.deviceId}
+                onChange={(e) => setFormData({ ...formData, deviceId: e.target.value })}
+                helperText="IMEI or device identifier used by the Sales Officer app"
               />
             </Grid>
             <Grid item xs={12}>
@@ -363,7 +525,15 @@ export const SalesOfficersPage: React.FC = () => {
           <Button
             variant="contained"
             onClick={handleCreate}
-            disabled={createMutation.isPending || !formData.email || !formData.password}
+            disabled={
+              createMutation.isPending ||
+              !formData.email ||
+              !formData.password ||
+              !formData.phoneNumber.trim() ||
+              !formData.town.trim() ||
+              !formData.district.trim() ||
+              !formData.deviceId.trim()
+            }
           >
             {createMutation.isPending ? 'Creating...' : 'Create'}
           </Button>
@@ -392,12 +562,59 @@ export const SalesOfficersPage: React.FC = () => {
                   onChange={(e) => setEditForm({ ...editForm, displayName: e.target.value })}
                 />
               </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Sales Officer phone"
+                  required
+                  value={editForm.phoneNumber}
+                  onChange={(e) => setEditForm({ ...editForm, phoneNumber: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                  Device photo (optional)
+                  <input type="file" hidden accept="image/*" onChange={(e) => pickDevicePhoto('edit', e)} />
+                </Button>
+                {editForm.devicePhoto && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={editForm.devicePhoto}
+                      alt="Device preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearDevicePhoto('edit')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Town"
+                  required
+                  value={editForm.town}
+                  onChange={(e) => setEditForm({ ...editForm, town: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Autocomplete
+                  options={[...MADHYA_PRADESH_DISTRICTS]}
+                  value={editForm.district || null}
+                  onChange={(_, value) => setEditForm({ ...editForm, district: value || '' })}
+                  renderInput={(params) => (
+                    <TextField {...params} label="District (Madhya Pradesh)" required placeholder="Search district…" />
+                  )}
+                />
+              </Grid>
               <Grid item xs={12}>
                 <TextField
                   fullWidth
-                  label="Phone Number"
-                  value={editForm.phoneNumber}
-                  onChange={(e) => setEditForm({ ...editForm, phoneNumber: e.target.value })}
+                  label="Device ID"
+                  required
+                  value={editForm.deviceId}
+                  onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value })}
                 />
               </Grid>
             </Grid>
@@ -414,7 +631,17 @@ export const SalesOfficersPage: React.FC = () => {
             {resetPasswordMutation.isPending ? 'Sending…' : 'Send password reset email'}
           </Button>
           <Box sx={{ flexGrow: 1 }} />
-          <Button variant="contained" onClick={handleSaveEdit} disabled={updateProfileMutation.isPending}>
+          <Button
+            variant="contained"
+            onClick={handleSaveEdit}
+            disabled={
+              updateProfileMutation.isPending ||
+              !editForm.phoneNumber.trim() ||
+              !editForm.town.trim() ||
+              !editForm.district.trim() ||
+              !editForm.deviceId.trim()
+            }
+          >
             {updateProfileMutation.isPending ? 'Saving...' : 'Save'}
           </Button>
         </DialogActions>
@@ -424,22 +651,42 @@ export const SalesOfficersPage: React.FC = () => {
         <DialogTitle>Assign retailer to Sales Officer</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Choose a medical store (retailer account) to attach. Stores already linked to this officer are not listed.
-            Assigning a store that has another Sales Officer will move it here.
+            Search and select one or more medical stores. Town and district are shown in the list.
+            Stores already linked to this officer are not listed. Assigning a store that has another
+            Sales Officer will move it here.
           </Typography>
           <Autocomplete
+            multiple
             options={assignOptions}
-            value={assignPick}
-            onChange={(_, v) => setAssignPick(v)}
-            getOptionLabel={(r) =>
-              `${r.shopName || r.displayName || r.email || r.id}${r.email ? ` (${r.email})` : ''}`
-            }
+            value={assignPicks}
+            onChange={(_, v) => setAssignPicks(v)}
+            isOptionEqualToValue={(a, b) => a.id === b.id}
+            filterOptions={(options, state) => {
+              const q = state.inputValue.trim().toLowerCase();
+              if (!q) return options;
+              return options.filter((r) =>
+                [
+                  r.shopName,
+                  r.displayName,
+                  r.email,
+                  r.town,
+                  r.district,
+                  r.storeCode,
+                ].some((v) => String(v || '').toLowerCase().includes(q))
+              );
+            }}
+            getOptionLabel={(r) => retailerOptionLabel(r)}
             renderOption={(props, r) => {
               const other = Boolean(r.salesOfficerId && r.salesOfficerId !== assignForSoId);
+              const loc = retailerLocationLabel(r);
               return (
                 <li {...props} key={r.id}>
                   <Box>
                     <Typography variant="body2">{r.shopName || r.displayName || r.email}</Typography>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      {loc || 'Town / district not set'}
+                      {r.storeCode ? ` · ${r.storeCode}` : ''}
+                    </Typography>
                     {other ? (
                       <Typography variant="caption" color="warning.main">
                         Currently: {soNameById[r.salesOfficerId!] || 'another Sales Officer'}
@@ -454,7 +701,7 @@ export const SalesOfficersPage: React.FC = () => {
               );
             }}
             renderInput={(params) => (
-              <TextField {...params} label="Search retailer / store" placeholder="Type to filter" />
+              <TextField {...params} label="Search retailers" placeholder="Name, town, district…" />
             )}
           />
         </DialogContent>
@@ -464,9 +711,13 @@ export const SalesOfficersPage: React.FC = () => {
             variant="contained"
             startIcon={<PersonAddAlt />}
             onClick={handleConfirmAssign}
-            disabled={!assignPick || assignMutation.isPending}
+            disabled={assignPicks.length === 0 || assignMutation.isPending}
           >
-            Assign
+            {assignMutation.isPending
+              ? 'Assigning…'
+              : assignPicks.length > 1
+                ? `Assign ${assignPicks.length} retailers`
+                : 'Assign'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -505,7 +756,14 @@ const SalesOfficerRow: React.FC<{
         <TableCell>
           <Box display="flex" alignItems="center" gap={1}>
             <Person color="secondary" fontSize="small" />
-            <Typography fontWeight="medium">{officer.displayName || officer.email}</Typography>
+            <Box>
+              <Typography fontWeight="medium">{officer.displayName || officer.email}</Typography>
+              {(officer.town || officer.district) && (
+                <Typography variant="caption" color="text.secondary">
+                  {[officer.town, officer.district].filter(Boolean).join(', ')}
+                </Typography>
+              )}
+            </Box>
           </Box>
         </TableCell>
         <TableCell>{officer.email}</TableCell>
@@ -562,7 +820,11 @@ const SalesOfficerRow: React.FC<{
                     <Chip
                       key={r.id}
                       icon={<Store fontSize="small" />}
-                      label={r.shopName || r.displayName || r.email}
+                      label={
+                        retailerLocationLabel(r)
+                          ? `${r.shopName || r.displayName || r.email} (${retailerLocationLabel(r)})`
+                          : r.shopName || r.displayName || r.email
+                      }
                       size="small"
                       variant="outlined"
                       onDelete={() => onRemoveRetailer(r)}

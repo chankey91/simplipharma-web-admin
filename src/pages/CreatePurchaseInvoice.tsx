@@ -171,14 +171,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const [addVendorDialog, setAddVendorDialog] = useState(false);
   /** Keeps a just-created vendor selected even before the vendors query refreshes. */
   const [justCreatedVendor, setJustCreatedVendor] = useState<Vendor | null>(null);
-  const [newMedicineData, setNewMedicineData] = useState({
+  const emptyNewMedicine = {
     name: '',
     code: '',
     type: '', // Displayed as "Type" but stored as category
     packaging: '',
     manufacturer: '',
     gstRate: '5',
-  });
+  };
+  const [newMedicineData, setNewMedicineData] = useState(emptyNewMedicine);
   const [itemDialog, setItemDialog] = useState<{ open: boolean; itemIndex: number | null }>({
     open: false,
     itemIndex: null,
@@ -792,6 +793,20 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
   };
 
+  const openAddMedicineDialog = (prefill?: Partial<typeof emptyNewMedicine>) => {
+    setNewMedicineData({
+      ...emptyNewMedicine,
+      ...prefill,
+      gstRate: prefill?.gstRate ?? emptyNewMedicine.gstRate,
+    });
+    setAddMedicineDialog(true);
+  };
+
+  const closeAddMedicineDialog = () => {
+    setAddMedicineDialog(false);
+    setNewMedicineData(emptyNewMedicine);
+  };
+
   const handleAddMedicine = async () => {
     if (!newMedicineData.name || !newMedicineData.code || !newMedicineData.type || !newMedicineData.packaging || !newMedicineData.manufacturer || !newMedicineData.gstRate) {
       await alert('Please fill all required fields', { severity: 'warning' });
@@ -805,8 +820,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       if (existingMedicine) {
         rememberMedicine(existingMedicine);
         setSelectedMedicine(existingMedicine);
-        setAddMedicineDialog(false);
-        setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
+        closeAddMedicineDialog();
         await alert(`Medicine "${existingMedicine.name}" already exists. Selected from existing medicines.`, { severity: 'warning' });
         return;
       }
@@ -839,8 +853,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
       rememberMedicine(newMedicine);
       setSelectedMedicine(newMedicine);
-      setAddMedicineDialog(false);
-      setNewMedicineData({ name: '', code: '', type: '', packaging: '', manufacturer: '', gstRate: '5' });
+      closeAddMedicineDialog();
     } catch (error: any) {
       await alert(error.message || 'Failed to add medicine', { severity: 'error' });
     }
@@ -1101,7 +1114,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   options={purchaseMedicineOptions}
                   groupBy={(o) => o.groupLabel}
                   getOptionLabel={(o) => o.label}
-                  getOptionDisabled={(o) => !o.selectable}
+                  getOptionDisabled={(o) => !o.selectable && !o.demand}
                   value={selectedResolveOption}
                   inputValue={medicineSearchInput}
                   onInputChange={(_, newInputValue, reason) => {
@@ -1123,11 +1136,21 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     setMedicineSearchInput(newInputValue);
                   }}
                   onChange={(_, newValue) => {
-                    if (!newValue || !newValue.selectable || !newValue.medicine) {
-                      if (!newValue) {
-                        setSelectedMedicine(null);
-                        setMedicineSearchInput('');
-                      }
+                    if (!newValue) {
+                      setSelectedMedicine(null);
+                      setMedicineSearchInput('');
+                      return;
+                    }
+                    if (newValue.demand && !newValue.medicine) {
+                      const demand = newValue.demand;
+                      openAddMedicineDialog({
+                        name: demand.productName || '',
+                        manufacturer: demand.manufacturerName || '',
+                        packaging: demand.requestedUnit || '',
+                      });
+                      return;
+                    }
+                    if (!newValue.selectable || !newValue.medicine) {
                       return;
                     }
                     void resolveMedicineAfterPickerSelection(newValue.medicine, undefined).then(
@@ -1168,7 +1191,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 <Button
                   variant="outlined"
                   size="small"
-                  onClick={() => setAddMedicineDialog(true)}
+                  onClick={() => openAddMedicineDialog()}
                 >
                   Add New Medicine
                 </Button>
@@ -1675,7 +1698,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       />
 
       {/* Add Medicine Dialog */}
-      <Dialog open={addMedicineDialog} onClose={() => setAddMedicineDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog open={addMedicineDialog} onClose={closeAddMedicineDialog} maxWidth="sm" fullWidth>
         <DialogTitle>Add New Medicine to Master</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
@@ -1776,7 +1799,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setAddMedicineDialog(false)}>Cancel</Button>
+          <Button onClick={closeAddMedicineDialog}>Cancel</Button>
           <Button variant="contained" onClick={handleAddMedicine} disabled={createMedicineMutation.isPending}>
             Add to Master
           </Button>
