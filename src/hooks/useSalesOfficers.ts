@@ -1,5 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSalesOfficers, createSalesOfficer, updateSalesOfficerProfile, sendSalesOfficerPasswordResetEmail } from '../services/salesOfficers';
+import {
+  getSalesOfficers,
+  createSalesOfficer,
+  updateSalesOfficerProfile,
+  sendSalesOfficerPasswordResetEmail,
+  type SalesOfficerProfileUpdate,
+} from '../services/salesOfficers';
 import { User } from '../types';
 
 export const useSalesOfficers = () => {
@@ -28,7 +34,7 @@ export const useUpdateSalesOfficerProfile = () => {
   return useMutation({
     mutationFn: (args: {
       salesOfficerId: string;
-      data: { displayName?: string; phoneNumber?: string };
+      data: SalesOfficerProfileUpdate;
     }) => updateSalesOfficerProfile(args.salesOfficerId, args.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });

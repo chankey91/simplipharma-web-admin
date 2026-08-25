@@ -43,7 +43,7 @@ export function renderMedicineResolveOption(
       key={key}
       {...rest}
       sx={{
-        opacity: option.selectable ? 1 : 0.75,
+        opacity: option.selectable || option.demand ? 1 : 0.75,
         alignItems: 'flex-start !important',
         py: 1,
       }}
@@ -57,7 +57,7 @@ export function renderMedicineResolveOption(
         ) : null}
         {option.group === 'product_demand' ? (
           <Chip
-            label="Product demand — map in Product Requests"
+            label="Product demand — click to add medicine"
             size="small"
             color="info"
             variant="outlined"
