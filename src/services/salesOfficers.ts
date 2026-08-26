@@ -62,23 +62,36 @@ export type SalesOfficerProfileUpdate = {
   district?: string;
   deviceId?: string;
   devicePhoto?: string;
+  officerPhoto?: string;
+  aadharNumber?: string;
+  pan?: string;
 };
 
-const MAX_DEVICE_PHOTO_BYTES = 5 * 1024 * 1024;
+const MAX_SO_PHOTO_BYTES = 5 * 1024 * 1024;
 
-export const uploadSalesOfficerDevicePhoto = async (file: File): Promise<string> => {
+const uploadSalesOfficerDocPhoto = async (
+  file: File,
+  folder: 'device' | 'officer',
+  label: string
+): Promise<string> => {
   if (!auth.currentUser?.uid) {
-    throw new Error('You must be signed in to upload a device photo.');
+    throw new Error(`You must be signed in to upload a ${label}.`);
   }
-  if (file.size > MAX_DEVICE_PHOTO_BYTES) {
-    throw new Error('Device photo must be 5 MB or smaller.');
+  if (file.size > MAX_SO_PHOTO_BYTES) {
+    throw new Error(`${label} must be 5 MB or smaller.`);
   }
-  const safeName = file.name.replace(/[^\w.\-]+/g, '_').slice(0, 80) || 'device.jpg';
+  const safeName = file.name.replace(/[^\w.\-]+/g, '_').slice(0, 80) || `${folder}.jpg`;
   const uid = auth.currentUser.uid;
-  const fileRef = ref(storage, `sales_officer_docs/${uid}/device/${Date.now()}_${safeName}`);
+  const fileRef = ref(storage, `sales_officer_docs/${uid}/${folder}/${Date.now()}_${safeName}`);
   await uploadBytes(fileRef, file, { contentType: file.type || 'image/jpeg' });
   return getDownloadURL(fileRef);
 };
+
+export const uploadSalesOfficerDevicePhoto = async (file: File): Promise<string> =>
+  uploadSalesOfficerDocPhoto(file, 'device', 'Device photo');
+
+export const uploadSalesOfficerPhoto = async (file: File): Promise<string> =>
+  uploadSalesOfficerDocPhoto(file, 'officer', 'Sales Officer photo');
 
 /** Update Sales Officer profile fields on `users/{salesOfficerId}` (not email — that is Auth). */
 export const updateSalesOfficerProfile = async (
@@ -100,6 +113,9 @@ export const updateSalesOfficerProfile = async (
   setTrimmed('district', true);
   setTrimmed('deviceId', true);
   setTrimmed('devicePhoto', false);
+  setTrimmed('officerPhoto', false);
+  setTrimmed('aadharNumber', true);
+  setTrimmed('pan', true);
   if (Object.keys(payload).length === 0) return;
   await updateDoc(ref, payload);
 };

@@ -48,7 +48,7 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { MADHYA_PRADESH_DISTRICTS } from '../constants/madhyaPradeshDistricts';
-import { uploadSalesOfficerDevicePhoto } from '../services/salesOfficers';
+import { uploadSalesOfficerDevicePhoto, uploadSalesOfficerPhoto } from '../services/salesOfficers';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -67,8 +67,27 @@ const emptyOfficerForm = () => ({
   district: '',
   deviceId: '',
   devicePhoto: '',
+  officerPhoto: '',
+  aadharNumber: '',
+  pan: '',
   password: generatePassword(),
 });
+
+const emptyEditOfficerForm = () => ({
+  displayName: '',
+  phoneNumber: '',
+  town: '',
+  district: '',
+  deviceId: '',
+  devicePhoto: '',
+  officerPhoto: '',
+  aadharNumber: '',
+  pan: '',
+});
+
+function filled(value: string | undefined | null): boolean {
+  return String(value ?? '').trim().length > 0;
+}
 
 function retailerLocationLabel(r: User): string {
   return [r.town, r.district].map((s) => String(s || '').trim()).filter(Boolean).join(', ');
@@ -98,16 +117,11 @@ export const SalesOfficersPage: React.FC = () => {
 
   const [editOpen, setEditOpen] = useState(false);
   const [editOfficer, setEditOfficer] = useState<User | null>(null);
-  const [editForm, setEditForm] = useState({
-    displayName: '',
-    phoneNumber: '',
-    town: '',
-    district: '',
-    deviceId: '',
-    devicePhoto: '',
-  });
+  const [editForm, setEditForm] = useState(emptyEditOfficerForm);
   const [createDevicePhotoFile, setCreateDevicePhotoFile] = useState<File | null>(null);
   const [editDevicePhotoFile, setEditDevicePhotoFile] = useState<File | null>(null);
+  const [createOfficerPhotoFile, setCreateOfficerPhotoFile] = useState<File | null>(null);
+  const [editOfficerPhotoFile, setEditOfficerPhotoFile] = useState<File | null>(null);
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForSoId, setAssignForSoId] = useState<string | null>(null);
@@ -159,12 +173,14 @@ export const SalesOfficersPage: React.FC = () => {
   const handleOpenCreate = () => {
     setFormData(emptyOfficerForm());
     setCreateDevicePhotoFile(null);
+    setCreateOfficerPhotoFile(null);
     setOpenDialog(true);
   };
 
   const handleOpenEdit = (officer: User) => {
     setEditOfficer(officer);
     setEditDevicePhotoFile(null);
+    setEditOfficerPhotoFile(null);
     setEditForm({
       displayName: officer.displayName || '',
       phoneNumber: officer.phoneNumber || '',
@@ -172,64 +188,85 @@ export const SalesOfficersPage: React.FC = () => {
       district: officer.district || '',
       deviceId: officer.deviceId || '',
       devicePhoto: officer.devicePhoto || '',
+      officerPhoto: officer.officerPhoto || '',
+      aadharNumber: officer.aadharNumber || '',
+      pan: officer.pan || '',
     });
     setEditOpen(true);
   };
 
-  const pickDevicePhoto = (
+  const pickSoPhoto = (
     kind: 'create' | 'edit',
+    field: 'devicePhoto' | 'officerPhoto',
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    const label = field === 'devicePhoto' ? 'Device photo' : 'Sales Officer photo';
     if (file.size > 5 * 1024 * 1024) {
-      void alert('Device photo must be 5 MB or smaller', { severity: 'warning' });
+      void alert(`${label} must be 5 MB or smaller`, { severity: 'warning' });
       event.target.value = '';
       return;
     }
     const previewUrl = URL.createObjectURL(file);
     if (kind === 'create') {
-      setCreateDevicePhotoFile(file);
-      setFormData((prev) => ({ ...prev, devicePhoto: previewUrl }));
+      if (field === 'devicePhoto') setCreateDevicePhotoFile(file);
+      else setCreateOfficerPhotoFile(file);
+      setFormData((prev) => ({ ...prev, [field]: previewUrl }));
     } else {
-      setEditDevicePhotoFile(file);
-      setEditForm((prev) => ({ ...prev, devicePhoto: previewUrl }));
+      if (field === 'devicePhoto') setEditDevicePhotoFile(file);
+      else setEditOfficerPhotoFile(file);
+      setEditForm((prev) => ({ ...prev, [field]: previewUrl }));
     }
     event.target.value = '';
   };
 
-  const clearDevicePhoto = (kind: 'create' | 'edit') => {
+  const clearSoPhoto = (kind: 'create' | 'edit', field: 'devicePhoto' | 'officerPhoto') => {
     if (kind === 'create') {
-      setCreateDevicePhotoFile(null);
-      setFormData((prev) => ({ ...prev, devicePhoto: '' }));
+      if (field === 'devicePhoto') setCreateDevicePhotoFile(null);
+      else setCreateOfficerPhotoFile(null);
+      setFormData((prev) => ({ ...prev, [field]: '' }));
     } else {
-      setEditDevicePhotoFile(null);
-      setEditForm((prev) => ({ ...prev, devicePhoto: '' }));
+      if (field === 'devicePhoto') setEditDevicePhotoFile(null);
+      else setEditOfficerPhotoFile(null);
+      setEditForm((prev) => ({ ...prev, [field]: '' }));
     }
   };
 
   const handleSaveEdit = async () => {
     if (!editOfficer) return;
-    if (!editForm.phoneNumber.trim()) {
+    if (!filled(editForm.phoneNumber)) {
       await alert('Sales Officer phone is required', { severity: 'warning' });
       return;
     }
-    if (!editForm.town.trim()) {
+    if (!filled(editForm.town)) {
       await alert('Town is required', { severity: 'warning' });
       return;
     }
-    if (!editForm.district.trim()) {
+    if (!filled(editForm.district)) {
       await alert('District is required', { severity: 'warning' });
       return;
     }
-    if (!editForm.deviceId.trim()) {
+    if (!filled(editForm.deviceId)) {
       await alert('Device ID is required', { severity: 'warning' });
+      return;
+    }
+    if (!filled(editForm.aadharNumber)) {
+      await alert('Aadhar number is required', { severity: 'warning' });
+      return;
+    }
+    if (!filled(editForm.pan)) {
+      await alert('PAN number is required', { severity: 'warning' });
       return;
     }
     try {
       let devicePhoto = editForm.devicePhoto.trim();
       if (editDevicePhotoFile) {
         devicePhoto = await uploadSalesOfficerDevicePhoto(editDevicePhotoFile);
+      }
+      let officerPhoto = editForm.officerPhoto.trim();
+      if (editOfficerPhotoFile) {
+        officerPhoto = await uploadSalesOfficerPhoto(editOfficerPhotoFile);
       }
       await updateProfileMutation.mutateAsync({
         salesOfficerId: editOfficer.id,
@@ -240,12 +277,16 @@ export const SalesOfficersPage: React.FC = () => {
           district: editForm.district.trim(),
           deviceId: editForm.deviceId.trim(),
           devicePhoto,
+          officerPhoto,
+          aadharNumber: editForm.aadharNumber.trim(),
+          pan: editForm.pan.trim(),
         },
       });
       await alert('Sales Officer updated.', { severity: 'success' });
       setEditOpen(false);
       setEditOfficer(null);
       setEditDevicePhotoFile(null);
+      setEditOfficerPhotoFile(null);
     } catch (err: any) {
       await alert(err.message || 'Failed to update', { severity: 'error' });
     }
@@ -316,24 +357,32 @@ export const SalesOfficersPage: React.FC = () => {
   };
 
   const handleCreate = async () => {
-    if (!formData.email.trim()) {
+    if (!filled(formData.email)) {
       await alert('Email is required', { severity: 'warning' });
       return;
     }
-    if (!formData.phoneNumber.trim()) {
+    if (!filled(formData.phoneNumber)) {
       await alert('Sales Officer phone is required', { severity: 'warning' });
       return;
     }
-    if (!formData.town.trim()) {
+    if (!filled(formData.town)) {
       await alert('Town is required', { severity: 'warning' });
       return;
     }
-    if (!formData.district.trim()) {
+    if (!filled(formData.district)) {
       await alert('District is required', { severity: 'warning' });
       return;
     }
-    if (!formData.deviceId.trim()) {
+    if (!filled(formData.deviceId)) {
       await alert('Device ID is required', { severity: 'warning' });
+      return;
+    }
+    if (!filled(formData.aadharNumber)) {
+      await alert('Aadhar number is required', { severity: 'warning' });
+      return;
+    }
+    if (!filled(formData.pan)) {
+      await alert('PAN number is required', { severity: 'warning' });
       return;
     }
     if (!formData.password || formData.password.length < 6) {
@@ -345,6 +394,10 @@ export const SalesOfficersPage: React.FC = () => {
       if (createDevicePhotoFile) {
         devicePhoto = await uploadSalesOfficerDevicePhoto(createDevicePhotoFile);
       }
+      let officerPhoto: string | undefined;
+      if (createOfficerPhotoFile) {
+        officerPhoto = await uploadSalesOfficerPhoto(createOfficerPhotoFile);
+      }
       await createMutation.mutateAsync({
         email: formData.email.trim(),
         displayName: formData.displayName.trim() || undefined,
@@ -353,12 +406,21 @@ export const SalesOfficersPage: React.FC = () => {
         district: formData.district.trim(),
         deviceId: formData.deviceId.trim(),
         devicePhoto,
+        officerPhoto,
+        aadharNumber: formData.aadharNumber.trim(),
+        pan: formData.pan.trim(),
         initialPassword: formData.password,
       });
       await alert('Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).', { severity: 'success' });
       setOpenDialog(false);
+      setCreateDevicePhotoFile(null);
+      setCreateOfficerPhotoFile(null);
     } catch (err: any) {
-      await alert(err.message || 'Failed to create Sales Officer', { severity: 'error' });
+      const message =
+        err?.message ||
+        err?.details ||
+        (typeof err === 'string' ? err : 'Failed to create Sales Officer');
+      await alert(message, { severity: 'error' });
     }
   };
 
@@ -430,7 +492,12 @@ export const SalesOfficersPage: React.FC = () => {
         </Table>
       </TableContainer>
 
-      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={openDialog}
+        onClose={() => setOpenDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Add Sales Officer</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
@@ -451,33 +518,6 @@ export const SalesOfficersPage: React.FC = () => {
                 value={formData.displayName}
                 onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
               />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Sales Officer phone"
-                required
-                value={formData.phoneNumber}
-                onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
-                Device photo (optional)
-                <input type="file" hidden accept="image/*" onChange={(e) => pickDevicePhoto('create', e)} />
-              </Button>
-              {formData.devicePhoto && (
-                <Box sx={{ mt: 1, textAlign: 'center' }}>
-                  <img
-                    src={formData.devicePhoto}
-                    alt="Device preview"
-                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
-                  />
-                  <Button size="small" color="error" onClick={() => clearDevicePhoto('create')} sx={{ mt: 0.5 }}>
-                    Remove
-                  </Button>
-                </Box>
-              )}
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
@@ -511,6 +551,79 @@ export const SalesOfficersPage: React.FC = () => {
             <Grid item xs={12}>
               <TextField
                 fullWidth
+                label="Sales Officer phone"
+                required
+                value={formData.phoneNumber}
+                onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Aadhar number"
+                required
+                value={formData.aadharNumber}
+                onChange={(e) => setFormData({ ...formData, aadharNumber: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="PAN number"
+                required
+                value={formData.pan}
+                onChange={(e) => setFormData({ ...formData, pan: e.target.value.toUpperCase() })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                Device photo (optional)
+                <input
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => pickSoPhoto('create', 'devicePhoto', e)}
+                />
+              </Button>
+              {formData.devicePhoto && (
+                <Box sx={{ mt: 1, textAlign: 'center' }}>
+                  <img
+                    src={formData.devicePhoto}
+                    alt="Device preview"
+                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                  />
+                  <Button size="small" color="error" onClick={() => clearSoPhoto('create', 'devicePhoto')} sx={{ mt: 0.5 }}>
+                    Remove
+                  </Button>
+                </Box>
+              )}
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                Sales Officer photo (optional)
+                <input
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => pickSoPhoto('create', 'officerPhoto', e)}
+                />
+              </Button>
+              {formData.officerPhoto && (
+                <Box sx={{ mt: 1, textAlign: 'center' }}>
+                  <img
+                    src={formData.officerPhoto}
+                    alt="Sales Officer preview"
+                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                  />
+                  <Button size="small" color="error" onClick={() => clearSoPhoto('create', 'officerPhoto')} sx={{ mt: 0.5 }}>
+                    Remove
+                  </Button>
+                </Box>
+              )}
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
                 label="Password"
                 required
                 value={formData.password}
@@ -525,15 +638,7 @@ export const SalesOfficersPage: React.FC = () => {
           <Button
             variant="contained"
             onClick={handleCreate}
-            disabled={
-              createMutation.isPending ||
-              !formData.email ||
-              !formData.password ||
-              !formData.phoneNumber.trim() ||
-              !formData.town.trim() ||
-              !formData.district.trim() ||
-              !formData.deviceId.trim()
-            }
+            disabled={createMutation.isPending}
           >
             {createMutation.isPending ? 'Creating...' : 'Create'}
           </Button>
@@ -565,33 +670,6 @@ export const SalesOfficersPage: React.FC = () => {
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
-                  label="Sales Officer phone"
-                  required
-                  value={editForm.phoneNumber}
-                  onChange={(e) => setEditForm({ ...editForm, phoneNumber: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
-                  Device photo (optional)
-                  <input type="file" hidden accept="image/*" onChange={(e) => pickDevicePhoto('edit', e)} />
-                </Button>
-                {editForm.devicePhoto && (
-                  <Box sx={{ mt: 1, textAlign: 'center' }}>
-                    <img
-                      src={editForm.devicePhoto}
-                      alt="Device preview"
-                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
-                    />
-                    <Button size="small" color="error" onClick={() => clearDevicePhoto('edit')} sx={{ mt: 0.5 }}>
-                      Remove
-                    </Button>
-                  </Box>
-                )}
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
                   label="Town"
                   required
                   value={editForm.town}
@@ -617,6 +695,79 @@ export const SalesOfficersPage: React.FC = () => {
                   onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value })}
                 />
               </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Sales Officer phone"
+                  required
+                  value={editForm.phoneNumber}
+                  onChange={(e) => setEditForm({ ...editForm, phoneNumber: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Aadhar number"
+                  required
+                  value={editForm.aadharNumber}
+                  onChange={(e) => setEditForm({ ...editForm, aadharNumber: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="PAN number"
+                  required
+                  value={editForm.pan}
+                  onChange={(e) => setEditForm({ ...editForm, pan: e.target.value.toUpperCase() })}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                  Device photo (optional)
+                  <input
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    onChange={(e) => pickSoPhoto('edit', 'devicePhoto', e)}
+                  />
+                </Button>
+                {editForm.devicePhoto && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={editForm.devicePhoto}
+                      alt="Device preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearSoPhoto('edit', 'devicePhoto')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                  Sales Officer photo (optional)
+                  <input
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    onChange={(e) => pickSoPhoto('edit', 'officerPhoto', e)}
+                  />
+                </Button>
+                {editForm.officerPhoto && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={editForm.officerPhoto}
+                      alt="Sales Officer preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearSoPhoto('edit', 'officerPhoto')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
             </Grid>
           )}
         </DialogContent>
@@ -634,13 +785,7 @@ export const SalesOfficersPage: React.FC = () => {
           <Button
             variant="contained"
             onClick={handleSaveEdit}
-            disabled={
-              updateProfileMutation.isPending ||
-              !editForm.phoneNumber.trim() ||
-              !editForm.town.trim() ||
-              !editForm.district.trim() ||
-              !editForm.deviceId.trim()
-            }
+            disabled={updateProfileMutation.isPending}
           >
             {updateProfileMutation.isPending ? 'Saving...' : 'Save'}
           </Button>
