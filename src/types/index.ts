@@ -305,6 +305,8 @@ export interface User {
   deviceId?: string;
   /** Sales Officer: photo of the work device (optional). */
   devicePhoto?: string;
+  /** Sales Officer: profile / person photo (optional). */
+  officerPhoto?: string;
   address?: string;
   /** Town / city (free text). */
   town?: string;
