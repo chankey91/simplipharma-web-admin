@@ -117,6 +117,10 @@ const WORK_FIELDS = [
   'expiryDate',
   'nonReturnable',
   'nrxDrug',
+  'orderSchemeApplied',
+  'orderSchemePaidQty',
+  'orderSchemeFreeQty',
+  'orderSchemeManuallySet',
 ] as const;
 
 function lineIdentityKey(line: OrderMedicine | any): string | null {

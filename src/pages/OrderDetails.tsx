@@ -34,6 +34,8 @@ import {
   ToggleButtonGroup,
   ToggleButton,
   InputAdornment,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -120,6 +122,7 @@ import {
   schemeLinePaidFreeConserved,
   schemeOrderLineDisplayTotals,
   formatSchemeQty,
+  roundSchemeQty,
   splitSchemeAcrossAllocationPhysical,
 } from '../utils/schemeFulfillment';
 import {
@@ -128,6 +131,13 @@ import {
   orderLineTaxableBeforeDiscount,
 } from '../utils/orderLineInvoiceEconomics';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
+import {
+  batchHasScheme,
+  defaultOrderSchemeFieldsFromBatch,
+  findBatchSchemeFromMedicineAndLine,
+  resolveOrderLineSchemeParams,
+  recomputeFulfillmentLineScheme,
+} from '../utils/orderSchemeOverride';
 import {
   applyDefaultDiscountToFulfillmentLine,
   buildPurchaseBatchDiscountLookup,
@@ -198,6 +208,15 @@ const toPersistedOrderMedicine = (line: any): OrderMedicine => {
     out.discountPercentage = toNumber(line.discountPercentage);
   }
   if (line.discountManuallySet === true) out.discountManuallySet = true;
+  if (line.orderSchemeApplied === false) out.orderSchemeApplied = false;
+  else if (line.orderSchemeApplied === true) out.orderSchemeApplied = true;
+  if (line.orderSchemeManuallySet === true) out.orderSchemeManuallySet = true;
+  if (line.orderSchemePaidQty != null && line.orderSchemePaidQty !== '') {
+    out.orderSchemePaidQty = toNumber(line.orderSchemePaidQty);
+  }
+  if (line.orderSchemeFreeQty != null && line.orderSchemeFreeQty !== '') {
+    out.orderSchemeFreeQty = toNumber(line.orderSchemeFreeQty);
+  }
   if (line.gstRate != null) out.gstRate = toNumber(line.gstRate);
   if (line.mrp != null) out.mrp = toNumber(line.mrp);
   if (line.nonReturnable === true) out.nonReturnable = true;
@@ -256,10 +275,17 @@ const getSchemeFromAny = (source: any) => ({
 
 const getSchemeLabels = (item: any): string[] => {
   if (!item) return [];
+  if (item.orderSchemeApplied === false) {
+    return ['No scheme on this order'];
+  }
   const labels = new Set<string>();
 
   if (Array.isArray(item.batchAllocations) && item.batchAllocations.length > 0) {
     item.batchAllocations.forEach((allocation: any) => {
+      if (item.orderSchemeManuallySet && item.orderSchemePaidQty > 0 && item.orderSchemeFreeQty > 0) {
+        labels.add(formatPurchaseSchemeLabel(item.orderSchemePaidQty, item.orderSchemeFreeQty));
+        return;
+      }
       const paid = toNumber(allocation?.schemePaidQty);
       const free = toNumber(allocation?.schemeFreeQty);
       if (paid > 0 && free > 0) {
@@ -270,6 +296,38 @@ const getSchemeLabels = (item: any): string[] => {
 
   return Array.from(labels);
 };
+
+function getEffectiveSchemeForLineDisplay(item: any, med?: Medicine) {
+  const batchScheme = findBatchSchemeFromMedicineAndLine(item, med);
+  const params = resolveOrderLineSchemeParams(item, batchScheme);
+  return {
+    batchScheme,
+    params,
+    schemePS: params.apply ? params.schemePaidQty : undefined,
+    schemeFS: params.apply ? params.schemeFreeQty : undefined,
+  };
+}
+
+function applyOrderSchemeSplitForPhysical(
+  item: any,
+  medicine: Medicine | undefined,
+  physicalO: number,
+  batchSource: { schemePaidQty?: number; schemeFreeQty?: number; purchaseSchemeDeal?: number; purchaseSchemeFree?: number }
+) {
+  let workingItem = { ...item };
+  if (workingItem.orderSchemeApplied === undefined) {
+    Object.assign(workingItem, defaultOrderSchemeFieldsFromBatch(batchSource));
+  }
+  const batchScheme = {
+    schemePaidQty: toNumber(batchSource.schemePaidQty ?? batchSource.purchaseSchemeDeal),
+    schemeFreeQty: toNumber(batchSource.schemeFreeQty ?? batchSource.purchaseSchemeFree),
+  };
+  const params = resolveOrderLineSchemeParams(workingItem, batchScheme);
+  const lineSplit = params.apply
+    ? schemeLinePaidFreeConserved(physicalO, params.schemePaidQty, params.schemeFreeQty)
+    : { paidQty: roundSchemeQty(physicalO), freeQty: 0 };
+  return { workingItem, params, lineSplit };
+}
 
 type PurchaseDiscountLookup = ReturnType<typeof buildPurchaseBatchDiscountLookup>;
 
@@ -311,9 +369,11 @@ function mapRepairedLineToFulfillment(
   };
 
   let batchAllocations = line.batchAllocations;
+  const schemeOff = (line as { orderSchemeApplied?: boolean }).orderSchemeApplied === false;
 
-  const computedFreeQuantity =
-    batchAllocations && batchAllocations.length > 0
+  const computedFreeQuantity = schemeOff
+    ? 0
+    : batchAllocations && batchAllocations.length > 0
       ? (() => {
           const hasPerAllocFree = batchAllocations.some(
             (a) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
@@ -372,7 +432,7 @@ function mapRepairedLineToFulfillment(
   const resolvedBatchNumber = String(line.batchNumber || '').trim() || firstAllocBatch || undefined;
   const hasAllocs = Array.isArray(line.batchAllocations) && line.batchAllocations.length > 0;
 
-  return {
+  const mapped = {
     ...withDefaults,
     medicineId: line.medicineId,
     batchNumber: resolvedBatchNumber,
@@ -385,12 +445,22 @@ function mapRepairedLineToFulfillment(
     discountPercentage: discountPct,
     discountManuallySet: (line as { discountManuallySet?: boolean }).discountManuallySet,
     batchAllocations: withDefaults.batchAllocations ?? batchAllocations,
-    freeQuantity:
-      line.freeQuantity !== undefined && line.freeQuantity !== null
+    freeQuantity: schemeOff
+      ? 0
+      : line.freeQuantity !== undefined && line.freeQuantity !== null
         ? toNumber(line.freeQuantity)
         : computedFreeQuantity,
     originalQuantity: line.originalQuantity || line.quantity,
   };
+
+  if (schemeOff && (hasAllocs || resolvedBatchNumber)) {
+    return recomputeFulfillmentLineScheme(
+      mapped as Record<string, unknown>,
+      medicine
+    ) as typeof mapped;
+  }
+
+  return mapped;
 }
 
 function assignedBatchLabel(item: {
@@ -1761,12 +1831,16 @@ export const OrderDetailsPage: React.FC = () => {
           );
           newMedicines[scanningItemIndex].discountPercentage = discountPct;
           newMedicines[scanningItemIndex].discountManuallySet = false;
-          const foundBatchScheme = getSchemeFromAny(foundBatch);
-          const lineSplit = schemeLinePaidFreeConserved(
+          const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
+            item,
+            medicine,
             toNumber(item.quantity),
-            foundBatchScheme.schemePaidQty,
-            foundBatchScheme.schemeFreeQty
+            foundBatch
           );
+          newMedicines[scanningItemIndex].orderSchemeApplied = workingItem.orderSchemeApplied;
+          newMedicines[scanningItemIndex].orderSchemePaidQty = workingItem.orderSchemePaidQty;
+          newMedicines[scanningItemIndex].orderSchemeFreeQty = workingItem.orderSchemeFreeQty;
+          newMedicines[scanningItemIndex].orderSchemeManuallySet = workingItem.orderSchemeManuallySet;
           newMedicines[scanningItemIndex].batchAllocations = [{
             batchNumber: foundBatch.batchNumber,
             quantity: lineSplit.paidQty,
@@ -1776,8 +1850,10 @@ export const OrderDetailsPage: React.FC = () => {
             purchasePrice: calculatedPrice,
             gstRate: gstRate,
             discountPercentage: discountPct,
-            schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
-            schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
+            schemePaidQty:
+              params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
+            schemeFreeQty:
+              params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
             ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
             ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
           }];
@@ -1863,12 +1939,16 @@ export const OrderDetailsPage: React.FC = () => {
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
             newMedicines[itemIndex].discountManuallySet = false;
-            const foundBatchScheme = getSchemeFromAny(foundBatch);
-            const lineSplit = schemeLinePaidFreeConserved(
+            const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
+              item,
+              medicine,
               toNumber(item.quantity),
-              foundBatchScheme.schemePaidQty,
-              foundBatchScheme.schemeFreeQty
+              foundBatch
             );
+            newMedicines[itemIndex].orderSchemeApplied = workingItem.orderSchemeApplied;
+            newMedicines[itemIndex].orderSchemePaidQty = workingItem.orderSchemePaidQty;
+            newMedicines[itemIndex].orderSchemeFreeQty = workingItem.orderSchemeFreeQty;
+            newMedicines[itemIndex].orderSchemeManuallySet = workingItem.orderSchemeManuallySet;
             newMedicines[itemIndex].batchAllocations = [{
               batchNumber: foundBatch.batchNumber,
               quantity: lineSplit.paidQty,
@@ -1878,8 +1958,10 @@ export const OrderDetailsPage: React.FC = () => {
               purchasePrice: calculatedPrice,
               gstRate: gstRate,
               discountPercentage: discountPct,
-              schemePaidQty: toNumber(foundBatch.schemePaidQty) || undefined,
-              schemeFreeQty: toNumber(foundBatch.schemeFreeQty) || undefined,
+              schemePaidQty:
+                params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
+              schemeFreeQty:
+                params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
               ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
               ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
@@ -1926,12 +2008,16 @@ export const OrderDetailsPage: React.FC = () => {
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
             newMedicines[itemIndex].discountManuallySet = false;
-            const selectedBatchScheme = getSchemeFromAny(batch);
-            const lineSplit = schemeLinePaidFreeConserved(
+            const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
+              item,
+              medicine,
               toNumber(item.quantity),
-              selectedBatchScheme.schemePaidQty,
-              selectedBatchScheme.schemeFreeQty
+              batch
             );
+            newMedicines[itemIndex].orderSchemeApplied = workingItem.orderSchemeApplied;
+            newMedicines[itemIndex].orderSchemePaidQty = workingItem.orderSchemePaidQty;
+            newMedicines[itemIndex].orderSchemeFreeQty = workingItem.orderSchemeFreeQty;
+            newMedicines[itemIndex].orderSchemeManuallySet = workingItem.orderSchemeManuallySet;
             newMedicines[itemIndex].batchAllocations = [{
               batchNumber: batch.batchNumber,
               quantity: lineSplit.paidQty,
@@ -1941,8 +2027,10 @@ export const OrderDetailsPage: React.FC = () => {
               purchasePrice: calculatedPrice,
               gstRate: gstRate,
               discountPercentage: discountPct,
-              schemePaidQty: toNumber(batch.schemePaidQty) || undefined,
-              schemeFreeQty: toNumber(batch.schemeFreeQty) || undefined,
+              schemePaidQty:
+                params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
+              schemeFreeQty:
+                params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
               ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
               ...(batch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
@@ -2223,18 +2311,33 @@ export const OrderDetailsPage: React.FC = () => {
     };
 
     const O = totalAllocated;
-    let schemePaid: number | undefined;
-    let schemeFree: number | undefined;
-    for (const a of validAllocations) {
-      const actualBatch = medicine?.stockBatches?.find((b) => b.batchNumber === a.batchNumber);
-      const s = getSchemeFromAny(actualBatch || a);
-      if (s.schemePaidQty > 0 && s.schemeFreeQty > 0) {
-        schemePaid = s.schemePaidQty;
-        schemeFree = s.schemeFreeQty;
-        break;
+    let workingItem = { ...item } as Record<string, unknown>;
+    if (workingItem.orderSchemeApplied === undefined) {
+      const initBatchScheme = findBatchSchemeFromMedicineAndLine(
+        { batchAllocations: validAllocations },
+        medicine
+      );
+      if (initBatchScheme.schemePaidQty > 0 && initBatchScheme.schemeFreeQty > 0) {
+        Object.assign(
+          workingItem,
+          defaultOrderSchemeFieldsFromBatch({
+            schemePaidQty: initBatchScheme.schemePaidQty,
+            schemeFreeQty: initBatchScheme.schemeFreeQty,
+          })
+        );
+      } else {
+        workingItem.orderSchemeApplied = false;
       }
     }
-    const lineSplit = schemeLinePaidFreeConserved(O, schemePaid, schemeFree);
+
+    const batchScheme = findBatchSchemeFromMedicineAndLine(
+      { batchAllocations: validAllocations },
+      medicine
+    );
+    const schemeParams = resolveOrderLineSchemeParams(workingItem, batchScheme);
+    const lineSplit = schemeParams.apply
+      ? schemeLinePaidFreeConserved(O, schemeParams.schemePaidQty, schemeParams.schemeFreeQty)
+      : { paidQty: roundSchemeQty(O), freeQty: 0 };
 
     // Update fulfillment data - store individual batch allocations (quantity = billable paid, allocationFreeQty = scheme free)
     const processedAllocations = validAllocations.map((a) => {
@@ -2271,13 +2374,9 @@ export const OrderDetailsPage: React.FC = () => {
         gstRate: gstRate,
         discountPercentage: discountPct,
         schemePaidQty:
-          getSchemeFromAny(actualBatch).schemePaidQty ||
-          getSchemeFromAny(a).schemePaidQty ||
-          undefined,
+          schemeParams.apply && schemeParams.schemePaidQty ? schemeParams.schemePaidQty : undefined,
         schemeFreeQty:
-          getSchemeFromAny(actualBatch).schemeFreeQty ||
-          getSchemeFromAny(a).schemeFreeQty ||
-          undefined,
+          schemeParams.apply && schemeParams.schemeFreeQty ? schemeParams.schemeFreeQty : undefined,
         ...((actualBatch as { nonReturnable?: boolean } | undefined)?.nonReturnable === true
           ? { nonReturnable: true as const }
           : {}),
@@ -2292,6 +2391,10 @@ export const OrderDetailsPage: React.FC = () => {
     const lineAfterBatches = applyDefaultDiscountToFulfillmentLine(
       {
         ...item,
+        orderSchemeApplied: workingItem.orderSchemeApplied as boolean | undefined,
+        orderSchemePaidQty: workingItem.orderSchemePaidQty as number | undefined,
+        orderSchemeFreeQty: workingItem.orderSchemeFreeQty as number | undefined,
+        orderSchemeManuallySet: workingItem.orderSchemeManuallySet as boolean | undefined,
         batchAllocations: processedAllocations,
         originalQuantity: totalAllocated < requiredQuantity ? requiredQuantity : item.originalQuantity || item.quantity,
         quantity: lineSplit.paidQty,
@@ -2331,6 +2434,131 @@ export const OrderDetailsPage: React.FC = () => {
       markFulfillmentDirty();
       setFulfillmentData({ ...fulfillmentData, medicines: newMedicines });
     }
+  };
+
+  const updateOrderSchemeOnLine = (itemIndex: number, patch: Record<string, unknown>) => {
+    markFulfillmentDirty();
+    setFulfillmentData((prev) => {
+      const newMedicines = [...prev.medicines];
+      const med = medicines?.find((m) => m.id === newMedicines[itemIndex]?.medicineId);
+      const merged = { ...newMedicines[itemIndex], ...patch };
+      newMedicines[itemIndex] = recomputeFulfillmentLineScheme(merged, med) as typeof merged;
+      if (
+        order?.id &&
+        canEditOrders &&
+        (order.status === 'Order Fulfillment' || order.status === 'Pending')
+      ) {
+        if (order.status === 'Order Fulfillment') {
+          void updateOrderMedicines(order.id, newMedicines.map(toPersistedOrderMedicine)).catch((err) =>
+            console.warn('Failed to persist order scheme override:', err)
+          );
+        }
+      }
+      return { ...prev, medicines: newMedicines };
+    });
+  };
+
+  const handleToggleOrderScheme = (itemIndex: number, applied: boolean) => {
+    const item = fulfillmentData.medicines[itemIndex];
+    if (!item) return;
+    const med = medicines?.find((m) => m.id === item.medicineId);
+    const batchScheme = findBatchSchemeFromMedicineAndLine(item, med);
+    const patch: Record<string, unknown> = {
+      orderSchemeApplied: applied,
+      orderSchemeManuallySet: item.orderSchemeManuallySet === true,
+    };
+    if (applied) {
+      const paid = toNumber(item.orderSchemePaidQty) || batchScheme.schemePaidQty;
+      const free = toNumber(item.orderSchemeFreeQty) || batchScheme.schemeFreeQty;
+      if (paid > 0 && free > 0) {
+        patch.orderSchemePaidQty = Math.floor(paid);
+        patch.orderSchemeFreeQty = Math.floor(free);
+      }
+    }
+    updateOrderSchemeOnLine(itemIndex, patch);
+  };
+
+  const handleOrderSchemeFieldChange = (
+    itemIndex: number,
+    field: 'orderSchemePaidQty' | 'orderSchemeFreeQty',
+    value: string
+  ) => {
+    const parsed = Math.floor(parseFloat(value) || 0);
+    updateOrderSchemeOnLine(itemIndex, {
+      orderSchemeApplied: true,
+      orderSchemeManuallySet: true,
+      [field]: parsed > 0 ? parsed : '',
+    });
+  };
+
+  const renderOrderSchemeControls = (item: any, itemIndex: number) => {
+    const hasBatch =
+      Boolean(item.batchNumber) ||
+      (Array.isArray(item.batchAllocations) && item.batchAllocations.length > 0);
+    if (!hasBatch) return null;
+
+    const med = medicines?.find((m) => m.id === item.medicineId);
+    const { batchScheme } = getEffectiveSchemeForLineDisplay(item, med);
+    const batchLabel = batchHasScheme(batchScheme)
+      ? formatPurchaseSchemeLabel(batchScheme.schemePaidQty, batchScheme.schemeFreeQty)
+      : '—';
+    const applied =
+      item.orderSchemeApplied !== false &&
+      (item.orderSchemeApplied === true || batchHasScheme(batchScheme));
+    const payFor =
+      item.orderSchemePaidQty != null && item.orderSchemePaidQty !== ''
+        ? item.orderSchemePaidQty
+        : batchScheme.schemePaidQty || '';
+    const getFree =
+      item.orderSchemeFreeQty != null && item.orderSchemeFreeQty !== ''
+        ? item.orderSchemeFreeQty
+        : batchScheme.schemeFreeQty || '';
+
+    return (
+      <Box sx={{ mt: 1, maxWidth: 300 }}>
+        <Typography variant="caption" color="text.secondary" display="block">
+          Batch scheme: {batchLabel}
+        </Typography>
+        <FormControlLabel
+          sx={{ mt: 0.25, ml: 0 }}
+          control={
+            <Checkbox
+              size="small"
+              checked={applied}
+              disabled={!batchHasScheme(batchScheme)}
+              onChange={(e) => handleToggleOrderScheme(itemIndex, e.target.checked)}
+            />
+          }
+          label={<Typography variant="caption">Apply scheme on this order</Typography>}
+        />
+        {applied && (
+          <Box display="flex" gap={1} mt={0.5} flexWrap="wrap">
+            <TextField
+              size="small"
+              label="Pay for"
+              type="number"
+              value={payFor}
+              onChange={(e) =>
+                handleOrderSchemeFieldChange(itemIndex, 'orderSchemePaidQty', e.target.value)
+              }
+              inputProps={{ min: 1 }}
+              sx={{ width: 100 }}
+            />
+            <TextField
+              size="small"
+              label="Get free"
+              type="number"
+              value={getFree}
+              onChange={(e) =>
+                handleOrderSchemeFieldChange(itemIndex, 'orderSchemeFreeQty', e.target.value)
+              }
+              inputProps={{ min: 1 }}
+              sx={{ width: 100 }}
+            />
+          </Box>
+        )}
+      </Box>
+    );
   };
 
   const handleLineDiscountChange = (itemIndex: number, raw: string, batchIdx?: number) => {
@@ -2821,6 +3049,8 @@ export const OrderDetailsPage: React.FC = () => {
       : toNumber(order.totalAmount);
   const effectiveDueAmount = Math.max(0, effectiveOrderTotal - (order.paidAmount ?? 0));
   const showPendingActions = order.status === 'Pending' && canEditOrders;
+  const showOrderSchemeControls =
+    (order.status === 'Pending' || order.status === 'Order Fulfillment') && canEditOrders;
 
   return (
     <Box>
@@ -2921,52 +3151,21 @@ export const OrderDetailsPage: React.FC = () => {
                       let batchNumber = m.batchNumber;
                       let expiryDate = m.batchExpiryDate || m.expiryDate;
                       let mfgDate = undefined;
-                      let freeQuantity = toNumber(m.freeQuantity);
+                      const medicineForInvoice = medicines?.find((med) => med.id === m.medicineId);
+                      const invoiceEcon = orderLineInvoiceEconomics(
+                        m,
+                        medicineForInvoice,
+                        taxPercentage,
+                        purchaseDiscountLookup,
+                        { lockPersistedDiscount: false }
+                      );
+                      let freeQuantity = invoiceEcon.freeQty;
+                      let quantity = invoiceEcon.paidQty;
                       
                       if (m.batchAllocations && m.batchAllocations.length > 0) {
                         // Use first batch for invoice display (backward compatibility)
                         batchNumber = m.batchAllocations[0].batchNumber;
                         expiryDate = m.batchAllocations[0].expiryDate || expiryDate;
-
-                        const hasPerAllocFree = m.batchAllocations.some(
-                          (a: any) => a.allocationFreeQty !== undefined && a.allocationFreeQty !== null
-                        );
-                        if (hasPerAllocFree) {
-                          freeQuantity = m.batchAllocations.reduce(
-                            (s: number, a: any) => s + toNumber(a.allocationFreeQty ?? 0),
-                            0
-                          );
-                        } else {
-                          const allocationFree = (() => {
-                            const medicine = medicines?.find((med) => med.id === m.medicineId);
-                            let schemePaidQty: number | undefined;
-                            let schemeFreeQty: number | undefined;
-                            for (const allocation of m.batchAllocations) {
-                              const stockBatch = medicine?.stockBatches?.find(
-                                (b) => b.batchNumber === allocation.batchNumber
-                              );
-                              const allocationScheme = getSchemeFromAny(allocation);
-                              const stockBatchScheme = getSchemeFromAny(stockBatch);
-                              const p = allocationScheme.schemePaidQty || stockBatchScheme.schemePaidQty;
-                              const f = allocationScheme.schemeFreeQty || stockBatchScheme.schemeFreeQty;
-                              if (p > 0 && f > 0) {
-                                schemePaidQty = p;
-                                schemeFreeQty = f;
-                                break;
-                              }
-                            }
-                            const totalO = orderLineSchemeDisplayPhysical(m, schemePaidQty, schemeFreeQty);
-                            return schemeLinePaidFreeConserved(
-                              totalO,
-                              schemePaidQty,
-                              schemeFreeQty
-                            ).freeQty;
-                          })();
-
-                          if (allocationFree > 0) {
-                            freeQuantity = allocationFree;
-                          }
-                        }
                       }
                       
                       // Find batch MFG date from medicine data
@@ -2982,6 +3181,7 @@ export const OrderDetailsPage: React.FC = () => {
                       
                       return {
                         ...m,
+                        quantity,
                         batchNumber: batchNumber, // For backward compatibility with invoice
                         batchAllocations: m.batchAllocations, // Keep batchAllocations for future enhancements
                         freeQuantity,
@@ -3363,24 +3563,16 @@ export const OrderDetailsPage: React.FC = () => {
                         econLine.paidQty > 0 ? econLine.paidQty : sumAllocQtyForLine > 0 ? sumAllocQtyForLine : 1;
                       let schemePLine: number | undefined;
                       let schemeFLine: number | undefined;
-                      for (const allocation of item.batchAllocations) {
-                        const b = medForLine?.stockBatches?.find(
-                          (x: any) => x.batchNumber === allocation.batchNumber
-                        );
-                        const s = getSchemeFromAny(b || allocation);
-                        if (s.schemePaidQty > 0 && s.schemeFreeQty > 0) {
-                          schemePLine = s.schemePaidQty;
-                          schemeFLine = s.schemeFreeQty;
-                          break;
-                        }
-                      }
+                      const schemeDisplay = getEffectiveSchemeForLineDisplay(item, medForLine);
+                      schemePLine = schemeDisplay.schemePS;
+                      schemeFLine = schemeDisplay.schemeFS;
                       const physicalSum = orderLineSchemeDisplayPhysical(item, schemePLine, schemeFLine);
                       const lineDisplay = schemeOrderLineDisplayTotals(
                         physicalSum,
                         schemePLine,
                         schemeFLine
                       );
-                      const paidQtyForLine = lineDisplay.billQty;
+                      const paidQtyForLine = econLine.paidQty;
                       const physicalQtyForLine = lineDisplay.totalQty;
                       const schemeLabels = getSchemeLabels(item);
                       const fromAllocsSumForWeights = item.batchAllocations.reduce(
@@ -3440,7 +3632,7 @@ export const OrderDetailsPage: React.FC = () => {
                               <Box display="flex" alignItems="flex-start" justifyContent="flex-end" gap={0.5}>
                                 <Box>
                                   <Typography variant="body2">
-                                    {lineDisplay.freeQty > 0 ? formatSchemeQty(lineDisplay.freeQty) : '-'}
+                                    {econLine.freeQty > 0 ? formatSchemeQty(econLine.freeQty) : '-'}
                                   </Typography>
                                   {schemeLabels.length > 0 && (
                                     <Typography variant="caption" color="text.secondary" display="block">
@@ -3453,6 +3645,7 @@ export const OrderDetailsPage: React.FC = () => {
                                     lastScheme={lastSchemeByMedicineId.get(item.medicineId)}
                                   />
                                 ) : null}
+                                {showOrderSchemeControls ? renderOrderSchemeControls(item, index) : null}
                               </Box>
                             </TableCell>
                             <TableCell align="right">
@@ -3620,33 +3813,15 @@ export const OrderDetailsPage: React.FC = () => {
                         ? item.batchAllocations[0]
                         : null;
                     const medSingle = medicines?.find((m) => m.id === item.medicineId);
-                    let schemePS: number | undefined;
-                    let schemeFS: number | undefined;
-                    if (singleAlloc != null) {
-                      const b = medSingle?.stockBatches?.find(
-                        (x: any) => x.batchNumber === singleAlloc.batchNumber
-                      );
-                      const s = getSchemeFromAny(b || singleAlloc);
-                      if (s.schemePaidQty > 0 && s.schemeFreeQty > 0) {
-                        schemePS = s.schemePaidQty;
-                        schemeFS = s.schemeFreeQty;
-                      }
-                    } else if (item.batchNumber && medSingle?.stockBatches) {
-                      const b = medSingle.stockBatches.find((x: any) => x.batchNumber === item.batchNumber);
-                      const s = getSchemeFromAny(b);
-                      if (s.schemePaidQty > 0 && s.schemeFreeQty > 0) {
-                        schemePS = s.schemePaidQty;
-                        schemeFS = s.schemeFreeQty;
-                      }
-                    }
+                    const schemeDisplaySingle = getEffectiveSchemeForLineDisplay(item, medSingle);
+                    const schemePS = schemeDisplaySingle.schemePS;
+                    const schemeFS = schemeDisplaySingle.schemeFS;
                     const totalOSingle = orderLineSchemeDisplayPhysical(item, schemePS, schemeFS);
                     const singleLineDisplay = schemeOrderLineDisplayTotals(
                       totalOSingle,
                       schemePS,
                       schemeFS
                     );
-                    const paidForDisplay = singleLineDisplay.billQty;
-                    const physicalForDisplay = singleLineDisplay.totalQty;
                     const lineEcon = orderLineInvoiceEconomics(
                       item,
                       medSingle,
@@ -3654,6 +3829,8 @@ export const OrderDetailsPage: React.FC = () => {
                       purchaseDiscountLookup,
                       { lockPersistedDiscount: order.status !== 'Pending' }
                     );
+                    const paidForDisplay = lineEcon.paidQty;
+                    const physicalForDisplay = singleLineDisplay.totalQty;
                     const fallbackBatchMrp = toNumber(
                       medSingle?.stockBatches?.find((b: any) => toNumber(b?.mrp) > 0)?.mrp
                     );
@@ -3779,7 +3956,7 @@ export const OrderDetailsPage: React.FC = () => {
                           <Box display="flex" alignItems="flex-start" justifyContent="flex-end" gap={0.5}>
                             <Box>
                               <Typography variant="body2">
-                                {singleLineDisplay.freeQty > 0 ? formatSchemeQty(singleLineDisplay.freeQty) : '-'}
+                                {lineEcon.freeQty > 0 ? formatSchemeQty(lineEcon.freeQty) : '-'}
                               </Typography>
                               {schemeLabels.length > 0 && (
                                 <Typography variant="caption" color="text.secondary" display="block">
@@ -3792,6 +3969,7 @@ export const OrderDetailsPage: React.FC = () => {
                                 lastScheme={lastSchemeByMedicineId.get(item.medicineId)}
                               />
                             ) : null}
+                            {showOrderSchemeControls ? renderOrderSchemeControls(item, index) : null}
                           </Box>
                         </TableCell>
                         <TableCell align="right">
@@ -4940,6 +5118,12 @@ export const OrderDetailsPage: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
+            {batchAllocationDialog.itemIndex >= 0 &&
+              showOrderSchemeControls &&
+              renderOrderSchemeControls(
+                fulfillmentData.medicines[batchAllocationDialog.itemIndex],
+                batchAllocationDialog.itemIndex
+              )}
             {batchAllocationDialog.allocatedQuantity < batchAllocationDialog.requiredQuantity && batchAllocationDialog.allocatedQuantity > 0 && (
               <Alert severity="warning" sx={{ mt: 2 }}>
                 Partial fulfillment: {batchAllocationDialog.allocatedQuantity} / {batchAllocationDialog.requiredQuantity} units will be fulfilled. 
