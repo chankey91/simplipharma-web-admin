@@ -6,8 +6,13 @@
 import {
   billablePaidFromAllocationSums,
   orderLineSchemeDisplayPhysical,
+  roundSchemeQty,
   schemeOrderLineDisplayTotals,
 } from './schemeFulfillment';
+import {
+  findBatchSchemeFromMedicineAndLine,
+  resolveOrderLineSchemeParams,
+} from './orderSchemeOverride';
 import {
   type PurchaseBatchDiscountLookup,
   findStockBatch,
@@ -22,11 +27,6 @@ const toNum = (v: unknown): number => {
   const n = typeof v === 'number' ? v : parseFloat(String(v));
   return Number.isFinite(n) ? n : 0;
 };
-
-const schemePair = (source: any) => ({
-  paid: source?.schemePaidQty ?? source?.purchaseSchemeDeal,
-  free: source?.schemeFreeQty ?? source?.purchaseSchemeFree,
-});
 
 /** Unit price for invoice totals — matches order-details price column (PI purchase price first). */
 function resolveOrderLineUnitPrice(
@@ -96,40 +96,24 @@ export function orderLineInvoiceEconomics(
 ): OrderLineInvoiceEconomics {
   const allocs = item.batchAllocations as any[] | undefined;
 
+  const batchScheme = findBatchSchemeFromMedicineAndLine(item, medicine);
+  const schemeParams = resolveOrderLineSchemeParams(item, batchScheme);
+
   let schemeP: number | undefined;
   let schemeF: number | undefined;
-
-  if (allocs && allocs.length > 0) {
-    for (const a of allocs) {
-      const b = medicine?.stockBatches?.find((x: any) => x.batchNumber === a.batchNumber);
-      const ap = schemePair(a);
-      const bp = schemePair(b);
-      const pp = toNum(ap.paid ?? bp.paid);
-      const ff = toNum(ap.free ?? bp.free);
-      if (pp > 0 && ff > 0) {
-        schemeP = pp;
-        schemeF = ff;
-        break;
-      }
-    }
-  } else {
-    const b = medicine?.stockBatches?.find((x: any) => x.batchNumber === item.batchNumber);
-    if (b) {
-      const p = schemePair(b);
-      const pp = toNum(p.paid);
-      const ff = toNum(p.free);
-      if (pp > 0 && ff > 0) {
-        schemeP = pp;
-        schemeF = ff;
-      }
-    }
+  if (schemeParams.apply && schemeParams.schemePaidQty && schemeParams.schemeFreeQty) {
+    schemeP = schemeParams.schemePaidQty;
+    schemeF = schemeParams.schemeFreeQty;
   }
 
   const totalO = orderLineSchemeDisplayPhysical(item, schemeP, schemeF);
 
   let paidQty: number;
   let freeQty: number;
-  if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
+  if (!schemeParams.apply) {
+    paidQty = roundSchemeQty(totalO > 0 ? totalO : toNum(item.quantity));
+    freeQty = 0;
+  } else if (schemeP !== undefined && schemeF !== undefined && schemeP > 0 && schemeF > 0 && totalO > 0) {
     const display = schemeOrderLineDisplayTotals(totalO, schemeP, schemeF);
     paidQty = display.billQty;
     freeQty = display.freeQty;

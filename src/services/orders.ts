@@ -9,6 +9,10 @@ import {
 } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
+import {
+  applyOrderSchemeFieldsToTarget,
+  recomputeFulfillmentLineScheme,
+} from '../utils/orderSchemeOverride';
 import { nestedFirestoreTimestamp, serverTimestamp } from '../utils/firestoreTimestamps';
 import {
   buildPurchaseBatchDiscountLookup,
@@ -788,18 +792,22 @@ export const fulfillOrder = async (
       item.lineType === 'product_demand' && item.medicineId
         ? { ...item, lineType: 'medicine' as const }
         : item;
-    const line = workItem;
+    let medicineDataForScheme: Medicine | null = null;
+    if (workItem.medicineId) {
+      try {
+        medicineDataForScheme = await getMedicineCached(workItem.medicineId);
+      } catch (error) {
+        console.warn(`Failed to fetch medicine ${workItem.medicineId} for scheme alignment:`, error);
+      }
+    }
+    const schemeAligned = recomputeFulfillmentLineScheme(
+      { ...workItem } as Record<string, unknown>,
+      medicineDataForScheme ?? undefined
+    ) as typeof workItem;
+    const line = { ...workItem, ...schemeAligned };
     // If line has multiple batch allocations, create separate line item for each batch
     if (line.batchAllocations && line.batchAllocations.length > 1) {
-      // Fetch medicine data to get batch discountPercentage if needed
-      let medicineData = null;
-      if (line.medicineId) {
-        try {
-          medicineData = await getMedicineCached(line.medicineId);
-        } catch (error) {
-          console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
-        }
-      }
+      const medicineData = medicineDataForScheme;
       
       for (const allocation of line.batchAllocations) {
         const batch = medicineData?.stockBatches?.find(
@@ -834,8 +842,12 @@ export const fulfillOrder = async (
               ...(allocation.gstRate !== undefined && allocation.gstRate !== null
                 ? { gstRate: allocation.gstRate }
                 : {}),
-              ...(allocation.schemePaidQty ? { schemePaidQty: allocation.schemePaidQty } : {}),
-              ...(allocation.schemeFreeQty ? { schemeFreeQty: allocation.schemeFreeQty } : {}),
+              ...(line.orderSchemeApplied !== false && allocation.schemePaidQty
+                ? { schemePaidQty: allocation.schemePaidQty }
+                : {}),
+              ...(line.orderSchemeApplied !== false && allocation.schemeFreeQty
+                ? { schemeFreeQty: allocation.schemeFreeQty }
+                : {}),
               ...(allocation.nonReturnable === true || batch?.nonReturnable === true
                 ? { nonReturnable: true }
                 : {}),
@@ -882,6 +894,7 @@ export const fulfillOrder = async (
         if (line.notes?.trim()) {
           batchItem.notes = line.notes.trim();
         }
+        applyOrderSchemeFieldsToTarget(line, batchItem);
 
         // Final cleanup: Remove any undefined or null values
         Object.keys(batchItem).forEach(key => {
@@ -920,20 +933,15 @@ export const fulfillOrder = async (
         let invBatch:
           | { purchasePrice?: number; discountPercentage?: number; nonReturnable?: boolean; nrxDrug?: boolean }
           | undefined;
-        if (line.medicineId) {
-          try {
-            const medicineData = await getMedicineCached(line.medicineId);
-            invBatch = medicineData?.stockBatches?.find(
-              (b) => b.batchNumber === allocation.batchNumber
-            );
-            if (invBatch?.nonReturnable === true) {
-              cleanItem.nonReturnable = true;
-            }
-            if (invBatch?.nrxDrug === true) {
-              cleanItem.nrxDrug = true;
-            }
-          } catch (error) {
-            console.warn(`Failed to fetch medicine ${line.medicineId} for discountPercentage:`, error);
+        if (medicineDataForScheme) {
+          invBatch = medicineDataForScheme.stockBatches?.find(
+            (b) => b.batchNumber === allocation.batchNumber
+          );
+          if (invBatch?.nonReturnable === true) {
+            cleanItem.nonReturnable = true;
+          }
+          if (invBatch?.nrxDrug === true) {
+            cleanItem.nrxDrug = true;
           }
         }
 
@@ -951,10 +959,8 @@ export const fulfillOrder = async (
         if (allocation.mrp !== undefined && allocation.mrp !== null) cleanItem.mrp = allocation.mrp;
         if (allocation.gstRate !== undefined && allocation.gstRate !== null) cleanItem.gstRate = allocation.gstRate;
         const { paid: ap, free: af } = paidFreeFromAllocation(allocation);
-        if (allocation.schemePaidQty && allocation.schemeFreeQty) {
-          cleanItem.quantity = ap;
-          cleanItem.freeQuantity = af;
-        }
+        cleanItem.quantity = ap;
+        cleanItem.freeQuantity = af;
         cleanItem.batchAllocations = [
           {
             batchNumber: allocation.batchNumber,
@@ -968,8 +974,12 @@ export const fulfillOrder = async (
             ...(allocation.gstRate !== undefined && allocation.gstRate !== null
               ? { gstRate: allocation.gstRate }
               : {}),
-            ...(allocation.schemePaidQty ? { schemePaidQty: allocation.schemePaidQty } : {}),
-            ...(allocation.schemeFreeQty ? { schemeFreeQty: allocation.schemeFreeQty } : {}),
+            ...(line.orderSchemeApplied !== false && allocation.schemePaidQty
+              ? { schemePaidQty: allocation.schemePaidQty }
+              : {}),
+            ...(line.orderSchemeApplied !== false && allocation.schemeFreeQty
+              ? { schemeFreeQty: allocation.schemeFreeQty }
+              : {}),
             ...(allocation.nonReturnable === true || invBatch?.nonReturnable === true
               ? { nonReturnable: true }
               : {}),
@@ -1031,6 +1041,7 @@ export const fulfillOrder = async (
       if (line.notes?.trim()) {
         cleanItem.notes = line.notes.trim();
       }
+      applyOrderSchemeFieldsToTarget(line, cleanItem);
       
       // Final cleanup: Remove any undefined or null values that might have been missed
       Object.keys(cleanItem).forEach(key => {
