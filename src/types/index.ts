@@ -105,6 +105,14 @@ export interface OrderMedicine {
   discountPercentage?: number; // Discount percentage for the item
   /** When true, user overrode discount % manually in fulfillment UI. */
   discountManuallySet?: boolean;
+  /** When false, batch scheme is not applied on this order line (bill full physical qty). */
+  orderSchemeApplied?: boolean;
+  /** Per-order scheme pay-for qty when `orderSchemeManuallySet` or for display while applied. */
+  orderSchemePaidQty?: number;
+  /** Per-order scheme get-free qty when `orderSchemeManuallySet` or for display while applied. */
+  orderSchemeFreeQty?: number;
+  /** User edited scheme on this order (override batch default). */
+  orderSchemeManuallySet?: boolean;
   gstRate?: number; // GST rate for the item
   mrp?: number; // MRP for the item
   /** When true, this line was fulfilled from non-returnable stock and must not be returned. */
