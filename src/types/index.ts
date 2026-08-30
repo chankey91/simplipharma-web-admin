@@ -579,7 +579,8 @@ export type PurchaseInvoiceDraftStatus =
   | 'ready'
   | 'committing'
   | 'committed'
-  | 'failed';
+  | 'failed'
+  | 'discarded';
 
 export type PurchaseInvoiceDraftMatchStatus =
   | 'matched'
@@ -609,13 +610,24 @@ export interface PurchaseInvoiceDraftExtractedLine {
   /** Pack size from invoice when present (e.g. 10 TAB, 15 ML). */
   packaging?: string;
   batchNumber?: string;
+  /** Physical pack batch when invoice distinguishes from bill batch. */
+  receivedBatchNumber?: string;
   expiryMmYyyy?: string;
   quantity?: number;
   freeQuantity?: number;
+  /** Retailer scheme: pay for N units. */
+  schemePaidQty?: number;
+  /** Retailer scheme: get M free. */
+  schemeFreeQty?: number;
   mrp?: number;
   purchasePrice?: number;
+  /** Trade/cash discount % on this bill line. */
   discountPercentage?: number;
+  /** Standard (MRP-based) discount % used with purchase pricing. */
+  standardDiscount?: number;
   gstRate?: number;
+  nonReturnable?: boolean;
+  nrxDrug?: boolean;
   confidence?: number;
 }
 
@@ -653,6 +665,8 @@ export interface PurchaseInvoiceDraft {
   vendorName?: string;
   invoiceNumber?: string;
   invoiceDate?: string;
+  /** Operator / extracted notes (aligned with Add Invoice). */
+  notes?: string;
   extractedLines?: PurchaseInvoiceDraftExtractedLine[];
   resolvedLines?: PurchaseInvoiceDraftResolvedLine[];
   errors?: string[];

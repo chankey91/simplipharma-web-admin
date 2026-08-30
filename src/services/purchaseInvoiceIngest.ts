@@ -3,9 +3,13 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
+  query,
   serverTimestamp,
   updateDoc,
+  where,
+  limit,
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
@@ -17,6 +21,16 @@ import type {
 } from '../types';
 
 const DRAFTS = 'purchase_invoice_drafts';
+
+const ACTIVE_DRAFT_STATUSES: PurchaseInvoiceDraftStatus[] = [
+  'uploaded',
+  'extracting',
+  'resolving',
+  'needs_review',
+  'ready',
+  'failed',
+  'committing',
+];
 
 const processDraftCallable = httpsCallable(functions, 'processPurchaseInvoiceDraft', {
   timeout: 300000,
@@ -51,6 +65,16 @@ function mapDraft(id: string, data: Record<string, unknown>): PurchaseInvoiceDra
   };
 }
 
+function toMillis(value: unknown): number {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'object' && value !== null && 'toMillis' in value) {
+    const fn = (value as { toMillis?: () => number }).toMillis;
+    if (typeof fn === 'function') return fn.call(value);
+  }
+  return 0;
+}
+
 /** Create draft doc then upload file under the user's Storage prefix. */
 export async function createAndUploadInvoiceDraft(file: File): Promise<string> {
   const uid = auth.currentUser?.uid;
@@ -62,14 +86,15 @@ export async function createAndUploadInvoiceDraft(file: File): Promise<string> {
     throw new Error('File must be under 15MB');
   }
 
-  const contentType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+  const contentType =
+    file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
   const draftRef = await addDoc(collection(db, DRAFTS), {
     status: 'uploaded' satisfies PurchaseInvoiceDraftStatus,
     createdBy: uid,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     sourceFile: {
-      storagePath: '', // filled after we know draft id
+      storagePath: '',
       fileName: file.name,
       contentType,
       size: file.size,
@@ -103,6 +128,20 @@ export async function getInvoiceDraft(draftId: string): Promise<PurchaseInvoiceD
   return mapDraft(snap.id, snap.data() as Record<string, unknown>);
 }
 
+/** Active (non-committed / non-discarded) drafts for the signed-in user. */
+export async function listMyActiveInvoiceDrafts(): Promise<PurchaseInvoiceDraft[]> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return [];
+  const snap = await getDocs(
+    query(collection(db, DRAFTS), where('createdBy', '==', uid), limit(40))
+  );
+  const drafts = snap.docs
+    .map((d) => mapDraft(d.id, d.data() as Record<string, unknown>))
+    .filter((d) => ACTIVE_DRAFT_STATUSES.includes(d.status));
+  drafts.sort((a, b) => toMillis(b.updatedAt) - toMillis(a.updatedAt));
+  return drafts;
+}
+
 export function subscribeInvoiceDraft(
   draftId: string,
   onNext: (draft: PurchaseInvoiceDraft | null) => void
@@ -123,12 +162,23 @@ export async function updateInvoiceDraftReview(
     vendorName?: string;
     invoiceNumber?: string;
     invoiceDate?: string;
+    notes?: string | null;
     resolvedLines?: PurchaseInvoiceDraftResolvedLine[];
     status?: PurchaseInvoiceDraftStatus;
   }
 ): Promise<void> {
+  const data: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) data[key] = value;
+  }
+  await updateDoc(doc(db, DRAFTS, draftId), data);
+}
+
+export async function discardInvoiceDraft(draftId: string): Promise<void> {
   await updateDoc(doc(db, DRAFTS, draftId), {
-    ...patch,
+    status: 'discarded' satisfies PurchaseInvoiceDraftStatus,
     updatedAt: serverTimestamp(),
   });
 }
