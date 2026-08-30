@@ -30,7 +30,6 @@ import {
   Add,
   Visibility,
   Receipt,
-  PictureAsPdf,
   CloudSync,
   CameraAlt,
   Delete,
@@ -282,9 +281,6 @@ export const PurchaseInvoicesPage: React.FC = () => {
           )}
           {canEditPurchases && (
             <>
-          <Button variant="outlined" startIcon={<PictureAsPdf />} onClick={() => navigate('/purchases/import-pdf')}>
-            Import PDF
-          </Button>
           <Button variant="outlined" startIcon={<CameraAlt />} onClick={() => navigate('/purchases/ingest')}>
             Ingest PDF / photo
           </Button>

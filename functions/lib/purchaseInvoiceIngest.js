@@ -37,7 +37,11 @@ async function assertCanIngest(uid) {
 }
 async function collectPendingMedicineIds(db) {
     var _a;
-    const snap = await db.collection('orders').where('status', '==', 'Pending').get();
+    const snap = await db
+        .collection('orders')
+        .where('status', '==', 'Pending')
+        .select('medicines')
+        .get();
     const ids = new Set();
     for (const doc of snap.docs) {
         const medicines = (_a = doc.data()) === null || _a === void 0 ? void 0 : _a.medicines;
@@ -115,7 +119,7 @@ async function searchMedicineCandidates(query, pendingIds) {
     return out;
 }
 async function matchVendor(db, gstin, nameHint) {
-    var _a, _b;
+    var _a, _b, _c;
     if (gstin) {
         const g = (0, purchaseInvoiceExtract_1.normalizeGstin)(gstin);
         const snap = await db.collection('vendors').where('gstNumber', '==', g).limit(2).get();
@@ -125,18 +129,37 @@ async function matchVendor(db, gstin, nameHint) {
         }
     }
     if (nameHint && nameHint.trim().length >= 4) {
-        const snap = await db.collection('vendors').limit(200).get();
-        const hay = nameHint.toLowerCase();
-        let best = null;
-        for (const d of snap.docs) {
-            const name = String(((_b = d.data()) === null || _b === void 0 ? void 0 : _b.vendorName) || '');
+        const hint = nameHint.trim();
+        const hay = hint.toLowerCase();
+        let bestId = '';
+        let bestName = '';
+        let bestScore = 0;
+        const consider = (id, name) => {
             const score = scoreName(hay, name);
-            if (score >= 0.7 && (!best || score > best.score)) {
-                best = { id: d.id, name, score };
+            if (score >= 0.7 && score > bestScore) {
+                bestScore = score;
+                bestId = id;
+                bestName = name;
             }
+        };
+        const prefixSnap = await db
+            .collection('vendors')
+            .orderBy('vendorName')
+            .startAt(hint)
+            .endAt(hint + '\uf8ff')
+            .limit(25)
+            .get();
+        for (const d of prefixSnap.docs) {
+            consider(d.id, String(((_b = d.data()) === null || _b === void 0 ? void 0 : _b.vendorName) || ''));
         }
-        if (best)
-            return { vendorId: best.id, vendorName: best.name };
+        if (bestId)
+            return { vendorId: bestId, vendorName: bestName };
+        const snap = await db.collection('vendors').select('vendorName', 'gstNumber').limit(500).get();
+        for (const d of snap.docs) {
+            consider(d.id, String(((_c = d.data()) === null || _c === void 0 ? void 0 : _c.vendorName) || ''));
+        }
+        if (bestId)
+            return { vendorId: bestId, vendorName: bestName };
     }
     return {};
 }
@@ -190,6 +213,7 @@ exports.processPurchaseInvoiceDraft = functionRegion_1.ff
             vendorHint: extracted.vendorHint || null,
             invoiceNumber: extracted.invoiceNumber || null,
             invoiceDate: extracted.invoiceDate || null,
+            notes: extracted.notes || null,
             rawTextPreview: (extracted.rawText || '').slice(0, 8000),
             extractedLines: extracted.lines,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
