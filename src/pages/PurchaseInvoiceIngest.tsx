@@ -344,12 +344,13 @@ async function ensureInventoryForIngestLine(
 const LineMedicinePicker: React.FC<{
   line: PurchaseInvoiceDraftResolvedLine;
   onPick: (medicineId: string, medicineName: string, productId?: string, gstRate?: number) => void;
+  onClear: () => void;
   onDemandPick: (prefill: {
     name: string;
     manufacturer?: string;
     packaging?: string;
   }) => void;
-}> = ({ line, onPick, onDemandPick }) => {
+}> = ({ line, onPick, onClear, onDemandPick }) => {
   const [medicineCache, setMedicineCache] = useState<Record<string, Medicine>>({});
   const rememberMedicines = useCallback((rows: Medicine[]) => {
     if (!rows.length) return;
@@ -394,8 +395,8 @@ const LineMedicinePicker: React.FC<{
   const selectedLabel = selectedMedicine ? getMedicinePickerLabel(selectedMedicine) : '';
   const [input, setInput] = useState(selectedLabel);
   useEffect(() => {
-    setInput(selectedLabel);
-  }, [selectedLabel, line.lineId]);
+    setInput(selectedLabel || line.productName || '');
+  }, [selectedLabel, line.lineId, line.productName]);
 
   const skipQuery =
     selectedMedicine != null && input.trim() === selectedLabel.trim()
@@ -437,6 +438,11 @@ const LineMedicinePicker: React.FC<{
     );
   }, [selectedMedicine, options]);
 
+  const clearSelection = () => {
+    onClear();
+    setInput(line.productName || '');
+  };
+
   return (
     <Autocomplete
       size="small"
@@ -452,17 +458,26 @@ const LineMedicinePicker: React.FC<{
       isOptionEqualToValue={(a, b) => a.id === b.id}
       onInputChange={(_, newInputValue, reason) => {
         if (reason === 'clear') {
-          setInput('');
+          clearSelection();
           return;
         }
         if (reason === 'input') {
           setInput(newInputValue);
+          if (
+            selectedMedicine &&
+            newInputValue.trim() !== selectedLabel.trim()
+          ) {
+            onClear();
+          }
           return;
         }
         setInput(newInputValue);
       }}
       onChange={(_, newValue) => {
-        if (!newValue) return;
+        if (!newValue) {
+          clearSelection();
+          return;
+        }
         if (newValue.demand && !newValue.medicine) {
           const demand = newValue.demand;
           onDemandPick({
@@ -648,19 +663,65 @@ const StackLines: React.FC<{
                     matchReason: 'inventory',
                   });
                 }}
+                onClear={() => {
+                  patchLine(line.lineId, {
+                    selectedMedicineId: undefined,
+                    selectedMedicineName: undefined,
+                    medicineId: undefined,
+                    medicineName: undefined,
+                    productId: undefined,
+                    matchStatus: 'unmatched',
+                    matchReason: 'none',
+                    candidates: [],
+                  });
+                }}
                 onDemandPick={(prefill) => openAddMedicine(line, prefill)}
               />
-              {!(line.selectedMedicineId || line.medicineId) && (
+              <Box mt={0.5} display="flex" gap={1} flexWrap="wrap">
+                {(line.selectedMedicineId || line.medicineId) && (
+                  <Button
+                    size="small"
+                    color="warning"
+                    disabled={busy}
+                    onClick={() =>
+                      patchLine(line.lineId, {
+                        selectedMedicineId: undefined,
+                        selectedMedicineName: undefined,
+                        medicineId: undefined,
+                        medicineName: undefined,
+                        productId: undefined,
+                        matchStatus: 'unmatched',
+                        matchReason: 'none',
+                        candidates: [],
+                      })
+                    }
+                  >
+                    Clear match
+                  </Button>
+                )}
                 <Button
                   size="small"
                   startIcon={<Add />}
-                  sx={{ mt: 0.5 }}
-                  onClick={() => openAddMedicine(line)}
                   disabled={busy}
+                  onClick={() => {
+                    if (line.selectedMedicineId || line.medicineId) {
+                      patchLine(line.lineId, {
+                        selectedMedicineId: undefined,
+                        selectedMedicineName: undefined,
+                        medicineId: undefined,
+                        medicineName: undefined,
+                        productId: undefined,
+                        matchStatus: 'unmatched',
+                        matchReason: 'none',
+                        candidates: [],
+                      });
+                    }
+                    openAddMedicine(line);
+                  }}
                 >
-                  Edit master
+                  Add as new master
                 </Button>
-              )}
+              </Box>
             </Grid>
 
             <Grid item xs={12} sm={6}>

@@ -264,7 +264,8 @@ export const processPurchaseInvoiceDraft = ff
         if (top && top.score >= 0.92 && (!second || top.score - second.score >= 0.08)) {
           matchStatus = 'matched';
         } else if (top && top.score >= 0.55) {
-          matchStatus = candidates.length > 1 && second && second.score >= 0.55 ? 'ambiguous' : 'matched';
+          // Weak / competing hits stay ambiguous — do not auto-link.
+          matchStatus = 'ambiguous';
         }
 
         const resolved: Record<string, unknown> = {
@@ -273,7 +274,8 @@ export const processPurchaseInvoiceDraft = ff
           matchReason: top?.reason || 'none',
           candidates: candidates.slice(0, 5),
         };
-        if (matchStatus !== 'unmatched' && top) {
+        // Only high-confidence matches are bound; ambiguous stay unlinked for review.
+        if (matchStatus === 'matched' && top) {
           resolved.medicineId = top.medicineId;
           resolved.medicineName = top.medicineName;
           if (top.productId) resolved.productId = top.productId;
