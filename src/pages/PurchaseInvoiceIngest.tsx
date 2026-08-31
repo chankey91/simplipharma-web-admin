@@ -150,6 +150,99 @@ function formatAmount(n: number): string {
   });
 }
 
+/** Text field that keeps intermediate decimals (e.g. "5.") while typing. */
+const EditableDecimalField: React.FC<{
+  label: string;
+  value: number | undefined | null;
+  onCommit: (n: number | undefined) => void;
+  /** When blur with empty input, commit this (omit to commit undefined). */
+  emptyValue?: number;
+  required?: boolean;
+  helperText?: string;
+  disabled?: boolean;
+  startAdornment?: React.ReactNode;
+  placeholder?: string;
+}> = ({
+  label,
+  value,
+  onCommit,
+  emptyValue,
+  required,
+  helperText,
+  disabled,
+  startAdornment,
+  placeholder,
+}) => {
+  const [focused, setFocused] = useState(false);
+  const [text, setText] = useState(() =>
+    value != null && Number.isFinite(Number(value)) ? String(value) : ''
+  );
+
+  useEffect(() => {
+    if (focused) return;
+    setText(value != null && Number.isFinite(Number(value)) ? String(value) : '');
+  }, [value, focused]);
+
+  const display =
+    focused ? text : value != null && Number.isFinite(Number(value)) ? String(value) : '';
+
+  return (
+    <TextField
+      size="small"
+      fullWidth
+      label={label}
+      type="text"
+      inputMode="decimal"
+      required={required}
+      disabled={disabled}
+      placeholder={placeholder}
+      helperText={helperText}
+      value={display}
+      onFocus={() => {
+        setFocused(true);
+        setText(value != null && Number.isFinite(Number(value)) ? String(value) : '');
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        if (raw !== '' && !/^-?\d*\.?\d*$/.test(raw)) return;
+        setText(raw);
+        if (raw === '' || raw === '-' || raw === '.' || raw === '-.' || raw.endsWith('.')) {
+          return;
+        }
+        const n = parseFloat(raw);
+        if (Number.isFinite(n)) onCommit(n);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const raw = text.trim();
+        if (raw === '' || raw === '-' || raw === '.' || raw === '-.') {
+          onCommit(emptyValue);
+          setText(
+            emptyValue != null && Number.isFinite(emptyValue) ? String(emptyValue) : ''
+          );
+          return;
+        }
+        const n = parseFloat(raw);
+        if (Number.isFinite(n)) {
+          onCommit(n);
+          setText(String(n));
+        } else {
+          onCommit(emptyValue);
+          setText(
+            emptyValue != null && Number.isFinite(emptyValue) ? String(emptyValue) : ''
+          );
+        }
+      }}
+      InputProps={
+        startAdornment
+          ? { startAdornment: <>{startAdornment}</> }
+          : undefined
+      }
+      inputProps={{ style: startAdornment ? { textAlign: 'right' } : undefined }}
+    />
+  );
+};
+
 function optionalPositiveInt(v: unknown): number | undefined {
   const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
   if (!Number.isFinite(n) || n <= 0) return undefined;
@@ -594,42 +687,20 @@ const StackLines: React.FC<{
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                size="small"
-                fullWidth
+              <EditableDecimalField
                 label="Quantity"
-                type="text"
-                inputMode="decimal"
                 required
-                value={line.quantity ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '.' || raw === '-') {
-                    void patchLine(line.lineId, { quantity: 0 });
-                    return;
-                  }
-                  const n = parseFloat(raw);
-                  void patchLine(line.lineId, { quantity: Number.isFinite(n) ? n : 0 });
-                }}
+                value={line.quantity}
+                emptyValue={0}
+                onCommit={(n) => patchLine(line.lineId, { quantity: n ?? 0 })}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                size="small"
-                fullWidth
+              <EditableDecimalField
                 label="Free quantity (this bill)"
-                type="text"
-                inputMode="decimal"
-                value={line.freeQuantity ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '.' || raw === '-') {
-                    void patchLine(line.lineId, { freeQuantity: 0 });
-                    return;
-                  }
-                  const n = parseFloat(raw);
-                  void patchLine(line.lineId, { freeQuantity: Number.isFinite(n) ? n : 0 });
-                }}
+                value={line.freeQuantity}
+                emptyValue={0}
+                onCommit={(n) => patchLine(line.lineId, { freeQuantity: n ?? 0 })}
                 helperText="Extra strips/units free on this invoice (stock)"
               />
             </Grid>
@@ -718,109 +789,48 @@ const StackLines: React.FC<{
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                size="small"
-                fullWidth
+              <EditableDecimalField
                 label="MRP"
-                type="text"
-                inputMode="decimal"
-                value={line.mrp ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '.' || raw === '-') {
-                    void patchLine(line.lineId, { mrp: undefined });
-                    return;
-                  }
-                  const n = parseFloat(raw);
-                  void patchLine(line.lineId, { mrp: Number.isFinite(n) ? n : undefined });
-                }}
-                InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
+                value={line.mrp}
+                onCommit={(n) => patchLine(line.lineId, { mrp: n })}
+                startAdornment={<Typography sx={{ mr: 1 }}>₹</Typography>}
                 helperText="Purchase price recalculates from MRP + standard discount + GST"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                size="small"
-                fullWidth
+              <EditableDecimalField
                 label="GST Rate (%)"
-                type="text"
-                inputMode="decimal"
-                value={line.gstRate ?? 5}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '.' || raw === '-') {
-                    void patchLine(line.lineId, { gstRate: 5 });
-                    return;
-                  }
-                  const n = parseFloat(raw);
-                  void patchLine(line.lineId, { gstRate: Number.isFinite(n) ? n : 5 });
-                }}
+                value={line.gstRate}
+                emptyValue={5}
+                onCommit={(n) =>
+                  patchLine(line.lineId, { gstRate: n != null && Number.isFinite(n) ? n : 5 })
+                }
+                helperText="Editable — supports decimals (e.g. 5, 12, 12.5)"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                size="small"
-                fullWidth
+              <EditableDecimalField
                 label="Standard Discount (%)"
-                type="text"
-                inputMode="decimal"
-                value={line.standardDiscount ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '.' || raw === '-') {
-                    void patchLine(line.lineId, { standardDiscount: undefined });
-                    return;
-                  }
-                  const n = parseFloat(raw);
-                  void patchLine(line.lineId, {
-                    standardDiscount: Number.isFinite(n) ? n : undefined,
-                  });
-                }}
+                value={line.standardDiscount}
+                onCommit={(n) => patchLine(line.lineId, { standardDiscount: n })}
                 helperText="Change to auto-update purchase price from MRP"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                size="small"
-                fullWidth
+              <EditableDecimalField
                 label="Purchase Price"
-                type="text"
-                inputMode="decimal"
                 required
-                value={line.purchasePrice ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '.' || raw === '-') {
-                    void patchLine(line.lineId, { purchasePrice: 0 });
-                    return;
-                  }
-                  const n = parseFloat(raw);
-                  void patchLine(line.lineId, {
-                    purchasePrice: Number.isFinite(n) ? n : 0,
-                  });
-                }}
-                InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
+                value={line.purchasePrice}
+                emptyValue={0}
+                onCommit={(n) => patchLine(line.lineId, { purchasePrice: n ?? 0 })}
+                startAdornment={<Typography sx={{ mr: 1 }}>₹</Typography>}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                size="small"
-                fullWidth
+              <EditableDecimalField
                 label="Discount Percentage (%)"
-                type="text"
-                inputMode="decimal"
-                value={line.discountPercentage ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '.' || raw === '-') {
-                    void patchLine(line.lineId, { discountPercentage: undefined });
-                    return;
-                  }
-                  const n = parseFloat(raw);
-                  void patchLine(line.lineId, {
-                    discountPercentage: Number.isFinite(n) ? n : undefined,
-                  });
-                }}
+                value={line.discountPercentage}
+                onCommit={(n) => patchLine(line.lineId, { discountPercentage: n })}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
