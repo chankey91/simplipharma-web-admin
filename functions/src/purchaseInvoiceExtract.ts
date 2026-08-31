@@ -99,7 +99,7 @@ Rules:
 - schemePaidQty / schemeFreeQty = retailer deal like "10+1" or "Buy 10 Get 1" → paid=10, free=1. Use null if not shown as a scheme ratio (do not copy freeQuantity into schemeFreeQty unless a scheme ratio is explicit).
 - discountPercentage = line trade/cash discount % on this bill when shown (CD / Disc %).
 - standardDiscount = standard/MRP discount % when explicitly printed; else null (do not invent).
-- gstRate = GST % for the line when shown (commonly 5, 12, 18, or 28). Use null if not on the row.
+- gstRate = GST % for the line when shown (commonly 5, 12, 18, or 28; decimals like 12.5 allowed). Use null if not on the row.
 - nonReturnable = true only if the row/invoice marks non-returnable / NR for that item. nrxDrug = true only if marked NRX / Schedule H / H1 for that item. Otherwise null.
 - If a field is missing or unclear, use null. Never invent medicines that are not on the invoice.
 - Prefer the supplier (seller) GSTIN for vendorHint.gstin when multiple GSTINs appear.`;
