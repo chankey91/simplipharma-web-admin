@@ -81,3 +81,67 @@ export function buildLastPurchaseByMedicineId(
 
   return map;
 }
+
+export type BestDiscountVendorPurchase = {
+  medicineId: string;
+  vendorName: string;
+  discountPercentage: number;
+  invoiceNumber?: string;
+  invoiceDate: Date;
+};
+
+/**
+ * Per medicineId: purchase line with the highest discountPercentage across all vendors.
+ * Ties broken by more recent invoice date.
+ */
+export function buildBestDiscountVendorByMedicineId(
+  invoices: PurchaseInvoice[]
+): Map<string, BestDiscountVendorPurchase> {
+  const map = new Map<string, BestDiscountVendorPurchase>();
+
+  for (const inv of invoices) {
+    if (!inv?.id) continue;
+    const vendorName = (inv.vendorName || '').trim() || 'Unknown vendor';
+    const invoiceDate = toDate(inv.invoiceDate);
+    const invoiceNumber = (inv.invoiceNumber || '').trim() || undefined;
+
+    for (const item of inv.items || []) {
+      const medicineId = (item.medicineId || '').trim();
+      if (!medicineId) continue;
+      if (item.discountPercentage === undefined || item.discountPercentage === null) continue;
+
+      const discountPercentage = toNum(item.discountPercentage);
+      if (!(discountPercentage > 0)) continue;
+
+      const existing = map.get(medicineId);
+      if (
+        !existing ||
+        discountPercentage > existing.discountPercentage ||
+        (discountPercentage === existing.discountPercentage &&
+          invoiceDate.getTime() > existing.invoiceDate.getTime())
+      ) {
+        map.set(medicineId, {
+          medicineId,
+          vendorName,
+          discountPercentage,
+          invoiceNumber,
+          invoiceDate,
+        });
+      }
+    }
+  }
+
+  return map;
+}
+
+/** Excel / UI label: "Vendor — 12%" */
+export function formatBestDiscountVendorLabel(
+  row: BestDiscountVendorPurchase | undefined | null
+): string {
+  if (!row) return '—';
+  const pct = Number.isInteger(row.discountPercentage)
+    ? String(row.discountPercentage)
+    : row.discountPercentage.toFixed(2).replace(/\.?0+$/, '');
+  return `${row.vendorName} — ${pct}%`;
+}
+
