@@ -18,7 +18,6 @@ import { OrderDetailsPage } from './pages/OrderDetails';
 import { OrderShortfallsPage } from './pages/OrderShortfalls';
 import { PurchaseInvoicesPage } from './pages/PurchaseInvoices';
 import { CreatePurchaseInvoicePage } from './pages/CreatePurchaseInvoice';
-import { ImportPurchaseInvoicePdfPage } from './pages/ImportPurchaseInvoicePdf';
 import { PurchaseInvoiceDetailsPage } from './pages/PurchaseInvoiceDetails';
 import { PurchaseInvoiceIngestPage } from './pages/PurchaseInvoiceIngest';
 import { InventoryPage } from './pages/Inventory';
@@ -125,7 +124,7 @@ const router = createBrowserRouter([
   { path: '/operations', element: withLayout(<OperationsPage />) },
   { path: '/purchases', element: withLayout(<PurchaseInvoicesPage />) },
   { path: '/purchases/new', element: withLayout(<CreatePurchaseInvoicePage />) },
-  { path: '/purchases/import-pdf', element: withLayout(<ImportPurchaseInvoicePdfPage />) },
+  { path: '/purchases/import-pdf', element: <Navigate to="/purchases/ingest" replace /> },
   { path: '/purchases/ingest', element: withLayout(<PurchaseInvoiceIngestPage />) },
   { path: '/purchases/ingest/:draftId', element: withLayout(<PurchaseInvoiceIngestPage />) },
   { path: '/purchases/:invoiceId/edit', element: withLayout(<CreatePurchaseInvoicePage />) },

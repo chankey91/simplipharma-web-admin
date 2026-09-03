@@ -17,13 +17,19 @@ export type ExtractedLine = {
   productName: string;
   packaging?: string;
   batchNumber?: string;
+  receivedBatchNumber?: string;
   expiryMmYyyy?: string;
   quantity?: number;
   freeQuantity?: number;
+  schemePaidQty?: number;
+  schemeFreeQty?: number;
   mrp?: number;
   purchasePrice?: number;
   discountPercentage?: number;
+  standardDiscount?: number;
   gstRate?: number;
+  nonReturnable?: boolean;
+  nrxDrug?: boolean;
   confidence?: number;
 };
 
@@ -36,6 +42,7 @@ export type ExtractResult = {
   vendorHint?: { name?: string; gstin?: string };
   invoiceNumber?: string;
   invoiceDate?: string;
+  notes?: string;
 };
 
 const HEADERISH =
@@ -54,31 +61,46 @@ Return ONLY valid JSON (no markdown fences) with this exact shape:
   "vendorHint": { "name": string|null, "gstin": string|null },
   "invoiceNumber": string|null,
   "invoiceDate": string|null,
+  "notes": string|null,
   "lines": [
     {
       "productName": string,
       "packaging": string|null,
       "batchNumber": string|null,
+      "receivedBatchNumber": string|null,
       "expiryMmYyyy": string|null,
       "quantity": number|null,
       "freeQuantity": number|null,
+      "schemePaidQty": number|null,
+      "schemeFreeQty": number|null,
       "mrp": number|null,
       "purchasePrice": number|null,
       "discountPercentage": number|null,
-      "gstRate": number|null
+      "standardDiscount": number|null,
+      "gstRate": number|null,
+      "nonReturnable": boolean|null,
+      "nrxDrug": boolean|null
     }
   ]
 }
 
 Rules:
 - Include ONLY product/medicine rows from the item table (transactional stock lines).
-- IGNORE completely: seller/buyer names & addresses, phone/email, GSTIN header blocks, IRN/QR, bank details, tax summary (CGST/SGST/IGST totals), grand total, round-off, terms & conditions, signatures, page headers/footers, HSN-only summary rows without a product name.
+- IGNORE completely: seller/buyer names & addresses, phone/email, GSTIN header blocks, IRN/QR, bank details, tax summary (CGST/SGST/IGST totals), grand total, round-off, signatures, page headers/footers, HSN-only summary rows without a product name.
+- notes = short invoice-level remark/terms snippet when clearly printed (else null). Do not invent notes.
+- invoiceDate as YYYY-MM-DD when possible; otherwise as printed.
 - productName = medicine/product name as printed (do not append pack, batch, qty, or prices).
 - packaging = pack size / packing as printed when present (e.g. "10 TAB", "15 ML", "1X10", "STRIP", "BOTTLE"). Do NOT put packaging inside productName. Use null if not shown.
+- batchNumber = invoice / bill batch as printed. receivedBatchNumber only if the invoice shows a distinct physical/pack batch different from bill batch; else null.
 - expiryMmYyyy as MM/YYYY or MM/YY when present on the row.
 - purchasePrice = unit rate / PTR / net rate when present (NOT the line amount).
-- quantity = billed/paid quantity (not free/scheme qty). freeQuantity = free/scheme qty if shown. Both may be decimals (e.g. 1.5).
-- gstRate = GST % for the line when shown (commonly 5, 12, 18, or 28). Use null if not on the row.
+- mrp = printed MRP / MRP per unit when present.
+- quantity = billed/paid quantity (not free/scheme qty). freeQuantity = free/scheme qty credited on this bill if shown. Both may be decimals (e.g. 1.5).
+- schemePaidQty / schemeFreeQty = retailer deal like "10+1" or "Buy 10 Get 1" → paid=10, free=1. Use null if not shown as a scheme ratio (do not copy freeQuantity into schemeFreeQty unless a scheme ratio is explicit).
+- discountPercentage = line trade/cash discount % on this bill when shown (CD / Disc %).
+- standardDiscount = standard/MRP discount % when explicitly printed; else null (do not invent).
+- gstRate = GST % for the line when shown (commonly 5, 12, 18, or 28; decimals like 12.5 allowed). Use null if not on the row.
+- nonReturnable = true only if the row/invoice marks non-returnable / NR for that item. nrxDrug = true only if marked NRX / Schedule H / H1 for that item. Otherwise null.
 - If a field is missing or unclear, use null. Never invent medicines that are not on the invoice.
 - Prefer the supplier (seller) GSTIN for vendorHint.gstin when multiple GSTINs appear.`;
 
@@ -124,6 +146,49 @@ function asNonEmptyString(v: unknown): string | undefined {
   return s ? s : undefined;
 }
 
+function asBooleanFlag(v: unknown): boolean | undefined {
+  if (v === true || v === false) return v;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (s === 'true' || s === 'yes' || s === 'y' || s === '1') return true;
+    if (s === 'false' || s === 'no' || s === 'n' || s === '0') return false;
+  }
+  return undefined;
+}
+
+function deriveStandardDiscount(
+  mrp?: number,
+  purchasePrice?: number,
+  gstRate?: number
+): number | undefined {
+  if (mrp == null || purchasePrice == null || mrp <= 0 || purchasePrice <= 0) return undefined;
+  const gst = gstRate != null && gstRate >= 0 ? gstRate : 5;
+  const priceWithGst = purchasePrice * (1 + gst / 100);
+  const pct = (1 - priceWithGst / mrp) * 100;
+  if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) return undefined;
+  return Math.round(pct * 100) / 100;
+}
+
+/** Normalize common Indian invoice date prints to YYYY-MM-DD for date inputs. */
+export function normalizeInvoiceDate(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const s = raw.trim();
+  if (!s) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const dmy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (dmy) {
+    const dd = dmy[1].padStart(2, '0');
+    const mm = dmy[2].padStart(2, '0');
+    let yyyy = dmy[3];
+    if (yyyy.length === 2) {
+      const yy = parseInt(yyyy, 10);
+      yyyy = String(yy <= 30 ? 2000 + yy : 1900 + yy);
+    }
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return s;
+}
+
 function normalizeGeminiLines(rawLines: unknown): ExtractedLine[] {
   if (!Array.isArray(rawLines)) return [];
   const out: ExtractedLine[] = [];
@@ -143,20 +208,36 @@ function normalizeGeminiLines(rawLines: unknown): ExtractedLine[] {
     if (packaging) line.packaging = packaging;
     const batch = asNonEmptyString(r.batchNumber);
     if (batch) line.batchNumber = batch;
+    const receivedBatch = asNonEmptyString(r.receivedBatchNumber);
+    if (receivedBatch) line.receivedBatchNumber = receivedBatch;
     const exp = asNonEmptyString(r.expiryMmYyyy);
     if (exp) line.expiryMmYyyy = exp;
     const qty = asFiniteNumber(r.quantity);
     if (qty !== undefined) line.quantity = Math.max(0, qty);
     const free = asFiniteNumber(r.freeQuantity);
     if (free !== undefined) line.freeQuantity = Math.max(0, free);
+    const schemePaid = asFiniteNumber(r.schemePaidQty);
+    if (schemePaid !== undefined && schemePaid > 0) line.schemePaidQty = Math.floor(schemePaid);
+    const schemeFree = asFiniteNumber(r.schemeFreeQty);
+    if (schemeFree !== undefined && schemeFree > 0) line.schemeFreeQty = Math.floor(schemeFree);
     const mrp = asFiniteNumber(r.mrp);
     if (mrp !== undefined) line.mrp = mrp;
     const rate = asFiniteNumber(r.purchasePrice);
     if (rate !== undefined) line.purchasePrice = rate;
     const disc = asFiniteNumber(r.discountPercentage);
     if (disc !== undefined) line.discountPercentage = disc;
+    const std = asFiniteNumber(r.standardDiscount);
+    if (std !== undefined) line.standardDiscount = std;
     const gst = asFiniteNumber(r.gstRate);
     if (gst !== undefined) line.gstRate = gst;
+    const nr = asBooleanFlag(r.nonReturnable);
+    if (nr === true) line.nonReturnable = true;
+    const nrx = asBooleanFlag(r.nrxDrug);
+    if (nrx === true) line.nrxDrug = true;
+    if (line.standardDiscount == null) {
+      const derived = deriveStandardDiscount(line.mrp, line.purchasePrice, line.gstRate);
+      if (derived != null) line.standardDiscount = derived;
+    }
     out.push(line);
   }
   return out;
@@ -167,6 +248,7 @@ function parseGeminiJson(text: string): {
   vendorHint?: { name?: string; gstin?: string };
   invoiceNumber?: string;
   invoiceDate?: string;
+  notes?: string;
 } {
   let cleaned = text.trim();
   const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -196,7 +278,8 @@ function parseGeminiJson(text: string): {
     lines: normalizeGeminiLines(parsed.lines),
     vendorHint,
     invoiceNumber: asNonEmptyString(parsed.invoiceNumber),
-    invoiceDate: asNonEmptyString(parsed.invoiceDate),
+    invoiceDate: normalizeInvoiceDate(asNonEmptyString(parsed.invoiceDate)),
+    notes: asNonEmptyString(parsed.notes),
   };
 }
 
@@ -341,6 +424,29 @@ async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: s
   );
 }
 
+async function extractWithGeminiFromPdfBytes(
+  buffer: Buffer
+): Promise<Omit<ExtractResult, 'engine' | 'rawText'> & { rawText: string }> {
+  const { text, model } = await callGemini([
+    { text: GEMINI_PROMPT },
+    { inline_data: { mime_type: 'application/pdf', data: buffer.toString('base64') } },
+  ]);
+  const parsed = parseGeminiJson(text);
+  return {
+    model,
+    rawText: text.slice(0, 8000),
+    lines: parsed.lines,
+    vendorHint: parsed.vendorHint,
+    invoiceNumber: parsed.invoiceNumber,
+    invoiceDate: parsed.invoiceDate,
+    notes: parsed.notes,
+    message:
+      parsed.lines.length === 0
+        ? 'Gemini found no medicine line items on the PDF. Add lines manually in review.'
+        : undefined,
+  };
+}
+
 async function extractWithGeminiFromImage(
   buffer: Buffer,
   contentType: string
@@ -361,6 +467,7 @@ async function extractWithGeminiFromImage(
     vendorHint: parsed.vendorHint,
     invoiceNumber: parsed.invoiceNumber,
     invoiceDate: parsed.invoiceDate,
+    notes: parsed.notes,
     message:
       parsed.lines.length === 0
         ? 'Gemini found no medicine line items. Add lines manually in review.'
@@ -384,6 +491,7 @@ async function extractWithGeminiFromText(
     vendorHint: parsed.vendorHint,
     invoiceNumber: parsed.invoiceNumber,
     invoiceDate: parsed.invoiceDate,
+    notes: parsed.notes,
     message:
       parsed.lines.length === 0
         ? 'Gemini found no medicine line items. Add lines manually in review.'
@@ -452,6 +560,8 @@ export function parseProductLineFromRawLine(line: string): Omit<ExtractedLine, '
   if (mrp !== undefined) parsed.mrp = mrp;
   if (purchasePrice !== undefined) parsed.purchasePrice = purchasePrice;
   if (discountPercentage !== undefined) parsed.discountPercentage = discountPercentage;
+  const derived = deriveStandardDiscount(parsed.mrp, parsed.purchasePrice, parsed.gstRate);
+  if (derived != null) parsed.standardDiscount = derived;
   return parsed;
 }
 
@@ -618,6 +728,7 @@ export async function extractInvoiceFromFile(
   if (isPdf) {
     const rawText = await extractTextFromPdf(buffer);
     const gstins = findGstinsInText(rawText);
+    let geminiError = '';
 
     if (geminiReady && rawText.trim().length >= 40) {
       try {
@@ -629,20 +740,43 @@ export async function extractInvoiceFromFile(
           rawText,
         };
       } catch (e: any) {
-        console.error('Gemini PDF text extract failed, falling back:', e?.message || e);
+        geminiError = e?.message || String(e);
+        console.error('Gemini PDF text extract failed, falling back:', geminiError);
+      }
+    }
+
+    // Scanned / image-only PDFs: send PDF bytes to Gemini multimodal.
+    if (geminiReady && rawText.trim().length < 40) {
+      try {
+        const gemini = await extractWithGeminiFromPdfBytes(buffer);
+        return {
+          engine: 'gemini',
+          ...gemini,
+          vendorHint: mergeVendorHint(gemini.vendorHint, gstins),
+          message:
+            gemini.message ||
+            (gemini.lines.length
+              ? 'Extracted from scanned PDF via Gemini vision. Review lines carefully.'
+              : gemini.message),
+        };
+      } catch (e: any) {
+        geminiError = e?.message || String(e);
+        console.error('Gemini PDF vision extract failed:', geminiError);
       }
     }
 
     return {
-      engine: 'pdf_text',
+      engine: rawText.trim() ? 'pdf_text' : 'none',
       rawText,
       lines: linesFromText(rawText),
       vendorHint: { gstin: gstins[0] },
       message: rawText.trim()
         ? geminiReady
-          ? 'Used heuristic PDF parse (Gemini failed). Review lines carefully.'
+          ? `Used heuristic PDF parse${geminiError ? ` (Gemini failed: ${geminiError.slice(0, 120)})` : ''}. Review lines carefully.`
           : 'PDF text parsed with heuristics. Configure gemini.api_key for better medicine-line extraction.'
-        : 'PDF had little/no extractable text (may be a scan). Photograph the invoice or add lines manually.',
+        : geminiError
+          ? `Scanned PDF extract failed (${geminiError.slice(0, 160)}). Photograph the invoice or add lines manually.`
+          : 'PDF had little/no extractable text (may be a scan). Photograph the invoice or add lines manually.',
     };
   }
 

@@ -1,29 +1,44 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
+  FormControlLabel,
   Grid,
+  IconButton,
   LinearProgress,
+  List,
+  ListItem,
+  ListItemSecondaryAction,
+  ListItemText,
   MenuItem,
   Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
+  Stack,
   TextField,
   Typography,
 } from '@mui/material';
-import { Add, ArrowBack, CloudUpload, PlayArrow, Save } from '@mui/icons-material';
+import {
+  Add,
+  ArrowBack,
+  CloudUpload,
+  DeleteOutline,
+  ExpandMore,
+  PlayArrow,
+  Save,
+  Search as SearchIcon,
+} from '@mui/icons-material';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { useVendors } from '../hooks/useVendors';
 import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
@@ -34,14 +49,17 @@ import { getTodayDateStringIST } from '../utils/dateTime';
 import { auth } from '../services/firebase';
 import {
   createAndUploadInvoiceDraft,
+  discardInvoiceDraft,
   getDraftFileDownloadUrl,
   isAllowedInvoiceUpload,
+  listMyActiveInvoiceDrafts,
   markInvoiceDraftCommitted,
   processInvoiceDraft,
   subscribeInvoiceDraft,
   updateInvoiceDraftReview,
 } from '../services/purchaseInvoiceIngest';
 import type {
+  Medicine,
   PurchaseInvoiceDraft,
   PurchaseInvoiceDraftResolvedLine,
   PurchaseInvoiceItem,
@@ -62,6 +80,7 @@ import {
   findMedicineByExactName,
   resolveMedicineAfterPickerSelection,
 } from '../services/medicineSearch';
+import type { MedicineResolveOption } from '../services/medicineResolution';
 import QRCode from 'qrcode';
 
 function parseExpiryToDate(mmYyyy?: string): Date | undefined {
@@ -74,11 +93,37 @@ function parseExpiryToDate(mmYyyy?: string): Date | undefined {
   return new Date(year, month - 1, 1);
 }
 
-/** Line taxable amount = qty × rate (minus discount % if any). Free qty not billed. */
-function lineAmountTotal(line: PurchaseInvoiceDraftResolvedLine): number {
-  const qty = Number(line.quantity) || 0;
-  const rate = Number(line.purchasePrice) || 0;
-  const disc = Number(line.discountPercentage) || 0;
+function numOr(v: unknown, fallback = 0): number {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Same formula as Add Invoice: discounted MRP / (1 + GST). */
+function purchasePriceFromMrpAndDiscount(
+  mrp: number,
+  gstRate: number,
+  standardDiscount: number
+): number {
+  if (mrp <= 0) return 0;
+  const discountedMrp = mrp * (1 - standardDiscount / 100);
+  return discountedMrp / (1 + gstRate / 100);
+}
+
+function standardDiscountFromMrpAndPurchasePrice(
+  mrp: number,
+  purchasePrice: number,
+  gstRate: number
+): number {
+  if (mrp <= 0 || purchasePrice <= 0) return 20;
+  const priceWithGST = purchasePrice * (1 + gstRate / 100);
+  return (1 - priceWithGST / mrp) * 100;
+}
+
+/** Line taxable (ex-GST) after bill discount %. Free qty not billed. */
+function lineTaxableAmount(line: PurchaseInvoiceDraftResolvedLine): number {
+  const qty = numOr(line.quantity);
+  const rate = numOr(line.purchasePrice);
+  const disc = numOr(line.discountPercentage);
   const base = qty * rate;
   if (disc > 0) return Math.round((base - (base * disc) / 100) * 100) / 100;
   return Math.round(base * 100) / 100;
@@ -90,7 +135,12 @@ function lineGstRate(line: PurchaseInvoiceDraftResolvedLine): number {
 }
 
 function lineGstAmount(line: PurchaseInvoiceDraftResolvedLine): number {
-  return Math.round(lineAmountTotal(line) * (lineGstRate(line) / 100) * 100) / 100;
+  return Math.round(lineTaxableAmount(line) * (lineGstRate(line) / 100) * 100) / 100;
+}
+
+/** Matches Add Invoice line totalAmount: taxable + GST. */
+function lineAmountTotal(line: PurchaseInvoiceDraftResolvedLine): number {
+  return Math.round((lineTaxableAmount(line) + lineGstAmount(line)) * 100) / 100;
 }
 
 function formatAmount(n: number): string {
@@ -98,6 +148,120 @@ function formatAmount(n: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+/** Text field that keeps intermediate decimals (e.g. "5.") while typing. */
+const EditableDecimalField: React.FC<{
+  label: string;
+  value: number | undefined | null;
+  onCommit: (n: number | undefined) => void;
+  /** When blur with empty input, commit this (omit to commit undefined). */
+  emptyValue?: number;
+  required?: boolean;
+  helperText?: string;
+  disabled?: boolean;
+  startAdornment?: React.ReactNode;
+  placeholder?: string;
+}> = ({
+  label,
+  value,
+  onCommit,
+  emptyValue,
+  required,
+  helperText,
+  disabled,
+  startAdornment,
+  placeholder,
+}) => {
+  const [focused, setFocused] = useState(false);
+  const [text, setText] = useState(() =>
+    value != null && Number.isFinite(Number(value)) ? String(value) : ''
+  );
+
+  useEffect(() => {
+    if (focused) return;
+    setText(value != null && Number.isFinite(Number(value)) ? String(value) : '');
+  }, [value, focused]);
+
+  const display =
+    focused ? text : value != null && Number.isFinite(Number(value)) ? String(value) : '';
+
+  return (
+    <TextField
+      size="small"
+      fullWidth
+      label={label}
+      type="text"
+      inputMode="decimal"
+      required={required}
+      disabled={disabled}
+      placeholder={placeholder}
+      helperText={helperText}
+      value={display}
+      onFocus={() => {
+        setFocused(true);
+        setText(value != null && Number.isFinite(Number(value)) ? String(value) : '');
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        if (raw !== '' && !/^-?\d*\.?\d*$/.test(raw)) return;
+        setText(raw);
+        if (raw === '' || raw === '-' || raw === '.' || raw === '-.' || raw.endsWith('.')) {
+          return;
+        }
+        const n = parseFloat(raw);
+        if (Number.isFinite(n)) onCommit(n);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const raw = text.trim();
+        if (raw === '' || raw === '-' || raw === '.' || raw === '-.') {
+          onCommit(emptyValue);
+          setText(
+            emptyValue != null && Number.isFinite(emptyValue) ? String(emptyValue) : ''
+          );
+          return;
+        }
+        const n = parseFloat(raw);
+        if (Number.isFinite(n)) {
+          onCommit(n);
+          setText(String(n));
+        } else {
+          onCommit(emptyValue);
+          setText(
+            emptyValue != null && Number.isFinite(emptyValue) ? String(emptyValue) : ''
+          );
+        }
+      }}
+      InputProps={
+        startAdornment
+          ? { startAdornment: <>{startAdornment}</> }
+          : undefined
+      }
+      inputProps={{ style: startAdornment ? { textAlign: 'right' } : undefined }}
+    />
+  );
+};
+
+function optionalPositiveInt(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.floor(n);
+}
+
+/** Firestore rejects `undefined` field values. */
+function stripUndefinedDeep<T>(value: T): T {
+  if (value === undefined) return value;
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefinedDeep(item)) as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    out[k] = stripUndefinedDeep(v);
+  }
+  return out as T;
 }
 
 type EnsuredMedicine = {
@@ -179,66 +343,623 @@ async function ensureInventoryForIngestLine(
 
 const LineMedicinePicker: React.FC<{
   line: PurchaseInvoiceDraftResolvedLine;
-  onPick: (medicineId: string, medicineName: string, productId?: string) => void;
-}> = ({ line, onPick }) => {
-  const matchedLabel = useMemo(() => {
-    const name = line.selectedMedicineName || line.medicineName;
-    if (!name) return '';
-    return line.productId ? `${name} [${line.productId}]` : name;
-  }, [line.selectedMedicineName, line.medicineName, line.productId]);
+  onPick: (medicineId: string, medicineName: string, productId?: string, gstRate?: number) => void;
+  onClear: () => void;
+  onDemandPick: (prefill: {
+    name: string;
+    manufacturer?: string;
+    packaging?: string;
+  }) => void;
+}> = ({ line, onPick, onClear, onDemandPick }) => {
+  const [medicineCache, setMedicineCache] = useState<Record<string, Medicine>>({});
+  const rememberMedicines = useCallback((rows: Medicine[]) => {
+    if (!rows.length) return;
+    setMedicineCache((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const m of rows) {
+        if (!m?.id) continue;
+        if (!next[m.id]) {
+          next[m.id] = m;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+  const rememberMedicine = useCallback(
+    (m: Medicine | null | undefined) => {
+      if (m?.id) rememberMedicines([m]);
+    },
+    [rememberMedicines]
+  );
 
-  const [input, setInput] = useState(matchedLabel);
+  const selectedMedicine = useMemo((): Medicine | null => {
+    const id = line.selectedMedicineId || line.medicineId;
+    if (!id) return null;
+    const cached = medicineCache[id];
+    if (cached) return cached;
+    return {
+      id,
+      name: line.selectedMedicineName || line.medicineName || line.productName || '',
+      productId: line.productId,
+      category: 'General',
+      manufacturer: '',
+      unit: line.packaging || 'Unit',
+      stock: 0,
+      price: 0,
+      gstRate: line.gstRate,
+    } as Medicine;
+  }, [line, medicineCache]);
+
+  const selectedLabel = selectedMedicine ? getMedicinePickerLabel(selectedMedicine) : '';
+  const [input, setInput] = useState(selectedLabel);
   useEffect(() => {
-    setInput(matchedLabel);
-  }, [matchedLabel, line.lineId]);
+    setInput(selectedLabel || line.productName || '');
+  }, [selectedLabel, line.lineId, line.productName]);
 
-  const searchQuery = input.trim() || matchedLabel || line.productName || '';
-  const { medicines: hits, loading } = useMedicineSearch(searchQuery, {
+  const skipQuery =
+    selectedMedicine != null && input.trim() === selectedLabel.trim()
+      ? selectedLabel
+      : undefined;
+  const { medicines: hits, loading } = useMedicineSearch(input, {
     hydrate: false,
-    limit: 30,
+    limit: 40,
+    skipQuery,
   });
   const { pendingMedicines, pendingDemands } = useMedicineResolutionContext();
+
+  useEffect(() => {
+    rememberMedicines(hits);
+  }, [hits, rememberMedicines]);
+  useEffect(() => {
+    rememberMedicines(pendingMedicines);
+  }, [pendingMedicines, rememberMedicines]);
+
   const options = useGroupedMedicineResolveOptions({
-    query: searchQuery,
+    query: input,
     inventoryHits: hits,
     pendingMedicines,
     pendingDemands,
+    selectedMedicine,
   });
+
+  const selectedResolveOption = useMemo((): MedicineResolveOption | null => {
+    if (!selectedMedicine) return null;
+    return (
+      options.find((o) => o.medicine?.id === selectedMedicine.id) || {
+        id: selectedMedicine.id,
+        group: 'inventory',
+        groupLabel: '3 · Inventory',
+        label: getMedicinePickerLabel(selectedMedicine),
+        selectable: true,
+        medicine: selectedMedicine,
+      }
+    );
+  }, [selectedMedicine, options]);
+
+  const clearSelection = () => {
+    onClear();
+    setInput(line.productName || '');
+  };
 
   return (
     <Autocomplete
       size="small"
       fullWidth
-      options={options}
       loading={loading}
+      options={options}
       groupBy={(o) => o.groupLabel}
       getOptionLabel={(o) => o.label}
-      getOptionDisabled={(o) => !o.selectable}
-      filterOptions={(x) => x}
+      getOptionDisabled={(o) => !o.selectable && !o.demand}
+      value={selectedResolveOption}
       inputValue={input}
-      onInputChange={(_, v, reason) => {
-        if (reason === 'reset' && matchedLabel) {
-          setInput(matchedLabel);
+      filterOptions={(x) => x}
+      isOptionEqualToValue={(a, b) => a.id === b.id}
+      onInputChange={(_, newInputValue, reason) => {
+        if (reason === 'clear') {
+          clearSelection();
           return;
         }
-        setInput(v);
+        if (reason === 'input') {
+          setInput(newInputValue);
+          if (
+            selectedMedicine &&
+            newInputValue.trim() !== selectedLabel.trim()
+          ) {
+            onClear();
+          }
+          return;
+        }
+        setInput(newInputValue);
       }}
-      renderGroup={renderMedicineResolveGroup}
-      renderOption={renderMedicineResolveOption}
-      onChange={(_, v) => {
-        if (!v?.selectable || !v.medicine) return;
-        void resolveMedicineAfterPickerSelection(v.medicine, undefined).then((m) => {
-          onPick(m.id, m.name, m.productId);
+      onChange={(_, newValue) => {
+        if (!newValue) {
+          clearSelection();
+          return;
+        }
+        if (newValue.demand && !newValue.medicine) {
+          const demand = newValue.demand;
+          onDemandPick({
+            name: demand.productName || line.productName || '',
+            manufacturer: demand.manufacturerName || '',
+            packaging: demand.requestedUnit || line.packaging || '',
+          });
+          return;
+        }
+        if (!newValue.selectable || !newValue.medicine) return;
+        void resolveMedicineAfterPickerSelection(newValue.medicine, undefined).then((m) => {
+          rememberMedicine(m);
+          onPick(m.id, m.name, m.productId, m.gstRate);
           setInput(getMedicinePickerLabel(m));
         });
       }}
+      renderGroup={renderMedicineResolveGroup}
+      renderOption={renderMedicineResolveOption}
       renderInput={(params) => (
         <TextField
           {...params}
-          placeholder={matchedLabel ? undefined : 'Resolve medicine…'}
+          label="Match medicine"
+          placeholder="Pending orders · demands · inventory…"
+          InputProps={{
+            ...params.InputProps,
+            startAdornment: (
+              <>
+                <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} fontSize="small" />
+                {params.InputProps.startAdornment}
+              </>
+            ),
+          }}
         />
       )}
     />
+  );
+};
+
+const StackLines: React.FC<{
+  lines: PurchaseInvoiceDraftResolvedLine[];
+  busy: boolean;
+  linesTaxableTotal: number;
+  linesGstTotal: number;
+  linesAmountTotal: number;
+  patchLine: (lineId: string, patch: Partial<PurchaseInvoiceDraftResolvedLine>) => void;
+  openAddMedicine: (
+    line: PurchaseInvoiceDraftResolvedLine,
+    prefill?: { name?: string; manufacturer?: string; packaging?: string }
+  ) => void;
+}> = ({
+  lines,
+  busy,
+  linesTaxableTotal,
+  linesGstTotal,
+  linesAmountTotal,
+  patchLine,
+  openAddMedicine,
+}) => {
+  if (!lines.length) {
+    return (
+      <Typography color="text.secondary">
+        No lines yet. For photos without OCR, click <strong>Add line</strong> and resolve medicines
+        manually (or configure Vision OCR and Re-run extract).
+      </Typography>
+    );
+  }
+
+  return (
+    <Box display="flex" flexDirection="column" gap={1}>
+      {lines.map((line, index) => {
+        const displayName =
+          line.selectedMedicineName ||
+          line.medicineName ||
+          line.productName ||
+          `Line ${index + 1}`;
+        const qty = numOr(line.quantity);
+        const free = numOr(line.freeQuantity);
+        return (
+        <Accordion
+          key={line.lineId}
+          disableGutters
+          elevation={0}
+          defaultExpanded={line.matchStatus !== 'matched'}
+          sx={{
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: 1,
+            '&:before': { display: 'none' },
+            overflow: 'hidden',
+          }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMore />}
+            sx={{
+              px: 1.5,
+              minHeight: 56,
+              '& .MuiAccordionSummary-content': { my: 1, overflow: 'hidden' },
+            }}
+          >
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) 88px 112px' },
+                width: '100%',
+                gap: { xs: 0.5, sm: 1.5 },
+                alignItems: 'center',
+                pr: 1,
+              }}
+            >
+              <Box minWidth={0}>
+                <Typography variant="body2" fontWeight={600} noWrap title={displayName}>
+                  {displayName}
+                </Typography>
+                <Box display="flex" gap={0.5} flexWrap="wrap" mt={0.25}>
+                  <Chip
+                    size="small"
+                    label={line.matchStatus}
+                    color={
+                      line.matchStatus === 'matched'
+                        ? 'success'
+                        : line.matchStatus === 'ambiguous'
+                          ? 'warning'
+                          : 'default'
+                    }
+                  />
+                  {line.matchReason === 'pending_order' && (
+                    <Chip size="small" color="warning" label="pending order" />
+                  )}
+                </Box>
+              </Box>
+              <Box textAlign={{ xs: 'left', sm: 'right' }}>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Qty
+                </Typography>
+                <Typography variant="body2">
+                  {qty}
+                  {free > 0 ? ` +${free}` : ''}
+                </Typography>
+              </Box>
+              <Box textAlign={{ xs: 'left', sm: 'right' }}>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Amount
+                </Typography>
+                <Typography variant="body2" fontWeight={600}>
+                  ₹{formatAmount(lineAmountTotal(line))}
+                </Typography>
+              </Box>
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails sx={{ px: 2, pt: 0, pb: 2 }}>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Product name"
+                value={line.productName || ''}
+                onChange={(e) => void patchLine(line.lineId, { productName: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Packaging"
+                value={line.packaging || ''}
+                onChange={(e) => void patchLine(line.lineId, { packaging: e.target.value })}
+                helperText="From invoice when present (used if creating master)"
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <LineMedicinePicker
+                line={line}
+                onPick={(medicineId, medicineName, productId, gstRate) => {
+                  patchLine(line.lineId, {
+                    selectedMedicineId: medicineId,
+                    selectedMedicineName: medicineName,
+                    medicineId,
+                    medicineName,
+                    productId,
+                    ...(gstRate != null ? { gstRate } : {}),
+                    matchStatus: 'matched',
+                    matchReason: 'inventory',
+                  });
+                }}
+                onClear={() => {
+                  patchLine(line.lineId, {
+                    selectedMedicineId: undefined,
+                    selectedMedicineName: undefined,
+                    medicineId: undefined,
+                    medicineName: undefined,
+                    productId: undefined,
+                    matchStatus: 'unmatched',
+                    matchReason: 'none',
+                    candidates: [],
+                  });
+                }}
+                onDemandPick={(prefill) => openAddMedicine(line, prefill)}
+              />
+              <Box mt={0.5} display="flex" gap={1} flexWrap="wrap">
+                {(line.selectedMedicineId || line.medicineId) && (
+                  <Button
+                    size="small"
+                    color="warning"
+                    disabled={busy}
+                    onClick={() =>
+                      patchLine(line.lineId, {
+                        selectedMedicineId: undefined,
+                        selectedMedicineName: undefined,
+                        medicineId: undefined,
+                        medicineName: undefined,
+                        productId: undefined,
+                        matchStatus: 'unmatched',
+                        matchReason: 'none',
+                        candidates: [],
+                      })
+                    }
+                  >
+                    Clear match
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  startIcon={<Add />}
+                  disabled={busy}
+                  onClick={() => {
+                    if (line.selectedMedicineId || line.medicineId) {
+                      patchLine(line.lineId, {
+                        selectedMedicineId: undefined,
+                        selectedMedicineName: undefined,
+                        medicineId: undefined,
+                        medicineName: undefined,
+                        productId: undefined,
+                        matchStatus: 'unmatched',
+                        matchReason: 'none',
+                        candidates: [],
+                      });
+                    }
+                    openAddMedicine(line);
+                  }}
+                >
+                  Add as new master
+                </Button>
+              </Box>
+            </Grid>
+
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Invoice Batch Number"
+                required
+                value={line.batchNumber || ''}
+                onChange={(e) => void patchLine(line.lineId, { batchNumber: e.target.value })}
+                helperText="Batch as printed on the vendor bill"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Received Batch Number"
+                value={line.receivedBatchNumber || ''}
+                onChange={(e) =>
+                  void patchLine(line.lineId, { receivedBatchNumber: e.target.value })
+                }
+                helperText="Physical batch on packs if different from invoice"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <EditableDecimalField
+                label="Quantity"
+                required
+                value={line.quantity}
+                emptyValue={0}
+                onCommit={(n) => patchLine(line.lineId, { quantity: n ?? 0 })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <EditableDecimalField
+                label="Free quantity (this bill)"
+                value={line.freeQuantity}
+                emptyValue={0}
+                onCommit={(n) => patchLine(line.lineId, { freeQuantity: n ?? 0 })}
+                helperText="Extra strips/units free on this invoice (stock)"
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary">
+                Retailer scheme (optional): e.g. 1 free on 10 strips → pay for = 10, free = 1.
+              </Typography>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Scheme — pay for (qty)"
+                type="text"
+                inputMode="numeric"
+                value={line.schemePaidQty ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (raw === '') {
+                    void patchLine(line.lineId, { schemePaidQty: undefined });
+                    return;
+                  }
+                  const n = parseFloat(raw);
+                  void patchLine(line.lineId, {
+                    schemePaidQty: Number.isFinite(n) ? Math.floor(n) : undefined,
+                  });
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Scheme — get free (qty)"
+                type="text"
+                inputMode="numeric"
+                value={line.schemeFreeQty ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (raw === '') {
+                    void patchLine(line.lineId, { schemeFreeQty: undefined });
+                    return;
+                  }
+                  const n = parseFloat(raw);
+                  void patchLine(line.lineId, {
+                    schemeFreeQty: Number.isFinite(n) ? Math.floor(n) : undefined,
+                  });
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={line.nonReturnable === true}
+                    onChange={(e) =>
+                      void patchLine(line.lineId, { nonReturnable: e.target.checked })
+                    }
+                  />
+                }
+                label="Non-returnable (retailer cannot return this batch)"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={line.nrxDrug === true}
+                    onChange={(e) => void patchLine(line.lineId, { nrxDrug: e.target.checked })}
+                  />
+                }
+                label="NRX drug (Schedule H / restricted)"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Expiry Date"
+                placeholder="MM/YY"
+                value={line.expiryMmYyyy || ''}
+                onChange={(e) => void patchLine(line.lineId, { expiryMmYyyy: e.target.value })}
+                helperText="MM/YY or MM/YYYY as on invoice"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <EditableDecimalField
+                label="MRP"
+                value={line.mrp}
+                onCommit={(n) => patchLine(line.lineId, { mrp: n })}
+                startAdornment={<Typography sx={{ mr: 1 }}>₹</Typography>}
+                helperText="Purchase price recalculates from MRP + standard discount + GST"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <EditableDecimalField
+                label="GST Rate (%)"
+                value={line.gstRate}
+                emptyValue={5}
+                onCommit={(n) =>
+                  patchLine(line.lineId, { gstRate: n != null && Number.isFinite(n) ? n : 5 })
+                }
+                helperText="Editable — supports decimals (e.g. 5, 12, 12.5)"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <EditableDecimalField
+                label="Standard Discount (%)"
+                value={line.standardDiscount}
+                onCommit={(n) => patchLine(line.lineId, { standardDiscount: n })}
+                helperText="Change to auto-update purchase price from MRP"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <EditableDecimalField
+                label="Purchase Price"
+                required
+                value={line.purchasePrice}
+                emptyValue={0}
+                onCommit={(n) => patchLine(line.lineId, { purchasePrice: n ?? 0 })}
+                startAdornment={<Typography sx={{ mr: 1 }}>₹</Typography>}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <EditableDecimalField
+                label="Discount Percentage (%)"
+                value={line.discountPercentage}
+                onCommit={(n) => patchLine(line.lineId, { discountPercentage: n })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Total Amount"
+                value={formatAmount(lineAmountTotal(line))}
+                InputProps={{ readOnly: true }}
+                helperText={`Taxable ₹${formatAmount(lineTaxableAmount(line))} · GST ₹${formatAmount(lineGstAmount(line))}`}
+              />
+            </Grid>
+          </Grid>
+          </AccordionDetails>
+        </Accordion>
+        );
+      })}
+
+      <Divider />
+      <Box display="flex" justifyContent="flex-end" gap={3} flexWrap="wrap">
+        <Box textAlign="right">
+          <Typography variant="caption" color="text.secondary">
+            Subtotal
+          </Typography>
+          <Typography variant="body2">
+            ₹
+            {formatAmount(
+              lines.reduce(
+                (s, l) => s + numOr(l.purchasePrice) * numOr(l.quantity),
+                0
+              )
+            )}
+          </Typography>
+        </Box>
+        <Box textAlign="right">
+          <Typography variant="caption" color="text.secondary">
+            Discount
+          </Typography>
+          <Typography variant="body2">
+            ₹
+            {formatAmount(
+              lines.reduce((s, l) => {
+                const base = numOr(l.purchasePrice) * numOr(l.quantity);
+                return s + (base * numOr(l.discountPercentage)) / 100;
+              }, 0)
+            )}
+          </Typography>
+        </Box>
+        <Box textAlign="right">
+          <Typography variant="caption" color="text.secondary">
+            Taxable
+          </Typography>
+          <Typography variant="body2">₹{formatAmount(linesTaxableTotal)}</Typography>
+        </Box>
+        <Box textAlign="right">
+          <Typography variant="caption" color="text.secondary">
+            GST
+          </Typography>
+          <Typography variant="body2">₹{formatAmount(linesGstTotal)}</Typography>
+        </Box>
+        <Box textAlign="right">
+          <Typography variant="caption" color="text.secondary">
+            Grand total
+          </Typography>
+          <Typography variant="subtitle1">₹{formatAmount(linesAmountTotal)}</Typography>
+        </Box>
+      </Box>
+    </Box>
   );
 };
 
@@ -248,15 +969,19 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   const { data: vendors } = useVendors();
   const createInvoice = useCreatePurchaseInvoice();
   const createMedicine = useCreateMedicine();
-  const { alert } = useAppDialog();
+  const { alert, confirm } = useAppDialog();
 
   const [draftId, setDraftId] = useState<string | null>(routeDraftId || null);
   const [draft, setDraft] = useState<PurchaseInvoiceDraft | null>(null);
+  const [localLines, setLocalLines] = useState<PurchaseInvoiceDraftResolvedLine[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
+  const [notes, setNotes] = useState('');
+  const [inboxDrafts, setInboxDrafts] = useState<PurchaseInvoiceDraft[]>([]);
+  const [inboxLoading, setInboxLoading] = useState(false);
   const [addMedicineLineId, setAddMedicineLineId] = useState<string | null>(null);
   const [newMedicineData, setNewMedicineData] = useState({
     name: '',
@@ -273,6 +998,22 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     total: number;
   }>({ open: false, label: '', current: 0, total: 1 });
 
+  const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingLinesRef = useRef<PurchaseInvoiceDraftResolvedLine[] | null>(null);
+  const linesDirtyRef = useRef(false);
+
+  const refreshInbox = useCallback(async () => {
+    if (draftId) return;
+    setInboxLoading(true);
+    try {
+      setInboxDrafts(await listMyActiveInvoiceDrafts());
+    } catch {
+      setInboxDrafts([]);
+    } finally {
+      setInboxLoading(false);
+    }
+  }, [draftId]);
+
   useEffect(() => {
     void generatePurchaseInvoiceNumber()
       .then(setInvoiceNumber)
@@ -280,9 +1021,18 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!draftId) return;
+    setDraftId(routeDraftId || null);
+  }, [routeDraftId]);
+
+  useEffect(() => {
+    if (!draftId) {
+      setDraft(null);
+      setLocalLines([]);
+      void refreshInbox();
+      return;
+    }
     return subscribeInvoiceDraft(draftId, setDraft);
-  }, [draftId]);
+  }, [draftId, refreshInbox]);
 
   useEffect(() => {
     if (!draft?.sourceFile?.storagePath) {
@@ -305,17 +1055,65 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   useEffect(() => {
     if (draft?.invoiceNumber) setInvoiceNumber(draft.invoiceNumber);
     if (draft?.invoiceDate) setInvoiceDate(draft.invoiceDate);
-  }, [draft?.invoiceNumber, draft?.invoiceDate]);
+    if (draft?.notes != null) setNotes(draft.notes);
+  }, [draft?.invoiceNumber, draft?.invoiceDate, draft?.notes]);
 
-  const lines = draft?.resolvedLines || [];
-  const linesAmountTotal = useMemo(
-    () => lines.reduce((sum, line) => sum + lineAmountTotal(line), 0),
+  useEffect(() => {
+    if (!draft?.resolvedLines) {
+      if (!linesDirtyRef.current) setLocalLines([]);
+      return;
+    }
+    if (linesDirtyRef.current) return;
+    setLocalLines(draft.resolvedLines);
+  }, [draft?.resolvedLines]);
+
+  const flushLinePatches = useCallback(async () => {
+    if (!draftId || !pendingLinesRef.current) return;
+    if (patchTimerRef.current) {
+      clearTimeout(patchTimerRef.current);
+      patchTimerRef.current = null;
+    }
+    const resolvedLines = stripUndefinedDeep(pendingLinesRef.current);
+    pendingLinesRef.current = null;
+    try {
+      await updateInvoiceDraftReview(draftId, {
+        resolvedLines,
+        status: 'needs_review',
+      });
+      linesDirtyRef.current = false;
+    } catch (e: unknown) {
+      linesDirtyRef.current = false;
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [draftId]);
+
+  useEffect(() => {
+    return () => {
+      if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
+    };
+  }, []);
+
+  const lines = localLines;
+  const linesTaxableTotal = useMemo(
+    () => lines.reduce((sum, line) => sum + lineTaxableAmount(line), 0),
     [lines]
   );
   const linesGstTotal = useMemo(
     () => lines.reduce((sum, line) => sum + lineGstAmount(line), 0),
     [lines]
   );
+  const linesAmountTotal = useMemo(
+    () => lines.reduce((sum, line) => sum + lineAmountTotal(line), 0),
+    [lines]
+  );
+
+  const avgLineConfidence = useMemo(() => {
+    const vals = lines
+      .map((l) => (typeof l.confidence === 'number' ? l.confidence : NaN))
+      .filter((n) => Number.isFinite(n));
+    if (!vals.length) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }, [lines]);
 
   const onFile = async (file: File | null) => {
     if (!file) return;
@@ -339,6 +1137,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
 
   const reprocess = async () => {
     if (!draftId) return;
+    await flushLinePatches();
     setBusy(true);
     setError(null);
     try {
@@ -350,35 +1149,90 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     }
   };
 
-  const patchLine = async (lineId: string, patch: Partial<PurchaseInvoiceDraftResolvedLine>) => {
-    if (!draftId || !draft?.resolvedLines) return;
-    const resolvedLines = draft.resolvedLines.map((l) =>
-      l.lineId === lineId ? { ...l, ...patch } : l
-    );
-    await updateInvoiceDraftReview(draftId, { resolvedLines, status: 'needs_review' });
+  const applyPricingToLine = (
+    line: PurchaseInvoiceDraftResolvedLine,
+    patch: Partial<PurchaseInvoiceDraftResolvedLine>
+  ): PurchaseInvoiceDraftResolvedLine => {
+    const next: PurchaseInvoiceDraftResolvedLine = { ...line, ...patch };
+    const gst = lineGstRate(next);
+    const mrp = numOr(next.mrp);
+    const touchedMrp = Object.prototype.hasOwnProperty.call(patch, 'mrp');
+    const touchedStd = Object.prototype.hasOwnProperty.call(patch, 'standardDiscount');
+    const touchedPp = Object.prototype.hasOwnProperty.call(patch, 'purchasePrice');
+
+    if ((touchedMrp || touchedStd) && mrp > 0) {
+      const std =
+        next.standardDiscount === undefined || next.standardDiscount === null
+          ? 20
+          : numOr(next.standardDiscount, 20);
+      const pp = purchasePriceFromMrpAndDiscount(mrp, gst, std);
+      next.purchasePrice = Math.round(pp * 100) / 100;
+      if (next.standardDiscount == null) next.standardDiscount = std;
+    } else if (touchedPp && mrp > 0) {
+      const pp = numOr(next.purchasePrice);
+      next.standardDiscount =
+        Math.round(standardDiscountFromMrpAndPurchasePrice(mrp, pp, gst) * 100) / 100;
+    }
+    return next;
+  };
+
+  const patchLine = (lineId: string, patch: Partial<PurchaseInvoiceDraftResolvedLine>) => {
+    if (!draftId) return;
+    setLocalLines((prev) => {
+      const resolvedLines = prev.map((l) =>
+        l.lineId === lineId ? applyPricingToLine(l, patch) : l
+      );
+      pendingLinesRef.current = resolvedLines;
+      linesDirtyRef.current = true;
+      if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
+      patchTimerRef.current = setTimeout(() => {
+        void flushLinePatches();
+      }, 450);
+      return resolvedLines;
+    });
   };
 
   const saveHeader = async () => {
     if (!draftId) return;
+    await flushLinePatches();
     const vendor = vendors?.find((v) => v.id === draft?.vendorId);
     await updateInvoiceDraftReview(draftId, {
       vendorId: draft?.vendorId,
       vendorName: vendor?.vendorName || draft?.vendorName,
       invoiceNumber,
       invoiceDate,
+      notes: notes.trim() || null,
     });
   };
 
-  const openAddMedicine = (line: PurchaseInvoiceDraftResolvedLine) => {
+  const openAddMedicine = (
+    line: PurchaseInvoiceDraftResolvedLine,
+    prefill?: { name?: string; manufacturer?: string; packaging?: string }
+  ) => {
     setAddMedicineLineId(line.lineId);
     setNewMedicineData({
-      name: line.productName || '',
+      name: prefill?.name || line.productName || '',
       code: '',
       type: '',
-      packaging: line.packaging || '',
-      manufacturer: '',
+      packaging: prefill?.packaging || line.packaging || '',
+      manufacturer: prefill?.manufacturer || '',
       gstRate: line.gstRate != null ? String(line.gstRate) : '5',
     });
+  };
+
+  const discardDraft = async (id: string) => {
+    const ok = await confirm('Discard this draft? You can upload the invoice again later.');
+    if (!ok) return;
+    try {
+      await discardInvoiceDraft(id);
+      if (draftId === id) {
+        setDraftId(null);
+        navigate('/purchases/ingest', { replace: true });
+      }
+      await refreshInbox();
+    } catch (e: unknown) {
+      await alert(e instanceof Error ? e.message : String(e), { severity: 'error' });
+    }
   };
 
   const closeAddMedicine = () => {
@@ -468,14 +1322,15 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   };
 
   const commit = async () => {
-    if (!draft) return;
+    if (!draft || !draftId) return;
+    await flushLinePatches();
     const vendorId = draft.vendorId;
     if (!vendorId) {
       await alert('Select a vendor before committing.', { severity: 'warning' });
       return;
     }
     const vendor = vendors?.find((v) => v.id === vendorId);
-    let linesAll = [...(draft.resolvedLines || [])];
+    let linesAll = [...localLines];
     const namedLines = linesAll.filter((l) => (l.productName || l.medicineName || '').trim());
     if (!namedLines.length) {
       await alert('No invoice lines to commit.', { severity: 'warning' });
@@ -491,6 +1346,16 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       return;
     }
 
+    const unmatchedNamed = namedLines.filter(
+      (l) => !(l.selectedMedicineId || l.medicineId)
+    );
+    if (unmatchedNamed.length) {
+      const ok = await confirm(
+        `${unmatchedNamed.length} line(s) have no inventory match. Commit will auto-create medicine masters (category General, manufacturer Unknown) for those names.\n\nContinue?`
+      );
+      if (!ok) return;
+    }
+
     setBusy(true);
     const ensureCache = new Map<string, EnsuredMedicine>();
     let autoCreated = 0;
@@ -502,6 +1367,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     });
 
     try {
+      await updateInvoiceDraftReview(draftId, { status: 'committing' });
       await saveHeader();
 
       const linkedLines: PurchaseInvoiceDraftResolvedLine[] = [];
@@ -534,13 +1400,12 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       }
 
       linesAll = linkedLines;
-      if (draftId) {
-        await updateInvoiceDraftReview(draftId, {
-          resolvedLines: linesAll,
-          status: 'needs_review',
-        });
-        setDraft((d) => (d ? { ...d, resolvedLines: linesAll } : d));
-      }
+      setLocalLines(linesAll);
+      await updateInvoiceDraftReview(draftId, {
+        resolvedLines: stripUndefinedDeep(linesAll),
+        status: 'committing',
+      });
+      linesDirtyRef.current = false;
 
       const usable = linesAll.filter(
         (l) => (l.selectedMedicineId || l.medicineId) && (l.batchNumber || '').trim()
@@ -569,44 +1434,83 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
         const freeRaw = Number(line.freeQuantity);
         const freeQuantity =
           Number.isFinite(freeRaw) && freeRaw > 0 ? freeRaw : undefined;
+        const schemePaidQty = optionalPositiveInt(line.schemePaidQty);
+        const schemeFreeQty =
+          schemePaidQty != null ? optionalPositiveInt(line.schemeFreeQty) : undefined;
         const purchasePrice = Number(line.purchasePrice || 0);
-        const mrp = line.mrp != null ? Number(line.mrp) : purchasePrice;
-        const unitPrice = mrp;
+        const mrpRaw = line.mrp != null ? Number(line.mrp) : NaN;
+        const mrp = Number.isFinite(mrpRaw) && mrpRaw > 0 ? mrpRaw : undefined;
+        const gstRate = line.gstRate ?? 5;
         const disc = Number(line.discountPercentage) || 0;
         const baseAmount = purchasePrice * quantity;
-        const totalAmount =
-          disc > 0
-            ? Math.round((baseAmount - (baseAmount * disc) / 100) * 100) / 100
-            : Math.round(baseAmount * 100) / 100;
+        const discountAmount = (baseAmount * disc) / 100;
+        const amountAfterDiscount = baseAmount - discountAmount;
+        const gstAmount = (amountAfterDiscount * gstRate) / 100;
+        const totalAmount = Math.round((amountAfterDiscount + gstAmount) * 100) / 100;
+        const enteredStd = Number(line.standardDiscount);
+        const standardDiscount = Number.isFinite(enteredStd)
+          ? enteredStd
+          : mrp != null && purchasePrice > 0
+            ? standardDiscountFromMrpAndPurchasePrice(mrp, purchasePrice, gstRate)
+            : undefined;
+        const receivedBatchNumber = String(line.receivedBatchNumber || '').trim();
+        const stockBatchForQr = receivedBatchNumber || String(line.batchNumber || '').trim();
         const qrCode = await QRCode.toDataURL(
           JSON.stringify({
             medicineId,
-            batchNumber: line.batchNumber,
+            medicineName,
+            batchNumber: stockBatchForQr,
             invoiceNumber,
+            quantity,
+            freeQuantity,
+            schemePaidQty,
+            schemeFreeQty,
+            purchasePrice,
+            mrp,
           })
         );
         items.push({
           medicineId,
           medicineName,
           batchNumber: String(line.batchNumber || '').trim(),
+          ...(receivedBatchNumber ? { receivedBatchNumber } : {}),
           quantity,
           freeQuantity,
-          unitPrice,
+          ...(schemePaidQty != null && schemeFreeQty != null
+            ? { schemePaidQty, schemeFreeQty }
+            : {}),
+          unitPrice: purchasePrice,
           purchasePrice,
           mrp,
           totalAmount,
           expiryDate: parseExpiryToDate(line.expiryMmYyyy),
-          discountPercentage: line.discountPercentage,
-          gstRate: line.gstRate ?? 5,
+          discountPercentage: disc > 0 ? disc : undefined,
+          standardDiscount:
+            standardDiscount != null && Number.isFinite(standardDiscount)
+              ? standardDiscount
+              : undefined,
+          gstRate,
           qrCode,
+          ...(line.nonReturnable === true ? { nonReturnable: true } : {}),
+          ...(line.nrxDrug === true ? { nrxDrug: true } : {}),
         });
       }
 
-      const subTotal = items.reduce((s, i) => s + i.totalAmount, 0);
-      const taxAmount = items.reduce(
-        (s, i) => s + (i.totalAmount * (i.gstRate ?? 5)) / 100,
+      const subTotal = items.reduce(
+        (s, i) => s + (i.purchasePrice || 0) * (i.quantity || 0),
         0
       );
+      const totalDiscount = items.reduce((s, i) => {
+        const base = (i.purchasePrice || 0) * (i.quantity || 0);
+        return s + (base * (i.discountPercentage || 0)) / 100;
+      }, 0);
+      const taxAmount = items.reduce((s, i) => {
+        const base = (i.purchasePrice || 0) * (i.quantity || 0);
+        const afterDisc = base - (base * (i.discountPercentage || 0)) / 100;
+        return s + (afterDisc * (i.gstRate || 0)) / 100;
+      }, 0);
+      const calculatedTotal = subTotal - totalDiscount + taxAmount;
+      const grandTotal = Math.round(calculatedTotal);
       const taxPercentage = 0;
       setCommitProgress({
         open: true,
@@ -614,6 +1518,10 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
         current: 0,
         total: items.length,
       });
+      const sourceNote = `Ingested from ${
+        draft.sourceFile?.contentType?.startsWith('image/') ? 'photo' : 'PDF'
+      }`;
+      const mergedNotes = [notes.trim(), sourceNote].filter(Boolean).join(' · ');
       const invoiceId = await createInvoice.mutateAsync({
         invoiceData: {
           invoiceNumber,
@@ -621,14 +1529,15 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
           vendorName: vendor?.vendorName || draft.vendorName || '',
           invoiceDate: new Date(invoiceDate),
           items,
-          subTotal,
+          subTotal: Math.round(subTotal * 100) / 100,
           taxAmount: Math.round(taxAmount * 100) / 100,
+          discount: totalDiscount > 0 ? Math.round(totalDiscount * 100) / 100 : undefined,
           taxPercentage,
-          totalAmount: Math.round((subTotal + taxAmount) * 100) / 100,
+          totalAmount: grandTotal,
           paymentStatus: 'Unpaid',
           createdBy: auth.currentUser?.uid || '',
           createdAt: new Date(),
-          notes: `Ingested from ${draft.sourceFile?.contentType?.startsWith('image/') ? 'photo' : 'PDF'}`,
+          notes: mergedNotes || undefined,
         },
         updateStock: true,
         onProgress: (p) => {
@@ -678,6 +1587,13 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       navigate(`/purchases/${invoiceId}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
+      if (draftId) {
+        try {
+          await updateInvoiceDraftReview(draftId, { status: 'needs_review' });
+        } catch {
+          /* ignore recovery failure */
+        }
+      }
     } finally {
       setBusy(false);
       setCommitProgress((p) => ({ ...p, open: false }));
@@ -685,17 +1601,26 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   };
 
   const addBlankLine = async () => {
-    if (!draftId || !draft) return;
+    if (!draftId) return;
+    await flushLinePatches();
     const lineId = `manual_${Date.now()}`;
     const blank: PurchaseInvoiceDraftResolvedLine = {
       lineId,
       productName: '',
       quantity: 1,
+      freeQuantity: 0,
+      gstRate: 5,
+      standardDiscount: 20,
       matchStatus: 'unmatched',
       matchReason: 'none',
     };
-    const resolvedLines = [...(draft.resolvedLines || []), blank];
-    await updateInvoiceDraftReview(draftId, { resolvedLines, status: 'needs_review' });
+    const resolvedLines = [...localLines, blank];
+    setLocalLines(resolvedLines);
+    linesDirtyRef.current = false;
+    await updateInvoiceDraftReview(draftId, {
+      resolvedLines: stripUndefinedDeep(resolvedLines),
+      status: 'needs_review',
+    });
   };
 
   const statusChip = useMemo(() => {
@@ -728,10 +1653,9 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>
-        Upload a <strong>PDF</strong> or <strong>photo (JPG/PNG)</strong>. Gemini extracts medicine
-        lines and matches pending orders / inventory. On commit, unmatched products are{' '}
-        <strong>auto-added to inventory master</strong> (using invoice packaging when present), then
-        stock is updated. You can still resolve or edit master details before committing.
+        Upload a <strong>PDF</strong> or <strong>photo (JPG/PNG)</strong>. Extracted fields match{' '}
+        <strong>Add Invoice</strong> (batches, scheme, MRP, discounts, flags, notes). Review and edit
+        before commit — unmatched products can be auto-added to inventory master, then stock updates.
       </Alert>
 
       {error && (
@@ -741,23 +1665,69 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       )}
 
       {!draftId && (
-        <Paper sx={{ p: 3 }}>
-          <Button
-            variant="contained"
-            component="label"
-            startIcon={busy ? <CircularProgress size={18} color="inherit" /> : <CloudUpload />}
-            disabled={busy}
-          >
-            Upload PDF or photo
-            <input
-              hidden
-              type="file"
-              accept="application/pdf,image/jpeg,image/png,image/webp,image/*"
-              capture="environment"
-              onChange={(e) => void onFile(e.target.files?.[0] || null)}
-            />
-          </Button>
-        </Paper>
+        <Stack gap={2}>
+          <Paper sx={{ p: 3 }}>
+            <Button
+              variant="contained"
+              component="label"
+              startIcon={busy ? <CircularProgress size={18} color="inherit" /> : <CloudUpload />}
+              disabled={busy}
+            >
+              Upload PDF or photo
+              <input
+                hidden
+                type="file"
+                accept="application/pdf,image/jpeg,image/png,image/webp,image/*"
+                capture="environment"
+                onChange={(e) => void onFile(e.target.files?.[0] || null)}
+              />
+            </Button>
+          </Paper>
+
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Your drafts
+            </Typography>
+            {inboxLoading ? (
+              <Box display="flex" justifyContent="center" p={2}>
+                <CircularProgress size={24} />
+              </Box>
+            ) : !inboxDrafts.length ? (
+              <Typography variant="body2" color="text.secondary">
+                No open drafts. Upload an invoice to start.
+              </Typography>
+            ) : (
+              <List dense>
+                {inboxDrafts.map((d) => (
+                  <ListItem
+                    key={d.id}
+                    button
+                    onClick={() => navigate(`/purchases/ingest/${d.id}`)}
+                  >
+                    <ListItemText
+                      primary={d.sourceFile?.fileName || d.id}
+                      secondary={`${d.status}${d.invoiceNumber ? ` · ${d.invoiceNumber}` : ''}${
+                        d.resolvedLines?.length ? ` · ${d.resolvedLines.length} lines` : ''
+                      }`}
+                    />
+                    <ListItemSecondaryAction>
+                      <IconButton
+                        edge="end"
+                        aria-label="discard"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void discardDraft(d.id);
+                        }}
+                      >
+                        <DeleteOutline />
+                      </IconButton>
+                    </ListItemSecondaryAction>
+                  </ListItem>
+                ))}
+              </List>
+            )}
+          </Paper>
+        </Stack>
       )}
 
       {draftId && !draft && (
@@ -776,11 +1746,56 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
               <Typography variant="body2" color="text.secondary" gutterBottom>
                 {draft.sourceFile?.fileName} · {draft.sourceFile?.contentType}
               </Typography>
+              <Box display="flex" gap={0.75} flexWrap="wrap" mb={1}>
+                {draft.extractionMeta?.engine && (
+                  <Chip
+                    size="small"
+                    color={
+                      draft.extractionMeta.engine === 'gemini'
+                        ? 'success'
+                        : draft.extractionMeta.engine === 'none'
+                          ? 'default'
+                          : 'warning'
+                    }
+                    label={`Engine: ${draft.extractionMeta.engine}`}
+                  />
+                )}
+                {draft.extractionMeta?.model && (
+                  <Chip size="small" variant="outlined" label={draft.extractionMeta.model} />
+                )}
+                {avgLineConfidence != null && (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`Avg confidence ${(avgLineConfidence * 100).toFixed(0)}%`}
+                  />
+                )}
+              </Box>
               {draft.extractionMeta?.message && (
                 <Alert severity="warning" sx={{ mb: 1 }}>
                   {draft.extractionMeta.message}
                 </Alert>
               )}
+              <Box mt={1} mb={1} display="flex" gap={1} flexWrap="wrap">
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<PlayArrow />}
+                  onClick={() => void reprocess()}
+                  disabled={busy}
+                >
+                  Re-run extract
+                </Button>
+                <Button
+                  size="small"
+                  color="error"
+                  startIcon={<DeleteOutline />}
+                  onClick={() => void discardDraft(draft.id)}
+                  disabled={busy || draft.status === 'committed'}
+                >
+                  Discard draft
+                </Button>
+              </Box>
               {previewUrl && draft.sourceFile?.contentType?.startsWith('image/') && (
                 <Box
                   component="img"
@@ -794,17 +1809,6 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                   Open PDF
                 </Button>
               )}
-              <Box mt={2} display="flex" gap={1} flexWrap="wrap">
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<PlayArrow />}
-                  onClick={() => void reprocess()}
-                  disabled={busy}
-                >
-                  Re-run extract
-                </Button>
-              </Box>
             </Paper>
           </Grid>
 
@@ -835,11 +1839,20 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                       </MenuItem>
                     ))}
                   </TextField>
+                  {draft.vendorId && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                      {vendors?.find((v) => v.id === draft.vendorId)?.gstNumber
+                        ? `GSTIN: ${vendors.find((v) => v.id === draft.vendorId)?.gstNumber}`
+                        : draft.vendorHint?.gstin
+                          ? `Extracted GSTIN: ${draft.vendorHint.gstin}`
+                          : ''}
+                    </Typography>
+                  )}
                 </Grid>
                 <Grid item xs={12} sm={3}>
                   <TextField
                     fullWidth
-                    label="Invoice #"
+                    label="Invoice Number"
                     size="small"
                     value={invoiceNumber}
                     onChange={(e) => setInvoiceNumber(e.target.value)}
@@ -849,11 +1862,23 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                   <TextField
                     fullWidth
                     type="date"
-                    label="Invoice date"
+                    label="Invoice Date"
                     size="small"
                     InputLabelProps={{ shrink: true }}
                     value={invoiceDate}
                     onChange={(e) => setInvoiceDate(e.target.value)}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={2}
+                    label="Notes"
+                    size="small"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    helperText="Optional. Extracted remarks appear here when present on the invoice."
                   />
                 </Grid>
               </Grid>
@@ -885,237 +1910,15 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                   <CircularProgress />
                 </Box>
               ) : (
-                <TableContainer sx={{ overflowX: 'auto' }}>
-                <Table size="small" sx={{ minWidth: 1360, tableLayout: 'fixed' }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell sx={{ width: '15%' }}>Extracted</TableCell>
-                      <TableCell sx={{ width: '22%' }}>Match</TableCell>
-                      <TableCell sx={{ width: '10%', minWidth: 96 }}>Batch</TableCell>
-                      <TableCell sx={{ width: '7%', minWidth: 60 }}>Qty</TableCell>
-                      <TableCell sx={{ width: '7%', minWidth: 60 }}>Free</TableCell>
-                      <TableCell sx={{ width: '9%', minWidth: 80 }}>Rate</TableCell>
-                      <TableCell sx={{ width: '8%', minWidth: 72 }}>GST %</TableCell>
-                      <TableCell sx={{ width: '10%', minWidth: 92 }}>Amount</TableCell>
-                      <TableCell sx={{ width: '8%', minWidth: 80 }}>Exp</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {lines.map((line) => (
-                      <TableRow key={line.lineId} sx={{ verticalAlign: 'top' }}>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            placeholder="Product name"
-                            value={line.productName || ''}
-                            onChange={(e) =>
-                              void patchLine(line.lineId, { productName: e.target.value })
-                            }
-                          />
-                          <TextField
-                            size="small"
-                            fullWidth
-                            placeholder="Packaging"
-                            sx={{ mt: 0.5 }}
-                            value={line.packaging || ''}
-                            onChange={(e) =>
-                              void patchLine(line.lineId, { packaging: e.target.value })
-                            }
-                          />
-                          <Box mt={0.5} display="flex" gap={0.5} flexWrap="wrap">
-                            <Chip
-                              size="small"
-                              label={line.matchStatus}
-                              color={
-                                line.matchStatus === 'matched'
-                                  ? 'success'
-                                  : line.matchStatus === 'ambiguous'
-                                    ? 'warning'
-                                    : 'default'
-                              }
-                            />
-                            {line.matchReason === 'pending_order' && (
-                              <Chip size="small" color="warning" label="pending order" />
-                            )}
-                          </Box>
-                        </TableCell>
-                        <TableCell>
-                          <LineMedicinePicker
-                            line={line}
-                            onPick={(medicineId, medicineName, productId) => {
-                              void patchLine(line.lineId, {
-                                selectedMedicineId: medicineId,
-                                selectedMedicineName: medicineName,
-                                medicineId,
-                                medicineName,
-                                productId,
-                                matchStatus: 'matched',
-                                matchReason: 'inventory',
-                              });
-                            }}
-                          />
-                          {!(line.selectedMedicineId || line.medicineId) && (
-                            <Button
-                              size="small"
-                              startIcon={<Add />}
-                              sx={{ mt: 0.5 }}
-                              onClick={() => openAddMedicine(line)}
-                              disabled={busy}
-                            >
-                              Edit master
-                            </Button>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            placeholder="Batch"
-                            value={line.batchNumber || ''}
-                            onChange={(e) =>
-                              void patchLine(line.lineId, { batchNumber: e.target.value })
-                            }
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            type="text"
-                            inputMode="decimal"
-                            value={line.quantity ?? ''}
-                            onChange={(e) => {
-                              const raw = e.target.value.trim();
-                              if (raw === '' || raw === '.' || raw === '-') {
-                                void patchLine(line.lineId, { quantity: 0 });
-                                return;
-                              }
-                              const n = parseFloat(raw);
-                              void patchLine(line.lineId, {
-                                quantity: Number.isFinite(n) ? n : 0,
-                              });
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="0"
-                            value={line.freeQuantity ?? ''}
-                            onChange={(e) => {
-                              const raw = e.target.value.trim();
-                              if (raw === '' || raw === '.' || raw === '-') {
-                                void patchLine(line.lineId, { freeQuantity: 0 });
-                                return;
-                              }
-                              const n = parseFloat(raw);
-                              void patchLine(line.lineId, {
-                                freeQuantity: Number.isFinite(n) ? n : 0,
-                              });
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            type="text"
-                            inputMode="decimal"
-                            value={line.purchasePrice ?? ''}
-                            onChange={(e) =>
-                              void patchLine(line.lineId, {
-                                purchasePrice: parseFloat(e.target.value) || 0,
-                              })
-                            }
-                            inputProps={{ style: { textAlign: 'right' } }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            type="text"
-                            inputMode="decimal"
-                            value={line.gstRate ?? 5}
-                            onChange={(e) => {
-                              const raw = e.target.value.trim();
-                              if (raw === '' || raw === '.' || raw === '-') {
-                                void patchLine(line.lineId, { gstRate: 5 });
-                                return;
-                              }
-                              const n = parseFloat(raw);
-                              void patchLine(line.lineId, {
-                                gstRate: Number.isFinite(n) ? n : 5,
-                              });
-                            }}
-                            inputProps={{ style: { textAlign: 'right' } }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            value={formatAmount(lineAmountTotal(line))}
-                            InputProps={{ readOnly: true }}
-                            inputProps={{
-                              style: { textAlign: 'right', fontWeight: 600 },
-                              'aria-label': 'Line amount',
-                            }}
-                            helperText={`GST ${formatAmount(lineGstAmount(line))}`}
-                            FormHelperTextProps={{ sx: { m: 0, textAlign: 'right' } }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            placeholder="MM/YY"
-                            value={line.expiryMmYyyy || ''}
-                            onChange={(e) =>
-                              void patchLine(line.lineId, { expiryMmYyyy: e.target.value })
-                            }
-                          />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {!!lines.length && (
-                      <TableRow>
-                        <TableCell colSpan={6} align="right">
-                          <Typography variant="subtitle2">Totals</Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography variant="caption" display="block" textAlign="right" color="text.secondary">
-                            GST {formatAmount(linesGstTotal)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography variant="subtitle2" textAlign="right">
-                            {formatAmount(linesAmountTotal)}
-                          </Typography>
-                          <Typography variant="caption" display="block" textAlign="right" color="text.secondary">
-                            Incl. GST {formatAmount(linesAmountTotal + linesGstTotal)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell />
-                      </TableRow>
-                    )}
-                    {!lines.length && (
-                      <TableRow>
-                        <TableCell colSpan={9}>
-                          <Typography color="text.secondary">
-                            No lines yet. For photos without OCR, click <strong>Add line</strong> and
-                            resolve medicines manually (or configure Vision OCR and Re-run extract).
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-                </TableContainer>
+                <StackLines
+                  lines={lines}
+                  busy={busy}
+                  linesTaxableTotal={linesTaxableTotal}
+                  linesGstTotal={linesGstTotal}
+                  linesAmountTotal={linesAmountTotal}
+                  patchLine={patchLine}
+                  openAddMedicine={openAddMedicine}
+                />
               )}
             </Paper>
           </Grid>
