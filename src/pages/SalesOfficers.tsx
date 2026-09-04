@@ -40,6 +40,7 @@ import {
   useUpdateSalesOfficerProfile,
   useSendSalesOfficerPasswordResetEmail,
 } from '../hooks/useSalesOfficers';
+import { useAreaManagers } from '../hooks/useAreaManagers';
 import { useStores, useAssignRetailerToSalesOfficer } from '../hooks/useStores';
 import { Loading } from '../components/Loading';
 import { User } from '../types';
@@ -103,6 +104,7 @@ function retailerOptionLabel(r: User): string {
 export const SalesOfficersPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: salesOfficers, isLoading, error } = useSalesOfficers();
+  const { data: areaManagers = [] } = useAreaManagers();
   const { data: allRetailers } = useStores();
   const createMutation = useCreateSalesOfficer();
   const updateProfileMutation = useUpdateSalesOfficerProfile();
@@ -134,6 +136,14 @@ export const SalesOfficersPage: React.FC = () => {
     });
     return m;
   }, [salesOfficers]);
+
+  const amNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    areaManagers.forEach((am) => {
+      m[am.id] = am.displayName || am.email || am.id;
+    });
+    return m;
+  }, [areaManagers]);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('displayName', 'asc');
 
@@ -474,6 +484,9 @@ export const SalesOfficersPage: React.FC = () => {
                 <SalesOfficerRow
                   key={so.id}
                   officer={so}
+                  areaManagerName={
+                    so.areaManagerId ? amNameById[so.areaManagerId] || so.areaManagerId : null
+                  }
                   retailers={
                     allRetailers?.filter((r) => r.salesOfficerId === so.id) || []
                   }
@@ -872,6 +885,7 @@ export const SalesOfficersPage: React.FC = () => {
 
 const SalesOfficerRow: React.FC<{
   officer: User;
+  areaManagerName: string | null;
   retailers: User[];
   expanded: boolean;
   onToggle: () => void;
@@ -881,6 +895,7 @@ const SalesOfficerRow: React.FC<{
   assignBusy: boolean;
 }> = ({
   officer,
+  areaManagerName,
   retailers,
   expanded,
   onToggle,
@@ -904,8 +919,13 @@ const SalesOfficerRow: React.FC<{
             <Box>
               <Typography fontWeight="medium">{officer.displayName || officer.email}</Typography>
               {(officer.town || officer.district) && (
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" color="text.secondary" display="block">
                   {[officer.town, officer.district].filter(Boolean).join(', ')}
+                </Typography>
+              )}
+              {areaManagerName && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  AM: {areaManagerName}
                 </Typography>
               )}
             </Box>

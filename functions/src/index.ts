@@ -447,6 +447,7 @@ function roleMatchesRequested(existingRole: string | undefined, requestedRole: s
   if (!existingRole) return true;
   if (requestedRole === 'retailer') return isRetailerRole(existingRole);
   if (requestedRole === 'salesOfficer') return isSalesOfficerRole(existingRole);
+  if (requestedRole === 'areaManager') return existingRole === 'areaManager';
   if (requestedRole === 'operations') return isOperationsRole(existingRole);
   if (requestedRole === 'office') return isOfficeRole(existingRole);
   return existingRole === requestedRole;
@@ -466,6 +467,7 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
   const roleByKey: Record<string, string> = {
     retailer: 'retailer',
     salesofficer: 'salesOfficer',
+    areamanager: 'areaManager',
     operations: 'operations',
     office: 'office',
     purchaseofficer: 'purchaseOfficer',
@@ -492,13 +494,15 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
   const accountLabel =
     role === 'salesOfficer'
       ? 'Sales Officer'
-      : role === 'operations'
-        ? 'Operations'
-        : role === 'office'
-          ? 'Office'
-          : role === 'purchaseOfficer'
-            ? 'Purchase Officer'
-            : 'store';
+      : role === 'areaManager'
+        ? 'Area Manager'
+        : role === 'operations'
+          ? 'Operations'
+          : role === 'office'
+            ? 'Office'
+            : role === 'purchaseOfficer'
+              ? 'Purchase Officer'
+              : 'store';
 
   try {
     let userRecord: admin.auth.UserRecord;
@@ -1144,7 +1148,7 @@ export const sendPanelPasswordResetEmail = ff.https.onCall(async (data, context)
 });
 
 /**
- * Admin only: send a password reset link to a Sales Officer’s email (mobile app account).
+ * Admin only: send a password reset link to a Sales Officer or Area Manager email (field app).
  * Requires SMTP (same as other transactional emails).
  */
 export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, context) => {
@@ -1171,19 +1175,24 @@ export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, c
   }
 
   const role = await getUserRole(userRecord.uid);
-  if (!isSalesOfficerRole(role)) {
+  const isAreaManager = role === 'areaManager';
+  if (!isSalesOfficerRole(role) && !isAreaManager) {
     throw new functions.https.HttpsError(
       'failed-precondition',
-      'This email is not a Sales Officer account'
+      'This email is not a Sales Officer or Area Manager account'
     );
   }
 
   const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
   if (!userDoc.exists || userDoc.data()?.isActive === false) {
-    throw new functions.https.HttpsError('failed-precondition', 'This Sales Officer account is inactive');
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      isAreaManager ? 'This Area Manager account is inactive' : 'This Sales Officer account is inactive'
+    );
   }
 
   const email = String(userRecord.email || rawEmail).trim();
+  const accountLabel = isAreaManager ? 'Area Manager' : 'Sales Officer';
 
   let resetLink: string;
   try {
@@ -1199,11 +1208,11 @@ export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, c
 
   const mail = await sendSmtpMail({
     to: email,
-    subject: 'SimpliPharma — Reset your Sales Officer password',
+    subject: `SimpliPharma — Reset your ${accountLabel} password`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #2196F3;">Password reset</h2>
-        <p>An administrator requested a password reset for your SimpliPharma Sales Officer (mobile) account.</p>
+        <p>An administrator requested a password reset for your SimpliPharma ${accountLabel} (app) account.</p>
         <p style="margin: 24px 0;">
           <a href="${resetLink}"
              style="background: #00a99d; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
@@ -1226,7 +1235,7 @@ export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, c
 
   return {
     success: true,
-    message: 'Password reset link sent to the Sales Officer email.',
+    message: `Password reset link sent to the ${accountLabel} email.`,
     emailSent: true,
   };
 });

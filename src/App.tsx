@@ -26,6 +26,7 @@ import { MedicineDetailsPage } from './pages/MedicineDetails';
 import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
 import { SalesOfficersPage } from './pages/SalesOfficers';
+import { AreaManagersPage } from './pages/AreaManagers';
 import { SoVisitsPage } from './pages/SoVisits';
 import { DailyPerformancePage } from './pages/DailyPerformance';
 import { NrxRegisterPage } from './pages/NrxRegister';
@@ -137,6 +138,7 @@ const router = createBrowserRouter([
   { path: '/banners', element: withLayout(<BannersPage />) },
   { path: '/home-feed', element: withLayout(<HomeFeedPage />) },
   { path: '/sales-officers', element: withLayout(<SalesOfficersPage />) },
+  { path: '/area-managers', element: withLayout(<AreaManagersPage />) },
   { path: '/so-visits', element: withLayout(<SoVisitsPage />) },
   { path: '/daily-performance', element: withLayout(<DailyPerformancePage />) },
   { path: '/nrx-register', element: withLayout(<NrxRegisterPage />) },

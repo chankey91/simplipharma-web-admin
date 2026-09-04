@@ -30,7 +30,7 @@ import { getCreditNotesByRetailer } from '../services/creditNotes';
 import { getDebitNotesByRetailer } from '../services/debitNotes';
 import type { PurchaseInvoice } from '../types';
 import { getOrderDashboardStats, getOrderInvoicedAmountTotal } from '../services/orderAggregations';
-import { OrderStatus } from '../types';
+import { Order, OrderStatus } from '../types';
 import {
   buildOrderPlacementBlockedRetailerIds,
   buildPaymentOverdueRetailerIds,
@@ -38,11 +38,54 @@ import {
 import { buildLastSchemeByMedicineId } from '../utils/retailerLastScheme';
 import { useStores } from './useStores';
 
+/** Shared invalidation for every Orders Management list source (Typesense + Firestore ranges). */
+const invalidateOrderListQueries = (queryClient: ReturnType<typeof useQueryClient>) => {
+  queryClient.invalidateQueries({ queryKey: ['orders'] });
+  queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
+  queryClient.invalidateQueries({ queryKey: ['ordersInRange'] });
+  queryClient.invalidateQueries({ queryKey: ['ordersInDateRange'] });
+  queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
+  queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
+  queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
+  queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
+  queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
+  queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+};
+
+const markOrderCancelledInLists = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  orderId: string
+) => {
+  const patchStatus = <T extends { id: string; status: OrderStatus }>(rows: T[] | undefined) =>
+    rows?.map((row) => (row.id === orderId ? { ...row, status: 'Cancelled' as const } : row));
+
+  queryClient.setQueriesData<OrderSearchResult>({ queryKey: ['ordersSearch'] }, (old) => {
+    if (!old) return old;
+    const previous = old.orders.find((o) => o.id === orderId);
+    const orders = patchStatus(old.orders) ?? old.orders;
+    const statusCounts = { ...old.statusCounts };
+    if (previous && previous.status !== 'Cancelled') {
+      statusCounts[previous.status] = Math.max(0, (statusCounts[previous.status] ?? 1) - 1);
+      statusCounts['Cancelled'] = (statusCounts['Cancelled'] ?? 0) + 1;
+    }
+    return { ...old, orders, statusCounts };
+  });
+
+  const patchOrderArray = (old: Order[] | undefined) => patchStatus(old);
+  queryClient.setQueriesData<Order[]>({ queryKey: ['orders'] }, patchOrderArray);
+  queryClient.setQueriesData<Order[]>({ queryKey: ['ordersInRange'] }, patchOrderArray);
+  queryClient.setQueriesData<Order[]>({ queryKey: ['ordersInDateRange'] }, patchOrderArray);
+  queryClient.setQueriesData<Order[]>({ queryKey: ['ordersByStatuses'] }, patchOrderArray);
+  queryClient.setQueriesData<Order[]>({ queryKey: ['ordersInPeriod'] }, patchOrderArray);
+};
+
 export const useOrders = (options?: { enabled?: boolean }) => {
   return useQuery({
     queryKey: ['orders'],
     queryFn: getAllOrders,
     enabled: options?.enabled ?? true,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 };
 
@@ -241,8 +284,9 @@ export const useOrdersSearch = (
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
     retry: 1,
-    staleTime: 30 * 1000,
-    refetchOnMount: false,
+    // Fresh list whenever Orders Management is opened from another page.
+    staleTime: 0,
+    refetchOnMount: 'always',
     refetchOnWindowFocus: false,
   });
 };
@@ -274,14 +318,7 @@ export const useUpdateOrderStatus = () => {
       note?: string 
     }) => updateOrderStatus(orderId, status, updatedBy, note),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
     }
   });
@@ -301,14 +338,9 @@ export const useCancelOrder = () => {
       reason: string 
     }) => cancelOrder(orderId, cancelledBy, reason),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+      // Immediate row update (Typesense can lag; date-range list also needs this key).
+      markOrderCancelledInLists(queryClient, variables.orderId);
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
       queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
@@ -323,8 +355,7 @@ export const useRestoreCancelledOrderStock = () => {
   return useMutation({
     mutationFn: (orderId: string) => restoreStockForCancelledOrder(orderId),
     onSuccess: (_, orderId) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', orderId] });
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
       queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
@@ -350,14 +381,7 @@ export const useFulfillOrder = () => {
       purchaseInvoices?: PurchaseInvoice[];
     }) => fulfillOrder(orderId, fulfilledBy, fulfillmentData, { purchaseInvoices }),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ['medicines'] }); // Invalidate medicines to reflect stock changes
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] }); // Refresh tray availability
@@ -379,14 +403,7 @@ export const useUnfulfillOrder = () => {
       note?: string;
     }) => unfulfillOrder(orderId, unfulfilledBy, note),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] });
@@ -408,14 +425,7 @@ export const useRecalculateOrderPricing = () => {
       purchaseInvoices: Parameters<typeof recalculateOrderPricing>[2];
     }) => recalculateOrderPricing(orderId, medicinesCatalog, purchaseInvoices),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
     },
   });
@@ -430,14 +440,7 @@ export const useUpdateOrderDispatch = () => {
       dispatchData: Parameters<typeof updateOrderDispatch>[1] 
     }) => updateOrderDispatch(orderId, dispatchData),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] }); // Refresh tray availability when dispatched
     }
@@ -451,14 +454,7 @@ export const useMarkOrderDelivered = () => {
     mutationFn: ({ orderId, deliveredBy }: { orderId: string; deliveredBy: string }) =>
       markOrderDelivered(orderId, deliveredBy),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
     }
   });
@@ -484,15 +480,8 @@ export const useUpdatePaymentStatus = () => {
       transactionId?: string;
     }) => updatePaymentStatus(orderId, paymentStatus, paidAmount, totalAmount, paymentMethod, transactionId),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-      queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-      queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
+      invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
-      queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
     }
   });

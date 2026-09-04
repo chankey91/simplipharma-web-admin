@@ -211,6 +211,9 @@ export const OrdersPage: React.FC = () => {
     queryFn: () =>
       getOrdersInRange(dateRangeBounds!.startMs, dateRangeBounds!.endMsExclusive),
     enabled: hasDateFilter && dateRangeBounds != null,
+    // Always reload when navigating back to Orders Management.
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   // Fallback path: full collection when Typesense unavailable and no date filter.
