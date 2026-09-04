@@ -1,5 +1,4 @@
 import * as XLSX from 'xlsx';
-import { formatOrderInvoiceLabel } from './orderDisplay';
 import { Order, User } from '../types';
 import { getMedicineById } from '../services/inventory';
 import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
@@ -336,7 +335,8 @@ export const exportRetailersWithSalesOfficers = async (
 /**
  * Export SO-wise outstanding dues.
  * Pass one summary for a single SO, or multiple for all SOs.
- * Sheet 1: SO summary. Sheet 2: retailer / bill detail rows.
+ * Sheet: one row per retailer (store code, shop, contact, phone, bills, outstanding).
+ * When exporting multiple SOs, includes SO Name / SO Phone columns.
  */
 export const exportSoReceivables = async (
   summaries: SoReceivableSummary[],
@@ -347,103 +347,80 @@ export const exportSoReceivables = async (
     return;
   }
 
-  const summaryRows: (string | number)[][] = [
-    [
-      'SR',
-      'SO Name',
-      'SO Phone',
-      'SO Email',
-      'SO ID',
-      'Stores with dues',
-      'Open bills',
-      'Total outstanding',
-      'Oldest bill',
-    ],
-  ];
+  const multiSo = summaries.length > 1;
+  const header: string[] = ['SR'];
+  if (multiSo) {
+    header.push('SO Name', 'SO Phone');
+  }
+  header.push(
+    'Store Code',
+    'Medical Name',
+    'Contact Person',
+    'Phone Number',
+    'Bill Count',
+    'Outstanding'
+  );
 
-  summaries.forEach((so, index) => {
-    summaryRows.push([
-      index + 1,
-      so.displayName,
-      so.phoneNumber || '',
-      so.email || '',
-      so.salesOfficerId || 'Unassigned',
-      so.retailerCount,
-      so.orderCount,
-      Number(so.totalOutstanding.toFixed(2)),
-      so.oldestOrderDate ? so.oldestOrderDate.toISOString().slice(0, 10) : '',
-    ]);
-  });
-
-  const detailRows: (string | number)[][] = [
-    [
-      'SR',
-      'SO Name',
-      'SO ID',
-      'Store Code',
-      'Shop Name',
-      'Retailer ID',
-      'Invoice / Order',
-      'Order Date',
-      'Payment Status',
-      'Bill outstanding',
-      'Store total outstanding',
-    ],
-  ];
-
+  const rows: (string | number)[][] = [header];
   let sr = 1;
+
   for (const so of summaries) {
-    for (const retailer of so.retailers) {
-      for (const bill of retailer.orders) {
-        detailRows.push([
-          sr++,
-          so.displayName,
-          so.salesOfficerId || 'Unassigned',
-          retailer.storeCode,
-          retailer.displayName,
-          retailer.retailerId,
-          formatOrderInvoiceLabel(bill),
-          bill.orderDate
-            ? new Date(bill.orderDate).toISOString().slice(0, 10)
-            : '',
-          bill.paymentStatus || 'Unpaid',
-          Number(bill.outstanding.toFixed(2)),
-          Number(retailer.totalOutstanding.toFixed(2)),
-        ]);
+    const retailers = [...so.retailers].sort((a, b) =>
+      a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' })
+    );
+    for (const retailer of retailers) {
+      const store = retailer.store;
+      const contactPerson =
+        store?.ownerName?.trim() ||
+        store?.licenceHolderName?.trim() ||
+        store?.displayName?.trim() ||
+        '';
+      const phone = store?.phoneNumber?.trim() || '';
+      const row: (string | number)[] = [sr++];
+      if (multiSo) {
+        row.push(so.displayName, so.phoneNumber || '');
       }
+      row.push(
+        retailer.storeCode || '',
+        retailer.displayName || '',
+        contactPerson,
+        phone,
+        retailer.orderCount,
+        Number(retailer.totalOutstanding.toFixed(2))
+      );
+      rows.push(row);
     }
   }
 
-  const wb = XLSX.utils.book_new();
-  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-  wsSummary['!cols'] = [
-    { wch: 5 },
-    { wch: 24 },
-    { wch: 14 },
-    { wch: 28 },
-    { wch: 28 },
-    { wch: 14 },
-    { wch: 12 },
-    { wch: 16 },
-    { wch: 12 },
-  ];
-  XLSX.utils.book_append_sheet(wb, wsSummary, 'SO Summary');
+  if (rows.length <= 1) {
+    await appAlert('No retailer dues found to export', { severity: 'warning' });
+    return;
+  }
 
-  const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-  wsDetail['!cols'] = [
-    { wch: 5 },
-    { wch: 22 },
-    { wch: 28 },
-    { wch: 12 },
-    { wch: 28 },
-    { wch: 28 },
-    { wch: 22 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 16 },
-  ];
-  XLSX.utils.book_append_sheet(wb, wsDetail, 'Bill Detail');
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = multiSo
+    ? [
+        { wch: 5 },
+        { wch: 22 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 30 },
+        { wch: 22 },
+        { wch: 14 },
+        { wch: 10 },
+        { wch: 14 },
+      ]
+    : [
+        { wch: 5 },
+        { wch: 12 },
+        { wch: 30 },
+        { wch: 22 },
+        { wch: 14 },
+        { wch: 10 },
+        { wch: 14 },
+      ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Retailers');
 
   const dateStr = istDateStampCompact();
   XLSX.writeFile(wb, `${filename}-${dateStr}.xlsx`);

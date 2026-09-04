@@ -391,6 +391,8 @@ function roleMatchesRequested(existingRole, requestedRole) {
         return (0, panelAuth_1.isRetailerRole)(existingRole);
     if (requestedRole === 'salesOfficer')
         return (0, panelAuth_1.isSalesOfficerRole)(existingRole);
+    if (requestedRole === 'areaManager')
+        return existingRole === 'areaManager';
     if (requestedRole === 'operations')
         return (0, panelAuth_1.isOperationsRole)(existingRole);
     if (requestedRole === 'office')
@@ -410,6 +412,7 @@ exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context)
     const roleByKey = {
         retailer: 'retailer',
         salesofficer: 'salesOfficer',
+        areamanager: 'areaManager',
         operations: 'operations',
         office: 'office',
         purchaseofficer: 'purchaseOfficer',
@@ -432,13 +435,15 @@ exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context)
     }
     const accountLabel = role === 'salesOfficer'
         ? 'Sales Officer'
-        : role === 'operations'
-            ? 'Operations'
-            : role === 'office'
-                ? 'Office'
-                : role === 'purchaseOfficer'
-                    ? 'Purchase Officer'
-                    : 'store';
+        : role === 'areaManager'
+            ? 'Area Manager'
+            : role === 'operations'
+                ? 'Operations'
+                : role === 'office'
+                    ? 'Office'
+                    : role === 'purchaseOfficer'
+                        ? 'Purchase Officer'
+                        : 'store';
     try {
         let userRecord;
         let reprovisioned = false;
@@ -1020,7 +1025,7 @@ exports.sendPanelPasswordResetEmail = functionRegion_1.ff.https.onCall(async (da
     };
 });
 /**
- * Admin only: send a password reset link to a Sales Officer’s email (mobile app account).
+ * Admin only: send a password reset link to a Sales Officer or Area Manager email (field app).
  * Requires SMTP (same as other transactional emails).
  */
 exports.sendSalesOfficerPasswordResetEmail = functionRegion_1.ff.https.onCall(async (data, context) => {
@@ -1046,14 +1051,16 @@ exports.sendSalesOfficerPasswordResetEmail = functionRegion_1.ff.https.onCall(as
         throw new functions.https.HttpsError('not-found', 'No user found with this email');
     }
     const role = await (0, panelAuth_1.getUserRole)(userRecord.uid);
-    if (!(0, panelAuth_1.isSalesOfficerRole)(role)) {
-        throw new functions.https.HttpsError('failed-precondition', 'This email is not a Sales Officer account');
+    const isAreaManager = role === 'areaManager';
+    if (!(0, panelAuth_1.isSalesOfficerRole)(role) && !isAreaManager) {
+        throw new functions.https.HttpsError('failed-precondition', 'This email is not a Sales Officer or Area Manager account');
     }
     const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
     if (!userDoc.exists || ((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.isActive) === false) {
-        throw new functions.https.HttpsError('failed-precondition', 'This Sales Officer account is inactive');
+        throw new functions.https.HttpsError('failed-precondition', isAreaManager ? 'This Area Manager account is inactive' : 'This Sales Officer account is inactive');
     }
     const email = String(userRecord.email || rawEmail).trim();
+    const accountLabel = isAreaManager ? 'Area Manager' : 'Sales Officer';
     let resetLink;
     try {
         resetLink = await generatePasswordResetLinkWithFallback(email, getSalesOfficerPasswordResetContinueUrl(), 'sendSalesOfficerPasswordResetEmail');
@@ -1064,11 +1071,11 @@ exports.sendSalesOfficerPasswordResetEmail = functionRegion_1.ff.https.onCall(as
     }
     const mail = await sendSmtpMail({
         to: email,
-        subject: 'SimpliPharma — Reset your Sales Officer password',
+        subject: `SimpliPharma — Reset your ${accountLabel} password`,
         html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #2196F3;">Password reset</h2>
-        <p>An administrator requested a password reset for your SimpliPharma Sales Officer (mobile) account.</p>
+        <p>An administrator requested a password reset for your SimpliPharma ${accountLabel} (app) account.</p>
         <p style="margin: 24px 0;">
           <a href="${resetLink}"
              style="background: #00a99d; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
@@ -1086,7 +1093,7 @@ exports.sendSalesOfficerPasswordResetEmail = functionRegion_1.ff.https.onCall(as
     }
     return {
         success: true,
-        message: 'Password reset link sent to the Sales Officer email.',
+        message: `Password reset link sent to the ${accountLabel} email.`,
         emailSent: true,
     };
 });
