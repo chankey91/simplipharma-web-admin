@@ -291,7 +291,7 @@ export interface User {
   id: string;
   uid: string;
   email: string;
-  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations' | 'purchaseOfficer' | 'office';
+  role?: 'retailer' | 'admin' | 'salesOfficer' | 'areaManager' | 'operations' | 'purchaseOfficer' | 'office';
   /** Custom sidebar paths for office/operations panel users. */
   menuPaths?: string[];
   /** Per-module write flags (office default: stores/receivables/orders false). */
@@ -307,6 +307,8 @@ export interface User {
   firstName?: string;
   lastName?: string;
   salesOfficerId?: string; // For retailers: which Sales Officer manages them
+  /** For sales officers: which Area Manager they report to. */
+  areaManagerId?: string;
   displayName?: string;
   phoneNumber?: string;
   /** Sales Officer: IMEI / device identifier used by the mobile app. */
@@ -320,6 +322,10 @@ export interface User {
   town?: string;
   /** District — typically from Madhya Pradesh district list. */
   district?: string;
+  /** Area Manager: districts they cover (assignment / coverage). */
+  managedDistricts?: string[];
+  /** Area Manager: optional towns within managed districts. */
+  managedTowns?: string[];
   shopName?: string;
   isActive?: boolean;
   createdAt?: Date | any;

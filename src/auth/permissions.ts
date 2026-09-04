@@ -1,6 +1,6 @@
 export type PanelRole = 'admin' | 'operations' | 'office';
 
-export type AppRole = PanelRole | 'retailer' | 'salesOfficer' | 'purchaseOfficer';
+export type AppRole = PanelRole | 'retailer' | 'salesOfficer' | 'areaManager' | 'purchaseOfficer';
 
 export type WriteModule = 'stores' | 'receivables' | 'orders' | 'purchases' | 'inventory';
 
@@ -46,6 +46,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/payment-requests', label: 'Payment requests' },
   { path: '/pending-retailers', label: 'Pending retailers' },
   { path: '/sales-officers', label: 'Sales officers' },
+  { path: '/area-managers', label: 'Area managers' },
   { path: '/so-visits', label: 'SO visits' },
   { path: '/daily-performance', label: 'Daily performance' },
   { path: '/margin', label: 'Margin report' },
