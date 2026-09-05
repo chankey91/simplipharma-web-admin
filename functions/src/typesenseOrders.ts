@@ -199,6 +199,7 @@ export const onOrderWriteTypesense = ff
 function orderRowFromHit(document: Record<string, unknown>): Record<string, unknown> {
   return {
     id: String(document.id ?? document.docId ?? ''),
+    retailerId: document.retailerId != null ? String(document.retailerId) : '',
     retailerEmail: document.retailerEmail != null ? String(document.retailerEmail) : '',
     retailerName: document.retailerName != null ? String(document.retailerName) : '',
     invoiceNumber: document.invoiceNumber != null ? String(document.invoiceNumber) : '',

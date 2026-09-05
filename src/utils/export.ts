@@ -425,3 +425,114 @@ export const exportSoReceivables = async (
   const dateStr = istDateStampCompact();
   XLSX.writeFile(wb, `${filename}-${dateStr}.xlsx`);
 };
+
+export type SelectedOrderStoreExportRow = {
+  orderId: string;
+  status: string;
+  retailerId: string;
+  storeName: string;
+  retailerEmail?: string;
+};
+
+/** Format town + district for display / Excel combined column. */
+export function formatTownDistrict(town?: string, district?: string): string {
+  const t = (town || '').trim();
+  const d = (district || '').trim();
+  if (t && d) return `${t}, ${d}`;
+  return t || d || '';
+}
+
+/**
+ * Unique medical stores from selected orders, sorted by district → town → shop.
+ * One Excel row per store (order ids / statuses aggregated).
+ */
+export const exportSelectedOrderStores = async (
+  selected: SelectedOrderStoreExportRow[],
+  stores: User[],
+  filename: string = 'selected-order-stores'
+) => {
+  if (!selected.length) {
+    await appAlert('No orders selected', { severity: 'warning' });
+    return;
+  }
+
+  const storeById = new Map<string, User>();
+  const storeByEmail = new Map<string, User>();
+  for (const s of stores) {
+    storeById.set(s.id, s);
+    if (s.uid) storeById.set(s.uid, s);
+    const email = (s.email || '').trim().toLowerCase();
+    if (email) storeByEmail.set(email, s);
+  }
+
+  type Agg = {
+    key: string;
+    storeCode: string;
+    shopName: string;
+    phone: string;
+    email: string;
+    town: string;
+    district: string;
+    townDistrict: string;
+    orderIds: string[];
+    statuses: Set<string>;
+  };
+
+  const byStore = new Map<string, Agg>();
+
+  for (const row of selected) {
+    const emailKey = (row.retailerEmail || '').trim().toLowerCase();
+    const store =
+      (row.retailerId ? storeById.get(row.retailerId) : undefined) ||
+      (emailKey ? storeByEmail.get(emailKey) : undefined);
+    const key =
+      store?.id ||
+      row.retailerId ||
+      emailKey ||
+      row.storeName.trim().toLowerCase() ||
+      row.orderId;
+
+    let agg = byStore.get(key);
+    if (!agg) {
+      const town = store?.town || '';
+      const district = store?.district || '';
+      agg = {
+        key,
+        storeCode: store?.storeCode || '',
+        shopName: store?.shopName || store?.displayName || row.storeName || 'N/A',
+        phone: store?.phoneNumber || '',
+        email: store?.email || row.retailerEmail || '',
+        town,
+        district,
+        townDistrict: formatTownDistrict(town, district),
+        orderIds: [],
+        statuses: new Set(),
+      };
+      byStore.set(key, agg);
+    }
+    if (!agg.orderIds.includes(row.orderId)) agg.orderIds.push(row.orderId);
+    if (row.status) agg.statuses.add(row.status);
+  }
+
+  const sorted = Array.from(byStore.values()).sort((a, b) => {
+    const d = a.district.localeCompare(b.district, undefined, { sensitivity: 'base' });
+    if (d !== 0) return d;
+    const t = a.town.localeCompare(b.town, undefined, { sensitivity: 'base' });
+    if (t !== 0) return t;
+    return a.shopName.localeCompare(b.shopName, undefined, { sensitivity: 'base' });
+  });
+
+  const excelData: (string | number)[][] = [
+    ['Store Code', 'Shop Name', 'Phone', 'Order Count'],
+  ];
+
+  sorted.forEach((row) => {
+    excelData.push([row.storeCode, row.shopName, row.phone, row.orderIds.length]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(excelData);
+  ws['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Stores');
+  XLSX.writeFile(wb, `${filename}-${istDateStampCompact()}.xlsx`);
+};
