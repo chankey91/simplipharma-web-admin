@@ -29,6 +29,8 @@ import {
   LinearProgress,
   Alert,
   Divider,
+  Checkbox,
+  Toolbar,
 } from '@mui/material';
 import {
   Search,
@@ -37,11 +39,18 @@ import {
   Download,
   CloudSync,
   Publish,
+  LocalShipping,
+  CheckCircle,
 } from '@mui/icons-material';
-import { useOrders, useOrdersSearch, useCancelOrder } from '../hooks/useOrders';
-import { useQuery } from '@tanstack/react-query';
+import {
+  useOrders,
+  useOrdersSearch,
+  useCancelOrder,
+  invalidateOrderListQueries,
+} from '../hooks/useOrders';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
-import { getOrdersInRange } from '../services/orders';
+import { getOrdersInRange, updateOrderDispatch, markOrderDelivered } from '../services/orders';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
@@ -66,6 +75,9 @@ import {
 } from '../utils/dateTime';
 
 const ROWS_PER_PAGE = 10;
+
+const isBulkSelectableStatus = (status: OrderStatus) =>
+  status === 'Order Fulfillment' || status === 'In Transit';
 
 /** Normalized row shape rendered by the table, sourced from either Typesense or the fallback full list. */
 interface OrderRow {
@@ -101,6 +113,7 @@ const sortKeyToField = (key: string): OrderSearchParams['sortField'] => {
 
 export const OrdersPage: React.FC = () => {
   const cancelOrderMutation = useCancelOrder();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { alert } = useAppDialog();
   const { canWrite, panelRole } = useAuth();
@@ -124,6 +137,15 @@ export const OrdersPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+  const [selectedById, setSelectedById] = useState<Record<string, OrderStatus>>({});
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDispatchDialog, setBulkDispatchDialog] = useState({
+    open: false,
+    courierName: '',
+    trackingNumber: '',
+    notes: '',
+  });
+  const [bulkDeliverDialog, setBulkDeliverDialog] = useState({ open: false });
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
@@ -141,6 +163,11 @@ export const OrdersPage: React.FC = () => {
   });
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
+
+  // Drop selection when filters / paging change so actions match what's on screen.
+  useEffect(() => {
+    setSelectedById({});
+  }, [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, page, sortKey, sortDirection]);
 
   const storeNameByRetailerId = useMemo(() => {
     const map = new Map<string, string>();
@@ -365,6 +392,123 @@ export const OrdersPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Error cancelling order:', error);
+    }
+  };
+
+  const selectedIds = useMemo(() => Object.keys(selectedById), [selectedById]);
+  const selectedFulfillmentIds = useMemo(
+    () => selectedIds.filter((id) => selectedById[id] === 'Order Fulfillment'),
+    [selectedIds, selectedById]
+  );
+  const selectedTransitIds = useMemo(
+    () => selectedIds.filter((id) => selectedById[id] === 'In Transit'),
+    [selectedIds, selectedById]
+  );
+
+  const selectableRowsOnPage = useMemo(
+    () => (canEditOrders ? rows.filter((r) => isBulkSelectableStatus(r.status)) : []),
+    [rows, canEditOrders]
+  );
+  const allSelectableOnPageSelected =
+    selectableRowsOnPage.length > 0 &&
+    selectableRowsOnPage.every((r) => Boolean(selectedById[r.id]));
+  const someSelectableOnPageSelected =
+    selectableRowsOnPage.some((r) => Boolean(selectedById[r.id])) && !allSelectableOnPageSelected;
+
+  const toggleRowSelected = (order: OrderRow) => {
+    if (!canEditOrders || !isBulkSelectableStatus(order.status)) return;
+    setSelectedById((prev) => {
+      const next = { ...prev };
+      if (next[order.id]) delete next[order.id];
+      else next[order.id] = order.status;
+      return next;
+    });
+  };
+
+  const toggleSelectAllOnPage = () => {
+    if (!canEditOrders) return;
+    setSelectedById((prev) => {
+      const next = { ...prev };
+      if (allSelectableOnPageSelected) {
+        for (const r of selectableRowsOnPage) delete next[r.id];
+      } else {
+        for (const r of selectableRowsOnPage) next[r.id] = r.status;
+      }
+      return next;
+    });
+  };
+
+  const refreshListsAfterBulk = async () => {
+    invalidateOrderListQueries(queryClient);
+    setSelectedById({});
+  };
+
+  const handleBulkDispatchConfirm = async () => {
+    const user = auth.currentUser;
+    if (!user || selectedFulfillmentIds.length === 0) return;
+    setBulkBusy(true);
+    const errors: string[] = [];
+    try {
+      for (const orderId of selectedFulfillmentIds) {
+        try {
+          await updateOrderDispatch(orderId, {
+            status: 'In Transit',
+            dispatchDate: new Date(),
+            dispatchedBy: user.uid,
+            courierName: bulkDispatchDialog.courierName.trim() || undefined,
+            trackingNumber: bulkDispatchDialog.trackingNumber.trim() || undefined,
+            dispatchNotes: bulkDispatchDialog.notes.trim() || undefined,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+        }
+      }
+      setBulkDispatchDialog({ open: false, courierName: '', trackingNumber: '', notes: '' });
+      await refreshListsAfterBulk();
+      if (errors.length > 0) {
+        await alert(
+          `Dispatched ${selectedFulfillmentIds.length - errors.length} order(s). Failed:\n${errors.slice(0, 5).join('\n')}`,
+          { severity: 'warning' }
+        );
+      } else {
+        await alert(`Marked ${selectedFulfillmentIds.length} order(s) as In Transit.`, {
+          severity: 'success',
+        });
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkDeliverConfirm = async () => {
+    const user = auth.currentUser;
+    if (!user || selectedTransitIds.length === 0) return;
+    setBulkBusy(true);
+    const errors: string[] = [];
+    try {
+      for (const orderId of selectedTransitIds) {
+        try {
+          await markOrderDelivered(orderId, user.uid);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+        }
+      }
+      setBulkDeliverDialog({ open: false });
+      await refreshListsAfterBulk();
+      if (errors.length > 0) {
+        await alert(
+          `Delivered ${selectedTransitIds.length - errors.length} order(s). Failed:\n${errors.slice(0, 5).join('\n')}`,
+          { severity: 'warning' }
+        );
+      } else {
+        await alert(`Marked ${selectedTransitIds.length} order(s) as Delivered.`, {
+          severity: 'success',
+        });
+      }
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -738,12 +882,79 @@ export const OrdersPage: React.FC = () => {
         </Box>
       </Paper>
 
+      {canEditOrders && selectedIds.length > 0 && (
+        <Paper sx={{ mb: 2 }}>
+          <Toolbar
+            sx={{
+              gap: 1,
+              flexWrap: 'wrap',
+              py: 1,
+              minHeight: 56,
+            }}
+          >
+            <Typography variant="body2" sx={{ mr: 1 }}>
+              {selectedIds.length} selected
+              {selectedFulfillmentIds.length > 0
+                ? ` · ${selectedFulfillmentIds.length} fulfillment`
+                : ''}
+              {selectedTransitIds.length > 0 ? ` · ${selectedTransitIds.length} in transit` : ''}
+            </Typography>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<LocalShipping />}
+              disabled={bulkBusy || selectedFulfillmentIds.length === 0}
+              onClick={() =>
+                setBulkDispatchDialog({
+                  open: true,
+                  courierName: '',
+                  trackingNumber: '',
+                  notes: '',
+                })
+              }
+            >
+              Mark In Transit ({selectedFulfillmentIds.length})
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              color="success"
+              startIcon={<CheckCircle />}
+              disabled={bulkBusy || selectedTransitIds.length === 0}
+              onClick={() => setBulkDeliverDialog({ open: true })}
+            >
+              Mark Delivered ({selectedTransitIds.length})
+            </Button>
+            <Button
+              size="small"
+              variant="text"
+              disabled={bulkBusy}
+              onClick={() => setSelectedById({})}
+            >
+              Clear selection
+            </Button>
+          </Toolbar>
+          {bulkBusy && <LinearProgress />}
+        </Paper>
+      )}
+
       {/* Orders Table */}
       <TableContainer component={Paper}>
         {isBusy && <LinearProgress />}
         <Table>
           <TableHead>
             <TableRow>
+              {canEditOrders && (
+                <TableCell padding="checkbox">
+                  <Checkbox
+                    indeterminate={someSelectableOnPageSelected}
+                    checked={allSelectableOnPageSelected}
+                    disabled={selectableRowsOnPage.length === 0 || bulkBusy}
+                    onChange={toggleSelectAllOnPage}
+                    inputProps={{ 'aria-label': 'Select all eligible orders on this page' }}
+                  />
+                </TableCell>
+              )}
               <SortableTableHeadCell columnId="id" label="Order ID" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="orderDate" label="Date & Time" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -757,13 +968,32 @@ export const OrdersPage: React.FC = () => {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={canEditOrders ? 9 : 8} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((order) => (
-                <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
+              rows.map((order) => {
+                const selectable = canEditOrders && isBulkSelectableStatus(order.status);
+                const selected = Boolean(selectedById[order.id]);
+                return (
+                <TableRow
+                  key={order.id}
+                  hover
+                  selected={selected}
+                  onClick={() => navigate(`/orders/${order.id}`)}
+                  sx={{ cursor: 'pointer' }}
+                >
+                  {canEditOrders && (
+                    <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selected}
+                        disabled={!selectable || bulkBusy}
+                        onChange={() => toggleRowSelected(order)}
+                        inputProps={{ 'aria-label': `Select order ${order.id}` }}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
                   <TableCell>{format(order.orderDate, 'MMM dd, yyyy hh:mm a')}</TableCell>
                   <TableCell>{order.storeName}</TableCell>
@@ -809,7 +1039,8 @@ export const OrdersPage: React.FC = () => {
                     )}
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -856,6 +1087,93 @@ export const OrdersPage: React.FC = () => {
             disabled={!cancelDialog.reason || cancelOrderMutation.isPending}
           >
             Cancel Order
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={bulkDispatchDialog.open}
+        onClose={() => !bulkBusy && setBulkDispatchDialog((p) => ({ ...p, open: false }))}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Mark orders In Transit</DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom>
+            Dispatch {selectedFulfillmentIds.length} fulfilled order(s). Courier and tracking are
+            optional and applied to every selected order.
+          </Typography>
+          <TextField
+            fullWidth
+            label="Courier name"
+            value={bulkDispatchDialog.courierName}
+            onChange={(e) =>
+              setBulkDispatchDialog((p) => ({ ...p, courierName: e.target.value }))
+            }
+            sx={{ mt: 2 }}
+            disabled={bulkBusy}
+          />
+          <TextField
+            fullWidth
+            label="Tracking number"
+            value={bulkDispatchDialog.trackingNumber}
+            onChange={(e) =>
+              setBulkDispatchDialog((p) => ({ ...p, trackingNumber: e.target.value }))
+            }
+            sx={{ mt: 2 }}
+            disabled={bulkBusy}
+          />
+          <TextField
+            fullWidth
+            label="Dispatch notes"
+            multiline
+            rows={2}
+            value={bulkDispatchDialog.notes}
+            onChange={(e) => setBulkDispatchDialog((p) => ({ ...p, notes: e.target.value }))}
+            sx={{ mt: 2 }}
+            disabled={bulkBusy}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setBulkDispatchDialog((p) => ({ ...p, open: false }))}
+            disabled={bulkBusy}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<LocalShipping />}
+            onClick={() => void handleBulkDispatchConfirm()}
+            disabled={bulkBusy || selectedFulfillmentIds.length === 0}
+          >
+            {bulkBusy ? 'Updating…' : `Mark In Transit (${selectedFulfillmentIds.length})`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={bulkDeliverDialog.open}
+        onClose={() => !bulkBusy && setBulkDeliverDialog({ open: false })}
+      >
+        <DialogTitle>Mark orders Delivered</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Confirm delivery for {selectedTransitIds.length} in-transit order(s)?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkDeliverDialog({ open: false })} disabled={bulkBusy}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            startIcon={<CheckCircle />}
+            onClick={() => void handleBulkDeliverConfirm()}
+            disabled={bulkBusy || selectedTransitIds.length === 0}
+          >
+            {bulkBusy ? 'Updating…' : `Mark Delivered (${selectedTransitIds.length})`}
           </Button>
         </DialogActions>
       </Dialog>
