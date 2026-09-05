@@ -51,12 +51,12 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
 import { getOrdersInRange, updateOrderDispatch, markOrderDelivered } from '../services/orders';
-import { Order, OrderStatus } from '../types';
+import { Order, OrderStatus, User } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
-import { exportPendingOrdersByStore, exportPendingOrdersProductSummary } from '../utils/export';
+import { exportPendingOrdersByStore, exportPendingOrdersProductSummary, exportSelectedOrderStores, formatTownDistrict } from '../utils/export';
 import { publishPurchaseList } from '../services/purchaseLists';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -84,11 +84,20 @@ interface OrderRow {
   id: string;
   orderDate: Date;
   storeName: string;
+  retailerId: string;
   retailerEmail: string;
+  townDistrict: string;
   itemCount: number;
   totalAmount: number;
   status: OrderStatus;
 }
+
+type SelectedOrderMeta = {
+  status: OrderStatus;
+  retailerId: string;
+  storeName: string;
+  retailerEmail: string;
+};
 
 /** Map the table's sort column id to the Typesense-indexed field name. */
 const sortKeyToField = (key: string): OrderSearchParams['sortField'] => {
@@ -137,7 +146,7 @@ export const OrdersPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
-  const [selectedById, setSelectedById] = useState<Record<string, OrderStatus>>({});
+  const [selectedById, setSelectedById] = useState<Record<string, SelectedOrderMeta>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkDispatchDialog, setBulkDispatchDialog] = useState({
     open: false,
@@ -180,10 +189,43 @@ export const OrdersPage: React.FC = () => {
     return map;
   }, [stores]);
 
+  const storeByRetailerId = useMemo(() => {
+    const map = new Map<string, User>();
+    stores?.forEach((store) => {
+      map.set(store.id, store);
+      if (store.uid) map.set(store.uid, store);
+    });
+    return map;
+  }, [stores]);
+
+  const storeByEmail = useMemo(() => {
+    const map = new Map<string, User>();
+    stores?.forEach((store) => {
+      const email = (store.email || '').trim().toLowerCase();
+      if (email) map.set(email, store);
+    });
+    return map;
+  }, [stores]);
+
   const resolveStoreName = (retailerName?: string, retailerId?: string) =>
     retailerName?.trim() ||
     (retailerId ? storeNameByRetailerId.get(retailerId) : undefined) ||
     'N/A';
+
+  const resolveTownDistrict = (retailerId?: string, retailerEmail?: string) => {
+    const store =
+      (retailerId ? storeByRetailerId.get(retailerId) : undefined) ||
+      (retailerEmail ? storeByEmail.get(retailerEmail.trim().toLowerCase()) : undefined);
+    const label = formatTownDistrict(store?.town, store?.district);
+    return label || '—';
+  };
+
+  const resolveRetailerId = (retailerId?: string, retailerEmail?: string) => {
+    if (retailerId?.trim()) return retailerId.trim();
+    const email = (retailerEmail || '').trim().toLowerCase();
+    if (email) return storeByEmail.get(email)?.id || '';
+    return '';
+  };
 
   // Debounce the search term so we don't fire a Typesense query on every keystroke.
   useEffect(() => {
@@ -295,6 +337,14 @@ export const OrdersPage: React.FC = () => {
             ),
             sortDirection
           );
+        case 'townDistrict':
+          return applyDirection(
+            compareAsc(
+              resolveTownDistrict(a.retailerId, a.retailerEmail).toLowerCase(),
+              resolveTownDistrict(b.retailerId, b.retailerEmail).toLowerCase()
+            ),
+            sortDirection
+          );
         case 'items':
           return applyDirection(compareAsc(a.medicines.length, b.medicines.length), sortDirection);
         case 'amount': {
@@ -317,6 +367,9 @@ export const OrdersPage: React.FC = () => {
     filterLocalOrders,
     sortKey,
     sortDirection,
+    storeByRetailerId,
+    storeByEmail,
+    storeNameByRetailerId,
   ]);
 
   const localStatusCounts = useMemo(() => {
@@ -332,26 +385,44 @@ export const OrdersPage: React.FC = () => {
     if (useLocalList) {
       return localFilteredSorted
         .slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE)
-        .map((o) => ({
-          id: o.id,
-          orderDate: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
-          storeName: resolveStoreName(o.retailerName, o.retailerId),
-          retailerEmail: o.retailerEmail || '',
-          itemCount: o.medicines.length,
-          totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
-          status: o.status,
-        }));
+        .map((o) => {
+          const retailerId = resolveRetailerId(o.retailerId, o.retailerEmail);
+          return {
+            id: o.id,
+            orderDate: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
+            storeName: resolveStoreName(o.retailerName, o.retailerId),
+            retailerId,
+            retailerEmail: o.retailerEmail || '',
+            townDistrict: resolveTownDistrict(o.retailerId || retailerId, o.retailerEmail),
+            itemCount: o.medicines.length,
+            totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
+            status: o.status,
+          };
+        });
     }
-    return (searchData?.orders ?? []).map((o) => ({
-      id: o.id,
-      orderDate: new Date(o.orderDate),
-      storeName: o.retailerName?.trim() || 'N/A',
-      retailerEmail: o.retailerEmail || '',
-      itemCount: o.itemCount,
-      totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
-      status: o.status,
-    }));
-  }, [useLocalList, localFilteredSorted, page, searchData, storeNameByRetailerId]);
+    return (searchData?.orders ?? []).map((o) => {
+      const retailerId = resolveRetailerId(o.retailerId, o.retailerEmail);
+      return {
+        id: o.id,
+        orderDate: new Date(o.orderDate),
+        storeName: o.retailerName?.trim() || 'N/A',
+        retailerId,
+        retailerEmail: o.retailerEmail || '',
+        townDistrict: resolveTownDistrict(retailerId, o.retailerEmail),
+        itemCount: o.itemCount,
+        totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
+        status: o.status,
+      };
+    });
+  }, [
+    useLocalList,
+    localFilteredSorted,
+    page,
+    searchData,
+    storeNameByRetailerId,
+    storeByRetailerId,
+    storeByEmail,
+  ]);
 
   const statusCounts = useLocalList ? localStatusCounts : searchData?.statusCounts ?? {};
   const totalCount = useLocalList ? localFilteredSorted.length : searchData?.found ?? 0;
@@ -397,11 +468,11 @@ export const OrdersPage: React.FC = () => {
 
   const selectedIds = useMemo(() => Object.keys(selectedById), [selectedById]);
   const selectedFulfillmentIds = useMemo(
-    () => selectedIds.filter((id) => selectedById[id] === 'Order Fulfillment'),
+    () => selectedIds.filter((id) => selectedById[id]?.status === 'Order Fulfillment'),
     [selectedIds, selectedById]
   );
   const selectedTransitIds = useMemo(
-    () => selectedIds.filter((id) => selectedById[id] === 'In Transit'),
+    () => selectedIds.filter((id) => selectedById[id]?.status === 'In Transit'),
     [selectedIds, selectedById]
   );
 
@@ -415,12 +486,19 @@ export const OrdersPage: React.FC = () => {
   const someSelectableOnPageSelected =
     selectableRowsOnPage.some((r) => Boolean(selectedById[r.id])) && !allSelectableOnPageSelected;
 
+  const toSelectedMeta = (order: OrderRow): SelectedOrderMeta => ({
+    status: order.status,
+    retailerId: order.retailerId,
+    storeName: order.storeName,
+    retailerEmail: order.retailerEmail,
+  });
+
   const toggleRowSelected = (order: OrderRow) => {
     if (!canEditOrders || !isBulkSelectableStatus(order.status)) return;
     setSelectedById((prev) => {
       const next = { ...prev };
       if (next[order.id]) delete next[order.id];
-      else next[order.id] = order.status;
+      else next[order.id] = toSelectedMeta(order);
       return next;
     });
   };
@@ -432,10 +510,28 @@ export const OrdersPage: React.FC = () => {
       if (allSelectableOnPageSelected) {
         for (const r of selectableRowsOnPage) delete next[r.id];
       } else {
-        for (const r of selectableRowsOnPage) next[r.id] = r.status;
+        for (const r of selectableRowsOnPage) next[r.id] = toSelectedMeta(r);
       }
       return next;
     });
+  };
+
+  const handleDownloadSelectedStores = async () => {
+    if (selectedIds.length === 0) {
+      await alert('Select at least one order first', { severity: 'warning' });
+      return;
+    }
+    await exportSelectedOrderStores(
+      selectedIds.map((id) => ({
+        orderId: id,
+        status: selectedById[id]?.status || '',
+        retailerId: selectedById[id]?.retailerId || '',
+        storeName: selectedById[id]?.storeName || '',
+        retailerEmail: selectedById[id]?.retailerEmail || '',
+      })),
+      stores || [],
+      'selected-order-stores'
+    );
   };
 
   const refreshListsAfterBulk = async () => {
@@ -927,6 +1023,15 @@ export const OrdersPage: React.FC = () => {
             </Button>
             <Button
               size="small"
+              variant="outlined"
+              startIcon={<Download />}
+              disabled={bulkBusy || selectedIds.length === 0}
+              onClick={() => void handleDownloadSelectedStores()}
+            >
+              Download store list
+            </Button>
+            <Button
+              size="small"
               variant="text"
               disabled={bulkBusy}
               onClick={() => setSelectedById({})}
@@ -958,6 +1063,7 @@ export const OrdersPage: React.FC = () => {
               <SortableTableHeadCell columnId="id" label="Order ID" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="orderDate" label="Date & Time" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="townDistrict" label="Town / District" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="retailer" label="Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -968,7 +1074,7 @@ export const OrdersPage: React.FC = () => {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={canEditOrders ? 9 : 8} align="center">
+                <TableCell colSpan={canEditOrders ? 10 : 9} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
                 </TableCell>
               </TableRow>
@@ -997,6 +1103,7 @@ export const OrdersPage: React.FC = () => {
                   <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
                   <TableCell>{format(order.orderDate, 'MMM dd, yyyy hh:mm a')}</TableCell>
                   <TableCell>{order.storeName}</TableCell>
+                  <TableCell>{order.townDistrict}</TableCell>
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
                   <TableCell>{order.itemCount} items</TableCell>
                   <TableCell>

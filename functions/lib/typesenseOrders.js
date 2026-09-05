@@ -187,6 +187,7 @@ function orderRowFromHit(document) {
     var _a, _b, _c;
     return {
         id: String((_b = (_a = document.id) !== null && _a !== void 0 ? _a : document.docId) !== null && _b !== void 0 ? _b : ''),
+        retailerId: document.retailerId != null ? String(document.retailerId) : '',
         retailerEmail: document.retailerEmail != null ? String(document.retailerEmail) : '',
         retailerName: document.retailerName != null ? String(document.retailerName) : '',
         invoiceNumber: document.invoiceNumber != null ? String(document.invoiceNumber) : '',

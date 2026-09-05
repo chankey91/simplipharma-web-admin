@@ -5,6 +5,7 @@ import { OrderStatus } from '../types';
 /** Lightweight row rendered by the Orders table (fields come straight from the Typesense index). */
 export interface OrderSearchRow {
   id: string;
+  retailerId: string;
   retailerEmail: string;
   retailerName: string;
   invoiceNumber: string;
