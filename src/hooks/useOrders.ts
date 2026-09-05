@@ -39,7 +39,7 @@ import { buildLastSchemeByMedicineId } from '../utils/retailerLastScheme';
 import { useStores } from './useStores';
 
 /** Shared invalidation for every Orders Management list source (Typesense + Firestore ranges). */
-const invalidateOrderListQueries = (queryClient: ReturnType<typeof useQueryClient>) => {
+export const invalidateOrderListQueries = (queryClient: ReturnType<typeof useQueryClient>) => {
   queryClient.invalidateQueries({ queryKey: ['orders'] });
   queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
   queryClient.invalidateQueries({ queryKey: ['ordersInRange'] });
