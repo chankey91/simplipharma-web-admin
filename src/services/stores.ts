@@ -1,8 +1,99 @@
-import { collection, getDocs, doc, updateDoc, setDoc, getDoc, query, where, Timestamp, serverTimestamp, deleteField, db, functions, auth } from './firebase';
+import {
+  collection,
+  getDocs,
+  doc,
+  updateDoc,
+  setDoc,
+  getDoc,
+  query,
+  where,
+  Timestamp,
+  serverTimestamp,
+  deleteField,
+  writeBatch,
+  db,
+  functions,
+  auth,
+} from './firebase';
+import type { QueryDocumentSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
 import { formatStoreCode, generateStoreCode, getMaxStoreCodeNumber, parseStoreCodeNumber } from '../utils/storeCode';
 import { ORDER_BLOCK_OVERRIDE_MS } from '../utils/retailerPaymentBlock';
+
+/**
+ * Collections that stamp denormalized `salesOfficerId` for SO-app queries.
+ * Typesense orders sync via onWrite when `orders` docs change — no full reindex needed.
+ */
+const RETAILER_SO_HISTORY_COLLECTIONS = [
+  'orders',
+  'so_visit_logs',
+  'order_return_requests',
+  'expiry_return_requests',
+  'payment_requests',
+] as const;
+
+export type RetailerSoMigrationCounts = Record<
+  (typeof RETAILER_SO_HISTORY_COLLECTIONS)[number],
+  number
+>;
+
+const FIRESTORE_BATCH_LIMIT = 400;
+
+async function commitSalesOfficerIdUpdates(
+  docs: QueryDocumentSnapshot[],
+  salesOfficerId: string | null
+): Promise<number> {
+  const next = (salesOfficerId || '').trim();
+  let updated = 0;
+  let batch = writeBatch(db);
+  let ops = 0;
+
+  const flush = async () => {
+    if (ops === 0) return;
+    await batch.commit();
+    batch = writeBatch(db);
+    ops = 0;
+  };
+
+  for (const d of docs) {
+    const current = String(d.data()?.salesOfficerId || '').trim();
+    if (current === next) continue;
+    if (next) {
+      batch.update(d.ref, { salesOfficerId: next });
+    } else {
+      batch.update(d.ref, { salesOfficerId: deleteField() });
+    }
+    ops += 1;
+    updated += 1;
+    if (ops >= FIRESTORE_BATCH_LIMIT) {
+      await flush();
+    }
+  }
+  await flush();
+  return updated;
+}
+
+/**
+ * Move (or clear) historical SO-scoped docs for a retailer so the field app
+ * shows deliveries / visits / returns under the newly assigned officer.
+ */
+export async function migrateRetailerSalesOfficerHistory(
+  retailerUserId: string,
+  salesOfficerId: string | null
+): Promise<RetailerSoMigrationCounts> {
+  const rid = retailerUserId.trim();
+  if (!rid) {
+    throw new Error('Retailer id is required to migrate SO history');
+  }
+
+  const counts = {} as RetailerSoMigrationCounts;
+  for (const name of RETAILER_SO_HISTORY_COLLECTIONS) {
+    const snap = await getDocs(query(collection(db, name), where('retailerId', '==', rid)));
+    counts[name] = await commitSalesOfficerIdUpdates(snap.docs, salesOfficerId);
+  }
+  return counts;
+}
 
 function toJsDate(v: unknown): Date | undefined {
   if (v == null) return undefined;
@@ -99,6 +190,25 @@ export const updateStore = async (
 
   if (Object.keys(cleanData).length === 0) {
     return;
+  }
+
+  // When SO assignment changes via Stores edit, move historical territory docs too.
+  if (Object.prototype.hasOwnProperty.call(cleanData, 'salesOfficerId')) {
+    const existing = await getDoc(storeRef);
+    const previousSo = String(existing.data()?.salesOfficerId || '').trim();
+    const rawNext = cleanData.salesOfficerId;
+    const nextSo =
+      rawNext == null || rawNext === ''
+        ? null
+        : String(rawNext).trim() || null;
+    if (previousSo !== (nextSo || '')) {
+      if (nextSo == null) {
+        cleanData.salesOfficerId = deleteField();
+      } else {
+        cleanData.salesOfficerId = nextSo;
+      }
+      await migrateRetailerSalesOfficerHistory(storeId, nextSo);
+    }
   }
 
   await updateDoc(storeRef, cleanData);
@@ -294,13 +404,18 @@ export const sendRetailerPasswordResetEmail = async (
 export const assignRetailerToSalesOfficer = async (
   retailerUserId: string,
   salesOfficerId: string | null
-): Promise<void> => {
+): Promise<RetailerSoMigrationCounts> => {
+  const nextSo =
+    salesOfficerId === null || salesOfficerId === '' ? null : salesOfficerId.trim();
+  // Migrate history first so the SO app never briefly shows a retailer without its orders.
+  const migration = await migrateRetailerSalesOfficerHistory(retailerUserId, nextSo);
   const storeRef = doc(db, 'users', retailerUserId);
-  if (salesOfficerId === null || salesOfficerId === '') {
+  if (nextSo == null) {
     await updateDoc(storeRef, { salesOfficerId: deleteField() });
   } else {
-    await updateDoc(storeRef, { salesOfficerId });
+    await updateDoc(storeRef, { salesOfficerId: nextSo });
   }
+  return migration;
 };
 
 export type BackfillStoreCodesResult = {
