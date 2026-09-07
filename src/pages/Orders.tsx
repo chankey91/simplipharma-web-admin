@@ -52,7 +52,8 @@ import {
 } from '../hooks/useOrders';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
-import { getOrdersInRange, updateOrderDispatch, markOrderDelivered } from '../services/orders';
+import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered } from '../services/orders';
+import { generateOrderInvoice } from '../utils/invoice';
 import { Order, OrderStatus, User } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
@@ -608,6 +609,8 @@ export const OrdersPage: React.FC = () => {
     if (!user || selectedTransitIds.length === 0) return;
     setBulkBusy(true);
     const errors: string[] = [];
+    const emailErrors: string[] = [];
+    let emailedCount = 0;
     try {
       for (const orderId of selectedTransitIds) {
         try {
@@ -615,20 +618,48 @@ export const OrdersPage: React.FC = () => {
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           errors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+          continue;
+        }
+        try {
+          const order = await getOrderById(orderId);
+          if (!order) {
+            emailErrors.push(`${formatOrderNumberForDisplay(orderId)}: order not found for invoice email`);
+            continue;
+          }
+          const emailResult = await generateOrderInvoice(order, {
+            emailPdfToRetailer: true,
+            downloadPdf: false,
+            awaitEmail: true,
+            suppressEmailAlerts: true,
+          });
+          if (emailResult.emailed) {
+            emailedCount += 1;
+          } else {
+            emailErrors.push(
+              `${formatOrderNumberForDisplay(orderId)}: ${emailResult.emailError || 'email failed'}`
+            );
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          emailErrors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
         }
       }
       setBulkDeliverDialog({ open: false });
       await refreshListsAfterBulk();
+      const deliveredOk = selectedTransitIds.length - errors.length;
+      const parts: string[] = [
+        `Marked ${deliveredOk} order(s) as Delivered.`,
+        emailedCount > 0 ? `Invoices emailed to ${emailedCount} store(s).` : '',
+      ].filter(Boolean);
       if (errors.length > 0) {
-        await alert(
-          `Delivered ${selectedTransitIds.length - errors.length} order(s). Failed:\n${errors.slice(0, 5).join('\n')}`,
-          { severity: 'warning' }
-        );
-      } else {
-        await alert(`Marked ${selectedTransitIds.length} order(s) as Delivered.`, {
-          severity: 'success',
-        });
+        parts.push(`Deliver failed:\n${errors.slice(0, 5).join('\n')}`);
       }
+      if (emailErrors.length > 0) {
+        parts.push(`Invoice email failed:\n${emailErrors.slice(0, 5).join('\n')}`);
+      }
+      await alert(parts.join('\n\n'), {
+        severity: errors.length > 0 || emailErrors.length > 0 ? 'warning' : 'success',
+      });
     } finally {
       setBulkBusy(false);
     }
@@ -1334,7 +1365,8 @@ export const OrdersPage: React.FC = () => {
         <DialogTitle>Mark orders Delivered</DialogTitle>
         <DialogContent>
           <Typography>
-            Confirm delivery for {selectedTransitIds.length} in-transit order(s)?
+            Confirm delivery for {selectedTransitIds.length} in-transit order(s)? Each store will
+            receive its tax invoice by email.
           </Typography>
         </DialogContent>
         <DialogActions>
