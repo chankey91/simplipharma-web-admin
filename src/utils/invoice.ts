@@ -1,5 +1,3 @@
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 import { Order, PurchaseInvoice, ProductDemand, Medicine } from '../types';
 import { format } from 'date-fns';
 import { getVendorById } from '../services/vendors';
@@ -17,7 +15,6 @@ import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import { PAYMENT_QR_DATA_URI } from '../assets/paymentQr';
 import { calculateOrderTotalsFromLines, hasBatchAssignment } from './orderTotals';
 import {
-  GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
   formatInvoiceProductName,
   formatInvoiceLineGst,
@@ -26,6 +23,10 @@ import {
   buildGstInvoiceTotalsSection,
   type GstInvoiceLineItem,
 } from './gstInvoiceTemplate';
+import {
+  buildContinuationHeaderHtml,
+  buildPaginatedInvoicePdf,
+} from './invoicePdfPages';
 
 // Function to convert number to words
 const numberToWords = (num: number): string => {
@@ -464,34 +465,10 @@ async function prepareOrderInvoiceData(
   };
 };
 
-const getOrderInvoiceHTML = async (
-  order: Order,
-  options?: { purchaseInvoices?: PurchaseInvoice[] }
-) => {
-  const {
-    items,
-    summary,
-    tax,
-    invoiceData,
-    company,
-    party,
-    gstRatePercent,
-  } = await prepareOrderInvoiceData(order, options);
-
+const buildOrderInvoiceFirstHeaderHtml = (data: OrderInvoicePrepared): string => {
+  const { company, party, invoiceData } = data;
   const companyState = resolveInvoiceState();
-
-  // Complete HTML template
   return `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Sales GST Invoice</title>
-<style>${GST_INVOICE_STYLES}</style>
-</head>
-<body>
-<div class="invoice-box">
-<!-- HEADER -->
 <table>
   <tr>
     <td width="50%">
@@ -511,7 +488,6 @@ const getOrderInvoiceHTML = async (
     </td>
   </tr>
 </table>
-<!-- INVOICE INFO -->
 <table>
   <tr>
     ${buildGstInvoiceTitleCell('SALES GST INVOICE', company.dl, company.gstin)}
@@ -526,17 +502,22 @@ const getOrderInvoiceHTML = async (
       Processed By: ${invoiceData.processedBy}
     </td>
   </tr>
-</table>
-<!-- ITEM TABLE -->
-${buildGstInvoiceItemTableHtml(items)}
-<!-- TOTAL SECTION -->
-${buildGstInvoiceTotalsSection(tax, summary, gstRatePercent / 2)}
-<!-- FOOTER -->
-${buildGstInvoiceFooter(order.dispatchNotes || '', summary.amountInWords, company.name, undefined, PAYMENT_QR_DATA_URI)}
-</div>
-</body>
-</html>
-  `;
+</table>`;
+};
+
+const buildOrderInvoiceFooterBlocksHtml = (
+  data: OrderInvoicePrepared,
+  remarks: string
+): string => {
+  return `
+${buildGstInvoiceTotalsSection(data.tax, data.summary, data.gstRatePercent / 2)}
+${buildGstInvoiceFooter(
+  remarks,
+  data.summary.amountInWords,
+  data.company.name,
+  undefined,
+  PAYMENT_QR_DATA_URI
+)}`;
 };
 
 function escapeCsvField(value: string | number): string {
@@ -650,111 +631,126 @@ function sanitizedOrderInvoiceCsvFileName(order: Order): string {
 export type GenerateOrderInvoiceOptions = {
   /**
    * Email PDF + CSV to `order.retailerEmail` via Cloud Function SMTP.
-   * Runs after the file download; send happens in the background (promise resolves once PDF saves).
+   * By default send runs in the background after PDF generation (unless `awaitEmail` is true).
    */
   emailPdfToRetailer?: boolean;
   /** Reuse cached purchase invoices (avoids a full collection download). */
   purchaseInvoices?: PurchaseInvoice[];
+  /** When false, generate the PDF for email without a local file download. Default true. */
+  downloadPdf?: boolean;
+  /** Wait for the SMTP email attempt before resolving. Useful for Mark Delivered. */
+  awaitEmail?: boolean;
+  /** Skip per-invoice success/failure alerts (caller summarizes, e.g. bulk deliver). */
+  suppressEmailAlerts?: boolean;
+};
+
+export type GenerateOrderInvoiceResult = {
+  emailed?: boolean;
+  emailedTo?: string;
+  emailError?: string;
 };
 
 export const generateOrderInvoice = async (
   order: Order,
   options?: GenerateOrderInvoiceOptions
-) => {
+): Promise<GenerateOrderInvoiceResult> => {
   const prepareOpts = options?.purchaseInvoices?.length
     ? { purchaseInvoices: options.purchaseInvoices }
     : undefined;
-  const html = await getOrderInvoiceHTML(order, prepareOpts);
-  
-  // Create a temporary element to render HTML
-  const element = document.createElement('div');
-  element.innerHTML = html;
-  element.style.width = '210mm'; // A4 width
-  element.style.padding = '0';
-  element.style.margin = '0';
-  element.style.position = 'absolute';
-  element.style.left = '-9999px';
-  element.style.top = '0';
-  document.body.appendChild(element);
-  
-  try {
-    // Convert HTML to canvas (scale 1.5 + JPEG keeps file size down vs scale 2 + PNG)
-    const canvas = await html2canvas(element, {
-      scale: 1.5,
-      useCORS: true,
-      logging: false,
-      width: element.scrollWidth,
-      height: element.scrollHeight
-    });
-    
-    // Convert canvas to image
-    const imgData = canvas.toDataURL('image/jpeg', 0.8);
-    
-    // Calculate PDF dimensions
-    const imgWidth = 210; // A4 width in mm
-    const pageHeight = 297; // A4 height in mm
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-    
-    // Create PDF
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    let position = 0;
-    
-    // Add first page
-    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-    
-    // Add additional pages if needed
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-    
-    // Save PDF
-    pdf.save(`order-invoice-${order.id}.pdf`);
+  const downloadPdf = options?.downloadPdf !== false;
+  const suppressEmailAlerts = options?.suppressEmailAlerts === true;
 
-    if (options?.emailPdfToRetailer) {
-      const em = order.retailerEmail?.trim();
-      if (!em || !em.includes('@')) {
-        await appAlert(
-          'Invoice downloaded, but this order has no retailer email — the PDF could not be emailed.'
-        );
-      } else {
-        // Snapshot PDF payload before teardown; SMTP + CSV can run slow — do not block download UX.
-        const dataUri = pdf.output('datauristring');
-        const fileName = sanitizedOrderInvoicePdfFileName(order);
-        const csvFileName = sanitizedOrderInvoiceCsvFileName(order);
-        void (async () => {
-          try {
-            const csvText = await buildOrderInvoiceCsv(order, prepareOpts);
-            const csvDataUri = csvUtf8ToDataUriBase64(csvText);
-            const res = await sendOrderInvoicePdfToRetailer(order.id, dataUri, fileName, {
-              csvBase64Uri: csvDataUri,
-              csvFileName,
-            });
-            if (res.ok && res.emailedTo) {
-              await appAlert(`Invoice emailed to ${res.emailedTo} (PDF and CSV).`);
-            } else {
-              await appAlert(
-                'Invoice was downloaded but email delivery could not be confirmed — check Firebase logs.'
-              );
-            }
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            console.error('Email invoice failed:', err);
-            await appAlert(`Invoice downloaded, but emailing the retailer failed: ${message}`);
-          }
-        })();
-      }
+  try {
+    const data = await prepareOrderInvoiceData(order, prepareOpts);
+    const pdf = await buildPaginatedInvoicePdf({
+      title: 'Sales GST Invoice',
+      items: data.items,
+      firstHeaderHtml: buildOrderInvoiceFirstHeaderHtml(data),
+      buildContHeaderHtml: (page) =>
+        buildContinuationHeaderHtml({
+          title: 'SALES GST INVOICE',
+          invoiceNo: data.invoiceData.no,
+          date: data.invoiceData.date,
+          pageIndex: page.pageIndex,
+          pageCount: page.pageCount,
+          partyName: data.party.name,
+        }),
+      buildItemsHtml: (pageItems) => buildGstInvoiceItemTableHtml(pageItems),
+      footerHtml: buildOrderInvoiceFooterBlocksHtml(data, order.dispatchNotes || ''),
+      fileName: `order-invoice-${order.id}.pdf`,
+      download: downloadPdf,
+      scale: 1.5,
+    });
+
+    if (!options?.emailPdfToRetailer) {
+      return {};
     }
+
+    const em = order.retailerEmail?.trim();
+    if (!em || !em.includes('@')) {
+      const emailError = 'This order has no retailer email — the PDF could not be emailed.';
+      if (!suppressEmailAlerts) {
+        await appAlert(
+          downloadPdf
+            ? 'Invoice downloaded, but this order has no retailer email — the PDF could not be emailed.'
+            : emailError
+        );
+      }
+      return { emailed: false, emailError };
+    }
+
+    const dataUri = pdf.output('datauristring');
+    const fileName = sanitizedOrderInvoicePdfFileName(order);
+    const csvFileName = sanitizedOrderInvoiceCsvFileName(order);
+
+    const sendEmail = async (): Promise<GenerateOrderInvoiceResult> => {
+      try {
+        const csvText = await buildOrderInvoiceCsv(order, prepareOpts);
+        const csvDataUri = csvUtf8ToDataUriBase64(csvText);
+        const res = await sendOrderInvoicePdfToRetailer(order.id, dataUri, fileName, {
+          csvBase64Uri: csvDataUri,
+          csvFileName,
+        });
+        if (res.ok && res.emailedTo) {
+          if (!suppressEmailAlerts) {
+            await appAlert(`Invoice emailed to ${res.emailedTo} (PDF and CSV).`);
+          }
+          return { emailed: true, emailedTo: res.emailedTo };
+        }
+        const emailError = 'Email delivery could not be confirmed — check Firebase logs.';
+        if (!suppressEmailAlerts) {
+          await appAlert(
+            downloadPdf
+              ? 'Invoice was downloaded but email delivery could not be confirmed — check Firebase logs.'
+              : emailError
+          );
+        }
+        return { emailed: false, emailError };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('Email invoice failed:', err);
+        if (!suppressEmailAlerts) {
+          await appAlert(
+            downloadPdf
+              ? `Invoice downloaded, but emailing the retailer failed: ${message}`
+              : `Emailing the retailer failed: ${message}`
+          );
+        }
+        return { emailed: false, emailError: message };
+      }
+    };
+
+    if (options.awaitEmail) {
+      return await sendEmail();
+    }
+    void sendEmail();
+    return {};
   } catch (error) {
     console.error('Error generating PDF:', error);
-    await appAlert('Failed to generate invoice. Please try again.');
-  } finally {
-    // Clean up
-    document.body.removeChild(element);
+    if (!suppressEmailAlerts) {
+      await appAlert('Failed to generate invoice. Please try again.');
+    }
+    return { emailed: false, emailError: 'Failed to generate invoice PDF.' };
   }
 };
 
@@ -963,18 +959,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     tray: '-'
   };
   
-  // Complete HTML template
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Purchase GST Invoice</title>
-<style>${GST_INVOICE_STYLES}</style>
-</head>
-<body>
-<div class="invoice-box">
-<!-- HEADER -->
+  const firstHeaderHtml = `
 <table>
   <tr>
     <td width="50%">
@@ -994,7 +979,6 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     </td>
   </tr>
 </table>
-<!-- INVOICE INFO -->
 <table>
   <tr>
     ${buildGstInvoiceTitleCell('PURCHASE GST INVOICE', company.dl, company.gstin)}
@@ -1007,75 +991,45 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
       Date: ${invoiceData.date}
     </td>
   </tr>
-</table>
-<!-- ITEM TABLE -->
-${buildGstInvoiceItemTableHtml(items)}
-<!-- TOTAL SECTION -->
+</table>`;
+
+  const footerHtml = `
 ${buildGstInvoiceTotalsSection(tax, summary, avgGstRate / 2)}
-<!-- FOOTER -->
-${buildGstInvoiceFooter(invoice.notes || '', summary.amountInWords, party.name)}
-</div>
-</body>
-</html>
-  `;
+${buildGstInvoiceFooter(invoice.notes || '', summary.amountInWords, party.name)}`;
+
+  return {
+    items: items as GstInvoiceLineItem[],
+    firstHeaderHtml,
+    footerHtml,
+    invoiceData,
+    partyName: party.name,
+  };
 };
 
 export const generatePurchaseInvoice = async (invoice: PurchaseInvoice) => {
-  const html = await getInvoiceHTML(invoice);
-  
-  // Create a temporary element to render HTML
-  const element = document.createElement('div');
-  element.innerHTML = html;
-  element.style.width = '210mm'; // A4 width
-  element.style.padding = '0';
-  element.style.margin = '0';
-  element.style.position = 'absolute';
-  element.style.left = '-9999px';
-  element.style.top = '0';
-  document.body.appendChild(element);
-  
   try {
-    // Convert HTML to canvas
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      width: element.scrollWidth,
-      height: element.scrollHeight
+    const parts = await getInvoiceHTML(invoice);
+    await buildPaginatedInvoicePdf({
+      title: 'Purchase GST Invoice',
+      items: parts.items,
+      firstHeaderHtml: parts.firstHeaderHtml,
+      buildContHeaderHtml: (page) =>
+        buildContinuationHeaderHtml({
+          title: 'PURCHASE GST INVOICE',
+          invoiceNo: parts.invoiceData.no,
+          date: parts.invoiceData.date,
+          pageIndex: page.pageIndex,
+          pageCount: page.pageCount,
+          partyName: parts.partyName,
+        }),
+      buildItemsHtml: (pageItems) => buildGstInvoiceItemTableHtml(pageItems),
+      footerHtml: parts.footerHtml,
+      fileName: `purchase-invoice-${invoice.invoiceNumber}.pdf`,
+      download: true,
+      scale: 1.5,
     });
-    
-    // Convert canvas to image
-    const imgData = canvas.toDataURL('image/png');
-    
-    // Calculate PDF dimensions
-    const imgWidth = 210; // A4 width in mm
-    const pageHeight = 297; // A4 height in mm
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-    
-    // Create PDF
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    let position = 0;
-    
-    // Add first page
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-    
-    // Add additional pages if needed
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-    
-    // Save PDF
-    pdf.save(`purchase-invoice-${invoice.invoiceNumber}.pdf`);
   } catch (error) {
     console.error('Error generating PDF:', error);
     await appAlert('Failed to generate invoice. Please try again.');
-  } finally {
-    // Clean up
-    document.body.removeChild(element);
   }
 };
