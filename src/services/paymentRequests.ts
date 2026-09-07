@@ -201,15 +201,25 @@ async function existingSettlementKinds(
   orderId: string,
   requestId: string
 ): Promise<Set<string>> {
+  const amounts = await existingSettlementAmounts(orderId, requestId);
+  return new Set(Object.keys(amounts).filter((k) => (amounts[k] ?? 0) > 0.01));
+}
+
+/** Sum of payment rows already posted for this payment request, by settlementKind. */
+async function existingSettlementAmounts(
+  orderId: string,
+  requestId: string
+): Promise<Record<string, number>> {
   const snap = await getDocs(collection(db, 'orders', orderId, 'payments'));
-  const kinds = new Set<string>();
+  const amounts: Record<string, number> = {};
   snap.docs.forEach((d) => {
     const data = d.data() as Record<string, unknown>;
     if (String(data.paymentRequestId || '') !== requestId) return;
     const kind = String(data.settlementKind || 'cash');
-    kinds.add(kind);
+    const amt = roundMoney2(Math.max(0, Number(data.amount ?? 0)));
+    amounts[kind] = roundMoney2((amounts[kind] ?? 0) + amt);
   });
-  return kinds;
+  return amounts;
 }
 
 export const getAllPaymentRequests = async (): Promise<PaymentRequest[]> => {
@@ -351,21 +361,41 @@ export const approvePaymentRequest = async (
   const currentPaid = Number(order.paidAmount ?? 0);
   const remainingDue = roundMoney2(Math.max(0, totalAmount - currentPaid));
   const requestedAmount = Number(request.requestedAmount ?? 0);
-  const approvedAmount = roundMoney2(
-    Math.max(0, Number(payload.approvedAmount ?? request.approvedAmount ?? requestedAmount))
+  const snapshotFallback = Number(
+    request.dueBeforeRequestSnapshot ?? request.orderTotalSnapshot ?? 0
   );
-  const postedKinds = await existingSettlementKinds(request.orderId, requestId);
+  const approvedAmount = roundMoney2(
+    Math.max(
+      0,
+      Number(
+        payload.approvedAmount ??
+          request.approvedAmount ??
+          (requestedAmount > 0.01 ? requestedAmount : snapshotFallback)
+      )
+    )
+  );
+  const postedAmounts = await existingSettlementAmounts(request.orderId, requestId);
+  const postedKinds = new Set(
+    Object.keys(postedAmounts).filter((k) => (postedAmounts[k] ?? 0) > 0.01)
+  );
   const cashToPost = postedKinds.has('cash')
     ? 0
     : roundMoney2(Math.min(approvedAmount, remainingDue));
-  const creditWanted = roundMoney2(Math.max(0, remainingDue - cashToPost));
+  // Cash payment row may exist from a failed prior approve while order.paidAmount was never updated.
+  const existingCashToApply =
+    postedKinds.has('cash') && remainingDue > 0.01
+      ? roundMoney2(Math.min(postedAmounts.cash ?? 0, remainingDue))
+      : 0;
+  const creditWanted = roundMoney2(Math.max(0, remainingDue - cashToPost - existingCashToApply));
   const approvedCreditRaw =
     creditWanted > 0.01 ? await applyCreditApplications(request.creditApplications) : 0;
   const approvedCredit = roundMoney2(Math.min(approvedCreditRaw, creditWanted));
-  const settlementTotal = roundMoney2(cashToPost + approvedCredit);
+  const settlementTotal = roundMoney2(cashToPost + existingCashToApply + approvedCredit);
   if (settlementTotal <= 0.01 && remainingDue > 0.01 && !canResettle) {
     throw new Error(
-      'Nothing to apply: enter a cash/online amount or ensure wallet credit notes still have balance.'
+      `Nothing to apply (due ₹${remainingDue.toFixed(2)}, cash/online ₹${approvedAmount.toFixed(2)}` +
+        `${postedKinds.has('cash') ? ', cash already posted for this request' : ''}` +
+        '). Enter a cash/online amount or ensure wallet credit notes still have balance.'
     );
   }
 
@@ -374,7 +404,8 @@ export const approvePaymentRequest = async (
   const nextStatus: 'Paid' | 'Partial' | 'Unpaid' =
     nextDue <= 0.01 ? 'Paid' : nextPaid > 0.01 ? 'Partial' : 'Unpaid';
   const cashMethod = request.method === 'online' ? 'Online' : 'Cash';
-  const paymentMethod = cashToPost > 0.01 ? cashMethod : 'Wallet';
+  const paymentMethod =
+    cashToPost > 0.01 || existingCashToApply > 0.01 ? cashMethod : 'Wallet';
 
   if (cashToPost > 0.01) {
     await addDoc(collection(db, 'orders', request.orderId, 'payments'), {
