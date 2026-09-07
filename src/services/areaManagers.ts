@@ -114,6 +114,58 @@ export const assignSalesOfficerToAreaManager = async (
   }
 };
 
+export type SyncAmSalesOfficersResult = {
+  assigned: number;
+  unassigned: number;
+  skippedOtherAm: number;
+};
+
+/**
+ * Link Sales Officers to an AM by matching SO.district to managedDistricts.
+ * - Assigns unassigned SOs (and keeps ones already on this AM).
+ * - Does not steal SOs already assigned to a different AM.
+ * - Unassigns SOs under this AM whose district is no longer managed.
+ */
+export const syncSalesOfficersForAreaManagerDistricts = async (
+  areaManagerId: string,
+  managedDistricts: string[],
+  salesOfficers: User[]
+): Promise<SyncAmSalesOfficersResult> => {
+  const amId = areaManagerId.trim();
+  if (!amId) {
+    throw new Error('Area Manager id is required');
+  }
+
+  const districts = new Set(
+    managedDistricts.map((d) => String(d || '').trim().toLowerCase()).filter(Boolean)
+  );
+
+  let assigned = 0;
+  let unassigned = 0;
+  let skippedOtherAm = 0;
+
+  for (const so of salesOfficers) {
+    const soDistrict = String(so.district || '').trim().toLowerCase();
+    const matches = Boolean(soDistrict && districts.has(soDistrict));
+    const currentAm = String(so.areaManagerId || '').trim();
+
+    if (matches) {
+      if (currentAm === amId) continue;
+      if (currentAm && currentAm !== amId) {
+        skippedOtherAm += 1;
+        continue;
+      }
+      await assignSalesOfficerToAreaManager(so.id, amId);
+      assigned += 1;
+    } else if (currentAm === amId) {
+      await assignSalesOfficerToAreaManager(so.id, null);
+      unassigned += 1;
+    }
+  }
+
+  return { assigned, unassigned, skippedOtherAm };
+};
+
 /**
  * Password reset for AM — reuses the SO reset callable (email-based Auth link).
  */
