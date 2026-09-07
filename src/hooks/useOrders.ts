@@ -21,6 +21,7 @@ import {
   unfulfillOrder,
   recalculateOrderPricing,
   restoreStockForCancelledOrder,
+  mergePendingOrders,
   getOrderById,
   getOrdersByRetailer,
   getRetailerOrdersForSchemeHistory,
@@ -39,17 +40,21 @@ import { buildLastSchemeByMedicineId } from '../utils/retailerLastScheme';
 import { useStores } from './useStores';
 
 /** Shared invalidation for every Orders Management list source (Typesense + Firestore ranges). */
-export const invalidateOrderListQueries = (queryClient: ReturnType<typeof useQueryClient>) => {
-  queryClient.invalidateQueries({ queryKey: ['orders'] });
-  queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
-  queryClient.invalidateQueries({ queryKey: ['ordersInRange'] });
-  queryClient.invalidateQueries({ queryKey: ['ordersInDateRange'] });
-  queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] });
-  queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] });
-  queryClient.invalidateQueries({ queryKey: ['recentOrders'] });
-  queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] });
-  queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
-  queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] });
+export const invalidateOrderListQueries = async (
+  queryClient: ReturnType<typeof useQueryClient>
+) => {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['orders'] }),
+    queryClient.invalidateQueries({ queryKey: ['ordersSearch'] }),
+    queryClient.invalidateQueries({ queryKey: ['ordersInRange'] }),
+    queryClient.invalidateQueries({ queryKey: ['ordersInDateRange'] }),
+    queryClient.invalidateQueries({ queryKey: ['ordersByStatuses'] }),
+    queryClient.invalidateQueries({ queryKey: ['orderDashboardStats'] }),
+    queryClient.invalidateQueries({ queryKey: ['recentOrders'] }),
+    queryClient.invalidateQueries({ queryKey: ['orderInvoicedAmountTotal'] }),
+    queryClient.invalidateQueries({ queryKey: ['receivableOrders'] }),
+    queryClient.invalidateQueries({ queryKey: ['ordersInPeriod'] }),
+  ]);
 };
 
 const markOrderCancelledInLists = (
@@ -346,6 +351,30 @@ export const useCancelOrder = () => {
       queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
       queryClient.invalidateQueries({ queryKey: ['expiredMedicines'] });
     }
+  });
+};
+
+export const useMergePendingOrders = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { orderIds: string[]; mergedBy: string; targetOrderId?: string }) =>
+      mergePendingOrders(args),
+    onSuccess: async (result) => {
+      await invalidateOrderListQueries(queryClient);
+      await queryClient.invalidateQueries({ queryKey: ['order', result.targetOrderId] });
+      await Promise.all(
+        result.cancelledOrderIds.map((id) =>
+          queryClient.invalidateQueries({ queryKey: ['order', id] })
+        )
+      );
+      await queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+      // Force active list queries to reload immediately (Orders Management table).
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ['ordersSearch'], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['ordersInRange'], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['orders'], type: 'active' }),
+      ]);
+    },
   });
 };
 

@@ -1,6 +1,6 @@
-import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where } from './firebase';
+import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where, writeBatch } from './firebase';
 import { deleteField } from 'firebase/firestore';
-import { Order, OrderStatus, OrderTimelineEvent, Medicine, PurchaseInvoice, Payment } from '../types';
+import { Order, OrderStatus, OrderTimelineEvent, OrderMedicine, Medicine, PurchaseInvoice, Payment } from '../types';
 import {
   reduceStockBatchesFromMedicine,
   restoreStockToBatch,
@@ -14,6 +14,7 @@ import {
   recomputeFulfillmentLineScheme,
 } from '../utils/orderSchemeOverride';
 import { nestedFirestoreTimestamp, serverTimestamp } from '../utils/firestoreTimestamps';
+import { stripUndefinedDeep } from '../utils/firestorePayload';
 import {
   buildPurchaseBatchDiscountLookup,
   resolveOrderLineDisplayDiscountPct,
@@ -535,6 +536,266 @@ export const cancelOrder = async (
   });
 
   return { stockRestoreErrors };
+};
+
+function normalizeProductName(name: string): string {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/** Physical ordered qty on a Pending line (paid + free if present). */
+function pendingLinePhysicalQty(line: OrderMedicine): number {
+  const paid = Number(line.quantity);
+  const free = Number(line.freeQuantity);
+  const paidN = Number.isFinite(paid) ? paid : 0;
+  const freeN = Number.isFinite(free) ? free : 0;
+  const original = Number(line.originalQuantity);
+  if (Number.isFinite(original) && original > paidN + freeN) {
+    return Math.max(0, original);
+  }
+  return Math.max(0, paidN + freeN);
+}
+
+function isProductDemandLine(line: OrderMedicine): boolean {
+  return (
+    line.lineType === 'product_demand' ||
+    Boolean(String(line.productDemandId || '').trim()) ||
+    !String(line.medicineId || '').trim()
+  );
+}
+
+/**
+ * Merge key for Pending lines:
+ * - product demands → name + manufacturer + unit
+ * - catalog medicines → medicineId (preferred) or normalized name
+ * Same display name also aliases together so differing medicineIds still combine.
+ */
+function pendingLineMergeKey(line: OrderMedicine): string {
+  if (isProductDemandLine(line)) {
+    const name = normalizeProductName(String(line.name || ''));
+    const mfr = normalizeProductName(String(line.manufacturerName || ''));
+    const unit = normalizeProductName(String(line.requestedUnit || ''));
+    return `demand:${name}|${mfr}|${unit}`;
+  }
+  const medId = String(line.medicineId || '').trim().toLowerCase();
+  if (medId) return `med:${medId}`;
+  return `name:${normalizeProductName(String(line.name || ''))}`;
+}
+
+function combinePendingOrderLines(lines: OrderMedicine[]): {
+  medicines: OrderMedicine[];
+  orphanDemandIds: string[];
+} {
+  const byKey = new Map<string, OrderMedicine>();
+  const catalogNameToKey = new Map<string, string>();
+  const orphanDemandIds: string[] = [];
+
+  for (const raw of lines) {
+    const qty = pendingLinePhysicalQty(raw);
+    if (qty <= 0 && !isProductDemandLine(raw)) continue;
+
+    const cleaned: OrderMedicine = {
+      ...raw,
+      medicineId: String(raw.medicineId || '').trim(),
+      name: String(raw.name || '').trim(),
+      quantity: qty,
+    };
+    delete cleaned.batchAllocations;
+    delete cleaned.batchNumber;
+    delete cleaned.expiryDate;
+    delete cleaned.freeQuantity;
+    delete cleaned.originalQuantity;
+
+    let key = pendingLineMergeKey(cleaned);
+    if (!isProductDemandLine(cleaned)) {
+      const nameKey = normalizeProductName(cleaned.name);
+      if (nameKey) {
+        const aliased = catalogNameToKey.get(nameKey);
+        if (aliased) {
+          key = aliased;
+        } else {
+          catalogNameToKey.set(nameKey, key);
+        }
+      }
+    }
+
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, cleaned);
+      continue;
+    }
+
+    existing.quantity = (Number(existing.quantity) || 0) + qty;
+    // Prefer keeping a real medicineId when aliasing by name.
+    if (!String(existing.medicineId || '').trim() && cleaned.medicineId) {
+      existing.medicineId = cleaned.medicineId;
+    }
+    if (
+      cleaned.productDemandId &&
+      existing.productDemandId &&
+      cleaned.productDemandId !== existing.productDemandId
+    ) {
+      orphanDemandIds.push(cleaned.productDemandId);
+    } else if (cleaned.productDemandId && !existing.productDemandId) {
+      existing.productDemandId = cleaned.productDemandId;
+      existing.lineType = 'product_demand';
+    }
+  }
+
+  const medicines = Array.from(byKey.values()).map(
+    (line) =>
+      stripUndefinedDeep({
+        ...line,
+        quantity: Math.max(0, Number(line.quantity) || 0),
+      }) as OrderMedicine
+  );
+
+  return { medicines, orphanDemandIds };
+}
+
+export type MergePendingOrdersResult = {
+  targetOrderId: string;
+  cancelledOrderIds: string[];
+  lineCount: number;
+  retailerId: string;
+};
+
+/**
+ * Manual merge: combine selected Pending orders for one retailer into the oldest
+ * (or explicit target). Same catalog/demand item → summed quantity. Sources cancelled.
+ */
+export const mergePendingOrders = async (args: {
+  orderIds: string[];
+  mergedBy: string;
+  /** Defaults to oldest by orderDate among the set. */
+  targetOrderId?: string;
+}): Promise<MergePendingOrdersResult> => {
+  const uniqueIds = [...new Set(args.orderIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (uniqueIds.length < 2) {
+    throw new Error('Select at least two Pending orders to merge');
+  }
+
+  const loaded: Order[] = [];
+  for (const id of uniqueIds) {
+    const order = await getOrderById(id);
+    if (!order) throw new Error(`Order not found: ${id}`);
+    loaded.push(order);
+  }
+
+  for (const o of loaded) {
+    if (o.status !== 'Pending') {
+      throw new Error(`Only Pending orders can be merged (found ${o.status} on ${o.id})`);
+    }
+  }
+
+  const retailerId = String(loaded[0].retailerId || '').trim();
+  if (!retailerId || loaded.some((o) => String(o.retailerId || '').trim() !== retailerId)) {
+    throw new Error('All selected orders must belong to the same retailer');
+  }
+
+  const byDateAsc = [...loaded].sort((a, b) => {
+    const ta = a.orderDate instanceof Date ? a.orderDate.getTime() : new Date(a.orderDate).getTime();
+    const tb = b.orderDate instanceof Date ? b.orderDate.getTime() : new Date(b.orderDate).getTime();
+    return ta - tb;
+  });
+
+  const targetId = (args.targetOrderId || '').trim() || byDateAsc[0].id;
+  const target = loaded.find((o) => o.id === targetId);
+  if (!target) throw new Error('Target order is not in the selected set');
+
+  const sources = loaded.filter((o) => o.id !== targetId);
+  const orderedForLines = [target, ...sources];
+  const allLines = orderedForLines.flatMap((o) => o.medicines || []);
+  const { medicines, orphanDemandIds } = combinePendingOrderLines(allLines);
+
+  const subTotal = medicines.reduce((sum, line) => {
+    if (line.lineType === 'product_demand') return sum;
+    return sum + (Number(line.price) || 0) * (Number(line.quantity) || 0);
+  }, 0);
+
+  const sourceIdsLabel = sources.map((o) => o.id).join(', ');
+  const mergeNote = `Merged Pending orders ${sourceIdsLabel} into this order (same items combined)`;
+
+  const targetRef = doc(db, 'orders', targetId);
+  const targetTimeline = Array.isArray(target.timeline) ? [...target.timeline] : [];
+  targetTimeline.push(createTimelineEvent('Pending', args.mergedBy, mergeNote));
+
+  const batch = writeBatch(db);
+  batch.update(targetRef, {
+    medicines: medicines.map((m) => stripUndefinedDeep({ ...m })),
+    subTotal,
+    totalAmount: subTotal,
+    taxAmount: Number(target.taxAmount) || 0,
+    totalDiscount: 0,
+    dueAmount: Math.max(0, subTotal - (Number(target.paidAmount) || 0)),
+    fulfillmentDraft: deleteField(),
+    timeline: targetTimeline,
+  });
+
+  for (const source of sources) {
+    const sourceRef = doc(db, 'orders', source.id);
+    const sourceTimeline = Array.isArray(source.timeline) ? [...source.timeline] : [];
+    const cancelReason = `Merged into order ${targetId}`;
+    sourceTimeline.push(createTimelineEvent('Cancelled', args.mergedBy, cancelReason));
+    batch.update(sourceRef, {
+      status: 'Cancelled',
+      cancelReason,
+      cancelledAt: serverTimestamp(),
+      stockRestoredOnCancel: true,
+      fulfillmentDraft: deleteField(),
+      timeline: sourceTimeline,
+    });
+  }
+
+  const keptDemandIds = new Set(
+    medicines.map((m) => String(m.productDemandId || '').trim()).filter(Boolean)
+  );
+
+  for (const line of medicines) {
+    const demandId = String(line.productDemandId || '').trim();
+    if (!demandId) continue;
+    const demandRef = doc(db, 'product_demands', demandId);
+    batch.update(demandRef, {
+      orderId: targetId,
+      requestedQuantity: Math.max(1, Math.floor(Number(line.quantity) || 1)),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  for (const demandId of orphanDemandIds) {
+    if (keptDemandIds.has(demandId)) continue;
+    const demandRef = doc(db, 'product_demands', demandId);
+    batch.update(demandRef, {
+      status: 'cancelled',
+      cancelReason: `Merged into order ${targetId}`,
+      orderId: targetId,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  // Demands on source orders that were not on any kept line
+  for (const source of sources) {
+    for (const line of source.medicines || []) {
+      const demandId = String(line.productDemandId || '').trim();
+      if (!demandId || keptDemandIds.has(demandId) || orphanDemandIds.includes(demandId)) continue;
+      const demandRef = doc(db, 'product_demands', demandId);
+      batch.update(demandRef, {
+        orderId: targetId,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  await batch.commit();
+
+  return {
+    targetOrderId: targetId,
+    cancelledOrderIds: sources.map((o) => o.id),
+    lineCount: medicines.length,
+    retailerId,
+  };
 };
 
 /**
