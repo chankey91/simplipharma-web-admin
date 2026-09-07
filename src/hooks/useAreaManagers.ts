@@ -4,6 +4,7 @@ import {
   createAreaManager,
   updateAreaManagerProfile,
   assignSalesOfficerToAreaManager,
+  syncSalesOfficersForAreaManagerDistricts,
   sendAreaManagerPasswordResetEmail,
   type AreaManagerProfileUpdate,
 } from '../services/areaManagers';
@@ -25,6 +26,7 @@ export const useCreateAreaManager = () => {
       createAreaManager(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['areaManagers'] });
+      queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });
     },
   });
 };
@@ -35,6 +37,27 @@ export const useUpdateAreaManagerProfile = () => {
     mutationFn: (args: { areaManagerId: string; data: AreaManagerProfileUpdate }) =>
       updateAreaManagerProfile(args.areaManagerId, args.data),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['areaManagers'] });
+      queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });
+    },
+  });
+};
+
+export const useSyncSalesOfficersForAreaManagerDistricts = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      areaManagerId: string;
+      managedDistricts: string[];
+      salesOfficers: User[];
+    }) =>
+      syncSalesOfficersForAreaManagerDistricts(
+        args.areaManagerId,
+        args.managedDistricts,
+        args.salesOfficers
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });
       queryClient.invalidateQueries({ queryKey: ['areaManagers'] });
     },
   });

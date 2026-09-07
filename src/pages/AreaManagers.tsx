@@ -35,6 +35,7 @@ import {
   useCreateAreaManager,
   useUpdateAreaManagerProfile,
   useAssignSalesOfficerToAreaManager,
+  useSyncSalesOfficersForAreaManagerDistricts,
   useSendAreaManagerPasswordResetEmail,
 } from '../hooks/useAreaManagers';
 import { useSalesOfficers } from '../hooks/useSalesOfficers';
@@ -85,6 +86,7 @@ export const AreaManagersPage: React.FC = () => {
   const createMutation = useCreateAreaManager();
   const updateMutation = useUpdateAreaManagerProfile();
   const assignMutation = useAssignSalesOfficerToAreaManager();
+  const syncSosMutation = useSyncSalesOfficersForAreaManagerDistricts();
   const resetPasswordMutation = useSendAreaManagerPasswordResetEmail();
 
   const [openDialog, setOpenDialog] = useState(false);
@@ -158,6 +160,20 @@ export const AreaManagersPage: React.FC = () => {
       .map((t) => t.trim())
       .filter(Boolean);
 
+  const formatSyncSummary = (sync: {
+    assigned: number;
+    unassigned: number;
+    skippedOtherAm: number;
+  }) => {
+    const parts: string[] = [];
+    if (sync.assigned > 0) parts.push(`linked ${sync.assigned} SO(s) by district`);
+    if (sync.unassigned > 0) parts.push(`unlinked ${sync.unassigned} SO(s) outside managed districts`);
+    if (sync.skippedOtherAm > 0) {
+      parts.push(`${sync.skippedOtherAm} SO(s) skipped (already under another AM)`);
+    }
+    return parts.length > 0 ? parts.join('; ') : 'no SO changes (check SO district on Sales Officers)';
+  };
+
   const handleCreate = async () => {
     if (!formData.email.trim() || !formData.displayName.trim() || !formData.phoneNumber.trim()) {
       await alert('Name, email, and phone are required.', { severity: 'warning' });
@@ -168,7 +184,7 @@ export const AreaManagersPage: React.FC = () => {
       return;
     }
     try {
-      await createMutation.mutateAsync({
+      const amId = await createMutation.mutateAsync({
         email: formData.email.trim(),
         displayName: formData.displayName.trim(),
         phoneNumber: formData.phoneNumber.trim(),
@@ -176,8 +192,17 @@ export const AreaManagersPage: React.FC = () => {
         managedTowns: parseTowns(formData.managedTowns),
         initialPassword: formData.password,
       });
+      let syncNote = '';
+      if (amId) {
+        const sync = await syncSosMutation.mutateAsync({
+          areaManagerId: amId,
+          managedDistricts: formData.managedDistricts,
+          salesOfficers,
+        });
+        syncNote = `\n\nSO sync: ${formatSyncSummary(sync)}`;
+      }
       await alert(
-        `Area Manager created.\n\nEmail: ${formData.email.trim()}\nPassword: ${formData.password}`,
+        `Area Manager created.\n\nEmail: ${formData.email.trim()}\nPassword: ${formData.password}${syncNote}`,
         { severity: 'success' }
       );
       setOpenDialog(false);
@@ -219,9 +244,16 @@ export const AreaManagersPage: React.FC = () => {
           managedTowns: parseTowns(editForm.managedTowns),
         },
       });
+      const sync = await syncSosMutation.mutateAsync({
+        areaManagerId: editManager.id,
+        managedDistricts: editForm.managedDistricts,
+        salesOfficers,
+      });
       setEditOpen(false);
       setEditManager(null);
-      await alert('Area Manager updated.', { severity: 'success' });
+      await alert(`Area Manager updated.\n\nSO sync: ${formatSyncSummary(sync)}`, {
+        severity: 'success',
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to update';
       await alert(msg, { severity: 'error' });
@@ -549,7 +581,12 @@ export const AreaManagersPage: React.FC = () => {
               value={formData.managedDistricts}
               onChange={(_, value) => setFormData({ ...formData, managedDistricts: value })}
               renderInput={(params) => (
-                <TextField {...params} label="Managed districts" required />
+                <TextField
+                  {...params}
+                  label="Managed districts"
+                  required
+                  helperText="On save, Sales Officers whose district matches are linked to this AM"
+                />
               )}
             />
             <TextField
@@ -605,7 +642,12 @@ export const AreaManagersPage: React.FC = () => {
               value={editForm.managedDistricts}
               onChange={(_, value) => setEditForm({ ...editForm, managedDistricts: value })}
               renderInput={(params) => (
-                <TextField {...params} label="Managed districts" required />
+                <TextField
+                  {...params}
+                  label="Managed districts"
+                  required
+                  helperText="On save, Sales Officers whose district matches are linked to this AM"
+                />
               )}
             />
             <TextField
