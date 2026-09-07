@@ -41,11 +41,13 @@ import {
   Publish,
   LocalShipping,
   CheckCircle,
+  MergeType,
 } from '@mui/icons-material';
 import {
   useOrders,
   useOrdersSearch,
   useCancelOrder,
+  useMergePendingOrders,
   invalidateOrderListQueries,
 } from '../hooks/useOrders';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -77,7 +79,7 @@ import {
 const ROWS_PER_PAGE = 10;
 
 const isBulkSelectableStatus = (status: OrderStatus) =>
-  status === 'Order Fulfillment' || status === 'In Transit';
+  status === 'Pending' || status === 'Order Fulfillment' || status === 'In Transit';
 
 /** Normalized row shape rendered by the table, sourced from either Typesense or the fallback full list. */
 interface OrderRow {
@@ -122,6 +124,7 @@ const sortKeyToField = (key: string): OrderSearchParams['sortField'] => {
 
 export const OrdersPage: React.FC = () => {
   const cancelOrderMutation = useCancelOrder();
+  const mergePendingMutation = useMergePendingOrders();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { alert } = useAppDialog();
@@ -155,6 +158,7 @@ export const OrdersPage: React.FC = () => {
     notes: '',
   });
   const [bulkDeliverDialog, setBulkDeliverDialog] = useState({ open: false });
+  const [mergePendingDialog, setMergePendingDialog] = useState({ open: false });
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
@@ -475,6 +479,23 @@ export const OrdersPage: React.FC = () => {
     () => selectedIds.filter((id) => selectedById[id]?.status === 'In Transit'),
     [selectedIds, selectedById]
   );
+  const selectedPendingIds = useMemo(
+    () => selectedIds.filter((id) => selectedById[id]?.status === 'Pending'),
+    [selectedIds, selectedById]
+  );
+  const pendingMergeRetailerId = useMemo(() => {
+    if (selectedPendingIds.length < 2) return '';
+    const first = String(selectedById[selectedPendingIds[0]]?.retailerId || '').trim();
+    if (!first) return '';
+    const same = selectedPendingIds.every(
+      (id) => String(selectedById[id]?.retailerId || '').trim() === first
+    );
+    return same ? first : '';
+  }, [selectedPendingIds, selectedById]);
+  const canMergePending = Boolean(pendingMergeRetailerId) && selectedPendingIds.length >= 2;
+  const mergePendingStoreName = pendingMergeRetailerId
+    ? selectedById[selectedPendingIds[0]]?.storeName || 'this retailer'
+    : '';
 
   const selectableRowsOnPage = useMemo(
     () => (canEditOrders ? rows.filter((r) => isBulkSelectableStatus(r.status)) : []),
@@ -535,7 +556,12 @@ export const OrdersPage: React.FC = () => {
   };
 
   const refreshListsAfterBulk = async () => {
-    invalidateOrderListQueries(queryClient);
+    await invalidateOrderListQueries(queryClient);
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: ['ordersSearch'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['ordersInRange'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['orders'], type: 'active' }),
+    ]);
     setSelectedById({});
   };
 
@@ -603,6 +629,32 @@ export const OrdersPage: React.FC = () => {
           severity: 'success',
         });
       }
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleMergePendingConfirm = async () => {
+    const user = auth.currentUser;
+    if (!user || !canMergePending) return;
+    setBulkBusy(true);
+    try {
+      const result = await mergePendingMutation.mutateAsync({
+        orderIds: selectedPendingIds,
+        mergedBy: user.uid,
+      });
+      setMergePendingDialog({ open: false });
+      // Hide merge-cancelled sources: show Pending only after merge.
+      setStatusFilter('Pending');
+      setPage(1);
+      await refreshListsAfterBulk();
+      await alert(
+        `Merged into #${formatOrderNumberForDisplay(result.targetOrderId)} (${result.lineCount} line(s)). ${result.cancelledOrderIds.length} order(s) cancelled and hidden from this Pending list.`,
+        { severity: 'success' }
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to merge orders';
+      await alert(msg, { severity: 'error' });
     } finally {
       setBulkBusy(false);
     }
@@ -990,11 +1042,22 @@ export const OrdersPage: React.FC = () => {
           >
             <Typography variant="body2" sx={{ mr: 1 }}>
               {selectedIds.length} selected
+              {selectedPendingIds.length > 0 ? ` · ${selectedPendingIds.length} pending` : ''}
               {selectedFulfillmentIds.length > 0
                 ? ` · ${selectedFulfillmentIds.length} fulfillment`
                 : ''}
               {selectedTransitIds.length > 0 ? ` · ${selectedTransitIds.length} in transit` : ''}
             </Typography>
+            <Button
+              size="small"
+              variant="contained"
+              color="secondary"
+              startIcon={<MergeType />}
+              disabled={bulkBusy || !canMergePending || mergePendingMutation.isPending}
+              onClick={() => setMergePendingDialog({ open: true })}
+            >
+              Merge Pending ({selectedPendingIds.length})
+            </Button>
             <Button
               size="small"
               variant="contained"
@@ -1038,6 +1101,11 @@ export const OrdersPage: React.FC = () => {
             >
               Clear selection
             </Button>
+            {selectedPendingIds.length >= 2 && !canMergePending && (
+              <Typography variant="caption" color="warning.main" sx={{ width: '100%' }}>
+                Merge needs 2+ Pending orders for the same retailer (check Town / store).
+              </Typography>
+            )}
           </Toolbar>
           {bulkBusy && <LinearProgress />}
         </Paper>
@@ -1281,6 +1349,47 @@ export const OrdersPage: React.FC = () => {
             disabled={bulkBusy || selectedTransitIds.length === 0}
           >
             {bulkBusy ? 'Updating…' : `Mark Delivered (${selectedTransitIds.length})`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={mergePendingDialog.open}
+        onClose={() =>
+          !bulkBusy &&
+          !mergePendingMutation.isPending &&
+          setMergePendingDialog({ open: false })
+        }
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Merge Pending orders</DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom>
+            Merge {selectedPendingIds.length} Pending orders for <strong>{mergePendingStoreName}</strong>{' '}
+            into the oldest order. Same medicines combine quantities; other Pending orders will be
+            cancelled.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Orders:{' '}
+            {selectedPendingIds.map((id) => `#${formatOrderNumberForDisplay(id)}`).join(', ')}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setMergePendingDialog({ open: false })}
+            disabled={bulkBusy || mergePendingMutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={<MergeType />}
+            onClick={() => void handleMergePendingConfirm()}
+            disabled={bulkBusy || !canMergePending || mergePendingMutation.isPending}
+          >
+            {bulkBusy || mergePendingMutation.isPending ? 'Merging…' : 'Merge orders'}
           </Button>
         </DialogActions>
       </Dialog>
