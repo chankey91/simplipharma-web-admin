@@ -54,6 +54,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
 import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered } from '../services/orders';
 import { generateOrderInvoice } from '../utils/invoice';
+import {
+  extractOrderShortfallsFromOrders,
+  exportOrderShortfallsToExcel,
+} from '../utils/orderShortfalls';
 import { Order, OrderStatus, User } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
@@ -249,6 +253,28 @@ export const OrdersPage: React.FC = () => {
   /** Prefer Firestore for any date filter — Typesense can lag behind new orders. */
   const useLocalList = typesenseDisabled || hasDateFilter;
 
+  /** Retailer ids whose town/district matches the search term (for Typesense location filter). */
+  const locationMatchedRetailerIds = useMemo(() => {
+    const term = debouncedTerm.toLowerCase();
+    // Avoid hijacking short queries (e.g. "a") into location-only results.
+    if (term.length < 3) return [] as string[];
+    const ids = new Set<string>();
+    for (const store of stores || []) {
+      const town = (store.town || '').trim().toLowerCase();
+      const district = (store.district || '').trim().toLowerCase();
+      const label = formatTownDistrict(store.town, store.district).toLowerCase();
+      if (
+        (town && town.includes(term)) ||
+        (district && district.includes(term)) ||
+        (label && label.includes(term))
+      ) {
+        if (store.id) ids.add(store.id);
+        if (store.uid) ids.add(store.uid);
+      }
+    }
+    return Array.from(ids);
+  }, [debouncedTerm, stores]);
+
   // Primary path: server-side search/filter/sort/pagination via Typesense.
   const searchParams: OrderSearchParams = {
     query: debouncedTerm,
@@ -259,6 +285,9 @@ export const OrdersPage: React.FC = () => {
     perPage: ROWS_PER_PAGE,
     ...(fromDateFilter && !dateRangeInvalid ? { fromDate: fromDateFilter.slice(0, 10) } : {}),
     ...(toDateFilter && !dateRangeInvalid ? { toDate: toDateFilter.slice(0, 10) } : {}),
+    ...(locationMatchedRetailerIds.length > 0
+      ? { locationRetailerIds: locationMatchedRetailerIds }
+      : {}),
   };
   const {
     data: searchData,
@@ -301,11 +330,13 @@ export const OrdersPage: React.FC = () => {
     (orders: Order[], applyStatusFilter: boolean) => {
       const term = debouncedTerm.toLowerCase();
       return orders.filter((order) => {
+        const townDistrict = resolveTownDistrict(order.retailerId, order.retailerEmail).toLowerCase();
         const matchesSearch =
           !term ||
           order.id.toLowerCase().includes(term) ||
           resolveStoreName(order.retailerName, order.retailerId).toLowerCase().includes(term) ||
           order.retailerEmail?.toLowerCase().includes(term) ||
+          townDistrict.includes(term) ||
           order.medicines.some((m) => m.name.toLowerCase().includes(term));
         const matchesStatus =
           !applyStatusFilter || statusFilter === 'All' || order.status === statusFilter;
@@ -317,8 +348,18 @@ export const OrdersPage: React.FC = () => {
         return matchesSearch && matchesStatus && matchesDate;
       });
     },
-    [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, hasDateFilter, storeNameByRetailerId]
+    [
+      debouncedTerm,
+      statusFilter,
+      fromDateFilter,
+      toDateFilter,
+      storeNameByRetailerId,
+      storeByRetailerId,
+      storeByEmail,
+    ]
   );
+
+  // (locationMatchedRetailerIds defined above searchParams)
 
   const localFilteredSorted = useMemo(() => {
     if (!useLocalList) return [];
@@ -554,6 +595,50 @@ export const OrdersPage: React.FC = () => {
       stores || [],
       'selected-order-stores'
     );
+  };
+
+  const handleDownloadSelectedShortItems = async () => {
+    if (selectedIds.length === 0) {
+      await alert('Select at least one order first', { severity: 'warning' });
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const orders: Order[] = [];
+      const loadErrors: string[] = [];
+      for (const orderId of selectedIds) {
+        try {
+          const order = await getOrderById(orderId);
+          if (order) orders.push(order);
+          else loadErrors.push(`${formatOrderNumberForDisplay(orderId)}: not found`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          loadErrors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+        }
+      }
+      const shortRows = extractOrderShortfallsFromOrders(orders);
+      if (shortRows.length === 0) {
+        await alert(
+          loadErrors.length > 0
+            ? `No short items on the selected orders.\nLoad issues:\n${loadErrors.slice(0, 5).join('\n')}`
+            : 'No short items on the selected orders.',
+          { severity: 'warning' }
+        );
+        return;
+      }
+      exportOrderShortfallsToExcel(shortRows, 'selected-order-short-items');
+      await alert(
+        `Downloaded ${shortRows.length} short item line(s) from ${orders.length} order(s)${
+          loadErrors.length > 0 ? ` (${loadErrors.length} load issue(s))` : ''
+        }.`,
+        { severity: loadErrors.length > 0 ? 'warning' : 'success' }
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to export short items';
+      await alert(msg, { severity: 'error' });
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   const refreshListsAfterBulk = async () => {
@@ -913,7 +998,7 @@ export const OrdersPage: React.FC = () => {
             <TextField
               fullWidth
               size="small"
-              placeholder="Search orders..."
+              placeholder="Search order, store, email, town, district…"
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);
@@ -1123,6 +1208,16 @@ export const OrdersPage: React.FC = () => {
               onClick={() => void handleDownloadSelectedStores()}
             >
               Download store list
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<Download />}
+              disabled={bulkBusy || selectedIds.length === 0}
+              onClick={() => void handleDownloadSelectedShortItems()}
+            >
+              Download short items
             </Button>
             <Button
               size="small"
