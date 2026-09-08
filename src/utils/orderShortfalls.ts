@@ -1,6 +1,8 @@
+import * as XLSX from 'xlsx';
+import { format } from 'date-fns';
 import { Order, OrderMedicine, OrderStatus } from '../types';
 import { hasBatchAssignment } from './orderTotals';
-import { coerceToDate } from './dateTime';
+import { coerceToDate, istDateStampCompact } from './dateTime';
 
 export type OrderShortfallReason = 'partial' | 'product_demand' | 'no_batch';
 
@@ -165,4 +167,91 @@ export function extractOrderShortfallsFromOrders(orders: Order[]): OrderShortfal
     rows.push(...extractOrderShortfalls(order));
   }
   return rows;
+}
+
+/** Sort shortfall rows by retailer, then medicine, then order id. */
+export function sortShortfallsByRetailer(rows: OrderShortfallRow[]): OrderShortfallRow[] {
+  return [...rows].sort((a, b) => {
+    const r = a.retailerName.localeCompare(b.retailerName, undefined, { sensitivity: 'base' });
+    if (r !== 0) return r;
+    const e = a.retailerEmail.localeCompare(b.retailerEmail, undefined, { sensitivity: 'base' });
+    if (e !== 0) return e;
+    const m = a.medicineName.localeCompare(b.medicineName, undefined, { sensitivity: 'base' });
+    if (m !== 0) return m;
+    return a.orderId.localeCompare(b.orderId);
+  });
+}
+
+/**
+ * Single-sheet Excel of shortfall lines, sorted by retailer.
+ * Inserts a blank spacer row when the retailer changes for easier scanning.
+ */
+export function exportOrderShortfallsToExcel(
+  rows: OrderShortfallRow[],
+  filenamePrefix = 'order-shortfalls'
+): void {
+  const sorted = sortShortfallsByRetailer(rows);
+  const excelData: (string | number)[][] = [
+    [
+      'SR',
+      'Retailer',
+      'Email',
+      'Order ID',
+      'Order Date',
+      'Status',
+      'Medicine',
+      'Manufacturer',
+      'Ordered Qty',
+      'Fulfilled Qty',
+      'Shortfall Qty',
+      'Reason',
+      'Open?',
+    ],
+  ];
+
+  let sr = 0;
+  let prevRetailerKey = '';
+  for (const row of sorted) {
+    const retailerKey = `${row.retailerId}|${row.retailerName}|${row.retailerEmail}`;
+    if (prevRetailerKey && prevRetailerKey !== retailerKey) {
+      excelData.push([]);
+    }
+    prevRetailerKey = retailerKey;
+    sr += 1;
+    excelData.push([
+      sr,
+      row.retailerName,
+      row.retailerEmail,
+      row.orderId,
+      format(row.orderDate, 'yyyy-MM-dd'),
+      row.orderStatus,
+      row.medicineName,
+      row.manufacturerName || '',
+      row.orderedQty,
+      row.fulfilledQty,
+      row.shortfallQty,
+      SHORTFALL_REASON_LABELS[row.reason],
+      row.isOpen ? 'Yes' : 'No',
+    ]);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(excelData);
+  ws['!cols'] = [
+    { wch: 5 },
+    { wch: 28 },
+    { wch: 28 },
+    { wch: 16 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 32 },
+    { wch: 20 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 18 },
+    { wch: 8 },
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Shortfalls');
+  XLSX.writeFile(wb, `${filenamePrefix}-${istDateStampCompact()}.xlsx`);
 }

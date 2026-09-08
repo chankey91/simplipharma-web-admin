@@ -33,6 +33,11 @@ export interface OrderSearchParams {
   paymentStatus?: 'Paid' | 'Unpaid' | 'Partial' | 'All';
   /** Only orders that have an invoice (excludes Pending + Cancelled). */
   invoicedOnly?: boolean;
+  /**
+   * When the client search term matches store town/district, pass those retailer
+   * ids so Typesense can return their orders even if town is not in search_blob.
+   */
+  locationRetailerIds?: string[];
   /** Typesense field name to sort by. */
   sortField?:
     | 'docId'
@@ -75,6 +80,7 @@ export async function searchOrdersTypesense(
     perPage: params.perPage ?? 10,
     fromDate: params.fromDate ?? '',
     toDate: params.toDate ?? '',
+    locationRetailerIds: params.locationRetailerIds ?? [],
   });
   const data = (res.data ?? {}) as Partial<OrderSearchResult>;
   return {

@@ -192,10 +192,10 @@ export const exportPendingOrdersProductSummary = async (
     [
       'SR',
       'Medicine Name',
-      'Manufacturer',
       'Packaging',
       'Total Quantity',
       'Best Discount Vendor',
+      'Manufacturer',
     ],
   ];
 
@@ -206,10 +206,10 @@ export const exportPendingOrdersProductSummary = async (
     excelData.push([
       index + 1,
       row.medicineName,
-      row.manufacturer,
       row.packaging,
       row.totalQty,
       formatBestDiscountVendorLabel(best),
+      row.manufacturer,
     ]);
   });
 
@@ -219,10 +219,10 @@ export const exportPendingOrdersProductSummary = async (
   ws['!cols'] = [
     { wch: 5 },
     { wch: 40 },
-    { wch: 30 },
     { wch: 18 },
     { wch: 14 },
     { wch: 36 },
+    { wch: 30 },
   ];
 
   XLSX.utils.book_append_sheet(wb, ws, 'Product Summary');
