@@ -100,18 +100,72 @@ function toMillis(value: unknown): number {
 function buildOrderSearchBlob(
   orderId: string,
   data: FirebaseFirestore.DocumentData,
-  medicineNames: string
+  medicineNames: string,
+  townDistrict = ''
 ): string {
-  const parts = [orderId, data.retailerEmail, data.retailerName, data.invoiceNumber, medicineNames]
+  const parts = [
+    orderId,
+    data.retailerEmail,
+    data.retailerName,
+    data.invoiceNumber,
+    medicineNames,
+    townDistrict,
+  ]
     .filter((x) => x != null && String(x).trim() !== '')
     .map((x) => String(x).trim());
   return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function firestoreDataToOrderDoc(
+function formatTownDistrictLabel(town?: unknown, district?: unknown): string {
+  const t = String(town || '').trim();
+  const d = String(district || '').trim();
+  if (t && d) return `${t} ${d} ${t}, ${d}`;
+  return t || d || '';
+}
+
+async function resolveRetailerTownDistrict(
+  data: FirebaseFirestore.DocumentData,
+  cache?: Map<string, string>
+): Promise<string> {
+  const retailerId = String(data.retailerId || '').trim();
+  const email = String(data.retailerEmail || '').trim().toLowerCase();
+  const cacheKey = retailerId || (email ? `email:${email}` : '');
+  if (cacheKey && cache?.has(cacheKey)) return cache.get(cacheKey) || '';
+
+  let label = '';
+  try {
+    if (retailerId) {
+      const snap = await admin.firestore().collection('users').doc(retailerId).get();
+      if (snap.exists) {
+        const u = snap.data() || {};
+        label = formatTownDistrictLabel(u.town, u.district);
+      }
+    }
+    if (!label && email) {
+      const q = await admin
+        .firestore()
+        .collection('users')
+        .where('email', '==', email)
+        .limit(1)
+        .get();
+      if (!q.empty) {
+        const u = q.docs[0].data() || {};
+        label = formatTownDistrictLabel(u.town, u.district);
+      }
+    }
+  } catch (err) {
+    console.warn('resolveRetailerTownDistrict failed', retailerId || email, err);
+  }
+
+  if (cacheKey && cache) cache.set(cacheKey, label);
+  return label;
+}
+
+async function firestoreDataToOrderDoc(
   orderId: string,
-  data: FirebaseFirestore.DocumentData | undefined
-): Record<string, unknown> | null {
+  data: FirebaseFirestore.DocumentData | undefined,
+  townDistrictCache?: Map<string, string>
+): Promise<Record<string, unknown> | null> {
   if (!data) return null;
   const medicines = Array.isArray(data.medicines) ? data.medicines : [];
   const medicineNames = medicines
@@ -123,6 +177,7 @@ function firestoreDataToOrderDoc(
     typeof data.totalAmount === 'number'
       ? data.totalAmount
       : parseFloat(String(data.totalAmount ?? 0)) || 0;
+  const townDistrict = await resolveRetailerTownDistrict(data, townDistrictCache);
 
   return {
     id: orderId,
@@ -133,7 +188,7 @@ function firestoreDataToOrderDoc(
     retailerName: String(data.retailerName || ''),
     medicineNames,
     invoiceNumber: String(data.invoiceNumber || ''),
-    search_blob: buildOrderSearchBlob(orderId, data, medicineNames),
+    search_blob: buildOrderSearchBlob(orderId, data, medicineNames, townDistrict),
     status,
     paymentStatus: String(data.paymentStatus || 'Unpaid'),
     orderDate: toMillis(data.orderDate),
@@ -152,7 +207,7 @@ export async function upsertOrderInTypesense(
     console.warn('Typesense: not configured, skip order upsert');
     return;
   }
-  const doc = firestoreDataToOrderDoc(orderId, data);
+  const doc = await firestoreDataToOrderDoc(orderId, data);
   if (!doc) {
     await deleteOrderFromTypesense(orderId).catch(() => undefined);
     return;
@@ -184,9 +239,9 @@ export const onOrderWriteTypesense = ff
         return;
       }
       const beforeDoc = change.before.exists
-        ? firestoreDataToOrderDoc(orderId, change.before.data())
+        ? await firestoreDataToOrderDoc(orderId, change.before.data())
         : null;
-      const afterDoc = firestoreDataToOrderDoc(orderId, change.after.data());
+      const afterDoc = await firestoreDataToOrderDoc(orderId, change.after.data());
       if (typesenseDocsEqual(beforeDoc, afterDoc)) {
         return;
       }
@@ -319,6 +374,15 @@ export const searchOrdersTypesense = ff
   const sortOrder = String(data?.sortOrder || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
   const fromDate = parseIstDateFilter(data?.fromDate);
   const toDate = parseIstDateFilter(data?.toDate);
+  const locationRetailerIds = Array.isArray(data?.locationRetailerIds)
+    ? Array.from(
+        new Set(
+          (data.locationRetailerIds as unknown[])
+            .map((id) => String(id || '').trim())
+            .filter(Boolean)
+        )
+      ).slice(0, 250)
+    : [];
 
   try {
     await ensureOrdersCollection(client);
@@ -341,10 +405,20 @@ export const searchOrdersTypesense = ff
       filters.push(`paymentStatus:=\`${paymentStatus}\``);
     }
     filters.push(...orderDateRangeFilters(fromDate, toDate));
+
+    // Town/district search: client resolved matching retailer ids from store profiles.
+    const useLocationFilter = locationRetailerIds.length > 0 && rawQuery.length > 0;
+    if (useLocationFilter) {
+      const idList = locationRetailerIds.map((id) => `\`${id.replace(/`/g, '')}\``).join(',');
+      filters.push(`retailerId:=[${idList}]`);
+    }
+
     const filterBy = filters.length > 0 ? filters.join(' && ') : undefined;
 
     const searchParams: Record<string, unknown> = {
-      q,
+      // Location filter already scopes to matching stores — use * so we don't also
+      // require the town string to appear in the (possibly stale) search_blob.
+      q: useLocationFilter ? '*' : q,
       query_by: 'search_blob,retailerEmail,retailerName,medicineNames,invoiceNumber',
       sort_by: `${sortField}:${sortOrder}`,
       per_page: perPage,
@@ -417,9 +491,10 @@ export const adminReindexOrdersTypesense = ff
       };
 
       const snap = await admin.firestore().collection('orders').get();
+      const townDistrictCache = new Map<string, string>();
       let count = 0;
       for (const doc of snap.docs) {
-        const d = firestoreDataToOrderDoc(doc.id, doc.data());
+        const d = await firestoreDataToOrderDoc(doc.id, doc.data(), townDistrictCache);
         if (d) {
           batch.push(d);
           count++;
