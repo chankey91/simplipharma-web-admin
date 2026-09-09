@@ -65,13 +65,15 @@ export type SalesOfficerProfileUpdate = {
   officerPhoto?: string;
   aadharNumber?: string;
   pan?: string;
+  aadharImageUrl?: string;
+  panImageUrl?: string;
 };
 
 const MAX_SO_PHOTO_BYTES = 5 * 1024 * 1024;
 
 const uploadSalesOfficerDocPhoto = async (
   file: File,
-  folder: 'device' | 'officer',
+  folder: 'device' | 'officer' | 'aadhar' | 'pan',
   label: string
 ): Promise<string> => {
   if (!auth.currentUser?.uid) {
@@ -92,6 +94,12 @@ export const uploadSalesOfficerDevicePhoto = async (file: File): Promise<string>
 
 export const uploadSalesOfficerPhoto = async (file: File): Promise<string> =>
   uploadSalesOfficerDocPhoto(file, 'officer', 'Sales Officer photo');
+
+export const uploadSalesOfficerAadharPhoto = async (file: File): Promise<string> =>
+  uploadSalesOfficerDocPhoto(file, 'aadhar', 'Aadhar photo');
+
+export const uploadSalesOfficerPanPhoto = async (file: File): Promise<string> =>
+  uploadSalesOfficerDocPhoto(file, 'pan', 'PAN photo');
 
 /** Update Sales Officer profile fields on `users/{salesOfficerId}` (not email — that is Auth). */
 export const updateSalesOfficerProfile = async (
@@ -116,6 +124,8 @@ export const updateSalesOfficerProfile = async (
   setTrimmed('officerPhoto', false);
   setTrimmed('aadharNumber', true);
   setTrimmed('pan', true);
+  setTrimmed('aadharImageUrl', true);
+  setTrimmed('panImageUrl', true);
   if (Object.keys(payload).length === 0) return;
   await updateDoc(ref, payload);
 };
