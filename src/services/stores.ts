@@ -119,9 +119,18 @@ function mapStoreDoc(docSnap: { id: string; data: () => Record<string, unknown> 
 
 export const getAllStores = async (): Promise<User[]> => {
   const usersCol = collection(db, 'users');
-  const q = query(usersCol, where('role', '==', 'retailer'));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => mapStoreDoc(d));
+  const [retailersSnap, dualSnap] = await Promise.all([
+    getDocs(query(usersCol, where('role', '==', 'retailer'))),
+    getDocs(query(usersCol, where('alsoRetailer', '==', true))),
+  ]);
+  const byId = new Map<string, User>();
+  for (const d of retailersSnap.docs) {
+    byId.set(d.id, mapStoreDoc(d));
+  }
+  for (const d of dualSnap.docs) {
+    if (!byId.has(d.id)) byId.set(d.id, mapStoreDoc(d));
+  }
+  return Array.from(byId.values());
 };
 
 /**

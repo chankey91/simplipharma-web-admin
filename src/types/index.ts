@@ -307,6 +307,11 @@ export interface User {
   firstName?: string;
   lastName?: string;
   salesOfficerId?: string; // For retailers: which Sales Officer manages them
+  /**
+   * Sales Officer who also operates a medical store under the same login/email.
+   * Primary `role` stays `salesOfficer`; store fields (shopName, storeCode, …) apply when true.
+   */
+  alsoRetailer?: boolean;
   /** For sales officers: which Area Manager they report to. */
   areaManagerId?: string;
   displayName?: string;

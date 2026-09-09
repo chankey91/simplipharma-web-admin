@@ -72,12 +72,16 @@ service cloud.firestore {
       return isAdmin() || isOperations();
     }
 
-    // Retailer doc exists, is retailer, and lists this user as their Sales Officer (mobile SO flows)
+    // Retailer doc exists and lists this user as their Sales Officer (mobile SO flows).
+    // Dual-role SOs (alsoRetailer) are store-capable under the same assignment field.
     function retailerAssignedToSO(retailerId) {
       return retailerId is string
         && exists(/databases/$(database)/documents/users/$(retailerId))
-        && get(/databases/$(database)/documents/users/$(retailerId)).data.role == 'retailer'
-        && get(/databases/$(database)/documents/users/$(retailerId)).data.salesOfficerId == request.auth.uid;
+        && get(/databases/$(database)/documents/users/$(retailerId)).data.salesOfficerId == request.auth.uid
+        && (
+          get(/databases/$(database)/documents/users/$(retailerId)).data.role == 'retailer'
+          || get(/databases/$(database)/documents/users/$(retailerId)).data.alsoRetailer == true
+        );
     }
 
     function orderRetailerId(orderId) {
@@ -194,7 +198,10 @@ service cloud.firestore {
         || isOperations()
         || isOffice()
         || (
-          resource.data.role == 'retailer'
+          (
+            resource.data.role == 'retailer'
+            || resource.data.alsoRetailer == true
+          )
           && resource.data.salesOfficerId == request.auth.uid
         )
       );
