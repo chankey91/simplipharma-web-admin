@@ -399,6 +399,16 @@ function roleMatchesRequested(existingRole, requestedRole) {
         return (0, panelAuth_1.isOfficeRole)(existingRole);
     return existingRole === requestedRole;
 }
+/** Same person can be SO + medical store under one email (alsoRetailer). */
+function canDualRoleMerge(existingRole, requestedRole) {
+    if (!existingRole)
+        return false;
+    if (requestedRole === 'salesOfficer' && (0, panelAuth_1.isRetailerRole)(existingRole))
+        return true;
+    if (requestedRole === 'retailer' && (0, panelAuth_1.isSalesOfficerRole)(existingRole))
+        return true;
+    return false;
+}
 exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context) => {
     var _a;
     if (!context.auth) {
@@ -465,7 +475,8 @@ exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context)
             const existingRole = existingDoc.exists
                 ? String(((_a = existingDoc.data()) === null || _a === void 0 ? void 0 : _a.role) || '')
                 : undefined;
-            if (!roleMatchesRequested(existingRole, role)) {
+            const dualMerge = canDualRoleMerge(existingRole, role);
+            if (!roleMatchesRequested(existingRole, role) && !dualMerge) {
                 throw new functions.https.HttpsError('already-exists', `This email is already registered as ${existingRole || 'another account type'}. Use a different email or update the existing account.`);
             }
             await admin.auth().updateUser(userRecord.uid, {
@@ -475,9 +486,69 @@ exports.createStoreUser = functionRegion_1.ff.https.onCall(async (data, context)
             });
             userRecord = await admin.auth().getUser(userRecord.uid);
             reprovisioned = true;
-            console.log('createStoreUser: reprovisioned existing auth user', userRecord.uid, email);
+            console.log('createStoreUser: reprovisioned existing auth user', userRecord.uid, email, dualMerge ? `(dual-role merge from ${existingRole} → ${role})` : '');
+            if (dualMerge) {
+                // Keep one Auth user: primary role becomes salesOfficer; store capability via alsoRetailer.
+                const incoming = Object.assign({}, (storeData || {}));
+                delete incoming.role;
+                const merged = Object.assign(Object.assign({}, incoming), { uid: userRecord.uid, email, role: 'salesOfficer', alsoRetailer: true, mustResetPassword: true, isActive: (storeData === null || storeData === void 0 ? void 0 : storeData.isActive) !== false, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                // Self-assign so this store appears under the SO territory.
+                if (!merged.salesOfficerId) {
+                    merged.salesOfficerId = userRecord.uid;
+                }
+                if (!merged.shopName && existingDoc.exists) {
+                    const prev = existingDoc.data() || {};
+                    if (prev.shopName)
+                        merged.shopName = prev.shopName;
+                    if (prev.storeCode && !merged.storeCode)
+                        merged.storeCode = prev.storeCode;
+                    if (prev.address && !merged.address)
+                        merged.address = prev.address;
+                }
+                if (merged.alsoRetailer && !String(merged.storeCode || '').trim()) {
+                    try {
+                        merged.storeCode = await (0, storeCode_1.generateNextStoreCode)();
+                    }
+                    catch (codeErr) {
+                        console.error('createStoreUser dual-merge: store code failed', codeErr);
+                    }
+                }
+                for (const [k, v] of Object.entries(merged)) {
+                    if (v === undefined)
+                        delete merged[k];
+                }
+                await admin.firestore().collection('users').doc(userRecord.uid).set(merged, { merge: true });
+                const emailSent = await sendStoreUserWelcomeEmail({
+                    email,
+                    password,
+                    role: 'salesOfficer',
+                    accountLabel: 'Sales Officer',
+                    storeData: merged,
+                });
+                return {
+                    success: true,
+                    uid: userRecord.uid,
+                    id: userRecord.uid,
+                    emailSent,
+                    reprovisioned: true,
+                    dualRoleMerged: true,
+                };
+            }
         }
         const cleanData = cleanStoreDataForFirestore(storeData, userRecord.uid, email, role);
+        if (role === 'salesOfficer' && (storeData === null || storeData === void 0 ? void 0 : storeData.alsoRetailer) === true) {
+            cleanData.alsoRetailer = true;
+            if (!cleanData.salesOfficerId)
+                cleanData.salesOfficerId = userRecord.uid;
+            if (!String(cleanData.storeCode || '').trim()) {
+                try {
+                    cleanData.storeCode = await (0, storeCode_1.generateNextStoreCode)();
+                }
+                catch (codeErr) {
+                    console.error('createStoreUser: store code for alsoRetailer SO failed', codeErr);
+                }
+            }
+        }
         if (reprovisioned && (await admin.firestore().collection('users').doc(userRecord.uid).get()).exists) {
             cleanData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
             await admin.firestore().collection('users').doc(userRecord.uid).set(cleanData, { merge: true });
