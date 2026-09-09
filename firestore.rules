@@ -325,6 +325,7 @@ service cloud.firestore {
     match /payment_requests/{requestId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
+        || isOffice()
         || resource.data.retailerId == request.auth.uid
         || (
           isSalesOfficer()
@@ -343,6 +344,7 @@ service cloud.firestore {
       );
       allow update: if signedIn() && (
         isAdminOrOperations()
+        || officeCanWrite('receivables')
         || (
           resource.data.retailerId == request.auth.uid
           && resource.data.status == 'pending_admin_review'
@@ -350,6 +352,12 @@ service cloud.firestore {
         )
       );
       allow delete: if false;
+    }
+
+    match /so_cash_remittances/{remittanceId} {
+      allow read: if signedIn() && (isAdminOrOperations() || isOffice());
+      allow create: if signedIn() && (isAdminOrOperations() || officeCanWrite('receivables'));
+      allow update, delete: if signedIn() && isAdminOrOperations();
     }
 
     match /retailer_registration_requests/{requestId} {

@@ -144,7 +144,8 @@ export const PaymentRequestsPage: React.FC = () => {
           <TableHead>
             <TableRow>
               <TableCell>Invoice</TableCell>
-              <TableCell>Retailer</TableCell>
+                  <TableCell>Retailer</TableCell>
+              <TableCell>Submitted by</TableCell>
               <TableCell>Method</TableCell>
               <TableCell align="right">Cash / online</TableCell>
               <TableCell align="right">Wallet</TableCell>
@@ -160,7 +161,7 @@ export const PaymentRequestsPage: React.FC = () => {
           <TableBody>
             {(rows ?? []).length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} align="center">
+                <TableCell colSpan={13} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
                     No requests in this status.
                   </Typography>
@@ -180,7 +181,56 @@ export const PaymentRequestsPage: React.FC = () => {
                       {r.retailerEmail || r.retailerId}
                     </Typography>
                   </TableCell>
-                  <TableCell>{methodLabel(r.method, r.requestedAmount, requestedWallet(r))}</TableCell>
+                  <TableCell>
+                    {r.submittedByRole === 'salesOfficer' ? (
+                      <>
+                        <Typography fontWeight={500}>
+                          {r.submittedByName || r.submittedBy || 'SO'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Sales officer
+                        </Typography>
+                      </>
+                    ) : (
+                      <>
+                        <Typography fontWeight={500}>
+                          {r.submittedByName || r.retailerName || 'Retailer'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {r.submittedByRole === 'retailer' ? 'Retailer' : '—'}
+                        </Typography>
+                      </>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Box display="flex" flexDirection="column" alignItems="flex-start" gap={0.5}>
+                      <Typography variant="body2">
+                        {methodLabel(r.method, r.requestedAmount, requestedWallet(r))}
+                      </Typography>
+                      {r.method === 'cash' && r.submittedByRole === 'salesOfficer' && (
+                        <Chip
+                          size="small"
+                          label={
+                            r.status === 'pending_admin_review'
+                              ? 'SO cash · pending confirm'
+                              : r.remittanceStatus === 'remitted'
+                                ? 'SO cash · remitted'
+                                : r.status === 'approved'
+                                  ? 'SO cash · unremitted'
+                                  : 'SO cash'
+                          }
+                          color={
+                            r.remittanceStatus === 'remitted'
+                              ? 'success'
+                              : r.status === 'pending_admin_review'
+                                ? 'warning'
+                                : 'info'
+                          }
+                          variant="outlined"
+                        />
+                      )}
+                    </Box>
+                  </TableCell>
                   <TableCell align="right">{formatCurrency(r.requestedAmount)}</TableCell>
                   <TableCell align="right">{formatCurrency(requestedWallet(r))}</TableCell>
                   <TableCell align="right">{formatCurrency(r.dueBeforeRequestSnapshot || 0)}</TableCell>
