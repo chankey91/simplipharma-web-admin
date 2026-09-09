@@ -217,6 +217,7 @@ export interface Order {
 export type PaymentStatus = 'Paid' | 'Unpaid' | 'Partial';
 export type PaymentMethod = 'Cash' | 'Online' | 'Card' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Wallet';
 export type PaymentReviewStatus = 'none' | 'pending_admin_review' | 'approved' | 'rejected';
+export type CashRemittanceStatus = 'unremitted' | 'remitted' | 'n_a';
 
 export interface Payment {
   id: string;
@@ -226,6 +227,13 @@ export interface Payment {
   paymentMethod: PaymentMethod;
   notes?: string;
   collectedBy?: string;
+  /** SO who collected cash in the field (when applicable). */
+  salesOfficerId?: string;
+  paymentRequestId?: string;
+  settlementKind?: 'cash' | 'wallet';
+  /** For SO-collected cash: unremitted until handed to office. */
+  remittanceStatus?: CashRemittanceStatus;
+  remittanceId?: string;
   transactionId?: string; // For online payments
 }
 
@@ -273,6 +281,18 @@ export interface PaymentRequest {
   notes?: string;
   creditApplications?: PaymentRequestCreditApplication[];
   status: PaymentRequestStatus;
+  /** Who submitted the request (retailer or SO uid). */
+  submittedBy?: string;
+  submittedByRole?: 'retailer' | 'salesOfficer';
+  submittedByName?: string;
+  /** Territory SO on the order (may differ from submitter for retailer-submitted). */
+  salesOfficerId?: string;
+  /** Set on approve for SO-collected cash. */
+  collectedBySoId?: string;
+  collectedBySoName?: string;
+  remittanceStatus?: CashRemittanceStatus;
+  remittanceId?: string;
+  remittedAt?: Date | any;
   reviewedBy?: string;
   reviewedAt?: Date | any;
   reviewNote?: string;
@@ -285,6 +305,18 @@ export interface PaymentRequest {
   netPayableSnapshot?: number;
   createdAt: Date | any;
   updatedAt: Date | any;
+}
+
+export interface SoCashRemittance {
+  id: string;
+  salesOfficerId: string;
+  salesOfficerName?: string;
+  amount: number;
+  paymentRequestIds: string[];
+  remittedBy: string;
+  notes?: string;
+  remittedAt: Date | any;
+  createdAt: Date | any;
 }
 
 export interface User {

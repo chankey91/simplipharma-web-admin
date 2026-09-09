@@ -55,7 +55,28 @@ function parsePaymentRequestDoc(id: string, data: Record<string, unknown>): Paym
     createdAt: toDate(data.createdAt),
     updatedAt: toDate(data.updatedAt),
     reviewedAt: toDate(data.reviewedAt),
+    remittedAt: toDate(data.remittedAt),
   } as PaymentRequest;
+}
+
+/** Cash collected by a sales officer in the field (not retailer self-submit). */
+export function isSoCollectedCashRequest(request: PaymentRequest): boolean {
+  return (
+    request.method === 'cash' &&
+    request.submittedByRole === 'salesOfficer' &&
+    Boolean(request.submittedBy)
+  );
+}
+
+export function resolveSoCashCollector(
+  request: PaymentRequest
+): { id: string; name: string } | null {
+  if (!isSoCollectedCashRequest(request)) return null;
+  const id = String(request.submittedBy);
+  return {
+    id,
+    name: String(request.submittedByName || id),
+  };
 }
 
 function roundMoney2(n: number): number {
@@ -407,6 +428,17 @@ export const approvePaymentRequest = async (
   const paymentMethod =
     cashToPost > 0.01 || existingCashToApply > 0.01 ? cashMethod : 'Wallet';
 
+  const soCollector = cashMethod === 'Cash' ? resolveSoCashCollector(request) : null;
+  const soCashFields = soCollector
+    ? {
+        collectedBy: soCollector.name,
+        salesOfficerId: soCollector.id,
+        remittanceStatus: 'unremitted' as const,
+      }
+    : cashMethod === 'Cash'
+      ? { remittanceStatus: 'n_a' as const }
+      : {};
+
   if (cashToPost > 0.01) {
     await addDoc(collection(db, 'orders', request.orderId, 'payments'), {
       orderId: request.orderId,
@@ -417,6 +449,7 @@ export const approvePaymentRequest = async (
       notes: `Approved payment request ${requestId}`,
       paymentRequestId: requestId,
       settlementKind: 'cash',
+      ...soCashFields,
       createdAt: serverTimestamp(),
     });
   }
@@ -454,6 +487,17 @@ export const approvePaymentRequest = async (
   });
 
   const priorApprovedCredit = Number(request.approvedCreditAmount ?? 0);
+  const requestSoCashUpdate =
+    soCollector && (cashToPost > 0.01 || existingCashToApply > 0.01)
+      ? {
+          collectedBySoId: soCollector.id,
+          collectedBySoName: soCollector.name,
+          // Keep remitted if already remitted (e.g. re-apply to invoice).
+          remittanceStatus:
+            request.remittanceStatus === 'remitted' ? 'remitted' : ('unremitted' as const),
+        }
+      : {};
+
   await updateDoc(reqRef, {
     status: 'approved',
     reviewedBy: payload.reviewedBy,
@@ -461,6 +505,7 @@ export const approvePaymentRequest = async (
     reviewNote: payload.reviewNote || null,
     approvedAmount,
     approvedCreditAmount: roundMoney2(priorApprovedCredit + approvedCredit),
+    ...requestSoCashUpdate,
     updatedAt: serverTimestamp(),
   });
 

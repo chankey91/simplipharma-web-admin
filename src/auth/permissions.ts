@@ -43,6 +43,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/stores', label: 'Medical stores' },
   { path: '/store-receivables', label: 'Store receivables' },
   { path: '/so-receivables', label: 'SO receivables' },
+  { path: '/so-cash', label: 'SO cash' },
   { path: '/payment-requests', label: 'Payment requests' },
   { path: '/pending-retailers', label: 'Pending retailers' },
   { path: '/sales-officers', label: 'Sales officers' },
@@ -82,7 +83,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/medicine-demand',
     '/support',
   ],
-  office: ['/stores', '/store-receivables', '/so-receivables', '/orders', '/purchases', '/inventory'],
+  office: ['/stores', '/store-receivables', '/so-receivables', '/so-cash', '/payment-requests', '/orders', '/purchases', '/inventory'],
 };
 
 const FULL_WRITE: WriteAccess = {
