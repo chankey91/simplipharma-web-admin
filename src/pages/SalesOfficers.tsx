@@ -49,7 +49,12 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { MADHYA_PRADESH_DISTRICTS } from '../constants/madhyaPradeshDistricts';
-import { uploadSalesOfficerDevicePhoto, uploadSalesOfficerPhoto } from '../services/salesOfficers';
+import {
+  uploadSalesOfficerDevicePhoto,
+  uploadSalesOfficerPhoto,
+  uploadSalesOfficerAadharPhoto,
+  uploadSalesOfficerPanPhoto,
+} from '../services/salesOfficers';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -58,6 +63,15 @@ const generatePassword = () => {
     password += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return password;
+};
+
+type SoPhotoField = 'devicePhoto' | 'officerPhoto' | 'aadharImageUrl' | 'panImageUrl';
+
+const SO_PHOTO_LABELS: Record<SoPhotoField, string> = {
+  devicePhoto: 'Device photo',
+  officerPhoto: 'Sales Officer photo',
+  aadharImageUrl: 'Aadhar photo',
+  panImageUrl: 'PAN photo',
 };
 
 const emptyOfficerForm = () => ({
@@ -71,6 +85,8 @@ const emptyOfficerForm = () => ({
   officerPhoto: '',
   aadharNumber: '',
   pan: '',
+  aadharImageUrl: '',
+  panImageUrl: '',
   password: generatePassword(),
 });
 
@@ -84,6 +100,8 @@ const emptyEditOfficerForm = () => ({
   officerPhoto: '',
   aadharNumber: '',
   pan: '',
+  aadharImageUrl: '',
+  panImageUrl: '',
 });
 
 function filled(value: string | undefined | null): boolean {
@@ -124,6 +142,10 @@ export const SalesOfficersPage: React.FC = () => {
   const [editDevicePhotoFile, setEditDevicePhotoFile] = useState<File | null>(null);
   const [createOfficerPhotoFile, setCreateOfficerPhotoFile] = useState<File | null>(null);
   const [editOfficerPhotoFile, setEditOfficerPhotoFile] = useState<File | null>(null);
+  const [createAadharPhotoFile, setCreateAadharPhotoFile] = useState<File | null>(null);
+  const [editAadharPhotoFile, setEditAadharPhotoFile] = useState<File | null>(null);
+  const [createPanPhotoFile, setCreatePanPhotoFile] = useState<File | null>(null);
+  const [editPanPhotoFile, setEditPanPhotoFile] = useState<File | null>(null);
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForSoId, setAssignForSoId] = useState<string | null>(null);
@@ -184,6 +206,8 @@ export const SalesOfficersPage: React.FC = () => {
     setFormData(emptyOfficerForm());
     setCreateDevicePhotoFile(null);
     setCreateOfficerPhotoFile(null);
+    setCreateAadharPhotoFile(null);
+    setCreatePanPhotoFile(null);
     setOpenDialog(true);
   };
 
@@ -191,6 +215,8 @@ export const SalesOfficersPage: React.FC = () => {
     setEditOfficer(officer);
     setEditDevicePhotoFile(null);
     setEditOfficerPhotoFile(null);
+    setEditAadharPhotoFile(null);
+    setEditPanPhotoFile(null);
     setEditForm({
       displayName: officer.displayName || '',
       phoneNumber: officer.phoneNumber || '',
@@ -201,18 +227,20 @@ export const SalesOfficersPage: React.FC = () => {
       officerPhoto: officer.officerPhoto || '',
       aadharNumber: officer.aadharNumber || '',
       pan: officer.pan || '',
+      aadharImageUrl: officer.aadharImageUrl || '',
+      panImageUrl: officer.panImageUrl || '',
     });
     setEditOpen(true);
   };
 
   const pickSoPhoto = (
     kind: 'create' | 'edit',
-    field: 'devicePhoto' | 'officerPhoto',
+    field: SoPhotoField,
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const label = field === 'devicePhoto' ? 'Device photo' : 'Sales Officer photo';
+    const label = SO_PHOTO_LABELS[field];
     if (file.size > 5 * 1024 * 1024) {
       void alert(`${label} must be 5 MB or smaller`, { severity: 'warning' });
       event.target.value = '';
@@ -221,24 +249,32 @@ export const SalesOfficersPage: React.FC = () => {
     const previewUrl = URL.createObjectURL(file);
     if (kind === 'create') {
       if (field === 'devicePhoto') setCreateDevicePhotoFile(file);
-      else setCreateOfficerPhotoFile(file);
+      else if (field === 'officerPhoto') setCreateOfficerPhotoFile(file);
+      else if (field === 'aadharImageUrl') setCreateAadharPhotoFile(file);
+      else setCreatePanPhotoFile(file);
       setFormData((prev) => ({ ...prev, [field]: previewUrl }));
     } else {
       if (field === 'devicePhoto') setEditDevicePhotoFile(file);
-      else setEditOfficerPhotoFile(file);
+      else if (field === 'officerPhoto') setEditOfficerPhotoFile(file);
+      else if (field === 'aadharImageUrl') setEditAadharPhotoFile(file);
+      else setEditPanPhotoFile(file);
       setEditForm((prev) => ({ ...prev, [field]: previewUrl }));
     }
     event.target.value = '';
   };
 
-  const clearSoPhoto = (kind: 'create' | 'edit', field: 'devicePhoto' | 'officerPhoto') => {
+  const clearSoPhoto = (kind: 'create' | 'edit', field: SoPhotoField) => {
     if (kind === 'create') {
       if (field === 'devicePhoto') setCreateDevicePhotoFile(null);
-      else setCreateOfficerPhotoFile(null);
+      else if (field === 'officerPhoto') setCreateOfficerPhotoFile(null);
+      else if (field === 'aadharImageUrl') setCreateAadharPhotoFile(null);
+      else setCreatePanPhotoFile(null);
       setFormData((prev) => ({ ...prev, [field]: '' }));
     } else {
       if (field === 'devicePhoto') setEditDevicePhotoFile(null);
-      else setEditOfficerPhotoFile(null);
+      else if (field === 'officerPhoto') setEditOfficerPhotoFile(null);
+      else if (field === 'aadharImageUrl') setEditAadharPhotoFile(null);
+      else setEditPanPhotoFile(null);
       setEditForm((prev) => ({ ...prev, [field]: '' }));
     }
   };
@@ -269,6 +305,14 @@ export const SalesOfficersPage: React.FC = () => {
       await alert('PAN number is required', { severity: 'warning' });
       return;
     }
+    if (!editAadharPhotoFile && !filled(editForm.aadharImageUrl)) {
+      await alert('Aadhar photo is required', { severity: 'warning' });
+      return;
+    }
+    if (!editPanPhotoFile && !filled(editForm.panImageUrl)) {
+      await alert('PAN photo is required', { severity: 'warning' });
+      return;
+    }
     try {
       let devicePhoto = editForm.devicePhoto.trim();
       if (editDevicePhotoFile) {
@@ -277,6 +321,14 @@ export const SalesOfficersPage: React.FC = () => {
       let officerPhoto = editForm.officerPhoto.trim();
       if (editOfficerPhotoFile) {
         officerPhoto = await uploadSalesOfficerPhoto(editOfficerPhotoFile);
+      }
+      let aadharImageUrl = editForm.aadharImageUrl.trim();
+      if (editAadharPhotoFile) {
+        aadharImageUrl = await uploadSalesOfficerAadharPhoto(editAadharPhotoFile);
+      }
+      let panImageUrl = editForm.panImageUrl.trim();
+      if (editPanPhotoFile) {
+        panImageUrl = await uploadSalesOfficerPanPhoto(editPanPhotoFile);
       }
       await updateProfileMutation.mutateAsync({
         salesOfficerId: editOfficer.id,
@@ -290,6 +342,8 @@ export const SalesOfficersPage: React.FC = () => {
           officerPhoto,
           aadharNumber: editForm.aadharNumber.trim(),
           pan: editForm.pan.trim(),
+          aadharImageUrl,
+          panImageUrl,
         },
       });
       await alert('Sales Officer updated.', { severity: 'success' });
@@ -297,6 +351,8 @@ export const SalesOfficersPage: React.FC = () => {
       setEditOfficer(null);
       setEditDevicePhotoFile(null);
       setEditOfficerPhotoFile(null);
+      setEditAadharPhotoFile(null);
+      setEditPanPhotoFile(null);
     } catch (err: any) {
       await alert(err.message || 'Failed to update', { severity: 'error' });
     }
@@ -395,6 +451,14 @@ export const SalesOfficersPage: React.FC = () => {
       await alert('PAN number is required', { severity: 'warning' });
       return;
     }
+    if (!createAadharPhotoFile) {
+      await alert('Aadhar photo is required', { severity: 'warning' });
+      return;
+    }
+    if (!createPanPhotoFile) {
+      await alert('PAN photo is required', { severity: 'warning' });
+      return;
+    }
     if (!formData.password || formData.password.length < 6) {
       await alert('Password must be at least 6 characters', { severity: 'warning' });
       return;
@@ -408,6 +472,8 @@ export const SalesOfficersPage: React.FC = () => {
       if (createOfficerPhotoFile) {
         officerPhoto = await uploadSalesOfficerPhoto(createOfficerPhotoFile);
       }
+      const aadharImageUrl = await uploadSalesOfficerAadharPhoto(createAadharPhotoFile);
+      const panImageUrl = await uploadSalesOfficerPanPhoto(createPanPhotoFile);
       await createMutation.mutateAsync({
         email: formData.email.trim(),
         displayName: formData.displayName.trim() || undefined,
@@ -419,12 +485,16 @@ export const SalesOfficersPage: React.FC = () => {
         officerPhoto,
         aadharNumber: formData.aadharNumber.trim(),
         pan: formData.pan.trim(),
+        aadharImageUrl,
+        panImageUrl,
         initialPassword: formData.password,
       });
       await alert('Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).', { severity: 'success' });
       setOpenDialog(false);
       setCreateDevicePhotoFile(null);
       setCreateOfficerPhotoFile(null);
+      setCreateAadharPhotoFile(null);
+      setCreatePanPhotoFile(null);
     } catch (err: any) {
       const message =
         err?.message ||
@@ -590,6 +660,52 @@ export const SalesOfficersPage: React.FC = () => {
             </Grid>
             <Grid item xs={12} sm={6}>
               <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                Aadhar photo *
+                <input
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => pickSoPhoto('create', 'aadharImageUrl', e)}
+                />
+              </Button>
+              {formData.aadharImageUrl && (
+                <Box sx={{ mt: 1, textAlign: 'center' }}>
+                  <img
+                    src={formData.aadharImageUrl}
+                    alt="Aadhar preview"
+                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                  />
+                  <Button size="small" color="error" onClick={() => clearSoPhoto('create', 'aadharImageUrl')} sx={{ mt: 0.5 }}>
+                    Remove
+                  </Button>
+                </Box>
+              )}
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                PAN photo *
+                <input
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => pickSoPhoto('create', 'panImageUrl', e)}
+                />
+              </Button>
+              {formData.panImageUrl && (
+                <Box sx={{ mt: 1, textAlign: 'center' }}>
+                  <img
+                    src={formData.panImageUrl}
+                    alt="PAN preview"
+                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                  />
+                  <Button size="small" color="error" onClick={() => clearSoPhoto('create', 'panImageUrl')} sx={{ mt: 0.5 }}>
+                    Remove
+                  </Button>
+                </Box>
+              )}
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
                 Device photo (optional)
                 <input
                   type="file"
@@ -734,6 +850,52 @@ export const SalesOfficersPage: React.FC = () => {
                   value={editForm.pan}
                   onChange={(e) => setEditForm({ ...editForm, pan: e.target.value.toUpperCase() })}
                 />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                  Aadhar photo *
+                  <input
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    onChange={(e) => pickSoPhoto('edit', 'aadharImageUrl', e)}
+                  />
+                </Button>
+                {editForm.aadharImageUrl && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={editForm.aadharImageUrl}
+                      alt="Aadhar preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearSoPhoto('edit', 'aadharImageUrl')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                  PAN photo *
+                  <input
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    onChange={(e) => pickSoPhoto('edit', 'panImageUrl', e)}
+                  />
+                </Button>
+                {editForm.panImageUrl && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={editForm.panImageUrl}
+                      alt="PAN preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearSoPhoto('edit', 'panImageUrl')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
               </Grid>
               <Grid item xs={12} sm={6}>
                 <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>

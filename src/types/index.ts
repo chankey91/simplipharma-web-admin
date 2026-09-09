@@ -340,6 +340,8 @@ export interface User {
   shopImageUrl?: string;
   licenceImageUrl?: string;
   aadharImageUrl?: string;
+  /** Sales Officer: PAN card image URL. */
+  panImageUrl?: string;
   storeCode?: string; // Unique code for medical store (e.g., MS001, MS002)
   location?: {
     latitude: number;
