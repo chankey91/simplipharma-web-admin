@@ -72,12 +72,16 @@ service cloud.firestore {
       return isAdmin() || isOperations();
     }
 
-    // Retailer doc exists, is retailer, and lists this user as their Sales Officer (mobile SO flows)
+    // Retailer doc exists and lists this user as their Sales Officer (mobile SO flows).
+    // Dual-role SOs (alsoRetailer) are store-capable under the same assignment field.
     function retailerAssignedToSO(retailerId) {
       return retailerId is string
         && exists(/databases/$(database)/documents/users/$(retailerId))
-        && get(/databases/$(database)/documents/users/$(retailerId)).data.role == 'retailer'
-        && get(/databases/$(database)/documents/users/$(retailerId)).data.salesOfficerId == request.auth.uid;
+        && get(/databases/$(database)/documents/users/$(retailerId)).data.salesOfficerId == request.auth.uid
+        && (
+          get(/databases/$(database)/documents/users/$(retailerId)).data.role == 'retailer'
+          || get(/databases/$(database)/documents/users/$(retailerId)).data.alsoRetailer == true
+        );
     }
 
     function orderRetailerId(orderId) {
@@ -194,7 +198,10 @@ service cloud.firestore {
         || isOperations()
         || isOffice()
         || (
-          resource.data.role == 'retailer'
+          (
+            resource.data.role == 'retailer'
+            || resource.data.alsoRetailer == true
+          )
           && resource.data.salesOfficerId == request.auth.uid
         )
       );
@@ -318,6 +325,7 @@ service cloud.firestore {
     match /payment_requests/{requestId} {
       allow read: if signedIn() && (
         isAdminOrOperations()
+        || isOffice()
         || resource.data.retailerId == request.auth.uid
         || (
           isSalesOfficer()
@@ -336,6 +344,7 @@ service cloud.firestore {
       );
       allow update: if signedIn() && (
         isAdminOrOperations()
+        || officeCanWrite('receivables')
         || (
           resource.data.retailerId == request.auth.uid
           && resource.data.status == 'pending_admin_review'
@@ -343,6 +352,12 @@ service cloud.firestore {
         )
       );
       allow delete: if false;
+    }
+
+    match /so_cash_remittances/{remittanceId} {
+      allow read: if signedIn() && (isAdminOrOperations() || isOffice());
+      allow create: if signedIn() && (isAdminOrOperations() || officeCanWrite('receivables'));
+      allow update, delete: if signedIn() && isAdminOrOperations();
     }
 
     match /retailer_registration_requests/{requestId} {

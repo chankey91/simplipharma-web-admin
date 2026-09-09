@@ -112,6 +112,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Medical stores', icon: <Store />, path: '/stores' },
       { text: 'Store receivables', icon: <AccountBalance />, path: '/store-receivables' },
       { text: 'SO receivables', icon: <Group />, path: '/so-receivables' },
+      { text: 'SO cash', icon: <AccountBalanceWallet />, path: '/so-cash' },
       { text: 'Payment requests', icon: <AccountBalanceWallet />, path: '/payment-requests' },
       { text: 'Pending retailers', icon: <PersonAdd />, path: '/pending-retailers' },
       { text: 'Sales officers', icon: <Group />, path: '/sales-officers' },

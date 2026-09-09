@@ -43,6 +43,7 @@ import { SoReceivablesPage } from './pages/SoReceivables';
 import { StoreLedgerPage } from './pages/StoreLedger';
 import { VendorLedgerPage } from './pages/VendorLedger';
 import { PaymentRequestsPage } from './pages/PaymentRequests';
+import { SoCashPage } from './pages/SoCash';
 import { SupportTicketsPage } from './pages/SupportTickets';
 import { HomeFeedPage } from './pages/HomeFeed';
 import { PurchaseListsPage } from './pages/PurchaseLists';
@@ -115,6 +116,7 @@ const router = createBrowserRouter([
   { path: '/stores', element: withLayout(<StoresPage />) },
   { path: '/store-receivables', element: withLayout(<StoreReceivablesPage />) },
   { path: '/so-receivables', element: withLayout(<SoReceivablesPage />) },
+  { path: '/so-cash', element: withLayout(<SoCashPage />) },
   { path: '/store-ledger', element: withLayout(<StoreLedgerPage />) },
   { path: '/vendor-ledger', element: withLayout(<VendorLedgerPage />) },
   { path: '/payment-requests', element: withLayout(<PaymentRequestsPage />) },

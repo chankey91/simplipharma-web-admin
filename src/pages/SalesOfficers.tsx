@@ -20,6 +20,8 @@ import {
   Collapse,
   Grid,
   Autocomplete,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import {
   Add,
@@ -55,6 +57,7 @@ import {
   uploadSalesOfficerAadharPhoto,
   uploadSalesOfficerPanPhoto,
 } from '../services/salesOfficers';
+import { generateStoreCode } from '../utils/storeCode';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -87,6 +90,9 @@ const emptyOfficerForm = () => ({
   pan: '',
   aadharImageUrl: '',
   panImageUrl: '',
+  alsoRetailer: false,
+  shopName: '',
+  address: '',
   password: generatePassword(),
 });
 
@@ -102,6 +108,10 @@ const emptyEditOfficerForm = () => ({
   pan: '',
   aadharImageUrl: '',
   panImageUrl: '',
+  alsoRetailer: false,
+  shopName: '',
+  address: '',
+  storeCode: '',
 });
 
 function filled(value: string | undefined | null): boolean {
@@ -229,6 +239,10 @@ export const SalesOfficersPage: React.FC = () => {
       pan: officer.pan || '',
       aadharImageUrl: officer.aadharImageUrl || '',
       panImageUrl: officer.panImageUrl || '',
+      alsoRetailer: officer.alsoRetailer === true,
+      shopName: officer.shopName || '',
+      address: officer.address || '',
+      storeCode: officer.storeCode || '',
     });
     setEditOpen(true);
   };
@@ -305,12 +319,10 @@ export const SalesOfficersPage: React.FC = () => {
       await alert('PAN number is required', { severity: 'warning' });
       return;
     }
-    if (!editAadharPhotoFile && !filled(editForm.aadharImageUrl)) {
-      await alert('Aadhar photo is required', { severity: 'warning' });
-      return;
-    }
-    if (!editPanPhotoFile && !filled(editForm.panImageUrl)) {
-      await alert('PAN photo is required', { severity: 'warning' });
+    if (editForm.alsoRetailer && !filled(editForm.shopName)) {
+      await alert('Shop name is required when this SO is also a medical store', {
+        severity: 'warning',
+      });
       return;
     }
     try {
@@ -330,6 +342,14 @@ export const SalesOfficersPage: React.FC = () => {
       if (editPanPhotoFile) {
         panImageUrl = await uploadSalesOfficerPanPhoto(editPanPhotoFile);
       }
+      let storeCode = editForm.storeCode.trim();
+      if (editForm.alsoRetailer && !storeCode) {
+        try {
+          storeCode = await generateStoreCode();
+        } catch (e) {
+          console.warn('Store code generation failed for dual-role SO', e);
+        }
+      }
       await updateProfileMutation.mutateAsync({
         salesOfficerId: editOfficer.id,
         data: {
@@ -344,6 +364,10 @@ export const SalesOfficersPage: React.FC = () => {
           pan: editForm.pan.trim(),
           aadharImageUrl,
           panImageUrl,
+          alsoRetailer: editForm.alsoRetailer,
+          shopName: editForm.alsoRetailer ? editForm.shopName.trim() : '',
+          address: editForm.alsoRetailer ? editForm.address.trim() : '',
+          storeCode: editForm.alsoRetailer ? storeCode : '',
         },
       });
       await alert('Sales Officer updated.', { severity: 'success' });
@@ -451,12 +475,10 @@ export const SalesOfficersPage: React.FC = () => {
       await alert('PAN number is required', { severity: 'warning' });
       return;
     }
-    if (!createAadharPhotoFile) {
-      await alert('Aadhar photo is required', { severity: 'warning' });
-      return;
-    }
-    if (!createPanPhotoFile) {
-      await alert('PAN photo is required', { severity: 'warning' });
+    if (formData.alsoRetailer && !filled(formData.shopName)) {
+      await alert('Shop name is required when this SO is also a medical store', {
+        severity: 'warning',
+      });
       return;
     }
     if (!formData.password || formData.password.length < 6) {
@@ -472,8 +494,22 @@ export const SalesOfficersPage: React.FC = () => {
       if (createOfficerPhotoFile) {
         officerPhoto = await uploadSalesOfficerPhoto(createOfficerPhotoFile);
       }
-      const aadharImageUrl = await uploadSalesOfficerAadharPhoto(createAadharPhotoFile);
-      const panImageUrl = await uploadSalesOfficerPanPhoto(createPanPhotoFile);
+      let aadharImageUrl: string | undefined;
+      if (createAadharPhotoFile) {
+        aadharImageUrl = await uploadSalesOfficerAadharPhoto(createAadharPhotoFile);
+      }
+      let panImageUrl: string | undefined;
+      if (createPanPhotoFile) {
+        panImageUrl = await uploadSalesOfficerPanPhoto(createPanPhotoFile);
+      }
+      let storeCode: string | undefined;
+      if (formData.alsoRetailer) {
+        try {
+          storeCode = await generateStoreCode();
+        } catch (e) {
+          console.warn('Store code generation failed for dual-role SO', e);
+        }
+      }
       await createMutation.mutateAsync({
         email: formData.email.trim(),
         displayName: formData.displayName.trim() || undefined,
@@ -487,9 +523,18 @@ export const SalesOfficersPage: React.FC = () => {
         pan: formData.pan.trim(),
         aadharImageUrl,
         panImageUrl,
+        alsoRetailer: formData.alsoRetailer || undefined,
+        shopName: formData.alsoRetailer ? formData.shopName.trim() : undefined,
+        address: formData.alsoRetailer ? formData.address.trim() || undefined : undefined,
+        storeCode,
         initialPassword: formData.password,
       });
-      await alert('Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).', { severity: 'success' });
+      await alert(
+        formData.alsoRetailer
+          ? 'Sales Officer created as SO + medical store (same email). Credentials emailed if SMTP is configured.'
+          : 'Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).',
+        { severity: 'success' }
+      );
       setOpenDialog(false);
       setCreateDevicePhotoFile(null);
       setCreateOfficerPhotoFile(null);
@@ -640,6 +685,45 @@ export const SalesOfficersPage: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
               />
             </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={formData.alsoRetailer}
+                    onChange={(e) =>
+                      setFormData({ ...formData, alsoRetailer: e.target.checked })
+                    }
+                  />
+                }
+                label="Also a medical store (same email — SO + retailer)"
+              />
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4, mt: -0.5 }}>
+                Use when this person runs their own shop. One login; switch to shop view in the app to order.
+              </Typography>
+            </Grid>
+            {formData.alsoRetailer && (
+              <>
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Shop name"
+                    required
+                    value={formData.shopName}
+                    onChange={(e) => setFormData({ ...formData, shopName: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Shop address"
+                    value={formData.address}
+                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    multiline
+                    minRows={2}
+                  />
+                </Grid>
+              </>
+            )}
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
@@ -660,7 +744,7 @@ export const SalesOfficersPage: React.FC = () => {
             </Grid>
             <Grid item xs={12} sm={6}>
               <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
-                Aadhar photo *
+                Aadhar photo (optional)
                 <input
                   type="file"
                   hidden
@@ -683,7 +767,7 @@ export const SalesOfficersPage: React.FC = () => {
             </Grid>
             <Grid item xs={12} sm={6}>
               <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
-                PAN photo *
+                PAN photo (optional)
                 <input
                   type="file"
                   hidden
@@ -833,6 +917,51 @@ export const SalesOfficersPage: React.FC = () => {
                   onChange={(e) => setEditForm({ ...editForm, phoneNumber: e.target.value })}
                 />
               </Grid>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editForm.alsoRetailer}
+                      onChange={(e) =>
+                        setEditForm({ ...editForm, alsoRetailer: e.target.checked })
+                      }
+                    />
+                  }
+                  label="Also a medical store (same email — SO + retailer)"
+                />
+              </Grid>
+              {editForm.alsoRetailer && (
+                <>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Shop name"
+                      required
+                      value={editForm.shopName}
+                      onChange={(e) => setEditForm({ ...editForm, shopName: e.target.value })}
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Store code"
+                      value={editForm.storeCode}
+                      onChange={(e) => setEditForm({ ...editForm, storeCode: e.target.value })}
+                      helperText="Leave blank to auto-generate on save if missing"
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <TextField
+                      fullWidth
+                      label="Shop address"
+                      value={editForm.address}
+                      onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                      multiline
+                      minRows={2}
+                    />
+                  </Grid>
+                </>
+              )}
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
@@ -853,7 +982,7 @@ export const SalesOfficersPage: React.FC = () => {
               </Grid>
               <Grid item xs={12} sm={6}>
                 <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
-                  Aadhar photo *
+                  Aadhar photo (optional)
                   <input
                     type="file"
                     hidden
@@ -876,7 +1005,7 @@ export const SalesOfficersPage: React.FC = () => {
               </Grid>
               <Grid item xs={12} sm={6}>
                 <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
-                  PAN photo *
+                  PAN photo (optional)
                   <input
                     type="file"
                     hidden
