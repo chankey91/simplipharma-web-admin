@@ -14,7 +14,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  Divider,
   FormControlLabel,
   Grid,
   IconButton,
@@ -38,6 +37,12 @@ import {
   PlayArrow,
   Save,
   Search as SearchIcon,
+  ZoomIn,
+  ZoomOut,
+  FitScreen,
+  Close,
+  RotateLeft,
+  RotateRight,
 } from '@mui/icons-material';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { useVendors } from '../hooks/useVendors';
@@ -83,13 +88,34 @@ import {
 import type { MedicineResolveOption } from '../services/medicineResolution';
 import QRCode from 'qrcode';
 
-function parseExpiryToDate(mmYyyy?: string): Date | undefined {
-  if (!mmYyyy) return undefined;
-  const m = mmYyyy.trim().match(/^(0[1-9]|1[0-2])\/(\d{2}|\d{4})$/);
+const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
+
+/** Normalize MM/YYYY or MM/YY → MM/YY for display/edit. */
+function toExpiryMmYy(raw?: string): string {
+  if (!raw) return '';
+  const m = String(raw).trim().match(/^(0?[1-9]|1[0-2])\/(\d{2}|\d{4})$/);
+  if (!m) return String(raw).trim();
+  const month = m[1].padStart(2, '0');
+  const year = m[2].length === 4 ? m[2].slice(-2) : m[2];
+  return `${month}/${year}`;
+}
+
+/** Auto-format typing toward MM/YY (max 5 chars). */
+function formatExpiryMmYyInput(raw: string): string {
+  let value = raw.replace(/[^0-9/]/g, '');
+  if (value.length === 3 && !value.includes('/')) {
+    value = `${value.slice(0, 2)}/${value.slice(2)}`;
+  }
+  return value.slice(0, 5);
+}
+
+function parseExpiryToDate(mmYy?: string): Date | undefined {
+  if (!mmYy) return undefined;
+  const normalized = toExpiryMmYy(mmYy);
+  const m = normalized.match(/^(0[1-9]|1[0-2])\/(\d{2})$/);
   if (!m) return undefined;
   const month = parseInt(m[1], 10);
-  let year = parseInt(m[2], 10);
-  if (year < 100) year += 2000;
+  const year = 2000 + parseInt(m[2], 10);
   return new Date(year, month - 1, 1);
 }
 
@@ -238,7 +264,7 @@ const EditableDecimalField: React.FC<{
           ? { startAdornment: <>{startAdornment}</> }
           : undefined
       }
-      inputProps={{ style: startAdornment ? { textAlign: 'right' } : undefined }}
+      inputProps={{ style: startAdornment ? { textAlign: 'left' } : undefined }}
     />
   );
 };
@@ -546,7 +572,7 @@ const StackLines: React.FC<{
   }
 
   return (
-    <Box display="flex" flexDirection="column" gap={1}>
+    <Box display="flex" flexDirection="column" gap={1} sx={{ pb: '72px' }}>
       {lines.map((line, index) => {
         const displayName =
           line.selectedMedicineName ||
@@ -845,8 +871,19 @@ const StackLines: React.FC<{
                 label="Expiry Date"
                 placeholder="MM/YY"
                 value={line.expiryMmYyyy || ''}
-                onChange={(e) => void patchLine(line.lineId, { expiryMmYyyy: e.target.value })}
-                helperText="MM/YY or MM/YYYY as on invoice"
+                onChange={(e) =>
+                  void patchLine(line.lineId, {
+                    expiryMmYyyy: formatExpiryMmYyInput(e.target.value),
+                  })
+                }
+                onBlur={() => {
+                  const normalized = toExpiryMmYy(line.expiryMmYyyy);
+                  if (normalized && normalized !== (line.expiryMmYyyy || '')) {
+                    void patchLine(line.lineId, { expiryMmYyyy: normalized });
+                  }
+                }}
+                helperText={EXPIRY_MM_YY_HELPER}
+                inputProps={{ maxLength: 5 }}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -910,8 +947,25 @@ const StackLines: React.FC<{
         );
       })}
 
-      <Divider />
-      <Box display="flex" justifyContent="flex-end" gap={3} flexWrap="wrap">
+      <Box
+        display="flex"
+        justifyContent="flex-end"
+        gap={3}
+        flexWrap="wrap"
+        sx={{
+          position: 'fixed',
+          bottom: 0,
+          left: { xs: 0, sm: '260px' },
+          right: 0,
+          zIndex: (theme) => theme.zIndex.appBar - 1,
+          bgcolor: 'background.paper',
+          borderTop: 1,
+          borderColor: 'divider',
+          py: 1.5,
+          px: { xs: 2, sm: 3 },
+          boxShadow: '0 -4px 16px rgba(0,0,0,0.12)',
+        }}
+      >
         <Box textAlign="right">
           <Typography variant="caption" color="text.secondary">
             Subtotal
@@ -975,6 +1029,9 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   const [draft, setDraft] = useState<PurchaseInvoiceDraft | null>(null);
   const [localLines, setLocalLines] = useState<PurchaseInvoiceDraftResolvedLine[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [imageViewerOpen, setImageViewerOpen] = useState(false);
+  const [imageZoom, setImageZoom] = useState(1);
+  const [imageRotation, setImageRotation] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState('');
@@ -1064,7 +1121,12 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       return;
     }
     if (linesDirtyRef.current) return;
-    setLocalLines(draft.resolvedLines);
+    setLocalLines(
+      draft.resolvedLines.map((l) => ({
+        ...l,
+        expiryMmYyyy: l.expiryMmYyyy ? toExpiryMmYy(l.expiryMmYyyy) : l.expiryMmYyyy,
+      }))
+    );
   }, [draft?.resolvedLines]);
 
   const flushLinePatches = useCallback(async () => {
@@ -1797,12 +1859,39 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                 </Button>
               </Box>
               {previewUrl && draft.sourceFile?.contentType?.startsWith('image/') && (
-                <Box
-                  component="img"
-                  src={previewUrl}
-                  alt="Invoice"
-                  sx={{ width: '100%', borderRadius: 1, maxHeight: 420, objectFit: 'contain' }}
-                />
+                <Box>
+                  <Box
+                    component="img"
+                    src={previewUrl}
+                    alt="Invoice"
+                    onClick={() => {
+                      setImageZoom(1);
+                      setImageRotation(0);
+                      setImageViewerOpen(true);
+                    }}
+                    sx={{
+                      width: '100%',
+                      borderRadius: 1,
+                      maxHeight: 420,
+                      objectFit: 'contain',
+                      cursor: 'zoom-in',
+                      display: 'block',
+                      bgcolor: 'grey.100',
+                    }}
+                  />
+                  <Button
+                    size="small"
+                    sx={{ mt: 1 }}
+                    startIcon={<ZoomIn />}
+                    onClick={() => {
+                      setImageZoom(1);
+                      setImageRotation(0);
+                      setImageViewerOpen(true);
+                    }}
+                  >
+                    View original / zoom
+                  </Button>
+                </Box>
               )}
               {previewUrl && draft.sourceFile?.contentType === 'application/pdf' && (
                 <Button href={previewUrl} target="_blank" rel="noreferrer" size="small">
@@ -1924,6 +2013,113 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
           </Grid>
         </Grid>
       )}
+
+      <Dialog
+        open={imageViewerOpen}
+        onClose={() => setImageViewerOpen(false)}
+        maxWidth={false}
+        fullWidth
+        PaperProps={{
+          sx: {
+            width: '96vw',
+            maxWidth: '96vw',
+            height: '92vh',
+            m: 1,
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            py: 1,
+          }}
+        >
+          <Typography variant="h6" component="span">
+            Invoice image
+          </Typography>
+          <Box display="flex" alignItems="center" gap={0.5}>
+            <IconButton
+              aria-label="Rotate left"
+              title="Rotate left"
+              onClick={() => setImageRotation((r) => (r + 270) % 360)}
+            >
+              <RotateLeft />
+            </IconButton>
+            <IconButton
+              aria-label="Rotate right"
+              title="Rotate right"
+              onClick={() => setImageRotation((r) => (r + 90) % 360)}
+            >
+              <RotateRight />
+            </IconButton>
+            <IconButton
+              aria-label="Zoom out"
+              onClick={() => setImageZoom((z) => Math.max(0.25, Math.round((z - 0.25) * 100) / 100))}
+              disabled={imageZoom <= 0.25}
+            >
+              <ZoomOut />
+            </IconButton>
+            <Typography variant="body2" sx={{ minWidth: 48, textAlign: 'center' }}>
+              {Math.round(imageZoom * 100)}%
+            </Typography>
+            <IconButton
+              aria-label="Zoom in"
+              onClick={() => setImageZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}
+              disabled={imageZoom >= 4}
+            >
+              <ZoomIn />
+            </IconButton>
+            <IconButton
+              aria-label="Fit to width"
+              onClick={() => {
+                setImageZoom(1);
+                setImageRotation(0);
+              }}
+              title="Reset view"
+            >
+              <FitScreen />
+            </IconButton>
+            <IconButton aria-label="Close" onClick={() => setImageViewerOpen(false)}>
+              <Close />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent
+          dividers
+          sx={{
+            flex: 1,
+            overflow: 'auto',
+            bgcolor: 'grey.900',
+            p: 1,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          {previewUrl && (
+            <Box
+              component="img"
+              src={previewUrl}
+              alt="Invoice original"
+              sx={{
+                width: `${imageZoom * 100}%`,
+                maxWidth: imageZoom === 1 && imageRotation % 180 === 0 ? '100%' : 'none',
+                height: 'auto',
+                display: 'block',
+                userSelect: 'none',
+                transform: `rotate(${imageRotation}deg)`,
+                transformOrigin: 'center center',
+                transition: 'transform 0.2s ease',
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={commitProgress.open} maxWidth="xs" fullWidth>
         <DialogTitle>Committing invoice</DialogTitle>

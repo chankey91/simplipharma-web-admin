@@ -840,6 +840,16 @@ export const updatePurchaseInvoiceWithStock = async (
     throw new Error('Invoice not found');
   }
 
+  if (
+    invoiceData.invoiceNumber &&
+    invoiceData.invoiceNumber.trim() !== (existing.invoiceNumber || '').trim()
+  ) {
+    const isUnique = await checkInvoiceNumberUnique(invoiceData.invoiceNumber.trim(), invoiceId);
+    if (!isUnique) {
+      throw new Error('Invoice Number already exists');
+    }
+  }
+
   onProgress?.({
     phase: 'saving_invoice',
     current: 0,
