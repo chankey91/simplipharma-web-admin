@@ -39,6 +39,7 @@ export const exportPendingOrdersByStore = async (
     string,
     {
       storeCode: string;
+      townDistrict: string;
       shopName: string;
       medicineName: string;
       quantity: number;
@@ -50,6 +51,7 @@ export const exportPendingOrdersByStore = async (
     const store = storeById.get(order.retailerId) || null;
     const storeId = order.retailerId || 'unknown';
     const storeCode = store?.storeCode || 'na';
+    const townDistrict = formatTownDistrict(store?.town, store?.district);
     const shopName = store?.shopName || store?.displayName || 'N/A';
 
     for (const medicine of order.medicines) {
@@ -61,6 +63,7 @@ export const exportPendingOrdersByStore = async (
       } else {
         medicineAggregate.set(key, {
           storeCode,
+          townDistrict,
           shopName,
           medicineName: medicine.name,
           quantity: medicine.quantity || 0,
@@ -77,12 +80,13 @@ export const exportPendingOrdersByStore = async (
   });
 
   const excelData: (string | number)[][] = [
-    ['Store Code', 'Shop Name', 'Medicine Name', 'Quantity'],
+    ['Store Code', 'Town / District', 'Shop Name', 'Medicine Name', 'Quantity'],
   ];
 
   rows.forEach((row) => {
     excelData.push([
       row.storeCode,
+      row.townDistrict,
       row.shopName,
       row.medicineName,
       row.quantity || '',
@@ -91,7 +95,7 @@ export const exportPendingOrdersByStore = async (
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(excelData);
-  ws['!cols'] = [{ wch: 12 }, { wch: 35 }, { wch: 40 }, { wch: 10 }];
+  ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 35 }, { wch: 40 }, { wch: 10 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Pending Orders');
 
   const dateStr = istDateStampCompact();

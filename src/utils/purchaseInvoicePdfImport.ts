@@ -111,13 +111,9 @@ export type ParsedPdfProductLine = {
 
 function parseExpiryFromLine(line: string): string | undefined {
   const m4 = line.match(/\b(0[1-9]|1[0-2])\/(\d{4})\b/);
-  if (m4) return `${m4[1]}/${m4[2]}`;
+  if (m4) return `${m4[1]}/${m4[2].slice(-2)}`;
   const m2 = line.match(/\b(0[1-9]|1[0-2])\/(\d{2})\b/);
-  if (m2) {
-    const yy = parseInt(m2[2], 10);
-    const year = yy <= 30 ? 2000 + yy : 1900 + yy;
-    return `${m2[1]}/${year}`;
-  }
+  if (m2) return `${m2[1]}/${m2[2]}`;
   return undefined;
 }
 
