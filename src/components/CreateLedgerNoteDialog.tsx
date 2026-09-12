@@ -33,6 +33,10 @@ type Props = {
   initialRetailerId?: string;
   /** Hide store search/select when store is already chosen. */
   lockRetailer?: boolean;
+  /** Prefill total amount (tax-inclusive). */
+  initialAmount?: number;
+  /** Prefill reason. */
+  initialReason?: string;
 };
 
 const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
@@ -71,6 +75,8 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
   onCreated,
   initialRetailerId,
   lockRetailer,
+  initialAmount,
+  initialReason,
 }) => {
   const { data: stores = [] } = useStores(open);
   const [retailerId, setRetailerId] = useState('');
@@ -88,13 +94,17 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
     setRetailerId(initialRetailerId?.trim() || '');
     setStoreSearch('');
     setNoteDate(toInputDate(new Date()));
-    setTotalAmount('');
+    setTotalAmount(
+      initialAmount != null && Number.isFinite(initialAmount) && initialAmount > 0
+        ? String(Math.round(initialAmount * 100) / 100)
+        : ''
+    );
     setTaxPercentage(5);
-    setReason('');
+    setReason(initialReason?.trim() || '');
     setOriginalInvoiceNumber('');
     setError('');
     setSaving(false);
-  }, [open, kind, initialRetailerId]);
+  }, [open, kind, initialRetailerId, initialAmount, initialReason]);
 
   const filteredStores = useMemo(() => {
     const q = storeSearch.trim().toLowerCase();
