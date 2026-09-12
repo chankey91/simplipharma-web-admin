@@ -1,5 +1,6 @@
 import { Order, User } from '../types';
 import { resolveOrderInvoiceGrandTotal } from './orderTotals';
+import { formatOrderInvoiceLabel } from './orderDisplay';
 
 export type ReceivableOrder = Order & {
   outstanding: number;
@@ -79,4 +80,42 @@ export function buildStoreReceivableSummaries(
   return summaries.sort((a, b) => b.totalOutstanding - a.totalOutstanding);
 }
 
-export { formatOrderInvoiceLabel } from './orderDisplay';
+const formatInr = (n: number) =>
+  `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** WhatsApp body for one medical store: total due + open bills. */
+export function formatRetailerDuesWhatsAppMessage(summary: StoreReceivableSummary): string {
+  const lines: string[] = [
+    `SimpliPharma — Outstanding dues reminder`,
+    `Store: ${summary.displayName}${summary.storeCode && summary.storeCode !== '—' ? ` (${summary.storeCode})` : ''}`,
+    `Total due: ${formatInr(summary.totalOutstanding)}`,
+    `Open bills: ${summary.orderCount}`,
+    '',
+  ];
+
+  for (const bill of summary.orders) {
+    const inv = formatOrderInvoiceLabel(bill);
+    const date =
+      bill.orderDate instanceof Date
+        ? bill.orderDate
+        : bill.orderDate
+          ? new Date(bill.orderDate as string)
+          : null;
+    const dateLabel =
+      date && !isNaN(date.getTime())
+        ? date.toLocaleDateString('en-IN', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+          })
+        : '';
+    lines.push(
+      `• ${inv}${dateLabel ? ` (${dateLabel})` : ''}: ${formatInr(bill.outstanding)}`
+    );
+  }
+
+  lines.push('', 'Please arrange payment at the earliest. Thank you.');
+  return lines.join('\n');
+}
+
+export { formatOrderInvoiceLabel };

@@ -51,6 +51,7 @@ import {
   Stars,
   ShoppingBag,
   ReportProblem,
+  CardGiftcard,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -124,6 +125,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Insights',
     items: [
       { text: 'Margin report', icon: <TrendingUp />, path: '/margin' },
+      { text: 'Retailer incentives', icon: <CardGiftcard />, path: '/retailer-incentives' },
       { text: 'Daily performance', icon: <Assessment />, path: '/daily-performance' },
       { text: 'Top sellers', icon: <Insights />, path: '/medicine-demand' },
     ],

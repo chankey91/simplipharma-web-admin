@@ -143,6 +143,9 @@ function extractLinePricing(line: {
 /**
  * Most recent prior line per medicineId for this retailer
  * (excludes current order, Pending, Cancelled). Includes scheme + discount/pricing.
+ *
+ * Pricing comes from the newest line. If that line has no scheme, scheme is backfilled
+ * from the most recent older order that did carry a scheme.
  */
 export function buildLastSchemeByMedicineId(
   orders: Order[],
@@ -152,6 +155,7 @@ export function buildLastSchemeByMedicineId(
     (a, b) => toDate(b.orderDate).getTime() - toDate(a.orderDate).getTime()
   );
   const map = new Map<string, LastRetailerScheme>();
+  const needsScheme = new Set<string>();
 
   for (const order of sorted) {
     if (!order?.id) continue;
@@ -160,15 +164,25 @@ export function buildLastSchemeByMedicineId(
 
     for (const line of order.medicines || []) {
       const medicineId = (line.medicineId || '').trim();
-      if (!medicineId || map.has(medicineId)) continue;
+      if (!medicineId) continue;
+
+      const sch = extractLineScheme(line);
+      const existing = map.get(medicineId);
+      if (existing) {
+        if (needsScheme.has(medicineId) && sch) {
+          existing.schemePaidQty = sch.schemePaidQty;
+          existing.schemeFreeQty = sch.schemeFreeQty;
+          needsScheme.delete(medicineId);
+        }
+        continue;
+      }
 
       // Need at least a billable prior line (batch or priced)
       const hasBatch =
         !!(line.batchNumber || (line.batchAllocations && line.batchAllocations.length > 0));
       const hasPrice = toNum(line.price) > 0 || toNum(line.mrp) > 0;
-      if (!hasBatch && !hasPrice) continue;
+      if (!hasBatch && !hasPrice && !sch) continue;
 
-      const sch = extractLineScheme(line);
       const pricing = extractLinePricing(line);
 
       map.set(medicineId, {
@@ -187,6 +201,7 @@ export function buildLastSchemeByMedicineId(
         orderDate: toDate(order.orderDate),
         invoiceNumber: order.invoiceNumber,
       });
+      if (!sch) needsScheme.add(medicineId);
     }
   }
 
