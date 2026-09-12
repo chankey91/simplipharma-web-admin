@@ -1,5 +1,6 @@
 import { Order, User } from '../types';
 import { resolveOrderInvoiceGrandTotal } from './orderTotals';
+import { formatOrderInvoiceLabel } from './orderDisplay';
 
 export type ReceivableOrder = Order & {
   outstanding: number;
@@ -117,4 +118,4 @@ export function formatRetailerDuesWhatsAppMessage(summary: StoreReceivableSummar
   return lines.join('\n');
 }
 
-export { formatOrderInvoiceLabel } from './orderDisplay';
+export { formatOrderInvoiceLabel };
