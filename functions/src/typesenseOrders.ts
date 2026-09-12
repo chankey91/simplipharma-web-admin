@@ -103,11 +103,14 @@ function buildOrderSearchBlob(
   medicineNames: string,
   townDistrict = ''
 ): string {
+  const invoiceRaw = String(data.invoiceNumber || '').trim();
+  const invoiceNormalized = invoiceRaw.replace(/[^a-zA-Z0-9]/g, '');
   const parts = [
     orderId,
     data.retailerEmail,
     data.retailerName,
-    data.invoiceNumber,
+    invoiceRaw,
+    invoiceNormalized,
     medicineNames,
     townDistrict,
   ]

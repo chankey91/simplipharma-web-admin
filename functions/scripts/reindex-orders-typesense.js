@@ -124,7 +124,16 @@ function buildDoc(orderId, data) {
     typeof data.totalAmount === 'number'
       ? data.totalAmount
       : parseFloat(String(data.totalAmount ?? 0)) || 0;
-  const parts = [orderId, data.retailerEmail, data.retailerName, data.invoiceNumber, medicineNames]
+  const invoiceRaw = String(data.invoiceNumber || '').trim();
+  const invoiceNormalized = invoiceRaw.replace(/[^a-zA-Z0-9]/g, '');
+  const parts = [
+    orderId,
+    data.retailerEmail,
+    data.retailerName,
+    invoiceRaw,
+    invoiceNormalized,
+    medicineNames,
+  ]
     .filter((x) => x != null && String(x).trim() !== '')
     .map((x) => String(x).trim());
   return {
@@ -135,7 +144,7 @@ function buildDoc(orderId, data) {
     retailerEmail: String(data.retailerEmail || ''),
     retailerName: String(data.retailerName || ''),
     medicineNames,
-    invoiceNumber: String(data.invoiceNumber || ''),
+    invoiceNumber: invoiceRaw,
     search_blob: parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase(),
     status,
     paymentStatus: String(data.paymentStatus || 'Unpaid'),
