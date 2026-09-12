@@ -23,6 +23,9 @@ export type LastVendorPurchaseLine = LastRetailerScheme;
 /**
  * Most recent purchase line per medicineId across all vendors
  * (excludes current invoice). Includes scheme, discount, rate, MRP, GST, qty, batch.
+ *
+ * Pricing comes from the newest line. If that line has no scheme, scheme is backfilled
+ * from the most recent older purchase that did carry a scheme.
  */
 export function buildLastPurchaseByMedicineId(
   invoices: PurchaseInvoice[],
@@ -32,6 +35,8 @@ export function buildLastPurchaseByMedicineId(
     (a, b) => toDate(b.invoiceDate).getTime() - toDate(a.invoiceDate).getTime()
   );
   const map = new Map<string, LastVendorPurchaseLine>();
+  /** Medicine ids still missing scheme after their newest line was recorded. */
+  const needsScheme = new Set<string>();
 
   for (const inv of sorted) {
     if (!inv?.id) continue;
@@ -39,11 +44,22 @@ export function buildLastPurchaseByMedicineId(
 
     for (const item of inv.items || []) {
       const medicineId = (item.medicineId || '').trim();
-      if (!medicineId || map.has(medicineId)) continue;
+      if (!medicineId) continue;
 
       const schemePaid = toNum(item.schemePaidQty);
       const schemeFree = toNum(item.schemeFreeQty);
       const hasScheme = schemePaid > 0 && schemeFree > 0;
+
+      const existing = map.get(medicineId);
+      if (existing) {
+        if (needsScheme.has(medicineId) && hasScheme) {
+          existing.schemePaidQty = schemePaid;
+          existing.schemeFreeQty = schemeFree;
+          needsScheme.delete(medicineId);
+        }
+        continue;
+      }
+
       const discount = toNum(item.discountPercentage);
       const price = toNum(item.purchasePrice ?? item.unitPrice);
       const mrp = toNum(item.mrp);
@@ -76,6 +92,7 @@ export function buildLastPurchaseByMedicineId(
           ? `${inv.invoiceNumber || inv.id} (${vendorLabel})`
           : inv.invoiceNumber,
       });
+      if (!hasScheme) needsScheme.add(medicineId);
     }
   }
 
