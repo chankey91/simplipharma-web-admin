@@ -96,11 +96,14 @@ function toMillis(value) {
     return Number.isFinite(t) ? t : 0;
 }
 function buildOrderSearchBlob(orderId, data, medicineNames, townDistrict = '') {
+    const invoiceRaw = String(data.invoiceNumber || '').trim();
+    const invoiceNormalized = invoiceRaw.replace(/[^a-zA-Z0-9]/g, '');
     const parts = [
         orderId,
         data.retailerEmail,
         data.retailerName,
-        data.invoiceNumber,
+        invoiceRaw,
+        invoiceNormalized,
         medicineNames,
         townDistrict,
     ]
