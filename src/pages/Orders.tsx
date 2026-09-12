@@ -331,9 +331,14 @@ export const OrdersPage: React.FC = () => {
       const term = debouncedTerm.toLowerCase();
       return orders.filter((order) => {
         const townDistrict = resolveTownDistrict(order.retailerId, order.retailerEmail).toLowerCase();
+      const invoiceNumber = (order.invoiceNumber || '').toLowerCase();
+        const invoiceCompact = invoiceNumber.replace(/[^a-z0-9]/g, '');
+        const termCompact = term.replace(/[^a-z0-9]/g, '');
         const matchesSearch =
           !term ||
           order.id.toLowerCase().includes(term) ||
+          invoiceNumber.includes(term) ||
+          (termCompact.length >= 3 && invoiceCompact.includes(termCompact)) ||
           resolveStoreName(order.retailerName, order.retailerId).toLowerCase().includes(term) ||
           order.retailerEmail?.toLowerCase().includes(term) ||
           townDistrict.includes(term) ||
@@ -998,7 +1003,7 @@ export const OrdersPage: React.FC = () => {
             <TextField
               fullWidth
               size="small"
-              placeholder="Search order, store, email, town, district…"
+              placeholder="Search order, invoice, store, email, town, district…"
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);

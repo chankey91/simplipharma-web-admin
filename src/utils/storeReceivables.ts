@@ -83,12 +83,15 @@ export function buildStoreReceivableSummaries(
 const formatInr = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** WhatsApp bold (mobile/web): *text* */
+const boldWa = (text: string) => `*${text}*`;
+
 /** WhatsApp body for one medical store: total due + open bills. */
 export function formatRetailerDuesWhatsAppMessage(summary: StoreReceivableSummary): string {
   const lines: string[] = [
     `SimpliPharma — Outstanding dues reminder`,
     `Store: ${summary.displayName}${summary.storeCode && summary.storeCode !== '—' ? ` (${summary.storeCode})` : ''}`,
-    `Total due: ${formatInr(summary.totalOutstanding)}`,
+    `Total due: ${boldWa(formatInr(summary.totalOutstanding))}`,
     `Open bills: ${summary.orderCount}`,
     '',
   ];
@@ -110,7 +113,7 @@ export function formatRetailerDuesWhatsAppMessage(summary: StoreReceivableSummar
           })
         : '';
     lines.push(
-      `• ${inv}${dateLabel ? ` (${dateLabel})` : ''}: ${formatInr(bill.outstanding)}`
+      `• ${inv}${dateLabel ? ` (${dateLabel})` : ''}: ${boldWa(formatInr(bill.outstanding))}`
     );
   }
 
