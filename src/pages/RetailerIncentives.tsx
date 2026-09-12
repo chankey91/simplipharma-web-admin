@@ -24,13 +24,14 @@ import {
   FormControlLabel,
   Switch,
 } from '@mui/material';
-import { Search, CardGiftcard } from '@mui/icons-material';
+import { Search, CardGiftcard, NoteAdd } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { useOrdersInDateRange } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
 import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { Loading } from '../components/Loading';
+import { CreateLedgerNoteDialog } from '../components/CreateLedgerNoteDialog';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
@@ -43,18 +44,30 @@ import {
   RETAILER_INCENTIVE_RATE,
   type RetailerIncentiveSummary,
 } from '../utils/retailerIncentives';
+import { useAppDialog } from '../context/AppDialogProvider';
 
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export const RetailerIncentivesPage: React.FC = () => {
   const navigate = useNavigate();
+  const { alert } = useAppDialog();
   const [yearMonth, setYearMonth] = useState(currentIstYearMonth());
   const [searchTerm, setSearchTerm] = useState('');
   const [qualifiedOnly, setQualifiedOnly] = useState(true);
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(15);
   const [drillDown, setDrillDown] = useState<RetailerIncentiveSummary | null>(null);
+  const [creditNoteFor, setCreditNoteFor] = useState<RetailerIncentiveSummary | null>(null);
+
+  const openCreditNote = (row: RetailerIncentiveSummary) => {
+    if (!row.qualified || row.incentiveAmount <= 0) return;
+    setCreditNoteFor(row);
+  };
+
+  const creditNoteReason = creditNoteFor
+    ? `Monthly purchase incentive ${creditNoteFor.storeCode !== '—' ? `(${creditNoteFor.storeCode}) ` : ''}${yearMonth} — ${RETAILER_INCENTIVE_RATE}% on eligible lines (vendor purchase disc ≥ ${RETAILER_INCENTIVE_PURCHASE_DISC_MIN}%)`
+    : '';
 
   const { startMs, endMsExclusive } = useMemo(() => istYearMonthBounds(yearMonth), [yearMonth]);
   const { data: orders, isLoading: ordersLoading } = useOrdersInDateRange(
@@ -335,15 +348,27 @@ export const RetailerIncentivesPage: React.FC = () => {
                     />
                   </TableCell>
                   <TableCell align="right">
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      startIcon={<CardGiftcard />}
-                      disabled={!row.qualified || row.lines.length === 0}
-                      onClick={() => setDrillDown(row)}
-                    >
-                      Details
-                    </Button>
+                    <Box display="flex" justifyContent="flex-end" gap={1} flexWrap="wrap">
+                      <Button
+                        size="small"
+                        variant="contained"
+                        color="success"
+                        startIcon={<NoteAdd />}
+                        disabled={!row.qualified || row.incentiveAmount <= 0}
+                        onClick={() => openCreditNote(row)}
+                      >
+                        Credit note
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<CardGiftcard />}
+                        disabled={!row.qualified || row.lines.length === 0}
+                        onClick={() => setDrillDown(row)}
+                      >
+                        Details
+                      </Button>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))
@@ -421,11 +446,41 @@ export const RetailerIncentivesPage: React.FC = () => {
               </TableContainer>
             </DialogContent>
             <DialogActions>
+              <Button
+                variant="contained"
+                color="success"
+                startIcon={<NoteAdd />}
+                disabled={drillDown.incentiveAmount <= 0}
+                onClick={() => {
+                  openCreditNote(drillDown);
+                }}
+              >
+                Create credit note ({formatCurrency(drillDown.incentiveAmount)})
+              </Button>
               <Button onClick={() => setDrillDown(null)}>Close</Button>
             </DialogActions>
           </>
         )}
       </Dialog>
+
+      <CreateLedgerNoteDialog
+        open={!!creditNoteFor}
+        kind="credit"
+        lockRetailer
+        initialRetailerId={creditNoteFor?.retailerId}
+        initialAmount={creditNoteFor?.incentiveAmount}
+        initialReason={creditNoteReason}
+        onClose={() => setCreditNoteFor(null)}
+        onCreated={async (result) => {
+          const storeName = creditNoteFor?.displayName || 'store';
+          setCreditNoteFor(null);
+          setDrillDown(null);
+          await alert(
+            `Credit note ${result.documentNumber} created for ${storeName}. Amount added to store ledger and wallet.`,
+            { severity: 'success' }
+          );
+        }}
+      />
     </Box>
   );
 };
