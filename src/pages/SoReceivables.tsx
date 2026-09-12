@@ -46,7 +46,7 @@ import {
   formatSoDuesWhatsAppMessage,
   type SoReceivableSummary,
 } from '../utils/soReceivables';
-import { formatOrderInvoiceLabel } from '../utils/storeReceivables';
+import { formatOrderInvoiceLabel, formatRetailerDuesWhatsAppMessage, type StoreReceivableSummary } from '../utils/storeReceivables';
 import { exportSoReceivables } from '../utils/export';
 import {
   buildWhatsAppUrl,
@@ -175,6 +175,24 @@ export const SoReceivablesPage: React.FC = () => {
       await navigator.clipboard.writeText(text);
     } catch {
       /* ignore */
+    }
+    window.open(buildWhatsAppUrl(phone, text), '_blank', 'noopener,noreferrer');
+  };
+
+  const handleWhatsAppRetailer = async (row: StoreReceivableSummary) => {
+    const phone = normalizeWhatsAppPhone(row.store?.phoneNumber);
+    const text = formatRetailerDuesWhatsAppMessage(row);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* ignore */
+    }
+    if (!phone) {
+      await alert(
+        'Message copied. This store has no phone number on file — paste into WhatsApp Web manually.',
+        { severity: 'warning' }
+      );
+      return;
     }
     window.open(buildWhatsAppUrl(phone, text), '_blank', 'noopener,noreferrer');
   };
@@ -441,14 +459,27 @@ export const SoReceivablesPage: React.FC = () => {
                                       {formatCurrency(r.totalOutstanding)}
                                     </TableCell>
                                     <TableCell align="right">
-                                      <Button
-                                        size="small"
-                                        onClick={() =>
-                                          navigate(`/store-receivables`)
-                                        }
+                                      <Box
+                                        display="flex"
+                                        gap={0.5}
+                                        justifyContent="flex-end"
+                                        flexWrap="wrap"
                                       >
-                                        Store receivables
-                                      </Button>
+                                        <Button
+                                          size="small"
+                                          color="success"
+                                          startIcon={<WhatsApp />}
+                                          onClick={() => void handleWhatsAppRetailer(r)}
+                                        >
+                                          WhatsApp
+                                        </Button>
+                                        <Button
+                                          size="small"
+                                          onClick={() => navigate(`/store-receivables`)}
+                                        >
+                                          Store receivables
+                                        </Button>
+                                      </Box>
                                     </TableCell>
                                   </TableRow>
                                 ))}
