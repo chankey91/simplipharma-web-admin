@@ -20,6 +20,8 @@ import {
   Collapse,
   Grid,
   Autocomplete,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import {
   Add,
@@ -40,6 +42,7 @@ import {
   useUpdateSalesOfficerProfile,
   useSendSalesOfficerPasswordResetEmail,
 } from '../hooks/useSalesOfficers';
+import { useAreaManagers } from '../hooks/useAreaManagers';
 import { useStores, useAssignRetailerToSalesOfficer } from '../hooks/useStores';
 import { Loading } from '../components/Loading';
 import { User } from '../types';
@@ -48,7 +51,13 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { MADHYA_PRADESH_DISTRICTS } from '../constants/madhyaPradeshDistricts';
-import { uploadSalesOfficerDevicePhoto, uploadSalesOfficerPhoto } from '../services/salesOfficers';
+import {
+  uploadSalesOfficerDevicePhoto,
+  uploadSalesOfficerPhoto,
+  uploadSalesOfficerAadharPhoto,
+  uploadSalesOfficerPanPhoto,
+} from '../services/salesOfficers';
+import { generateStoreCode } from '../utils/storeCode';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -57,6 +66,15 @@ const generatePassword = () => {
     password += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return password;
+};
+
+type SoPhotoField = 'devicePhoto' | 'officerPhoto' | 'aadharImageUrl' | 'panImageUrl';
+
+const SO_PHOTO_LABELS: Record<SoPhotoField, string> = {
+  devicePhoto: 'Device photo',
+  officerPhoto: 'Sales Officer photo',
+  aadharImageUrl: 'Aadhar photo',
+  panImageUrl: 'PAN photo',
 };
 
 const emptyOfficerForm = () => ({
@@ -70,6 +88,11 @@ const emptyOfficerForm = () => ({
   officerPhoto: '',
   aadharNumber: '',
   pan: '',
+  aadharImageUrl: '',
+  panImageUrl: '',
+  alsoRetailer: false,
+  shopName: '',
+  address: '',
   password: generatePassword(),
 });
 
@@ -83,6 +106,12 @@ const emptyEditOfficerForm = () => ({
   officerPhoto: '',
   aadharNumber: '',
   pan: '',
+  aadharImageUrl: '',
+  panImageUrl: '',
+  alsoRetailer: false,
+  shopName: '',
+  address: '',
+  storeCode: '',
 });
 
 function filled(value: string | undefined | null): boolean {
@@ -103,6 +132,7 @@ function retailerOptionLabel(r: User): string {
 export const SalesOfficersPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: salesOfficers, isLoading, error } = useSalesOfficers();
+  const { data: areaManagers = [] } = useAreaManagers();
   const { data: allRetailers } = useStores();
   const createMutation = useCreateSalesOfficer();
   const updateProfileMutation = useUpdateSalesOfficerProfile();
@@ -122,6 +152,10 @@ export const SalesOfficersPage: React.FC = () => {
   const [editDevicePhotoFile, setEditDevicePhotoFile] = useState<File | null>(null);
   const [createOfficerPhotoFile, setCreateOfficerPhotoFile] = useState<File | null>(null);
   const [editOfficerPhotoFile, setEditOfficerPhotoFile] = useState<File | null>(null);
+  const [createAadharPhotoFile, setCreateAadharPhotoFile] = useState<File | null>(null);
+  const [editAadharPhotoFile, setEditAadharPhotoFile] = useState<File | null>(null);
+  const [createPanPhotoFile, setCreatePanPhotoFile] = useState<File | null>(null);
+  const [editPanPhotoFile, setEditPanPhotoFile] = useState<File | null>(null);
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForSoId, setAssignForSoId] = useState<string | null>(null);
@@ -134,6 +168,14 @@ export const SalesOfficersPage: React.FC = () => {
     });
     return m;
   }, [salesOfficers]);
+
+  const amNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    areaManagers.forEach((am) => {
+      m[am.id] = am.displayName || am.email || am.id;
+    });
+    return m;
+  }, [areaManagers]);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('displayName', 'asc');
 
@@ -174,6 +216,8 @@ export const SalesOfficersPage: React.FC = () => {
     setFormData(emptyOfficerForm());
     setCreateDevicePhotoFile(null);
     setCreateOfficerPhotoFile(null);
+    setCreateAadharPhotoFile(null);
+    setCreatePanPhotoFile(null);
     setOpenDialog(true);
   };
 
@@ -181,6 +225,8 @@ export const SalesOfficersPage: React.FC = () => {
     setEditOfficer(officer);
     setEditDevicePhotoFile(null);
     setEditOfficerPhotoFile(null);
+    setEditAadharPhotoFile(null);
+    setEditPanPhotoFile(null);
     setEditForm({
       displayName: officer.displayName || '',
       phoneNumber: officer.phoneNumber || '',
@@ -191,18 +237,24 @@ export const SalesOfficersPage: React.FC = () => {
       officerPhoto: officer.officerPhoto || '',
       aadharNumber: officer.aadharNumber || '',
       pan: officer.pan || '',
+      aadharImageUrl: officer.aadharImageUrl || '',
+      panImageUrl: officer.panImageUrl || '',
+      alsoRetailer: officer.alsoRetailer === true,
+      shopName: officer.shopName || '',
+      address: officer.address || '',
+      storeCode: officer.storeCode || '',
     });
     setEditOpen(true);
   };
 
   const pickSoPhoto = (
     kind: 'create' | 'edit',
-    field: 'devicePhoto' | 'officerPhoto',
+    field: SoPhotoField,
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const label = field === 'devicePhoto' ? 'Device photo' : 'Sales Officer photo';
+    const label = SO_PHOTO_LABELS[field];
     if (file.size > 5 * 1024 * 1024) {
       void alert(`${label} must be 5 MB or smaller`, { severity: 'warning' });
       event.target.value = '';
@@ -211,24 +263,32 @@ export const SalesOfficersPage: React.FC = () => {
     const previewUrl = URL.createObjectURL(file);
     if (kind === 'create') {
       if (field === 'devicePhoto') setCreateDevicePhotoFile(file);
-      else setCreateOfficerPhotoFile(file);
+      else if (field === 'officerPhoto') setCreateOfficerPhotoFile(file);
+      else if (field === 'aadharImageUrl') setCreateAadharPhotoFile(file);
+      else setCreatePanPhotoFile(file);
       setFormData((prev) => ({ ...prev, [field]: previewUrl }));
     } else {
       if (field === 'devicePhoto') setEditDevicePhotoFile(file);
-      else setEditOfficerPhotoFile(file);
+      else if (field === 'officerPhoto') setEditOfficerPhotoFile(file);
+      else if (field === 'aadharImageUrl') setEditAadharPhotoFile(file);
+      else setEditPanPhotoFile(file);
       setEditForm((prev) => ({ ...prev, [field]: previewUrl }));
     }
     event.target.value = '';
   };
 
-  const clearSoPhoto = (kind: 'create' | 'edit', field: 'devicePhoto' | 'officerPhoto') => {
+  const clearSoPhoto = (kind: 'create' | 'edit', field: SoPhotoField) => {
     if (kind === 'create') {
       if (field === 'devicePhoto') setCreateDevicePhotoFile(null);
-      else setCreateOfficerPhotoFile(null);
+      else if (field === 'officerPhoto') setCreateOfficerPhotoFile(null);
+      else if (field === 'aadharImageUrl') setCreateAadharPhotoFile(null);
+      else setCreatePanPhotoFile(null);
       setFormData((prev) => ({ ...prev, [field]: '' }));
     } else {
       if (field === 'devicePhoto') setEditDevicePhotoFile(null);
-      else setEditOfficerPhotoFile(null);
+      else if (field === 'officerPhoto') setEditOfficerPhotoFile(null);
+      else if (field === 'aadharImageUrl') setEditAadharPhotoFile(null);
+      else setEditPanPhotoFile(null);
       setEditForm((prev) => ({ ...prev, [field]: '' }));
     }
   };
@@ -259,6 +319,12 @@ export const SalesOfficersPage: React.FC = () => {
       await alert('PAN number is required', { severity: 'warning' });
       return;
     }
+    if (editForm.alsoRetailer && !filled(editForm.shopName)) {
+      await alert('Shop name is required when this SO is also a medical store', {
+        severity: 'warning',
+      });
+      return;
+    }
     try {
       let devicePhoto = editForm.devicePhoto.trim();
       if (editDevicePhotoFile) {
@@ -267,6 +333,22 @@ export const SalesOfficersPage: React.FC = () => {
       let officerPhoto = editForm.officerPhoto.trim();
       if (editOfficerPhotoFile) {
         officerPhoto = await uploadSalesOfficerPhoto(editOfficerPhotoFile);
+      }
+      let aadharImageUrl = editForm.aadharImageUrl.trim();
+      if (editAadharPhotoFile) {
+        aadharImageUrl = await uploadSalesOfficerAadharPhoto(editAadharPhotoFile);
+      }
+      let panImageUrl = editForm.panImageUrl.trim();
+      if (editPanPhotoFile) {
+        panImageUrl = await uploadSalesOfficerPanPhoto(editPanPhotoFile);
+      }
+      let storeCode = editForm.storeCode.trim();
+      if (editForm.alsoRetailer && !storeCode) {
+        try {
+          storeCode = await generateStoreCode();
+        } catch (e) {
+          console.warn('Store code generation failed for dual-role SO', e);
+        }
       }
       await updateProfileMutation.mutateAsync({
         salesOfficerId: editOfficer.id,
@@ -280,6 +362,12 @@ export const SalesOfficersPage: React.FC = () => {
           officerPhoto,
           aadharNumber: editForm.aadharNumber.trim(),
           pan: editForm.pan.trim(),
+          aadharImageUrl,
+          panImageUrl,
+          alsoRetailer: editForm.alsoRetailer,
+          shopName: editForm.alsoRetailer ? editForm.shopName.trim() : '',
+          address: editForm.alsoRetailer ? editForm.address.trim() : '',
+          storeCode: editForm.alsoRetailer ? storeCode : '',
         },
       });
       await alert('Sales Officer updated.', { severity: 'success' });
@@ -287,6 +375,8 @@ export const SalesOfficersPage: React.FC = () => {
       setEditOfficer(null);
       setEditDevicePhotoFile(null);
       setEditOfficerPhotoFile(null);
+      setEditAadharPhotoFile(null);
+      setEditPanPhotoFile(null);
     } catch (err: any) {
       await alert(err.message || 'Failed to update', { severity: 'error' });
     }
@@ -385,6 +475,12 @@ export const SalesOfficersPage: React.FC = () => {
       await alert('PAN number is required', { severity: 'warning' });
       return;
     }
+    if (formData.alsoRetailer && !filled(formData.shopName)) {
+      await alert('Shop name is required when this SO is also a medical store', {
+        severity: 'warning',
+      });
+      return;
+    }
     if (!formData.password || formData.password.length < 6) {
       await alert('Password must be at least 6 characters', { severity: 'warning' });
       return;
@@ -398,6 +494,22 @@ export const SalesOfficersPage: React.FC = () => {
       if (createOfficerPhotoFile) {
         officerPhoto = await uploadSalesOfficerPhoto(createOfficerPhotoFile);
       }
+      let aadharImageUrl: string | undefined;
+      if (createAadharPhotoFile) {
+        aadharImageUrl = await uploadSalesOfficerAadharPhoto(createAadharPhotoFile);
+      }
+      let panImageUrl: string | undefined;
+      if (createPanPhotoFile) {
+        panImageUrl = await uploadSalesOfficerPanPhoto(createPanPhotoFile);
+      }
+      let storeCode: string | undefined;
+      if (formData.alsoRetailer) {
+        try {
+          storeCode = await generateStoreCode();
+        } catch (e) {
+          console.warn('Store code generation failed for dual-role SO', e);
+        }
+      }
       await createMutation.mutateAsync({
         email: formData.email.trim(),
         displayName: formData.displayName.trim() || undefined,
@@ -409,12 +521,25 @@ export const SalesOfficersPage: React.FC = () => {
         officerPhoto,
         aadharNumber: formData.aadharNumber.trim(),
         pan: formData.pan.trim(),
+        aadharImageUrl,
+        panImageUrl,
+        alsoRetailer: formData.alsoRetailer || undefined,
+        shopName: formData.alsoRetailer ? formData.shopName.trim() : undefined,
+        address: formData.alsoRetailer ? formData.address.trim() || undefined : undefined,
+        storeCode,
         initialPassword: formData.password,
       });
-      await alert('Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).', { severity: 'success' });
+      await alert(
+        formData.alsoRetailer
+          ? 'Sales Officer created as SO + medical store (same email). Credentials emailed if SMTP is configured.'
+          : 'Sales Officer created successfully! Credentials have been sent via email (if SMTP is configured).',
+        { severity: 'success' }
+      );
       setOpenDialog(false);
       setCreateDevicePhotoFile(null);
       setCreateOfficerPhotoFile(null);
+      setCreateAadharPhotoFile(null);
+      setCreatePanPhotoFile(null);
     } catch (err: any) {
       const message =
         err?.message ||
@@ -474,6 +599,9 @@ export const SalesOfficersPage: React.FC = () => {
                 <SalesOfficerRow
                   key={so.id}
                   officer={so}
+                  areaManagerName={
+                    so.areaManagerId ? amNameById[so.areaManagerId] || so.areaManagerId : null
+                  }
                   retailers={
                     allRetailers?.filter((r) => r.salesOfficerId === so.id) || []
                   }
@@ -557,6 +685,45 @@ export const SalesOfficersPage: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
               />
             </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={formData.alsoRetailer}
+                    onChange={(e) =>
+                      setFormData({ ...formData, alsoRetailer: e.target.checked })
+                    }
+                  />
+                }
+                label="Also a medical store (same email — SO + retailer)"
+              />
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4, mt: -0.5 }}>
+                Use when this person runs their own shop. One login; switch to shop view in the app to order.
+              </Typography>
+            </Grid>
+            {formData.alsoRetailer && (
+              <>
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Shop name"
+                    required
+                    value={formData.shopName}
+                    onChange={(e) => setFormData({ ...formData, shopName: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Shop address"
+                    value={formData.address}
+                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    multiline
+                    minRows={2}
+                  />
+                </Grid>
+              </>
+            )}
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
@@ -574,6 +741,52 @@ export const SalesOfficersPage: React.FC = () => {
                 value={formData.pan}
                 onChange={(e) => setFormData({ ...formData, pan: e.target.value.toUpperCase() })}
               />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                Aadhar photo (optional)
+                <input
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => pickSoPhoto('create', 'aadharImageUrl', e)}
+                />
+              </Button>
+              {formData.aadharImageUrl && (
+                <Box sx={{ mt: 1, textAlign: 'center' }}>
+                  <img
+                    src={formData.aadharImageUrl}
+                    alt="Aadhar preview"
+                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                  />
+                  <Button size="small" color="error" onClick={() => clearSoPhoto('create', 'aadharImageUrl')} sx={{ mt: 0.5 }}>
+                    Remove
+                  </Button>
+                </Box>
+              )}
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                PAN photo (optional)
+                <input
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => pickSoPhoto('create', 'panImageUrl', e)}
+                />
+              </Button>
+              {formData.panImageUrl && (
+                <Box sx={{ mt: 1, textAlign: 'center' }}>
+                  <img
+                    src={formData.panImageUrl}
+                    alt="PAN preview"
+                    style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                  />
+                  <Button size="small" color="error" onClick={() => clearSoPhoto('create', 'panImageUrl')} sx={{ mt: 0.5 }}>
+                    Remove
+                  </Button>
+                </Box>
+              )}
             </Grid>
             <Grid item xs={12} sm={6}>
               <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
@@ -704,6 +917,51 @@ export const SalesOfficersPage: React.FC = () => {
                   onChange={(e) => setEditForm({ ...editForm, phoneNumber: e.target.value })}
                 />
               </Grid>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editForm.alsoRetailer}
+                      onChange={(e) =>
+                        setEditForm({ ...editForm, alsoRetailer: e.target.checked })
+                      }
+                    />
+                  }
+                  label="Also a medical store (same email — SO + retailer)"
+                />
+              </Grid>
+              {editForm.alsoRetailer && (
+                <>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Shop name"
+                      required
+                      value={editForm.shopName}
+                      onChange={(e) => setEditForm({ ...editForm, shopName: e.target.value })}
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Store code"
+                      value={editForm.storeCode}
+                      onChange={(e) => setEditForm({ ...editForm, storeCode: e.target.value })}
+                      helperText="Leave blank to auto-generate on save if missing"
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <TextField
+                      fullWidth
+                      label="Shop address"
+                      value={editForm.address}
+                      onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                      multiline
+                      minRows={2}
+                    />
+                  </Grid>
+                </>
+              )}
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
@@ -721,6 +979,52 @@ export const SalesOfficersPage: React.FC = () => {
                   value={editForm.pan}
                   onChange={(e) => setEditForm({ ...editForm, pan: e.target.value.toUpperCase() })}
                 />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                  Aadhar photo (optional)
+                  <input
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    onChange={(e) => pickSoPhoto('edit', 'aadharImageUrl', e)}
+                  />
+                </Button>
+                {editForm.aadharImageUrl && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={editForm.aadharImageUrl}
+                      alt="Aadhar preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearSoPhoto('edit', 'aadharImageUrl')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
+                  PAN photo (optional)
+                  <input
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    onChange={(e) => pickSoPhoto('edit', 'panImageUrl', e)}
+                  />
+                </Button>
+                {editForm.panImageUrl && (
+                  <Box sx={{ mt: 1, textAlign: 'center' }}>
+                    <img
+                      src={editForm.panImageUrl}
+                      alt="PAN preview"
+                      style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid #ddd' }}
+                    />
+                    <Button size="small" color="error" onClick={() => clearSoPhoto('edit', 'panImageUrl')} sx={{ mt: 0.5 }}>
+                      Remove
+                    </Button>
+                  </Box>
+                )}
               </Grid>
               <Grid item xs={12} sm={6}>
                 <Button variant="outlined" component="label" startIcon={<PhotoCamera />} fullWidth sx={{ height: 56 }}>
@@ -872,6 +1176,7 @@ export const SalesOfficersPage: React.FC = () => {
 
 const SalesOfficerRow: React.FC<{
   officer: User;
+  areaManagerName: string | null;
   retailers: User[];
   expanded: boolean;
   onToggle: () => void;
@@ -881,6 +1186,7 @@ const SalesOfficerRow: React.FC<{
   assignBusy: boolean;
 }> = ({
   officer,
+  areaManagerName,
   retailers,
   expanded,
   onToggle,
@@ -904,8 +1210,13 @@ const SalesOfficerRow: React.FC<{
             <Box>
               <Typography fontWeight="medium">{officer.displayName || officer.email}</Typography>
               {(officer.town || officer.district) && (
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" color="text.secondary" display="block">
                   {[officer.town, officer.district].filter(Boolean).join(', ')}
+                </Typography>
+              )}
+              {areaManagerName && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  AM: {areaManagerName}
                 </Typography>
               )}
             </Box>

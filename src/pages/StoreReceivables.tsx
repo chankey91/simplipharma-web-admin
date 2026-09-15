@@ -25,7 +25,7 @@ import {
   FormControlLabel,
   Switch,
 } from '@mui/material';
-import { Search, Visibility, Receipt } from '@mui/icons-material';
+import { Search, Visibility, Receipt, WhatsApp } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { useReceivableOrders } from '../hooks/useOrders';
@@ -38,6 +38,7 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import {
   buildStoreReceivableSummaries,
   formatOrderInvoiceLabel,
+  formatRetailerDuesWhatsAppMessage,
   type StoreReceivableSummary,
 } from '../utils/storeReceivables';
 import {
@@ -48,6 +49,10 @@ import {
 import { Order } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useAuth } from '../context/AuthContext';
+import {
+  buildWhatsAppUrl,
+  normalizeWhatsAppPhone,
+} from '../utils/orderWhatsAppItems';
 
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -119,6 +124,24 @@ export const StoreReceivablesPage: React.FC = () => {
     } catch (e: any) {
       await alert(e?.message || 'Failed to unlock ordering', { severity: 'error' });
     }
+  };
+
+  const handleWhatsAppRetailer = async (row: StoreReceivableSummary) => {
+    const phone = normalizeWhatsAppPhone(row.store?.phoneNumber);
+    const text = formatRetailerDuesWhatsAppMessage(row);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* ignore */
+    }
+    if (!phone) {
+      await alert(
+        'Message copied. This store has no phone number on file — paste into WhatsApp Web manually.',
+        { severity: 'warning' }
+      );
+      return;
+    }
+    window.open(buildWhatsAppUrl(phone, text), '_blank', 'noopener,noreferrer');
   };
 
   const totals = useMemo(() => {
@@ -205,9 +228,9 @@ export const StoreReceivablesPage: React.FC = () => {
           Store receivables
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Outstanding bills from medical stores. Open a store to see unpaid orders, then collect
-          payment on the order details page. Click Order blocked to unlock ordering for 6 hours.
-          Stores still overdue after unlock show Unlocked until…
+          Outstanding bills from medical stores. Send a WhatsApp dues reminder to a retailer, open
+          a store to see unpaid orders, then collect payment on the order details page. Click Order
+          blocked to unlock ordering for 6 hours.
         </Typography>
       </Box>
 
@@ -390,14 +413,25 @@ export const StoreReceivablesPage: React.FC = () => {
                       : '—'}
                   </TableCell>
                   <TableCell align="right">
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      startIcon={<Receipt />}
-                      onClick={() => setDrillDown(row)}
-                    >
-                      View bills
-                    </Button>
+                    <Box display="flex" justifyContent="flex-end" gap={1} flexWrap="wrap">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="success"
+                        startIcon={<WhatsApp />}
+                        onClick={() => void handleWhatsAppRetailer(row)}
+                      >
+                        WhatsApp
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<Receipt />}
+                        onClick={() => setDrillDown(row)}
+                      >
+                        View bills
+                      </Button>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))
@@ -468,6 +502,14 @@ export const StoreReceivablesPage: React.FC = () => {
               </TableContainer>
             </DialogContent>
             <DialogActions>
+              <Button
+                variant="outlined"
+                color="success"
+                startIcon={<WhatsApp />}
+                onClick={() => void handleWhatsAppRetailer(drillDown)}
+              >
+                WhatsApp retailer
+              </Button>
               <Button onClick={() => setDrillDown(null)}>Close</Button>
             </DialogActions>
           </>

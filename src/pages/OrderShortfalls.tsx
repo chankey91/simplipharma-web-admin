@@ -26,7 +26,6 @@ import {
 import { Search, Download, ReportProblem } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import * as XLSX from 'xlsx';
 import { getOrdersInRange } from '../services/orders';
 import { useStores } from '../hooks/useStores';
 import { Loading } from '../components/Loading';
@@ -36,6 +35,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import {
   extractOrderShortfallsFromOrders,
+  exportOrderShortfallsToExcel,
   SHORTFALL_REASON_LABELS,
   type OrderShortfallReason,
   type OrderShortfallRow,
@@ -44,7 +44,6 @@ import {
   getTodayDateStringIST,
   istDayEndExclusiveMs,
   istDayStartMs,
-  istDateStampCompact,
 } from '../utils/dateTime';
 import { useAppDialog } from '../context/AppDialogProvider';
 
@@ -207,59 +206,7 @@ export const OrderShortfallsPage: React.FC = () => {
       await alert('No shortfalls to export', { severity: 'warning' });
       return;
     }
-    const excelData: (string | number)[][] = [
-      [
-        'SR',
-        'Retailer',
-        'Email',
-        'Order ID',
-        'Order Date',
-        'Status',
-        'Medicine',
-        'Manufacturer',
-        'Ordered Qty',
-        'Fulfilled Qty',
-        'Shortfall Qty',
-        'Reason',
-        'Open?',
-      ],
-    ];
-    sortedRows.forEach((row, i) => {
-      excelData.push([
-        i + 1,
-        row.retailerName,
-        row.retailerEmail,
-        row.orderId,
-        format(row.orderDate, 'yyyy-MM-dd'),
-        row.orderStatus,
-        row.medicineName,
-        row.manufacturerName || '',
-        row.orderedQty,
-        row.fulfilledQty,
-        row.shortfallQty,
-        SHORTFALL_REASON_LABELS[row.reason],
-        row.isOpen ? 'Yes' : 'No',
-      ]);
-    });
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(excelData);
-    ws['!cols'] = [
-      { wch: 5 },
-      { wch: 28 },
-      { wch: 28 },
-      { wch: 16 },
-      { wch: 12 },
-      { wch: 14 },
-      { wch: 32 },
-      { wch: 20 },
-      { wch: 12 },
-      { wch: 12 },
-      { wch: 12 },
-      { wch: 18 },
-      { wch: 8 },
-    ];
-    XLSX.utils.book_append_sheet(wb, ws, 'Shortfalls');
-    XLSX.writeFile(wb, `order-shortfalls-${istDateStampCompact()}.xlsx`);
+    exportOrderShortfallsToExcel(sortedRows, 'order-shortfalls');
   };
 
   const renderRetailerGroupsHint = (rows: OrderShortfallRow[]) => {

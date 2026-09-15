@@ -36,6 +36,7 @@ import {
   Engineering,
   Settings,
   PersonAdd,
+  SupervisorAccount,
   Archive,
   PostAdd,
   TrendingUp,
@@ -51,6 +52,7 @@ import {
   ShoppingBag,
   ReportProblem,
   ReceiptLong,
+  CardGiftcard,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -111,9 +113,12 @@ const MENU_SECTIONS: MenuSection[] = [
     items: [
       { text: 'Medical stores', icon: <Store />, path: '/stores' },
       { text: 'Store receivables', icon: <AccountBalance />, path: '/store-receivables' },
+      { text: 'SO receivables', icon: <Group />, path: '/so-receivables' },
+      { text: 'SO cash', icon: <AccountBalanceWallet />, path: '/so-cash' },
       { text: 'Payment requests', icon: <AccountBalanceWallet />, path: '/payment-requests' },
       { text: 'Pending retailers', icon: <PersonAdd />, path: '/pending-retailers' },
       { text: 'Sales officers', icon: <Group />, path: '/sales-officers' },
+      { text: 'Area managers', icon: <SupervisorAccount />, path: '/area-managers' },
       { text: 'SO visits', icon: <Place />, path: '/so-visits' },
     ],
   },
@@ -125,6 +130,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Insights',
     items: [
       { text: 'Margin report', icon: <TrendingUp />, path: '/margin' },
+      { text: 'Retailer incentives', icon: <CardGiftcard />, path: '/retailer-incentives' },
       { text: 'Daily performance', icon: <Assessment />, path: '/daily-performance' },
       { text: 'Top sellers', icon: <Insights />, path: '/medicine-demand' },
     ],

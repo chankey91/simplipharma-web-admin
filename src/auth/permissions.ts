@@ -1,6 +1,6 @@
 export type PanelRole = 'admin' | 'operations' | 'office';
 
-export type AppRole = PanelRole | 'retailer' | 'salesOfficer' | 'purchaseOfficer';
+export type AppRole = PanelRole | 'retailer' | 'salesOfficer' | 'areaManager' | 'purchaseOfficer';
 
 export type WriteModule = 'stores' | 'receivables' | 'orders' | 'purchases' | 'inventory' | 'gst';
 
@@ -43,13 +43,17 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/purchase-returns', label: 'Purchase returns' },
   { path: '/stores', label: 'Medical stores' },
   { path: '/store-receivables', label: 'Store receivables' },
+  { path: '/so-receivables', label: 'SO receivables' },
+  { path: '/so-cash', label: 'SO cash' },
   { path: '/payment-requests', label: 'Payment requests' },
   { path: '/pending-retailers', label: 'Pending retailers' },
   { path: '/sales-officers', label: 'Sales officers' },
+  { path: '/area-managers', label: 'Area managers' },
   { path: '/so-visits', label: 'SO visits' },
   { path: '/daily-performance', label: 'Daily performance' },
   { path: '/gst', label: 'GST' },
   { path: '/margin', label: 'Margin report' },
+  { path: '/retailer-incentives', label: 'Retailer incentives' },
   { path: '/medicine-demand', label: 'Top sellers' },
   { path: '/banners', label: 'Banners' },
   { path: '/home-feed', label: 'Home feed' },
@@ -82,7 +86,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/medicine-demand',
     '/support',
   ],
-  office: ['/stores', '/store-receivables', '/orders', '/purchases', '/inventory'],
+  office: ['/stores', '/store-receivables', '/so-receivables', '/so-cash', '/payment-requests', '/orders', '/purchases', '/inventory'],
 };
 
 const FULL_WRITE: WriteAccess = {

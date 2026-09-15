@@ -187,6 +187,15 @@ export interface Order {
   cancelledAt?: Date | any;
   /** Set when cancel/unfulfill successfully put deducted stock back on inventory batches. */
   stockRestoredOnCancel?: boolean;
+  /**
+   * When true, retailer apps must not list or open this order (e.g. Pending merge source).
+   * Admin still sees Cancelled + cancelReason for audit.
+   */
+  hiddenFromRetailer?: boolean;
+  /** Target order id after Pending merge (set on cancelled source orders). */
+  mergedIntoOrderId?: string;
+  /** Source order ids merged into this order (set on the surviving target). */
+  mergedFromOrderIds?: string[];
   paymentStatus?: PaymentStatus;
   paymentReviewStatus?: PaymentReviewStatus;
   paidAmount?: number;
@@ -225,6 +234,7 @@ export interface Order {
 export type PaymentStatus = 'Paid' | 'Unpaid' | 'Partial';
 export type PaymentMethod = 'Cash' | 'Online' | 'Card' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Wallet';
 export type PaymentReviewStatus = 'none' | 'pending_admin_review' | 'approved' | 'rejected';
+export type CashRemittanceStatus = 'unremitted' | 'remitted' | 'n_a';
 
 export interface Payment {
   id: string;
@@ -234,6 +244,13 @@ export interface Payment {
   paymentMethod: PaymentMethod;
   notes?: string;
   collectedBy?: string;
+  /** SO who collected cash in the field (when applicable). */
+  salesOfficerId?: string;
+  paymentRequestId?: string;
+  settlementKind?: 'cash' | 'wallet';
+  /** For SO-collected cash: unremitted until handed to office. */
+  remittanceStatus?: CashRemittanceStatus;
+  remittanceId?: string;
   transactionId?: string; // For online payments
 }
 
@@ -281,6 +298,18 @@ export interface PaymentRequest {
   notes?: string;
   creditApplications?: PaymentRequestCreditApplication[];
   status: PaymentRequestStatus;
+  /** Who submitted the request (retailer or SO uid). */
+  submittedBy?: string;
+  submittedByRole?: 'retailer' | 'salesOfficer';
+  submittedByName?: string;
+  /** Territory SO on the order (may differ from submitter for retailer-submitted). */
+  salesOfficerId?: string;
+  /** Set on approve for SO-collected cash. */
+  collectedBySoId?: string;
+  collectedBySoName?: string;
+  remittanceStatus?: CashRemittanceStatus;
+  remittanceId?: string;
+  remittedAt?: Date | any;
   reviewedBy?: string;
   reviewedAt?: Date | any;
   reviewNote?: string;
@@ -295,11 +324,23 @@ export interface PaymentRequest {
   updatedAt: Date | any;
 }
 
+export interface SoCashRemittance {
+  id: string;
+  salesOfficerId: string;
+  salesOfficerName?: string;
+  amount: number;
+  paymentRequestIds: string[];
+  remittedBy: string;
+  notes?: string;
+  remittedAt: Date | any;
+  createdAt: Date | any;
+}
+
 export interface User {
   id: string;
   uid: string;
   email: string;
-  role?: 'retailer' | 'admin' | 'salesOfficer' | 'operations' | 'purchaseOfficer' | 'office';
+  role?: 'retailer' | 'admin' | 'salesOfficer' | 'areaManager' | 'operations' | 'purchaseOfficer' | 'office';
   /** Custom sidebar paths for office/operations panel users. */
   menuPaths?: string[];
   /** Per-module write flags (office default: stores/receivables/orders false). */
@@ -315,6 +356,13 @@ export interface User {
   firstName?: string;
   lastName?: string;
   salesOfficerId?: string; // For retailers: which Sales Officer manages them
+  /**
+   * Sales Officer who also operates a medical store under the same login/email.
+   * Primary `role` stays `salesOfficer`; store fields (shopName, storeCode, …) apply when true.
+   */
+  alsoRetailer?: boolean;
+  /** For sales officers: which Area Manager they report to. */
+  areaManagerId?: string;
   displayName?: string;
   phoneNumber?: string;
   /** Sales Officer: IMEI / device identifier used by the mobile app. */
@@ -328,6 +376,10 @@ export interface User {
   town?: string;
   /** District — typically from Madhya Pradesh district list. */
   district?: string;
+  /** Area Manager: districts they cover (assignment / coverage). */
+  managedDistricts?: string[];
+  /** Area Manager: optional towns within managed districts. */
+  managedTowns?: string[];
   shopName?: string;
   isActive?: boolean;
   createdAt?: Date | any;
@@ -344,6 +396,8 @@ export interface User {
   shopImageUrl?: string;
   licenceImageUrl?: string;
   aadharImageUrl?: string;
+  /** Sales Officer: PAN card image URL. */
+  panImageUrl?: string;
   storeCode?: string; // Unique code for medical store (e.g., MS001, MS002)
   location?: {
     latitude: number;

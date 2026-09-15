@@ -92,7 +92,7 @@ Rules:
 - productName = medicine/product name as printed (do not append pack, batch, qty, or prices).
 - packaging = pack size / packing as printed when present (e.g. "10 TAB", "15 ML", "1X10", "STRIP", "BOTTLE"). Do NOT put packaging inside productName. Use null if not shown.
 - batchNumber = invoice / bill batch as printed. receivedBatchNumber only if the invoice shows a distinct physical/pack batch different from bill batch; else null.
-- expiryMmYyyy as MM/YYYY or MM/YY when present on the row.
+- expiryMmYyyy as MM/YY when present on the row (e.g. 12/25).
 - purchasePrice = unit rate / PTR / net rate when present (NOT the line amount).
 - mrp = printed MRP / MRP per unit when present.
 - quantity = billed/paid quantity (not free/scheme qty). freeQuantity = free/scheme qty credited on this bill if shown. Both may be decimals (e.g. 1.5).
@@ -106,13 +106,9 @@ Rules:
 
 function parseExpiryFromLine(line: string): string | undefined {
   const m4 = line.match(/\b(0[1-9]|1[0-2])\/(\d{4})\b/);
-  if (m4) return `${m4[1]}/${m4[2]}`;
+  if (m4) return `${m4[1]}/${m4[2].slice(-2)}`;
   const m2 = line.match(/\b(0[1-9]|1[0-2])\/(\d{2})\b/);
-  if (m2) {
-    const yy = parseInt(m2[2], 10);
-    const year = yy <= 30 ? 2000 + yy : 1900 + yy;
-    return `${m2[1]}/${year}`;
-  }
+  if (m2) return `${m2[1]}/${m2[2]}`;
   return undefined;
 }
 
@@ -211,7 +207,14 @@ function normalizeGeminiLines(rawLines: unknown): ExtractedLine[] {
     const receivedBatch = asNonEmptyString(r.receivedBatchNumber);
     if (receivedBatch) line.receivedBatchNumber = receivedBatch;
     const exp = asNonEmptyString(r.expiryMmYyyy);
-    if (exp) line.expiryMmYyyy = exp;
+    if (exp) {
+      const m = exp.match(/^(0?[1-9]|1[0-2])\/(\d{2}|\d{4})$/);
+      if (m) {
+        line.expiryMmYyyy = `${m[1].padStart(2, '0')}/${m[2].length === 4 ? m[2].slice(-2) : m[2]}`;
+      } else {
+        line.expiryMmYyyy = exp;
+      }
+    }
     const qty = asFiniteNumber(r.quantity);
     if (qty !== undefined) line.quantity = Math.max(0, qty);
     const free = asFiniteNumber(r.freeQuantity);

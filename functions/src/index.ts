@@ -447,9 +447,18 @@ function roleMatchesRequested(existingRole: string | undefined, requestedRole: s
   if (!existingRole) return true;
   if (requestedRole === 'retailer') return isRetailerRole(existingRole);
   if (requestedRole === 'salesOfficer') return isSalesOfficerRole(existingRole);
+  if (requestedRole === 'areaManager') return existingRole === 'areaManager';
   if (requestedRole === 'operations') return isOperationsRole(existingRole);
   if (requestedRole === 'office') return isOfficeRole(existingRole);
   return existingRole === requestedRole;
+}
+
+/** Same person can be SO + medical store under one email (alsoRetailer). */
+function canDualRoleMerge(existingRole: string | undefined, requestedRole: string): boolean {
+  if (!existingRole) return false;
+  if (requestedRole === 'salesOfficer' && isRetailerRole(existingRole)) return true;
+  if (requestedRole === 'retailer' && isSalesOfficerRole(existingRole)) return true;
+  return false;
 }
 
 export const createStoreUser = ff.https.onCall(async (data, context) => {
@@ -466,6 +475,7 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
   const roleByKey: Record<string, string> = {
     retailer: 'retailer',
     salesofficer: 'salesOfficer',
+    areamanager: 'areaManager',
     operations: 'operations',
     office: 'office',
     purchaseofficer: 'purchaseOfficer',
@@ -492,13 +502,15 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
   const accountLabel =
     role === 'salesOfficer'
       ? 'Sales Officer'
-      : role === 'operations'
-        ? 'Operations'
-        : role === 'office'
-          ? 'Office'
-          : role === 'purchaseOfficer'
-            ? 'Purchase Officer'
-            : 'store';
+      : role === 'areaManager'
+        ? 'Area Manager'
+        : role === 'operations'
+          ? 'Operations'
+          : role === 'office'
+            ? 'Office'
+            : role === 'purchaseOfficer'
+              ? 'Purchase Officer'
+              : 'store';
 
   try {
     let userRecord: admin.auth.UserRecord;
@@ -522,8 +534,9 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
       const existingRole = existingDoc.exists
         ? String(existingDoc.data()?.role || '')
         : undefined;
+      const dualMerge = canDualRoleMerge(existingRole, role);
 
-      if (!roleMatchesRequested(existingRole, role)) {
+      if (!roleMatchesRequested(existingRole, role) && !dualMerge) {
         throw new functions.https.HttpsError(
           'already-exists',
           `This email is already registered as ${existingRole || 'another account type'}. Use a different email or update the existing account.`
@@ -537,10 +550,79 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
       });
       userRecord = await admin.auth().getUser(userRecord.uid);
       reprovisioned = true;
-      console.log('createStoreUser: reprovisioned existing auth user', userRecord.uid, email);
+      console.log(
+        'createStoreUser: reprovisioned existing auth user',
+        userRecord.uid,
+        email,
+        dualMerge ? `(dual-role merge from ${existingRole} → ${role})` : ''
+      );
+
+      if (dualMerge) {
+        // Keep one Auth user: primary role becomes salesOfficer; store capability via alsoRetailer.
+        const incoming = { ...(storeData || {}) } as Record<string, any>;
+        delete incoming.role;
+        const merged: Record<string, any> = {
+          ...incoming,
+          uid: userRecord.uid,
+          email,
+          role: 'salesOfficer',
+          alsoRetailer: true,
+          mustResetPassword: true,
+          isActive: storeData?.isActive !== false,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        // Self-assign so this store appears under the SO territory.
+        if (!merged.salesOfficerId) {
+          merged.salesOfficerId = userRecord.uid;
+        }
+        if (!merged.shopName && existingDoc.exists) {
+          const prev = existingDoc.data() || {};
+          if (prev.shopName) merged.shopName = prev.shopName;
+          if (prev.storeCode && !merged.storeCode) merged.storeCode = prev.storeCode;
+          if (prev.address && !merged.address) merged.address = prev.address;
+        }
+        if (merged.alsoRetailer && !String(merged.storeCode || '').trim()) {
+          try {
+            merged.storeCode = await generateNextStoreCode();
+          } catch (codeErr) {
+            console.error('createStoreUser dual-merge: store code failed', codeErr);
+          }
+        }
+        for (const [k, v] of Object.entries(merged)) {
+          if (v === undefined) delete merged[k];
+        }
+        await admin.firestore().collection('users').doc(userRecord.uid).set(merged, { merge: true });
+
+        const emailSent = await sendStoreUserWelcomeEmail({
+          email,
+          password,
+          role: 'salesOfficer',
+          accountLabel: 'Sales Officer',
+          storeData: merged,
+        });
+        return {
+          success: true,
+          uid: userRecord.uid,
+          id: userRecord.uid,
+          emailSent,
+          reprovisioned: true,
+          dualRoleMerged: true,
+        };
+      }
     }
 
     const cleanData = cleanStoreDataForFirestore(storeData, userRecord.uid, email, role);
+    if (role === 'salesOfficer' && storeData?.alsoRetailer === true) {
+      cleanData.alsoRetailer = true;
+      if (!cleanData.salesOfficerId) cleanData.salesOfficerId = userRecord.uid;
+      if (!String(cleanData.storeCode || '').trim()) {
+        try {
+          cleanData.storeCode = await generateNextStoreCode();
+        } catch (codeErr) {
+          console.error('createStoreUser: store code for alsoRetailer SO failed', codeErr);
+        }
+      }
+    }
     if (reprovisioned && (await admin.firestore().collection('users').doc(userRecord.uid).get()).exists) {
       cleanData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
       await admin.firestore().collection('users').doc(userRecord.uid).set(cleanData, { merge: true });
@@ -1144,7 +1226,7 @@ export const sendPanelPasswordResetEmail = ff.https.onCall(async (data, context)
 });
 
 /**
- * Admin only: send a password reset link to a Sales Officer’s email (mobile app account).
+ * Admin only: send a password reset link to a Sales Officer or Area Manager email (field app).
  * Requires SMTP (same as other transactional emails).
  */
 export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, context) => {
@@ -1171,19 +1253,24 @@ export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, c
   }
 
   const role = await getUserRole(userRecord.uid);
-  if (!isSalesOfficerRole(role)) {
+  const isAreaManager = role === 'areaManager';
+  if (!isSalesOfficerRole(role) && !isAreaManager) {
     throw new functions.https.HttpsError(
       'failed-precondition',
-      'This email is not a Sales Officer account'
+      'This email is not a Sales Officer or Area Manager account'
     );
   }
 
   const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
   if (!userDoc.exists || userDoc.data()?.isActive === false) {
-    throw new functions.https.HttpsError('failed-precondition', 'This Sales Officer account is inactive');
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      isAreaManager ? 'This Area Manager account is inactive' : 'This Sales Officer account is inactive'
+    );
   }
 
   const email = String(userRecord.email || rawEmail).trim();
+  const accountLabel = isAreaManager ? 'Area Manager' : 'Sales Officer';
 
   let resetLink: string;
   try {
@@ -1199,11 +1286,11 @@ export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, c
 
   const mail = await sendSmtpMail({
     to: email,
-    subject: 'SimpliPharma — Reset your Sales Officer password',
+    subject: `SimpliPharma — Reset your ${accountLabel} password`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #2196F3;">Password reset</h2>
-        <p>An administrator requested a password reset for your SimpliPharma Sales Officer (mobile) account.</p>
+        <p>An administrator requested a password reset for your SimpliPharma ${accountLabel} (app) account.</p>
         <p style="margin: 24px 0;">
           <a href="${resetLink}"
              style="background: #00a99d; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
@@ -1226,7 +1313,7 @@ export const sendSalesOfficerPasswordResetEmail = ff.https.onCall(async (data, c
 
   return {
     success: true,
-    message: 'Password reset link sent to the Sales Officer email.',
+    message: `Password reset link sent to the ${accountLabel} email.`,
     emailSent: true,
   };
 });

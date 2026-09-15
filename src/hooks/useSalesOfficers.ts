@@ -25,6 +25,7 @@ export const useCreateSalesOfficer = () => {
       createSalesOfficer(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
     },
   });
 };
@@ -38,6 +39,7 @@ export const useUpdateSalesOfficerProfile = () => {
     }) => updateSalesOfficerProfile(args.salesOfficerId, args.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['salesOfficers'] });
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
     },
   });
 };

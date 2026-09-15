@@ -898,6 +898,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         const result = await updateInvoiceMutation.mutateAsync({
           invoiceId: editInvoiceId,
           invoiceData: {
+            invoiceNumber,
+            vendorId: invoiceData.vendorId,
+            vendorName: selectedVendor?.vendorName || existingInvoice?.vendorName || '',
+            invoiceDate: new Date(invoiceData.invoiceDate),
             items,
             subTotal,
             taxAmount: totalTax,
@@ -991,7 +995,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
       {isEditMode ? (
         <Alert severity="info" sx={{ mb: 2 }}>
-          Invoice number, date, and vendor are locked. Edit line items below — stock will sync on update.
+          Edit invoice number, date, vendor, or line items below — stock will sync on update.
         </Alert>
       ) : null}
 
@@ -1007,7 +1011,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               placeholder="Enter vendor bill / invoice number"
               value={invoiceData.invoiceNumber}
               onChange={(e) => setInvoiceData({ ...invoiceData, invoiceNumber: e.target.value })}
-              disabled={isEditMode}
               sx={{ mb: 2 }}
             />
             <TextField
@@ -1018,7 +1021,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               value={invoiceData.invoiceDate}
               onChange={(e) => setInvoiceData({ ...invoiceData, invoiceDate: e.target.value })}
               InputLabelProps={{ shrink: true }}
-              disabled={isEditMode}
               sx={{ mb: 2 }}
             />
             <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'flex-start' }}>
@@ -1031,7 +1033,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   setJustCreatedVendor(null);
                   setInvoiceData({ ...invoiceData, vendorId: newValue?.id || '' });
                 }}
-                disabled={isEditMode}
                 renderInput={(params) => (
                   <TextField
                     {...params}
@@ -1042,16 +1043,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 )}
                 isOptionEqualToValue={(option, value) => option.id === value.id}
               />
-              {!isEditMode && (
-                <Button
-                  variant="outlined"
-                  startIcon={<Add />}
-                  onClick={() => setAddVendorDialog(true)}
-                  sx={{ mt: 0.5, whiteSpace: 'nowrap', flexShrink: 0 }}
-                >
-                  Add Vendor
-                </Button>
-              )}
+              <Button
+                variant="outlined"
+                startIcon={<Add />}
+                onClick={() => setAddVendorDialog(true)}
+                sx={{ mt: 0.5, whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                Add Vendor
+              </Button>
             </Box>
             {selectedVendor && (
               <Card variant="outlined" sx={{ mb: 2, bgcolor: 'rgba(33, 150, 243, 0.05)' }}>
@@ -1349,13 +1348,18 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         open={itemDialog.open}
         disableRestoreFocus
         disableAutoFocus
+        disableEscapeKeyDown
         TransitionProps={{
           onEntered: () => invoiceBatchInputElRef.current?.focus(),
         }}
-        onClose={() => {
-        setItemDialog({ open: false, itemIndex: null });
-        setExpiryDateError(''); // Clear error when dialog closes
-      }} maxWidth="sm" fullWidth>
+        onClose={(_event, reason) => {
+          if (reason === 'backdropClick') return;
+          setItemDialog({ open: false, itemIndex: null });
+          setExpiryDateError('');
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>
           {itemDialog.itemIndex !== null ? 'Edit Item' : 'Add Item'} - {currentItem.medicineName}
         </DialogTitle>

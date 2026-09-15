@@ -29,6 +29,8 @@ import {
   LinearProgress,
   Alert,
   Divider,
+  Checkbox,
+  Toolbar,
 } from '@mui/material';
 import {
   Search,
@@ -37,17 +39,31 @@ import {
   Download,
   CloudSync,
   Publish,
+  LocalShipping,
+  CheckCircle,
+  MergeType,
 } from '@mui/icons-material';
-import { useOrders, useOrdersSearch, useCancelOrder } from '../hooks/useOrders';
-import { useQuery } from '@tanstack/react-query';
+import {
+  useOrders,
+  useOrdersSearch,
+  useCancelOrder,
+  useMergePendingOrders,
+  invalidateOrderListQueries,
+} from '../hooks/useOrders';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
-import { getOrdersInRange } from '../services/orders';
-import { Order, OrderStatus } from '../types';
+import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered } from '../services/orders';
+import { generateOrderInvoice } from '../utils/invoice';
+import {
+  extractOrderShortfallsFromOrders,
+  exportOrderShortfallsToExcel,
+} from '../utils/orderShortfalls';
+import { Order, OrderStatus, User } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { useNavigate } from 'react-router-dom';
-import { exportPendingOrdersByStore, exportPendingOrdersProductSummary } from '../utils/export';
+import { exportPendingOrdersByStore, exportPendingOrdersProductSummary, exportSelectedOrderStores, formatTownDistrict } from '../utils/export';
 import { publishPurchaseList } from '../services/purchaseLists';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -67,16 +83,28 @@ import {
 
 const ROWS_PER_PAGE = 10;
 
+const isBulkSelectableStatus = (status: OrderStatus) =>
+  status === 'Pending' || status === 'Order Fulfillment' || status === 'In Transit';
+
 /** Normalized row shape rendered by the table, sourced from either Typesense or the fallback full list. */
 interface OrderRow {
   id: string;
   orderDate: Date;
   storeName: string;
+  retailerId: string;
   retailerEmail: string;
+  townDistrict: string;
   itemCount: number;
   totalAmount: number;
   status: OrderStatus;
 }
+
+type SelectedOrderMeta = {
+  status: OrderStatus;
+  retailerId: string;
+  storeName: string;
+  retailerEmail: string;
+};
 
 /** Map the table's sort column id to the Typesense-indexed field name. */
 const sortKeyToField = (key: string): OrderSearchParams['sortField'] => {
@@ -101,6 +129,8 @@ const sortKeyToField = (key: string): OrderSearchParams['sortField'] => {
 
 export const OrdersPage: React.FC = () => {
   const cancelOrderMutation = useCancelOrder();
+  const mergePendingMutation = useMergePendingOrders();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { alert } = useAppDialog();
   const { canWrite, panelRole } = useAuth();
@@ -124,6 +154,16 @@ export const OrdersPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+  const [selectedById, setSelectedById] = useState<Record<string, SelectedOrderMeta>>({});
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDispatchDialog, setBulkDispatchDialog] = useState({
+    open: false,
+    courierName: '',
+    trackingNumber: '',
+    notes: '',
+  });
+  const [bulkDeliverDialog, setBulkDeliverDialog] = useState({ open: false });
+  const [mergePendingDialog, setMergePendingDialog] = useState({ open: false });
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
@@ -142,6 +182,11 @@ export const OrdersPage: React.FC = () => {
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
 
+  // Drop selection when filters / paging change so actions match what's on screen.
+  useEffect(() => {
+    setSelectedById({});
+  }, [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, page, sortKey, sortDirection]);
+
   const storeNameByRetailerId = useMemo(() => {
     const map = new Map<string, string>();
     stores?.forEach((store) => {
@@ -153,10 +198,43 @@ export const OrdersPage: React.FC = () => {
     return map;
   }, [stores]);
 
+  const storeByRetailerId = useMemo(() => {
+    const map = new Map<string, User>();
+    stores?.forEach((store) => {
+      map.set(store.id, store);
+      if (store.uid) map.set(store.uid, store);
+    });
+    return map;
+  }, [stores]);
+
+  const storeByEmail = useMemo(() => {
+    const map = new Map<string, User>();
+    stores?.forEach((store) => {
+      const email = (store.email || '').trim().toLowerCase();
+      if (email) map.set(email, store);
+    });
+    return map;
+  }, [stores]);
+
   const resolveStoreName = (retailerName?: string, retailerId?: string) =>
     retailerName?.trim() ||
     (retailerId ? storeNameByRetailerId.get(retailerId) : undefined) ||
     'N/A';
+
+  const resolveTownDistrict = (retailerId?: string, retailerEmail?: string) => {
+    const store =
+      (retailerId ? storeByRetailerId.get(retailerId) : undefined) ||
+      (retailerEmail ? storeByEmail.get(retailerEmail.trim().toLowerCase()) : undefined);
+    const label = formatTownDistrict(store?.town, store?.district);
+    return label || '—';
+  };
+
+  const resolveRetailerId = (retailerId?: string, retailerEmail?: string) => {
+    if (retailerId?.trim()) return retailerId.trim();
+    const email = (retailerEmail || '').trim().toLowerCase();
+    if (email) return storeByEmail.get(email)?.id || '';
+    return '';
+  };
 
   // Debounce the search term so we don't fire a Typesense query on every keystroke.
   useEffect(() => {
@@ -175,6 +253,28 @@ export const OrdersPage: React.FC = () => {
   /** Prefer Firestore for any date filter — Typesense can lag behind new orders. */
   const useLocalList = typesenseDisabled || hasDateFilter;
 
+  /** Retailer ids whose town/district matches the search term (for Typesense location filter). */
+  const locationMatchedRetailerIds = useMemo(() => {
+    const term = debouncedTerm.toLowerCase();
+    // Avoid hijacking short queries (e.g. "a") into location-only results.
+    if (term.length < 3) return [] as string[];
+    const ids = new Set<string>();
+    for (const store of stores || []) {
+      const town = (store.town || '').trim().toLowerCase();
+      const district = (store.district || '').trim().toLowerCase();
+      const label = formatTownDistrict(store.town, store.district).toLowerCase();
+      if (
+        (town && town.includes(term)) ||
+        (district && district.includes(term)) ||
+        (label && label.includes(term))
+      ) {
+        if (store.id) ids.add(store.id);
+        if (store.uid) ids.add(store.uid);
+      }
+    }
+    return Array.from(ids);
+  }, [debouncedTerm, stores]);
+
   // Primary path: server-side search/filter/sort/pagination via Typesense.
   const searchParams: OrderSearchParams = {
     query: debouncedTerm,
@@ -185,6 +285,9 @@ export const OrdersPage: React.FC = () => {
     perPage: ROWS_PER_PAGE,
     ...(fromDateFilter && !dateRangeInvalid ? { fromDate: fromDateFilter.slice(0, 10) } : {}),
     ...(toDateFilter && !dateRangeInvalid ? { toDate: toDateFilter.slice(0, 10) } : {}),
+    ...(locationMatchedRetailerIds.length > 0
+      ? { locationRetailerIds: locationMatchedRetailerIds }
+      : {}),
   };
   const {
     data: searchData,
@@ -211,6 +314,9 @@ export const OrdersPage: React.FC = () => {
     queryFn: () =>
       getOrdersInRange(dateRangeBounds!.startMs, dateRangeBounds!.endMsExclusive),
     enabled: hasDateFilter && dateRangeBounds != null,
+    // Always reload when navigating back to Orders Management.
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   // Fallback path: full collection when Typesense unavailable and no date filter.
@@ -224,11 +330,18 @@ export const OrdersPage: React.FC = () => {
     (orders: Order[], applyStatusFilter: boolean) => {
       const term = debouncedTerm.toLowerCase();
       return orders.filter((order) => {
+        const townDistrict = resolveTownDistrict(order.retailerId, order.retailerEmail).toLowerCase();
+      const invoiceNumber = (order.invoiceNumber || '').toLowerCase();
+        const invoiceCompact = invoiceNumber.replace(/[^a-z0-9]/g, '');
+        const termCompact = term.replace(/[^a-z0-9]/g, '');
         const matchesSearch =
           !term ||
           order.id.toLowerCase().includes(term) ||
+          invoiceNumber.includes(term) ||
+          (termCompact.length >= 3 && invoiceCompact.includes(termCompact)) ||
           resolveStoreName(order.retailerName, order.retailerId).toLowerCase().includes(term) ||
           order.retailerEmail?.toLowerCase().includes(term) ||
+          townDistrict.includes(term) ||
           order.medicines.some((m) => m.name.toLowerCase().includes(term));
         const matchesStatus =
           !applyStatusFilter || statusFilter === 'All' || order.status === statusFilter;
@@ -240,8 +353,18 @@ export const OrdersPage: React.FC = () => {
         return matchesSearch && matchesStatus && matchesDate;
       });
     },
-    [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, hasDateFilter, storeNameByRetailerId]
+    [
+      debouncedTerm,
+      statusFilter,
+      fromDateFilter,
+      toDateFilter,
+      storeNameByRetailerId,
+      storeByRetailerId,
+      storeByEmail,
+    ]
   );
+
+  // (locationMatchedRetailerIds defined above searchParams)
 
   const localFilteredSorted = useMemo(() => {
     if (!useLocalList) return [];
@@ -262,6 +385,14 @@ export const OrdersPage: React.FC = () => {
             compareAsc(
               resolveStoreName(a.retailerName, a.retailerId).toLowerCase(),
               resolveStoreName(b.retailerName, b.retailerId).toLowerCase()
+            ),
+            sortDirection
+          );
+        case 'townDistrict':
+          return applyDirection(
+            compareAsc(
+              resolveTownDistrict(a.retailerId, a.retailerEmail).toLowerCase(),
+              resolveTownDistrict(b.retailerId, b.retailerEmail).toLowerCase()
             ),
             sortDirection
           );
@@ -287,6 +418,9 @@ export const OrdersPage: React.FC = () => {
     filterLocalOrders,
     sortKey,
     sortDirection,
+    storeByRetailerId,
+    storeByEmail,
+    storeNameByRetailerId,
   ]);
 
   const localStatusCounts = useMemo(() => {
@@ -302,26 +436,44 @@ export const OrdersPage: React.FC = () => {
     if (useLocalList) {
       return localFilteredSorted
         .slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE)
-        .map((o) => ({
-          id: o.id,
-          orderDate: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
-          storeName: resolveStoreName(o.retailerName, o.retailerId),
-          retailerEmail: o.retailerEmail || '',
-          itemCount: o.medicines.length,
-          totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
-          status: o.status,
-        }));
+        .map((o) => {
+          const retailerId = resolveRetailerId(o.retailerId, o.retailerEmail);
+          return {
+            id: o.id,
+            orderDate: o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate),
+            storeName: resolveStoreName(o.retailerName, o.retailerId),
+            retailerId,
+            retailerEmail: o.retailerEmail || '',
+            townDistrict: resolveTownDistrict(o.retailerId || retailerId, o.retailerEmail),
+            itemCount: o.medicines.length,
+            totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
+            status: o.status,
+          };
+        });
     }
-    return (searchData?.orders ?? []).map((o) => ({
-      id: o.id,
-      orderDate: new Date(o.orderDate),
-      storeName: o.retailerName?.trim() || 'N/A',
-      retailerEmail: o.retailerEmail || '',
-      itemCount: o.itemCount,
-      totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
-      status: o.status,
-    }));
-  }, [useLocalList, localFilteredSorted, page, searchData, storeNameByRetailerId]);
+    return (searchData?.orders ?? []).map((o) => {
+      const retailerId = resolveRetailerId(o.retailerId, o.retailerEmail);
+      return {
+        id: o.id,
+        orderDate: new Date(o.orderDate),
+        storeName: o.retailerName?.trim() || 'N/A',
+        retailerId,
+        retailerEmail: o.retailerEmail || '',
+        townDistrict: resolveTownDistrict(retailerId, o.retailerEmail),
+        itemCount: o.itemCount,
+        totalAmount: resolveOrderListTotalAmount(o.id, o.totalAmount),
+        status: o.status,
+      };
+    });
+  }, [
+    useLocalList,
+    localFilteredSorted,
+    page,
+    searchData,
+    storeNameByRetailerId,
+    storeByRetailerId,
+    storeByEmail,
+  ]);
 
   const statusCounts = useLocalList ? localStatusCounts : searchData?.statusCounts ?? {};
   const totalCount = useLocalList ? localFilteredSorted.length : searchData?.found ?? 0;
@@ -362,6 +514,270 @@ export const OrdersPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Error cancelling order:', error);
+    }
+  };
+
+  const selectedIds = useMemo(() => Object.keys(selectedById), [selectedById]);
+  const selectedFulfillmentIds = useMemo(
+    () => selectedIds.filter((id) => selectedById[id]?.status === 'Order Fulfillment'),
+    [selectedIds, selectedById]
+  );
+  const selectedTransitIds = useMemo(
+    () => selectedIds.filter((id) => selectedById[id]?.status === 'In Transit'),
+    [selectedIds, selectedById]
+  );
+  const selectedPendingIds = useMemo(
+    () => selectedIds.filter((id) => selectedById[id]?.status === 'Pending'),
+    [selectedIds, selectedById]
+  );
+  const pendingMergeRetailerId = useMemo(() => {
+    if (selectedPendingIds.length < 2) return '';
+    const first = String(selectedById[selectedPendingIds[0]]?.retailerId || '').trim();
+    if (!first) return '';
+    const same = selectedPendingIds.every(
+      (id) => String(selectedById[id]?.retailerId || '').trim() === first
+    );
+    return same ? first : '';
+  }, [selectedPendingIds, selectedById]);
+  const canMergePending = Boolean(pendingMergeRetailerId) && selectedPendingIds.length >= 2;
+  const mergePendingStoreName = pendingMergeRetailerId
+    ? selectedById[selectedPendingIds[0]]?.storeName || 'this retailer'
+    : '';
+
+  const selectableRowsOnPage = useMemo(
+    () => (canEditOrders ? rows.filter((r) => isBulkSelectableStatus(r.status)) : []),
+    [rows, canEditOrders]
+  );
+  const allSelectableOnPageSelected =
+    selectableRowsOnPage.length > 0 &&
+    selectableRowsOnPage.every((r) => Boolean(selectedById[r.id]));
+  const someSelectableOnPageSelected =
+    selectableRowsOnPage.some((r) => Boolean(selectedById[r.id])) && !allSelectableOnPageSelected;
+
+  const toSelectedMeta = (order: OrderRow): SelectedOrderMeta => ({
+    status: order.status,
+    retailerId: order.retailerId,
+    storeName: order.storeName,
+    retailerEmail: order.retailerEmail,
+  });
+
+  const toggleRowSelected = (order: OrderRow) => {
+    if (!canEditOrders || !isBulkSelectableStatus(order.status)) return;
+    setSelectedById((prev) => {
+      const next = { ...prev };
+      if (next[order.id]) delete next[order.id];
+      else next[order.id] = toSelectedMeta(order);
+      return next;
+    });
+  };
+
+  const toggleSelectAllOnPage = () => {
+    if (!canEditOrders) return;
+    setSelectedById((prev) => {
+      const next = { ...prev };
+      if (allSelectableOnPageSelected) {
+        for (const r of selectableRowsOnPage) delete next[r.id];
+      } else {
+        for (const r of selectableRowsOnPage) next[r.id] = toSelectedMeta(r);
+      }
+      return next;
+    });
+  };
+
+  const handleDownloadSelectedStores = async () => {
+    if (selectedIds.length === 0) {
+      await alert('Select at least one order first', { severity: 'warning' });
+      return;
+    }
+    await exportSelectedOrderStores(
+      selectedIds.map((id) => ({
+        orderId: id,
+        status: selectedById[id]?.status || '',
+        retailerId: selectedById[id]?.retailerId || '',
+        storeName: selectedById[id]?.storeName || '',
+        retailerEmail: selectedById[id]?.retailerEmail || '',
+      })),
+      stores || [],
+      'selected-order-stores'
+    );
+  };
+
+  const handleDownloadSelectedShortItems = async () => {
+    if (selectedIds.length === 0) {
+      await alert('Select at least one order first', { severity: 'warning' });
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const orders: Order[] = [];
+      const loadErrors: string[] = [];
+      for (const orderId of selectedIds) {
+        try {
+          const order = await getOrderById(orderId);
+          if (order) orders.push(order);
+          else loadErrors.push(`${formatOrderNumberForDisplay(orderId)}: not found`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          loadErrors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+        }
+      }
+      const shortRows = extractOrderShortfallsFromOrders(orders);
+      if (shortRows.length === 0) {
+        await alert(
+          loadErrors.length > 0
+            ? `No short items on the selected orders.\nLoad issues:\n${loadErrors.slice(0, 5).join('\n')}`
+            : 'No short items on the selected orders.',
+          { severity: 'warning' }
+        );
+        return;
+      }
+      exportOrderShortfallsToExcel(shortRows, 'selected-order-short-items');
+      await alert(
+        `Downloaded ${shortRows.length} short item line(s) from ${orders.length} order(s)${
+          loadErrors.length > 0 ? ` (${loadErrors.length} load issue(s))` : ''
+        }.`,
+        { severity: loadErrors.length > 0 ? 'warning' : 'success' }
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to export short items';
+      await alert(msg, { severity: 'error' });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const refreshListsAfterBulk = async () => {
+    await invalidateOrderListQueries(queryClient);
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: ['ordersSearch'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['ordersInRange'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['orders'], type: 'active' }),
+    ]);
+    setSelectedById({});
+  };
+
+  const handleBulkDispatchConfirm = async () => {
+    const user = auth.currentUser;
+    if (!user || selectedFulfillmentIds.length === 0) return;
+    setBulkBusy(true);
+    const errors: string[] = [];
+    try {
+      for (const orderId of selectedFulfillmentIds) {
+        try {
+          await updateOrderDispatch(orderId, {
+            status: 'In Transit',
+            dispatchDate: new Date(),
+            dispatchedBy: user.uid,
+            courierName: bulkDispatchDialog.courierName.trim() || undefined,
+            trackingNumber: bulkDispatchDialog.trackingNumber.trim() || undefined,
+            dispatchNotes: bulkDispatchDialog.notes.trim() || undefined,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+        }
+      }
+      setBulkDispatchDialog({ open: false, courierName: '', trackingNumber: '', notes: '' });
+      await refreshListsAfterBulk();
+      if (errors.length > 0) {
+        await alert(
+          `Dispatched ${selectedFulfillmentIds.length - errors.length} order(s). Failed:\n${errors.slice(0, 5).join('\n')}`,
+          { severity: 'warning' }
+        );
+      } else {
+        await alert(`Marked ${selectedFulfillmentIds.length} order(s) as In Transit.`, {
+          severity: 'success',
+        });
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkDeliverConfirm = async () => {
+    const user = auth.currentUser;
+    if (!user || selectedTransitIds.length === 0) return;
+    setBulkBusy(true);
+    const errors: string[] = [];
+    const emailErrors: string[] = [];
+    let emailedCount = 0;
+    try {
+      for (const orderId of selectedTransitIds) {
+        try {
+          await markOrderDelivered(orderId, user.uid);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+          continue;
+        }
+        try {
+          const order = await getOrderById(orderId);
+          if (!order) {
+            emailErrors.push(`${formatOrderNumberForDisplay(orderId)}: order not found for invoice email`);
+            continue;
+          }
+          const emailResult = await generateOrderInvoice(order, {
+            emailPdfToRetailer: true,
+            downloadPdf: false,
+            awaitEmail: true,
+            suppressEmailAlerts: true,
+          });
+          if (emailResult.emailed) {
+            emailedCount += 1;
+          } else {
+            emailErrors.push(
+              `${formatOrderNumberForDisplay(orderId)}: ${emailResult.emailError || 'email failed'}`
+            );
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          emailErrors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+        }
+      }
+      setBulkDeliverDialog({ open: false });
+      await refreshListsAfterBulk();
+      const deliveredOk = selectedTransitIds.length - errors.length;
+      const parts: string[] = [
+        `Marked ${deliveredOk} order(s) as Delivered.`,
+        emailedCount > 0 ? `Invoices emailed to ${emailedCount} store(s).` : '',
+      ].filter(Boolean);
+      if (errors.length > 0) {
+        parts.push(`Deliver failed:\n${errors.slice(0, 5).join('\n')}`);
+      }
+      if (emailErrors.length > 0) {
+        parts.push(`Invoice email failed:\n${emailErrors.slice(0, 5).join('\n')}`);
+      }
+      await alert(parts.join('\n\n'), {
+        severity: errors.length > 0 || emailErrors.length > 0 ? 'warning' : 'success',
+      });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleMergePendingConfirm = async () => {
+    const user = auth.currentUser;
+    if (!user || !canMergePending) return;
+    setBulkBusy(true);
+    try {
+      const result = await mergePendingMutation.mutateAsync({
+        orderIds: selectedPendingIds,
+        mergedBy: user.uid,
+      });
+      setMergePendingDialog({ open: false });
+      // Hide merge-cancelled sources: show Pending only after merge.
+      setStatusFilter('Pending');
+      setPage(1);
+      await refreshListsAfterBulk();
+      await alert(
+        `Merged into #${formatOrderNumberForDisplay(result.targetOrderId)} (${result.lineCount} line(s)). ${result.cancelledOrderIds.length} source order(s) cancelled for admin audit and hidden from the retailer.`,
+        { severity: 'success' }
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to merge orders';
+      await alert(msg, { severity: 'error' });
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -587,7 +1003,7 @@ export const OrdersPage: React.FC = () => {
             <TextField
               fullWidth
               size="small"
-              placeholder="Search orders..."
+              placeholder="Search order, invoice, store, email, town, district…"
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);
@@ -735,15 +1151,118 @@ export const OrdersPage: React.FC = () => {
         </Box>
       </Paper>
 
+      {canEditOrders && selectedIds.length > 0 && (
+        <Paper sx={{ mb: 2 }}>
+          <Toolbar
+            sx={{
+              gap: 1,
+              flexWrap: 'wrap',
+              py: 1,
+              minHeight: 56,
+            }}
+          >
+            <Typography variant="body2" sx={{ mr: 1 }}>
+              {selectedIds.length} selected
+              {selectedPendingIds.length > 0 ? ` · ${selectedPendingIds.length} pending` : ''}
+              {selectedFulfillmentIds.length > 0
+                ? ` · ${selectedFulfillmentIds.length} fulfillment`
+                : ''}
+              {selectedTransitIds.length > 0 ? ` · ${selectedTransitIds.length} in transit` : ''}
+            </Typography>
+            <Button
+              size="small"
+              variant="contained"
+              color="secondary"
+              startIcon={<MergeType />}
+              disabled={bulkBusy || !canMergePending || mergePendingMutation.isPending}
+              onClick={() => setMergePendingDialog({ open: true })}
+            >
+              Merge Pending ({selectedPendingIds.length})
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<LocalShipping />}
+              disabled={bulkBusy || selectedFulfillmentIds.length === 0}
+              onClick={() =>
+                setBulkDispatchDialog({
+                  open: true,
+                  courierName: '',
+                  trackingNumber: '',
+                  notes: '',
+                })
+              }
+            >
+              Mark In Transit ({selectedFulfillmentIds.length})
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              color="success"
+              startIcon={<CheckCircle />}
+              disabled={bulkBusy || selectedTransitIds.length === 0}
+              onClick={() => setBulkDeliverDialog({ open: true })}
+            >
+              Mark Delivered ({selectedTransitIds.length})
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<Download />}
+              disabled={bulkBusy || selectedIds.length === 0}
+              onClick={() => void handleDownloadSelectedStores()}
+            >
+              Download store list
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<Download />}
+              disabled={bulkBusy || selectedIds.length === 0}
+              onClick={() => void handleDownloadSelectedShortItems()}
+            >
+              Download short items
+            </Button>
+            <Button
+              size="small"
+              variant="text"
+              disabled={bulkBusy}
+              onClick={() => setSelectedById({})}
+            >
+              Clear selection
+            </Button>
+            {selectedPendingIds.length >= 2 && !canMergePending && (
+              <Typography variant="caption" color="warning.main" sx={{ width: '100%' }}>
+                Merge needs 2+ Pending orders for the same retailer (check Town / store).
+              </Typography>
+            )}
+          </Toolbar>
+          {bulkBusy && <LinearProgress />}
+        </Paper>
+      )}
+
       {/* Orders Table */}
       <TableContainer component={Paper}>
         {isBusy && <LinearProgress />}
         <Table>
           <TableHead>
             <TableRow>
+              {canEditOrders && (
+                <TableCell padding="checkbox">
+                  <Checkbox
+                    indeterminate={someSelectableOnPageSelected}
+                    checked={allSelectableOnPageSelected}
+                    disabled={selectableRowsOnPage.length === 0 || bulkBusy}
+                    onChange={toggleSelectAllOnPage}
+                    inputProps={{ 'aria-label': 'Select all eligible orders on this page' }}
+                  />
+                </TableCell>
+              )}
               <SortableTableHeadCell columnId="id" label="Order ID" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="orderDate" label="Date & Time" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="storeName" label="Store Name" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
+              <SortableTableHeadCell columnId="townDistrict" label="Town / District" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="retailer" label="Email" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="items" label="Items" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
               <SortableTableHeadCell columnId="amount" label="Amount" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -754,16 +1273,36 @@ export const OrdersPage: React.FC = () => {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={canEditOrders ? 10 : 9} align="center">
                   <Typography color="textSecondary" sx={{ py: 3 }}>No orders found</Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((order) => (
-                <TableRow key={order.id} hover onClick={() => navigate(`/orders/${order.id}`)} sx={{ cursor: 'pointer' }}>
+              rows.map((order) => {
+                const selectable = canEditOrders && isBulkSelectableStatus(order.status);
+                const selected = Boolean(selectedById[order.id]);
+                return (
+                <TableRow
+                  key={order.id}
+                  hover
+                  selected={selected}
+                  onClick={() => navigate(`/orders/${order.id}`)}
+                  sx={{ cursor: 'pointer' }}
+                >
+                  {canEditOrders && (
+                    <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selected}
+                        disabled={!selectable || bulkBusy}
+                        onChange={() => toggleRowSelected(order)}
+                        inputProps={{ 'aria-label': `Select order ${order.id}` }}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
                   <TableCell>{format(order.orderDate, 'MMM dd, yyyy hh:mm a')}</TableCell>
                   <TableCell>{order.storeName}</TableCell>
+                  <TableCell>{order.townDistrict}</TableCell>
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
                   <TableCell>{order.itemCount} items</TableCell>
                   <TableCell>
@@ -806,7 +1345,8 @@ export const OrdersPage: React.FC = () => {
                     )}
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -853,6 +1393,135 @@ export const OrdersPage: React.FC = () => {
             disabled={!cancelDialog.reason || cancelOrderMutation.isPending}
           >
             Cancel Order
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={bulkDispatchDialog.open}
+        onClose={() => !bulkBusy && setBulkDispatchDialog((p) => ({ ...p, open: false }))}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Mark orders In Transit</DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom>
+            Dispatch {selectedFulfillmentIds.length} fulfilled order(s). Courier and tracking are
+            optional and applied to every selected order.
+          </Typography>
+          <TextField
+            fullWidth
+            label="Courier name"
+            value={bulkDispatchDialog.courierName}
+            onChange={(e) =>
+              setBulkDispatchDialog((p) => ({ ...p, courierName: e.target.value }))
+            }
+            sx={{ mt: 2 }}
+            disabled={bulkBusy}
+          />
+          <TextField
+            fullWidth
+            label="Tracking number"
+            value={bulkDispatchDialog.trackingNumber}
+            onChange={(e) =>
+              setBulkDispatchDialog((p) => ({ ...p, trackingNumber: e.target.value }))
+            }
+            sx={{ mt: 2 }}
+            disabled={bulkBusy}
+          />
+          <TextField
+            fullWidth
+            label="Dispatch notes"
+            multiline
+            rows={2}
+            value={bulkDispatchDialog.notes}
+            onChange={(e) => setBulkDispatchDialog((p) => ({ ...p, notes: e.target.value }))}
+            sx={{ mt: 2 }}
+            disabled={bulkBusy}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setBulkDispatchDialog((p) => ({ ...p, open: false }))}
+            disabled={bulkBusy}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<LocalShipping />}
+            onClick={() => void handleBulkDispatchConfirm()}
+            disabled={bulkBusy || selectedFulfillmentIds.length === 0}
+          >
+            {bulkBusy ? 'Updating…' : `Mark In Transit (${selectedFulfillmentIds.length})`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={bulkDeliverDialog.open}
+        onClose={() => !bulkBusy && setBulkDeliverDialog({ open: false })}
+      >
+        <DialogTitle>Mark orders Delivered</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Confirm delivery for {selectedTransitIds.length} in-transit order(s)? Each store will
+            receive its tax invoice by email.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkDeliverDialog({ open: false })} disabled={bulkBusy}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            startIcon={<CheckCircle />}
+            onClick={() => void handleBulkDeliverConfirm()}
+            disabled={bulkBusy || selectedTransitIds.length === 0}
+          >
+            {bulkBusy ? 'Updating…' : `Mark Delivered (${selectedTransitIds.length})`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={mergePendingDialog.open}
+        onClose={() =>
+          !bulkBusy &&
+          !mergePendingMutation.isPending &&
+          setMergePendingDialog({ open: false })
+        }
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Merge Pending orders</DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom>
+            Merge {selectedPendingIds.length} Pending orders for <strong>{mergePendingStoreName}</strong>{' '}
+            into the oldest order. Same medicines combine quantities; source orders stay Cancelled for
+            admin audit but are hidden from the retailer (they only see the combined order).
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Orders:{' '}
+            {selectedPendingIds.map((id) => `#${formatOrderNumberForDisplay(id)}`).join(', ')}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setMergePendingDialog({ open: false })}
+            disabled={bulkBusy || mergePendingMutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={<MergeType />}
+            onClick={() => void handleMergePendingConfirm()}
+            disabled={bulkBusy || !canMergePending || mergePendingMutation.isPending}
+          >
+            {bulkBusy || mergePendingMutation.isPending ? 'Merging…' : 'Merge orders'}
           </Button>
         </DialogActions>
       </Dialog>

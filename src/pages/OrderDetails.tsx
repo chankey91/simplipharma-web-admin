@@ -1544,7 +1544,8 @@ export const OrderDetailsPage: React.FC = () => {
           open: true,
           action: 'deliver',
           title: 'Confirm Delivery',
-          message: 'Are you sure you want to mark this order as delivered?'
+          message:
+            'Mark this order as delivered? The tax invoice PDF and CSV will be emailed to the retailer.',
         });
         break;
       case 'cancel':
@@ -1627,26 +1628,12 @@ export const OrderDetailsPage: React.FC = () => {
         clearSessionFulfillmentDraft(order.id);
         localPendingEditsRef.current = { orderId: order.id, dirty: false };
         setFulfillmentDirty(false);
-        // Close before success/invoice alerts so MUI dialogs do not stack and block dismiss.
+        // Close before success alerts so MUI dialogs do not stack and block dismiss.
         closeConfirmDialog();
-        try {
-          const refreshed = await getOrderById(order.id);
-          if (refreshed) {
-            void generateOrderInvoice(refreshed, {
-              emailPdfToRetailer: true,
-              purchaseInvoices: purchaseInvoicesList,
-            }).catch(async (err) => {
-              console.error('Error emailing invoice after fulfill:', err);
-              await alert(
-                'Order fulfilled, but the invoice email could not be sent. Download from Print Invoice or check Firebase logs.',
-                { severity: 'warning' }
-              );
-            });
-          }
-        } catch (emailErr) {
-          console.error('Error loading order for invoice email:', emailErr);
-        }
-        await alert('Order fulfilled successfully! Invoice will be emailed to the retailer.', { severity: 'success' });
+        await alert(
+          'Order fulfilled successfully! Invoice will be emailed when the order is marked Delivered.',
+          { severity: 'success' }
+        );
       } else if (confirmDialog.action === 'dispatch') {
         await dispatchOrderMutation.mutateAsync({
           orderId: order.id,
@@ -1667,7 +1654,33 @@ export const OrderDetailsPage: React.FC = () => {
           deliveredBy: user.uid
         });
         closeConfirmDialog();
-        await alert('Order marked as delivered successfully!', { severity: 'success' });
+        let invoiceEmailNote = 'Invoice will be emailed to the retailer.';
+        try {
+          const refreshed = await getOrderById(order.id);
+          if (refreshed) {
+            const emailResult = await generateOrderInvoice(refreshed, {
+              emailPdfToRetailer: true,
+              downloadPdf: false,
+              awaitEmail: true,
+              suppressEmailAlerts: true,
+              purchaseInvoices: purchaseInvoicesList,
+            });
+            if (emailResult.emailed && emailResult.emailedTo) {
+              invoiceEmailNote = `Invoice emailed to ${emailResult.emailedTo}.`;
+            } else if (emailResult.emailError) {
+              invoiceEmailNote = `Delivered, but invoice email failed: ${emailResult.emailError}`;
+            }
+          }
+        } catch (emailErr) {
+          console.error('Error emailing invoice after deliver:', emailErr);
+          invoiceEmailNote =
+            'Delivered, but the invoice email could not be sent. Use Print Invoice or Invoices page.';
+        }
+        await alert(`Order marked as delivered successfully! ${invoiceEmailNote}`, {
+          severity: invoiceEmailNote.includes('failed') || invoiceEmailNote.includes('could not')
+            ? 'warning'
+            : 'success',
+        });
       } else if (confirmDialog.action === 'cancel') {
         if (!cancelReason.trim()) {
           await alert('Please provide a cancellation reason', { severity: 'warning' });

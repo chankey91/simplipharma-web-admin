@@ -26,6 +26,7 @@ import { MedicineDetailsPage } from './pages/MedicineDetails';
 import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
 import { SalesOfficersPage } from './pages/SalesOfficers';
+import { AreaManagersPage } from './pages/AreaManagers';
 import { SoVisitsPage } from './pages/SoVisits';
 import { DailyPerformancePage } from './pages/DailyPerformance';
 import { NrxRegisterPage } from './pages/NrxRegister';
@@ -37,10 +38,13 @@ import { OrderReturnsPage } from './pages/OrderReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { CreditNotesPage } from './pages/CreditNotes';
 import { MarginReportPage } from './pages/MarginReport';
+import { RetailerIncentivesPage } from './pages/RetailerIncentives';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
+import { SoReceivablesPage } from './pages/SoReceivables';
 import { StoreLedgerPage } from './pages/StoreLedger';
 import { VendorLedgerPage } from './pages/VendorLedger';
 import { PaymentRequestsPage } from './pages/PaymentRequests';
+import { SoCashPage } from './pages/SoCash';
 import { SupportTicketsPage } from './pages/SupportTickets';
 import { HomeFeedPage } from './pages/HomeFeed';
 import { PurchaseListsPage } from './pages/PurchaseLists';
@@ -118,6 +122,8 @@ const router = createBrowserRouter([
   { path: '/support', element: withLayout(<SupportTicketsPage />) },
   { path: '/stores', element: withLayout(<StoresPage />) },
   { path: '/store-receivables', element: withLayout(<StoreReceivablesPage />) },
+  { path: '/so-receivables', element: withLayout(<SoReceivablesPage />) },
+  { path: '/so-cash', element: withLayout(<SoCashPage />) },
   { path: '/store-ledger', element: withLayout(<StoreLedgerPage />) },
   { path: '/vendor-ledger', element: withLayout(<VendorLedgerPage />) },
   { path: '/payment-requests', element: withLayout(<PaymentRequestsPage />) },
@@ -141,6 +147,7 @@ const router = createBrowserRouter([
   { path: '/banners', element: withLayout(<BannersPage />) },
   { path: '/home-feed', element: withLayout(<HomeFeedPage />) },
   { path: '/sales-officers', element: withLayout(<SalesOfficersPage />) },
+  { path: '/area-managers', element: withLayout(<AreaManagersPage />) },
   { path: '/so-visits', element: withLayout(<SoVisitsPage />) },
   { path: '/daily-performance', element: withLayout(<DailyPerformancePage />) },
   { path: '/nrx-register', element: withLayout(<NrxRegisterPage />) },
@@ -152,6 +159,7 @@ const router = createBrowserRouter([
   { path: '/purchase-returns/new', element: withLayout(<CreatePurchaseReturnPage />) },
   { path: '/purchase-returns/:returnId', element: withLayout(<PurchaseReturnDetailsPage />) },
   { path: '/margin', element: withLayout(<MarginReportPage />) },
+  { path: '/retailer-incentives', element: withLayout(<RetailerIncentivesPage />) },
   { path: '/medicine-demand', element: withLayout(<MedicineDemandPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
   { path: '/purchase-lists', element: withLayout(<PurchaseListsPage />) },

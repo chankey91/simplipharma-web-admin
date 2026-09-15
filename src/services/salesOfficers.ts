@@ -16,17 +16,30 @@ export const getSalesOfficers = async (): Promise<User[]> => {
 
 export const getRetailersBySalesOfficer = async (salesOfficerId: string): Promise<User[]> => {
   const usersCol = collection(db, 'users');
-  const q = query(
-    usersCol,
-    where('role', '==', 'retailer'),
-    where('salesOfficerId', '==', salesOfficerId)
-  );
+  // Single-field query — includes pure retailers and dual-role SOs (alsoRetailer) assigned to this SO.
+  const q = query(usersCol, where('salesOfficerId', '==', salesOfficerId));
   const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({
-    id: d.id,
-    uid: d.id,
-    ...d.data(),
-  } as User));
+  const retailerSortKey = (r: User) =>
+    String(r.shopName || r.displayName || r.email || r.storeCode || '')
+      .trim()
+      .toLowerCase();
+  return snapshot.docs
+    .map(
+      (d) =>
+        ({
+          id: d.id,
+          uid: d.id,
+          ...d.data(),
+        }) as User
+    )
+    .filter((r) => {
+      if (r.isActive === false) return false;
+      const role = String(r.role || '');
+      return role === 'retailer' || r.alsoRetailer === true;
+    })
+    .sort((a, b) =>
+      retailerSortKey(a).localeCompare(retailerSortKey(b), undefined, { sensitivity: 'base' })
+    );
 };
 
 export const createSalesOfficer = async (
@@ -65,13 +78,22 @@ export type SalesOfficerProfileUpdate = {
   officerPhoto?: string;
   aadharNumber?: string;
   pan?: string;
+  aadharImageUrl?: string;
+  panImageUrl?: string;
+  alsoRetailer?: boolean;
+  shopName?: string;
+  address?: string;
+  storeCode?: string;
+  licenceNumber?: string;
+  ownerName?: string;
+  gst?: string;
 };
 
 const MAX_SO_PHOTO_BYTES = 5 * 1024 * 1024;
 
 const uploadSalesOfficerDocPhoto = async (
   file: File,
-  folder: 'device' | 'officer',
+  folder: 'device' | 'officer' | 'aadhar' | 'pan',
   label: string
 ): Promise<string> => {
   if (!auth.currentUser?.uid) {
@@ -93,13 +115,19 @@ export const uploadSalesOfficerDevicePhoto = async (file: File): Promise<string>
 export const uploadSalesOfficerPhoto = async (file: File): Promise<string> =>
   uploadSalesOfficerDocPhoto(file, 'officer', 'Sales Officer photo');
 
+export const uploadSalesOfficerAadharPhoto = async (file: File): Promise<string> =>
+  uploadSalesOfficerDocPhoto(file, 'aadhar', 'Aadhar photo');
+
+export const uploadSalesOfficerPanPhoto = async (file: File): Promise<string> =>
+  uploadSalesOfficerDocPhoto(file, 'pan', 'PAN photo');
+
 /** Update Sales Officer profile fields on `users/{salesOfficerId}` (not email — that is Auth). */
 export const updateSalesOfficerProfile = async (
   salesOfficerId: string,
   data: SalesOfficerProfileUpdate
 ): Promise<void> => {
   const ref = doc(db, 'users', salesOfficerId);
-  const payload: Record<string, string | ReturnType<typeof deleteField>> = {};
+  const payload: Record<string, string | boolean | ReturnType<typeof deleteField>> = {};
   const setTrimmed = (key: keyof SalesOfficerProfileUpdate, required: boolean) => {
     if (data[key] === undefined) return;
     const value = String(data[key] ?? '').trim();
@@ -116,6 +144,23 @@ export const updateSalesOfficerProfile = async (
   setTrimmed('officerPhoto', false);
   setTrimmed('aadharNumber', true);
   setTrimmed('pan', true);
+  setTrimmed('aadharImageUrl', false);
+  setTrimmed('panImageUrl', false);
+  setTrimmed('shopName', false);
+  setTrimmed('address', false);
+  setTrimmed('storeCode', false);
+  setTrimmed('licenceNumber', false);
+  setTrimmed('ownerName', false);
+  setTrimmed('gst', false);
+  if (data.alsoRetailer !== undefined) {
+    if (data.alsoRetailer) {
+      payload.alsoRetailer = true;
+      // Self-managed store so SO territory / reports can include this account.
+      payload.salesOfficerId = salesOfficerId;
+    } else {
+      payload.alsoRetailer = deleteField();
+    }
+  }
   if (Object.keys(payload).length === 0) return;
   await updateDoc(ref, payload);
 };
