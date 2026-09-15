@@ -57,6 +57,18 @@ service cloud.firestore {
       return isOffice() && hasWrite(module);
     }
 
+    function canMaintainGst() {
+      return isAdminOrOperations() || officeCanWrite('gst');
+    }
+
+    function affectedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function isGstSnapshotOnlyUpdate() {
+      return affectedKeys().hasOnly(['gst']);
+    }
+
     function isPurchaseOfficer() {
       return hasUserDoc() && (
         userRole() == 'purchaseOfficer' ||
@@ -160,6 +172,7 @@ service cloud.firestore {
       allow update: if signedIn() && (
         isAdminOrOperations()
         || officeCanWrite('orders')
+        || (canMaintainGst() && isGstSnapshotOnlyUpdate())
         || (
           resource.data.retailerId == request.auth.uid
           && request.resource.data.retailerId == resource.data.retailerId
@@ -218,6 +231,11 @@ service cloud.firestore {
           && (hasWrite('stores') || hasWrite('receivables'))
         )
       );
+      // Operations/office GST module: GSTIN only — full retailer docs stay admin/SO.
+      allow update: if signedIn()
+        && canMaintainGst()
+        && resource.data.role == 'retailer'
+        && affectedKeys().hasOnly(['gst', 'gstinStateCode']);
     }
 
     match /favorites/{favoriteId} {
@@ -281,7 +299,9 @@ service cloud.firestore {
         || resource.data.retailerId == request.auth.uid
         || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
-      allow create, update: if isAdminOrOperations() || officeCanWrite('stores');
+      allow create: if isAdminOrOperations() || officeCanWrite('stores');
+      allow update: if isAdminOrOperations() || officeCanWrite('stores')
+        || (canMaintainGst() && isGstSnapshotOnlyUpdate());
       allow delete: if false;
     }
 
@@ -292,7 +312,9 @@ service cloud.firestore {
         || resource.data.retailerId == request.auth.uid
         || (isSalesOfficer() && retailerAssignedToSO(resource.data.retailerId))
       );
-      allow create, update: if isAdminOrOperations() || officeCanWrite('stores');
+      allow create: if isAdminOrOperations() || officeCanWrite('stores');
+      allow update: if isAdminOrOperations() || officeCanWrite('stores')
+        || (canMaintainGst() && isGstSnapshotOnlyUpdate());
       allow delete: if false;
     }
 
@@ -401,17 +423,23 @@ service cloud.firestore {
 
     match /vendors/{vendorId} {
       allow read: if signedIn();
-      allow write: if isAdminOrOperations() || officeCanWrite('purchases');
+      allow create, delete: if isAdminOrOperations() || officeCanWrite('purchases');
+      allow update: if isAdminOrOperations() || officeCanWrite('purchases')
+        || (canMaintainGst() && affectedKeys().hasOnly(['gstNumber', 'gstinStateCode']));
     }
 
     match /purchaseInvoices/{invoiceId} {
       allow read: if signedIn() && (isAdminOrOperations() || isSalesOfficer() || isOffice());
-      allow write: if isAdminOrOperations() || officeCanWrite('purchases');
+      allow create, delete: if isAdminOrOperations() || officeCanWrite('purchases');
+      allow update: if isAdminOrOperations() || officeCanWrite('purchases')
+        || (canMaintainGst() && isGstSnapshotOnlyUpdate());
     }
 
     match /purchaseReturns/{returnId} {
       allow read: if signedIn() && isAdminOrOperations();
-      allow write: if isAdminOrOperations();
+      allow create, delete: if isAdminOrOperations();
+      allow update: if isAdminOrOperations()
+        || (canMaintainGst() && isGstSnapshotOnlyUpdate());
     }
 
     match /product_demands/{demandId} {
@@ -583,6 +611,16 @@ service cloud.firestore {
     }
 
     // Phase 1 — invoice ingest drafts (PDF / photo). Commit still uses purchaseInvoices.
+    match /company_gst_settings/{settingsId} {
+      allow read: if signedIn() && (isAdminOrOperations() || isOffice());
+      allow write: if isAdminOrOperations() || officeCanWrite('gst');
+    }
+
+    match /gst_periods/{periodId} {
+      allow read: if signedIn() && (isAdminOrOperations() || isOffice());
+      allow write: if isAdminOrOperations() || officeCanWrite('gst');
+    }
+
     match /purchase_invoice_drafts/{draftId} {
       allow read: if isAdminOrOperations() || isPurchaseOfficer() || isOffice();
       allow create: if (isAdminOrOperations() || isPurchaseOfficer() || officeCanWrite('purchases'))

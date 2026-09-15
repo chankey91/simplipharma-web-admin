@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where, writeBatch } from './firebase';
+import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where, writeBatch, getUserProfile } from './firebase';
 import { deleteField } from 'firebase/firestore';
 import { Order, OrderStatus, OrderTimelineEvent, OrderMedicine, Medicine, PurchaseInvoice, Payment } from '../types';
 import {
@@ -22,6 +22,9 @@ import {
 import { getAllPurchaseInvoices } from './purchaseInvoices';
 import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
 import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
+import { createOutwardGstSnapshot } from './gstDocuments';
+import { assertDocumentDateWritable } from './gstPeriods';
+import { gstLinesFromOrderMedicines } from '../utils/gstLineSnapshot';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -866,6 +869,11 @@ export const fulfillOrder = async (
   const currentTimeline = orderDoc.data()?.timeline || [];
 
   const order = orderDoc.data() as Order;
+  const orderDate =
+    order.orderDate instanceof Date
+      ? order.orderDate
+      : (order.orderDate as { toDate?: () => Date })?.toDate?.() || new Date();
+  await assertDocumentDateWritable(orderDate);
 
   // Dedupe medicine reads within this fulfill call.
   const medicineFetchCache = new Map<string, Medicine | null>();
@@ -1076,6 +1084,7 @@ export const fulfillOrder = async (
       medicineDataForScheme ?? undefined
     ) as typeof workItem;
     const line = { ...workItem, ...schemeAligned };
+    const lineHsn = String(medicineDataForScheme?.code || line.hsn || '').trim();
     // If line has multiple batch allocations, create separate line item for each batch
     if (line.batchAllocations && line.batchAllocations.length > 1) {
       const medicineData = medicineDataForScheme;
@@ -1098,6 +1107,7 @@ export const fulfillOrder = async (
           freeQuantity: allocFree,
           batchNumber: allocation.batchNumber,
           gstRate: allocation.gstRate || line.gstRate || 5,
+          ...(lineHsn ? { hsn: lineHsn } : {}),
           batchAllocations: [
             {
               batchNumber: allocation.batchNumber,
@@ -1188,6 +1198,7 @@ export const fulfillOrder = async (
         price: line.price || 0,
         quantity: line.quantity || 0,
         freeQuantity: line.freeQuantity || 0,
+        ...(lineHsn ? { hsn: lineHsn } : {}),
       };
       
       // Add expiryDate only if it exists
@@ -1398,6 +1409,30 @@ export const fulfillOrder = async (
   }
   if (fulfillmentData.processedBy) {
     updateData.processedBy = fulfillmentData.processedBy;
+  }
+
+  try {
+    const retailer = order.retailerId ? await getUserProfile(order.retailerId) : null;
+    const taxableValue = Math.max(
+      0,
+      (cleanFulfillmentData.subTotal || 0) - (cleanFulfillmentData.totalDiscount || 0)
+    );
+    updateData.gst = await createOutwardGstSnapshot({
+      taxAmount: cleanFulfillmentData.taxAmount,
+      taxableValue,
+      totalAmount: cleanFulfillmentData.totalAmount,
+      buyerGstin: retailer?.gst,
+      buyerLegalName: retailer?.shopName || retailer?.displayName || order.retailerName,
+      documentKind: 'invoice',
+      invoiceDate: orderDate,
+      lines: gstLinesFromOrderMedicines(
+        processedMedicines,
+        taxableValue,
+        cleanFulfillmentData.taxAmount || 0
+      ),
+    });
+  } catch (error) {
+    console.warn('GST snapshot skipped on fulfill (invoice totals unchanged):', error);
   }
   
   await updateDoc(orderRef, updateData);
