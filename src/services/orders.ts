@@ -722,6 +722,12 @@ export const mergePendingOrders = async (args: {
   const targetTimeline = Array.isArray(target.timeline) ? [...target.timeline] : [];
   targetTimeline.push(createTimelineEvent('Pending', args.mergedBy, mergeNote));
 
+  const sourceIds = sources.map((o) => o.id);
+  const priorMergedFrom = Array.isArray(target.mergedFromOrderIds)
+    ? target.mergedFromOrderIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  const mergedFromOrderIds = [...new Set([...priorMergedFrom, ...sourceIds])];
+
   const batch = writeBatch(db);
   batch.update(targetRef, {
     medicines: medicines.map((m) => stripUndefinedDeep({ ...m })),
@@ -732,6 +738,7 @@ export const mergePendingOrders = async (args: {
     dueAmount: Math.max(0, subTotal - (Number(target.paidAmount) || 0)),
     fulfillmentDraft: deleteField(),
     timeline: targetTimeline,
+    mergedFromOrderIds,
   });
 
   for (const source of sources) {
@@ -746,6 +753,9 @@ export const mergePendingOrders = async (args: {
       stockRestoredOnCancel: true,
       fulfillmentDraft: deleteField(),
       timeline: sourceTimeline,
+      // Keep Cancelled + audit for admin; retailer list/detail should hide these.
+      hiddenFromRetailer: true,
+      mergedIntoOrderId: targetId,
     });
   }
 

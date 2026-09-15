@@ -1346,13 +1346,18 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         open={itemDialog.open}
         disableRestoreFocus
         disableAutoFocus
+        disableEscapeKeyDown
         TransitionProps={{
           onEntered: () => invoiceBatchInputElRef.current?.focus(),
         }}
-        onClose={() => {
-        setItemDialog({ open: false, itemIndex: null });
-        setExpiryDateError(''); // Clear error when dialog closes
-      }} maxWidth="sm" fullWidth>
+        onClose={(_event, reason) => {
+          if (reason === 'backdropClick') return;
+          setItemDialog({ open: false, itemIndex: null });
+          setExpiryDateError('');
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>
           {itemDialog.itemIndex !== null ? 'Edit Item' : 'Add Item'} - {currentItem.medicineName}
         </DialogTitle>
