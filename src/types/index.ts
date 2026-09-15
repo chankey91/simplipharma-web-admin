@@ -179,6 +179,15 @@ export interface Order {
   cancelledAt?: Date | any;
   /** Set when cancel/unfulfill successfully put deducted stock back on inventory batches. */
   stockRestoredOnCancel?: boolean;
+  /**
+   * When true, retailer apps must not list or open this order (e.g. Pending merge source).
+   * Admin still sees Cancelled + cancelReason for audit.
+   */
+  hiddenFromRetailer?: boolean;
+  /** Target order id after Pending merge (set on cancelled source orders). */
+  mergedIntoOrderId?: string;
+  /** Source order ids merged into this order (set on the surviving target). */
+  mergedFromOrderIds?: string[];
   paymentStatus?: PaymentStatus;
   paymentReviewStatus?: PaymentReviewStatus;
   paidAmount?: number;

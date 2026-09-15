@@ -770,7 +770,7 @@ export const OrdersPage: React.FC = () => {
       setPage(1);
       await refreshListsAfterBulk();
       await alert(
-        `Merged into #${formatOrderNumberForDisplay(result.targetOrderId)} (${result.lineCount} line(s)). ${result.cancelledOrderIds.length} order(s) cancelled and hidden from this Pending list.`,
+        `Merged into #${formatOrderNumberForDisplay(result.targetOrderId)} (${result.lineCount} line(s)). ${result.cancelledOrderIds.length} source order(s) cancelled for admin audit and hidden from the retailer.`,
         { severity: 'success' }
       );
     } catch (e) {
@@ -1499,8 +1499,8 @@ export const OrdersPage: React.FC = () => {
         <DialogContent>
           <Typography gutterBottom>
             Merge {selectedPendingIds.length} Pending orders for <strong>{mergePendingStoreName}</strong>{' '}
-            into the oldest order. Same medicines combine quantities; other Pending orders will be
-            cancelled.
+            into the oldest order. Same medicines combine quantities; source orders stay Cancelled for
+            admin audit but are hidden from the retailer (they only see the combined order).
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             Orders:{' '}
