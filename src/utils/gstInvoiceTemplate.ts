@@ -238,18 +238,24 @@ export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): strin
 }
 
 export function buildGstInvoiceTotalsSection(
-  tax: { taxable: string; cgst: string; sgst: string; rate: string; summaryAmt?: string },
+  tax: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string },
   summary: GstInvoiceSummary,
   gstRateHalf: number,
   totalLabel = 'GRAND TOTAL'
 ): string {
   const roundOffSign = parseFloat(summary.roundOff) >= 0 ? '+' : '';
-  const totalGst = (parseFloat(summary.sgst) + parseFloat(summary.cgst)).toFixed(2);
+  const igstAmt = parseFloat(tax.igst || '0');
+  const totalGst =
+    igstAmt > 0
+      ? igstAmt.toFixed(2)
+      : (parseFloat(summary.sgst) + parseFloat(summary.cgst)).toFixed(2);
   const amtLine =
     tax.summaryAmt ||
     `Amt ${tax.rate}%: ${tax.taxable}`;
   const cgstSgstLabel =
-    tax.rate === 'mixed'
+    igstAmt > 0
+      ? `IGST: ${tax.igst}`
+      : tax.rate === 'mixed'
       ? `CGST: ${tax.cgst} | SGST: ${tax.sgst}`
       : `CGST ${gstRateHalf.toFixed(1)}%: ${tax.cgst} | SGST ${gstRateHalf.toFixed(1)}%: ${tax.sgst}`;
   return `

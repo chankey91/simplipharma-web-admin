@@ -7,6 +7,9 @@ import {
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 import { attachStandardDiscountToBatchData } from '../utils/orderFulfillmentDiscount';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
+import { createInwardGstSnapshot } from './gstDocuments';
+import { assertDocumentDateWritable } from './gstPeriods';
+import { gstLinesFromPurchaseItems } from '../utils/gstLineSnapshot';
 
 function mapVendorPayments(raw: unknown): VendorInvoicePayment[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -254,6 +257,7 @@ export const createPurchaseInvoice = async (
   if (!isUnique) {
     throw new Error('Invoice Number already exists');
   }
+  await assertDocumentDateWritable(invoiceData.invoiceDate || new Date());
   
   const invoiceRef = doc(collection(db, 'purchaseInvoices'));
   
@@ -351,8 +355,32 @@ export const createPurchaseInvoice = async (
   if (invoiceData.paymentMethod) {
     invoiceDoc.paymentMethod = invoiceData.paymentMethod;
   }
-  if (invoiceData.notes) {
+    if (invoiceData.notes) {
     invoiceDoc.notes = invoiceData.notes;
+  }
+  if (invoiceData.vendorGstin) {
+    invoiceDoc.vendorGstin = invoiceData.vendorGstin;
+  }
+  if (invoiceData.vendorInvoiceNumber) {
+    invoiceDoc.vendorInvoiceNumber = invoiceData.vendorInvoiceNumber;
+  } else if (invoiceData.invoiceNumber) {
+    invoiceDoc.vendorInvoiceNumber = invoiceData.invoiceNumber;
+  }
+
+  try {
+    invoiceDoc.gst = await createInwardGstSnapshot({
+      taxAmount: invoiceData.taxAmount,
+      taxableValue: Math.max(0, (invoiceData.subTotal || 0) - (invoiceData.discount || 0)),
+      vendorGstin: invoiceData.vendorGstin,
+      vendorName: invoiceData.vendorName,
+      lines: gstLinesFromPurchaseItems(
+        invoiceData.items,
+        Math.max(0, (invoiceData.subTotal || 0) - (invoiceData.discount || 0)),
+        invoiceData.taxAmount || 0
+      ),
+    });
+  } catch (error) {
+    console.warn('GST snapshot skipped on purchase invoice create:', error);
   }
   
   onProgress?.({

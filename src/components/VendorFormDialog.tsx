@@ -17,6 +17,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCreateVendor } from '../hooks/useVendors';
 import { Vendor } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { gstinHelperText, gstinStateCode, isValidGstinFormat, normalizeGstin } from '../utils/gstin';
 
 const generatePassword = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
@@ -83,6 +84,11 @@ export const VendorFormDialog: React.FC<VendorFormDialogProps> = ({
       setError('Please fill all required fields (Vendor Name, Phone Number, GST Number)');
       return;
     }
+    const gstNumber = normalizeGstin(formData.gstNumber);
+    if (!isValidGstinFormat(gstNumber)) {
+      setError('Enter a valid 15-character Indian GSTIN');
+      return;
+    }
 
     const trimmedEmail = formData.email?.trim() || '';
     if (trimmedEmail && !trimmedEmail.includes('@')) {
@@ -108,7 +114,8 @@ export const VendorFormDialog: React.FC<VendorFormDialogProps> = ({
     const vendorSnapshot: Omit<Vendor, 'id'> = {
       vendorName: formData.vendorName,
       phoneNumber: formData.phoneNumber,
-      gstNumber: formData.gstNumber,
+      gstNumber,
+      gstinStateCode: gstinStateCode(gstNumber),
       email: trimmedEmail,
       isActive: formData.isActive,
       createdAt: new Date(),
@@ -255,7 +262,8 @@ export const VendorFormDialog: React.FC<VendorFormDialogProps> = ({
                 onChange={(e) =>
                   setFormData({ ...formData, gstNumber: e.target.value.toUpperCase() })
                 }
-                helperText="Must be unique"
+                helperText={gstinHelperText(formData.gstNumber)}
+                error={Boolean(formData.gstNumber) && !isValidGstinFormat(formData.gstNumber)}
               />
             </Grid>
             <Grid item xs={12} md={6}>

@@ -6,6 +6,9 @@ import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
+import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
+import { hasGstSnapshot } from './gstSnapshot';
+import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
@@ -111,7 +114,19 @@ const getDebitNoteHTML = async (note: DebitNote) => {
   const debitDate =
     note.debitNoteDate instanceof Date ? note.debitNoteDate : new Date(note.debitNoteDate);
 
-  const company = { ...COMPANY_INVOICE_DETAILS };
+  const companySettings = hasGstSnapshot(note)
+    ? await getCompanyGstSettings().catch(() => defaultCompanyGstSettings())
+    : null;
+  const company = companySettings
+    ? {
+        name: companySettings.legalName,
+        address: companySettings.address,
+        phone: companySettings.phone || '',
+        email: companySettings.email || '',
+        dl: companySettings.dl || '',
+        gstin: companySettings.gstin,
+      }
+    : { ...COMPANY_INVOICE_DETAILS };
 
   let party = {
     name: note.retailerName || note.retailerEmail || 'N/A',
@@ -144,8 +159,9 @@ const getDebitNoteHTML = async (note: DebitNote) => {
 
   const items = await prepareDebitNoteItemRows(note);
   const gstRatePercent = note.taxPercentage ?? 5;
-  const totalCGST = note.taxAmount / 2;
-  const totalSGST = note.taxAmount / 2;
+  const printedTax = printTaxFromDocument(note);
+  const totalCGST = printedTax.cgst;
+  const totalSGST = printedTax.sgst;
   const calculatedTotal = Math.round((note.subTotal + note.taxAmount) * 100) / 100;
   const grandTotal =
     typeof note.totalAmount === 'number' && Number.isFinite(note.totalAmount)
@@ -162,10 +178,14 @@ const getDebitNoteHTML = async (note: DebitNote) => {
     user: 'Admin',
   };
 
+  const buyerPrint = printBuyerStateFromDocument(note, party.gstin);
+  party = { ...party, ...buyerPrint, gstin: buyerPrint.gstin || party.gstin };
+
   const tax = {
     taxable: note.subTotal.toFixed(2),
     cgst: totalCGST.toFixed(2),
     sgst: totalSGST.toFixed(2),
+    igst: printedTax.igst.toFixed(2),
     rate: gstRatePercent.toFixed(0),
   };
 

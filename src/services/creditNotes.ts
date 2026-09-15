@@ -22,6 +22,10 @@ import { getTodayStartIST } from '../utils/dateTime';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
 import { recalculateOrderReturnItemPricing } from '../utils/orderReturnPricing';
 import { CreditNote, CreditNoteLine } from '../types';
+import { createOutwardGstSnapshot } from './gstDocuments';
+import { assertDocumentDateWritable } from './gstPeriods';
+import { gstLinesFromNoteItems } from '../utils/gstLineSnapshot';
+import { getUserProfile } from './firebase';
 
 type ReturnItemInput = {
   medicineId: string;
@@ -331,6 +335,11 @@ export async function issueCreditNoteForOrderReturn(
       ? toTimestamp(returnRequest.approvedAt)
       : serverTimestamp();
 
+  await assertDocumentDateWritable(
+    options?.creditNoteDate ||
+      (returnRequest.approvedAt ? toDate(returnRequest.approvedAt) : new Date())
+  );
+
   const note: Omit<CreditNote, 'id'> & { createdAt: ReturnType<typeof serverTimestamp> } = {
     creditNoteNumber,
     creditNoteDate,
@@ -352,6 +361,29 @@ export async function issueCreditNoteForOrderReturn(
     createdBy: returnRequest.approvedBy || auth.currentUser?.uid,
     createdAt: serverTimestamp(),
   };
+
+  try {
+    const retailer = returnRequest.retailerId
+      ? await getUserProfile(returnRequest.retailerId)
+      : null;
+    const buyerGstin = retailer?.gst || undefined;
+    if (buyerGstin) note.retailerGstin = buyerGstin;
+    note.gst = await createOutwardGstSnapshot({
+      taxAmount: note.taxAmount,
+      taxableValue: note.subTotal,
+      totalAmount: note.totalAmount,
+      buyerGstin,
+      buyerLegalName: retailer?.shopName || note.retailerName,
+      documentKind: 'credit_note',
+      invoiceDate:
+        options?.creditNoteDate ||
+        (returnRequest.approvedAt ? toDate(returnRequest.approvedAt) : new Date()),
+      lines: gstLinesFromNoteItems(lines, note.subTotal, note.taxAmount),
+    });
+  } catch (error) {
+    console.warn('GST snapshot skipped on credit note create:', error);
+  }
+
   const noteSafe = stripUndefinedDeep(note);
 
   const batch = writeBatch(db);

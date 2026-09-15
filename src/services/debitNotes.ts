@@ -1,4 +1,4 @@
-import { collection, getDocs, query, orderBy, where, doc, getDoc, db } from './firebase';
+import { collection, getDocs, query, orderBy, where, doc, getDoc, Timestamp, db } from './firebase';
 import { DebitNote, TaxNoteLine } from '../types';
 
 function toDate(value: unknown): Date {
@@ -40,7 +40,35 @@ export const getAllDebitNotes = async (): Promise<DebitNote[]> => {
   }
 };
 
-/** Debit notes for a retailer (store ledger). */
+export const getDebitNotesInRange = async (
+  startMs: number,
+  endMs?: number
+): Promise<DebitNote[]> => {
+  const col = collection(db, 'debit_notes');
+  const start = Timestamp.fromMillis(startMs);
+  try {
+    const q =
+      endMs != null
+        ? query(
+            col,
+            where('debitNoteDate', '>=', start),
+            where('debitNoteDate', '<', Timestamp.fromMillis(endMs)),
+            orderBy('debitNoteDate', 'desc')
+          )
+        : query(col, where('debitNoteDate', '>=', start), orderBy('debitNoteDate', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => parseDebitNoteDoc(d.id, d.data() as Record<string, unknown>));
+  } catch (error) {
+    console.warn('getDebitNotesInRange fallback:', error);
+    const all = await getAllDebitNotes();
+    return all.filter((note) => {
+      const t = toDate(note.debitNoteDate ?? note.createdAt).getTime();
+      if (endMs != null) return t >= startMs && t < endMs;
+      return t >= startMs;
+    });
+  }
+};
+
 export const getDebitNotesByRetailer = async (retailerId: string): Promise<DebitNote[]> => {
   const col = collection(db, 'debit_notes');
   try {

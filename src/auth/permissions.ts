@@ -2,7 +2,7 @@ export type PanelRole = 'admin' | 'operations' | 'office';
 
 export type AppRole = PanelRole | 'retailer' | 'salesOfficer' | 'purchaseOfficer';
 
-export type WriteModule = 'stores' | 'receivables' | 'orders' | 'purchases' | 'inventory';
+export type WriteModule = 'stores' | 'receivables' | 'orders' | 'purchases' | 'inventory' | 'gst';
 
 export type WriteAccess = Record<WriteModule, boolean>;
 
@@ -19,6 +19,7 @@ export const WRITE_MODULES: { id: WriteModule; label: string }[] = [
   { id: 'orders', label: 'Can edit orders' },
   { id: 'purchases', label: 'Can edit purchase invoices' },
   { id: 'inventory', label: 'Can edit inventory' },
+  { id: 'gst', label: 'Can edit GST settings' },
 ];
 
 /** Sidebar/route catalog — used for admin menu checkboxes. */
@@ -47,6 +48,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/sales-officers', label: 'Sales officers' },
   { path: '/so-visits', label: 'SO visits' },
   { path: '/daily-performance', label: 'Daily performance' },
+  { path: '/gst', label: 'GST' },
   { path: '/margin', label: 'Margin report' },
   { path: '/medicine-demand', label: 'Top sellers' },
   { path: '/banners', label: 'Banners' },
@@ -89,6 +91,7 @@ const FULL_WRITE: WriteAccess = {
   orders: true,
   purchases: true,
   inventory: true,
+  gst: true,
 };
 
 /** Office default: view stores / receivables / orders; full purchase invoices + inventory. */
@@ -98,6 +101,7 @@ export const OFFICE_WRITE_DEFAULTS: WriteAccess = {
   orders: false,
   purchases: true,
   inventory: true,
+  gst: false,
 };
 
 export const PANEL_ROLES: PanelRole[] = ['admin', 'operations', 'office'];
@@ -144,6 +148,7 @@ function normalizeWriteAccess(role: PanelRole, raw: unknown): WriteAccess {
     orders: src.orders === undefined ? base.orders : src.orders === true,
     purchases: src.purchases === undefined ? base.purchases : src.purchases === true,
     inventory: src.inventory === undefined ? base.inventory : src.inventory === true,
+    gst: src.gst === undefined ? base.gst : src.gst === true,
   };
 }
 

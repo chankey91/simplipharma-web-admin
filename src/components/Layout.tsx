@@ -50,6 +50,7 @@ import {
   Stars,
   ShoppingBag,
   ReportProblem,
+  ReceiptLong,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -115,6 +116,10 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Sales officers', icon: <Group />, path: '/sales-officers' },
       { text: 'SO visits', icon: <Place />, path: '/so-visits' },
     ],
+  },
+  {
+    title: 'GST',
+    items: [{ text: 'GST workspace', icon: <ReceiptLong />, path: '/gst' }],
   },
   {
     title: 'Insights',
