@@ -18,7 +18,7 @@ import {
   MenuItem,
   Alert,
 } from '@mui/material';
-import { Download, PictureAsPdf, Search } from '@mui/icons-material';
+import { Download, PictureAsPdf, Search, WhatsApp } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useStores } from '../hooks/useStores';
 import { useRetailerLedgerData } from '../hooks/useOrders';
@@ -32,6 +32,7 @@ import {
 import {
   downloadStoreLedgerExcel,
   downloadStoreLedgerPdf,
+  shareStoreLedgerPdfOnWhatsApp,
 } from '../utils/storeLedgerExport';
 import { useAppDialog } from '../context/AppDialogProvider';
 
@@ -52,6 +53,7 @@ export const StoreLedgerPage: React.FC = () => {
   const [generated, setGenerated] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
+  const [sharingWhatsApp, setSharingWhatsApp] = useState(false);
 
   const { data: ledgerData, isLoading: ledgerLoading, isFetching, refetch } = useRetailerLedgerData(
     retailerId,
@@ -120,6 +122,28 @@ export const StoreLedgerPage: React.FC = () => {
       await alert(`Failed to export PDF: ${msg}`, { severity: 'error' });
     } finally {
       setExportingPdf(false);
+    }
+  };
+
+  const handleWhatsAppPdf = async () => {
+    if (!ledger) return;
+    setSharingWhatsApp(true);
+    try {
+      const result = await shareStoreLedgerPdfOnWhatsApp(
+        ledger,
+        selectedStore?.phoneNumber
+      );
+      if (!result.opened) {
+        await alert(
+          'Ledger PDF link copied. This store has no phone number on file — paste into WhatsApp Web and share the link.',
+          { severity: 'warning' }
+        );
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      await alert(`Failed to share ledger on WhatsApp: ${msg}`, { severity: 'error' });
+    } finally {
+      setSharingWhatsApp(false);
     }
   };
 
@@ -225,9 +249,18 @@ export const StoreLedgerPage: React.FC = () => {
                 variant="outlined"
                 startIcon={<PictureAsPdf />}
                 onClick={() => void handlePdf()}
-                disabled={!ledger || exportingPdf}
+                disabled={!ledger || exportingPdf || sharingWhatsApp}
               >
                 {exportingPdf ? 'Exporting…' : 'PDF'}
+              </Button>
+              <Button
+                variant="outlined"
+                color="success"
+                startIcon={<WhatsApp />}
+                onClick={() => void handleWhatsAppPdf()}
+                disabled={!ledger || exportingPdf || sharingWhatsApp}
+              >
+                {sharingWhatsApp ? 'Sharing…' : 'WhatsApp PDF'}
               </Button>
               <Button
                 variant="outlined"

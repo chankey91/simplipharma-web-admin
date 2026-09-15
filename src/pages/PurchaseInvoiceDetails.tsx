@@ -694,7 +694,11 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
 
       <Dialog
         open={itemDialog.open}
-        onClose={() => setItemDialog({ open: false, itemIndex: null })}
+        disableEscapeKeyDown
+        onClose={(_event, reason) => {
+          if (reason === 'backdropClick') return;
+          setItemDialog({ open: false, itemIndex: null });
+        }}
         maxWidth="sm"
         fullWidth
       >
