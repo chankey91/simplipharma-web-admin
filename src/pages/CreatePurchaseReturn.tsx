@@ -178,18 +178,23 @@ export const CreatePurchaseReturnPage: React.FC = () => {
     vendorOptions.find((v) => v.id === vendorId) ?? null;
 
   const vendorGroups = useMemo(() => {
-    const map = new Map<string, { vendorId: string; vendorName: string; lines: DraftLine[] }>();
+    const map = new Map<
+      string,
+      { vendorId: string; vendorName: string; vendorGstin?: string; lines: DraftLine[] }
+    >();
     for (const it of items) {
+      const vendorGstin = vendorOptions.find((v) => v.id === it.vendorId)?.gstNumber;
       const g = map.get(it.vendorId) || {
         vendorId: it.vendorId,
         vendorName: it.vendorName,
+        vendorGstin,
         lines: [] as DraftLine[],
       };
       g.lines.push(it);
       map.set(it.vendorId, g);
     }
     return [...map.values()];
-  }, [items]);
+  }, [items, vendorOptions]);
 
   const subTotal = useMemo(
     () =>
@@ -324,6 +329,7 @@ export const CreatePurchaseReturnPage: React.FC = () => {
         return {
           vendorId: g.vendorId,
           vendorName: g.vendorName,
+          vendorGstin: g.vendorGstin,
           returnDate: date,
           items: lines.map(
             ({ availableQuantity: _a, vendorId: _v, vendorName: _n, ...rest }) => rest

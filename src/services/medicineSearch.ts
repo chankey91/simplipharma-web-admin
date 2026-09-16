@@ -80,6 +80,8 @@ export type SearchMedicinesOptions = {
   sortKey?: string;
   sortDirection?: 'asc' | 'desc';
   includeFacets?: boolean;
+  /** Typesense: medicines with a non-empty HSN/code. */
+  hsnFilter?: 'present' | 'missing';
   /** When aborted, the promise rejects with AbortError and results must be ignored. */
   signal?: AbortSignal;
 };
@@ -295,6 +297,7 @@ export async function searchMedicinesCatalog(
         sortKey: opts?.sortKey,
         sortDirection: opts?.sortDirection,
         includeFacets: opts?.includeFacets === true,
+        hsnFilter: opts?.hsnFilter,
       }),
       opts?.signal
     );

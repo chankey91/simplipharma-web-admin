@@ -11,6 +11,9 @@ import {
 import { generateCreditNoteNumber, generateDebitNoteNumber } from '../utils/invoiceNumber';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
 import { CreditNoteLine } from '../types';
+import { createOutwardGstSnapshot } from './gstDocuments';
+import { assertDocumentDateWritable } from './gstPeriods';
+import { gstLinesFromNoteItems } from '../utils/gstLineSnapshot';
 
 export const LEDGER_NOTE_GST_RATES = [5, 18] as const;
 export type LedgerNoteGstRate = (typeof LEDGER_NOTE_GST_RATES)[number];
@@ -100,6 +103,7 @@ export async function createDirectLedgerCreditNote(
   const creditNoteNumber = await generateCreditNoteNumber();
   const noteRef = doc(collection(db, 'credit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
+  await assertDocumentDateWritable(input.noteDate || new Date());
 
   const originalInvoiceNumber = optionalTrimmed(input.originalInvoiceNumber);
 
@@ -123,6 +127,19 @@ export async function createDirectLedgerCreditNote(
       status: 'issued',
       createdBy: auth.currentUser?.uid || undefined,
       createdAt: serverTimestamp(),
+      gst: await createOutwardGstSnapshot({
+        taxAmount,
+        taxableValue: subTotal,
+        totalAmount,
+        buyerGstin: retailer.retailerGstin,
+        buyerLegalName: retailer.retailerName,
+        documentKind: 'credit_note',
+        invoiceDate: input.noteDate || new Date(),
+        lines: gstLinesFromNoteItems(items, subTotal, taxAmount),
+      }).catch((error) => {
+        console.warn('GST snapshot skipped on ledger credit note:', error);
+        return undefined;
+      }),
     })
   );
 
@@ -139,6 +156,7 @@ export async function createDirectLedgerDebitNote(
   const debitNoteNumber = await generateDebitNoteNumber();
   const noteRef = doc(collection(db, 'debit_notes'));
   const noteDate = input.noteDate ? Timestamp.fromDate(input.noteDate) : Timestamp.now();
+  await assertDocumentDateWritable(input.noteDate || new Date());
 
   const originalInvoiceNumber = optionalTrimmed(input.originalInvoiceNumber);
 
@@ -160,6 +178,19 @@ export async function createDirectLedgerDebitNote(
       status: 'issued',
       createdBy: auth.currentUser?.uid || undefined,
       createdAt: serverTimestamp(),
+      gst: await createOutwardGstSnapshot({
+        taxAmount,
+        taxableValue: subTotal,
+        totalAmount,
+        buyerGstin: retailer.retailerGstin,
+        buyerLegalName: retailer.retailerName,
+        documentKind: 'debit_note',
+        invoiceDate: input.noteDate || new Date(),
+        lines: gstLinesFromNoteItems(items, subTotal, taxAmount),
+      }).catch((error) => {
+        console.warn('GST snapshot skipped on ledger debit note:', error);
+        return undefined;
+      }),
     })
   );
 

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Typography,
@@ -77,7 +77,8 @@ import {
 } from '../services/retailerDocuments';
 import { exportRetailersWithSalesOfficers } from '../utils/export';
 import { format } from 'date-fns';
-import { useNavigate } from 'react-router-dom';
+import { gstinHelperText, gstinStateCode, isValidGstinFormat, normalizeGstin } from '../utils/gstin';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -109,6 +110,7 @@ const generatePassword = () => {
 
 export const StoresPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { canWrite, canAccessPath } = useAuth();
   const canEditStores = canWrite('stores');
   const { data: stores, isLoading, error } = useStores();
@@ -400,6 +402,22 @@ export const StoresPage: React.FC = () => {
     setOpenDialog(true);
   };
 
+  const openedEditFromQuery = useRef<string | null>(null);
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId || !stores?.length) return;
+    if (openedEditFromQuery.current === editId) return;
+    const store = stores.find((s) => s.id === editId);
+    if (!store) return;
+    openedEditFromQuery.current = editId;
+    void handleOpenEdit(store);
+    const next = new URLSearchParams(searchParams);
+    next.delete('edit');
+    setSearchParams(next, { replace: true });
+    // handleOpenEdit is stable enough for this one-shot open
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stores, searchParams]);
+
   const handleSendPasswordReset = async () => {
     const email = (editingStore?.email || '').trim();
     if (!email) return;
@@ -503,6 +521,14 @@ export const StoresPage: React.FC = () => {
       }
     }
 
+    const gstin = normalizeGstin(formData.gst);
+    if (gstin && !isValidGstinFormat(gstin)) {
+      await alert('GSTIN must be a valid 15-character Indian GSTIN, or left blank', {
+        severity: 'warning',
+      });
+      return;
+    }
+
     const { licenceTaken, aadharTaken } = await checkLicenseAndAadharUnique(
       lic,
       aad,
@@ -555,7 +581,8 @@ export const StoresPage: React.FC = () => {
         ownerName: formData.ownerName.trim() || undefined,
         licenceHolderName: formData.licenceHolderName.trim() || undefined,
         pan: formData.pan.trim() || undefined,
-        gst: formData.gst.trim() || undefined,
+        gst: gstin || undefined,
+        gstinStateCode: gstin ? gstinStateCode(gstin) : undefined,
         storeCode: formData.storeCode.trim() || undefined,
         isActive: formData.isActive,
         shopImage: shopImage,
@@ -1213,7 +1240,9 @@ export const StoresPage: React.FC = () => {
                   fullWidth
                   label="GST Number"
                   value={formData.gst}
-                  onChange={(e) => setFormData({ ...formData, gst: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, gst: e.target.value.toUpperCase() })}
+                  helperText={gstinHelperText(formData.gst)}
+                  error={Boolean(formData.gst.trim()) && !isValidGstinFormat(formData.gst)}
                 />
               </Grid>
             </Grid>

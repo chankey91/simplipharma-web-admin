@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Typography,
@@ -39,6 +39,8 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { gstinHelperText, gstinStateCode, isValidGstinFormat, normalizeGstin } from '../utils/gstin';
+import { useSearchParams } from 'react-router-dom';
 
 const generatePassword = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -50,6 +52,7 @@ const generatePassword = () => {
 };
 
 export const VendorsPage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: vendors, isLoading } = useVendors();
   const createVendorMutation = useCreateVendor();
   const updateVendorMutation = useUpdateVendor();
@@ -173,11 +176,31 @@ export const VendorsPage: React.FC = () => {
     setOpenDialog(true);
   };
 
+  const openedEditFromQuery = useRef<string | null>(null);
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId || !vendors?.length) return;
+    if (openedEditFromQuery.current === editId) return;
+    const vendor = vendors.find((v) => v.id === editId);
+    if (!vendor) return;
+    openedEditFromQuery.current = editId;
+    handleOpenEdit(vendor);
+    const next = new URLSearchParams(searchParams);
+    next.delete('edit');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendors, searchParams]);
+
   const handleSave = async () => {
     setError(null);
     
     if (!formData.vendorName || !formData.phoneNumber || !formData.gstNumber) {
       setError('Please fill all required fields (Vendor Name, Phone Number, GST Number)');
+      return;
+    }
+    const gstNumber = normalizeGstin(formData.gstNumber);
+    if (!isValidGstinFormat(gstNumber)) {
+      setError('Enter a valid 15-character Indian GSTIN');
       return;
     }
 
@@ -217,7 +240,8 @@ export const VendorsPage: React.FC = () => {
     const vendorData: any = {
       vendorName: formData.vendorName,
       phoneNumber: formData.phoneNumber,
-      gstNumber: formData.gstNumber,
+      gstNumber,
+      gstinStateCode: gstinStateCode(gstNumber),
       isActive: formData.isActive,
     };
     
@@ -517,7 +541,8 @@ export const VendorsPage: React.FC = () => {
                   required
                   value={formData.gstNumber}
                   onChange={(e) => setFormData({ ...formData, gstNumber: e.target.value.toUpperCase() })}
-                  helperText="Must be unique"
+                  helperText={gstinHelperText(formData.gstNumber)}
+                  error={Boolean(formData.gstNumber) && !isValidGstinFormat(formData.gstNumber)}
                 />
               </Grid>
               <Grid item xs={12} md={6}>

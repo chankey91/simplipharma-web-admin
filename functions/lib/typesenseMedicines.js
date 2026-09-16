@@ -75,8 +75,19 @@ const COLLECTION_FIELDS_BASE = [
     { name: 'nearestExpiry', type: 'int64', optional: true, sort: true },
     { name: 'unit', type: 'string', optional: true },
     { name: 'gstRate', type: 'float', optional: true },
+    /** Stored for retailer cards; not searchable. */
+    { name: 'imageUrl', type: 'string', optional: true, index: false },
 ];
-const OPTIONAL_SCHEMA_FIELDS = COLLECTION_FIELDS_BASE.filter((f) => ['productId', 'search_blob', 'stock', 'currentStock', 'nearestExpiry', 'unit', 'gstRate'].includes(f.name));
+const OPTIONAL_SCHEMA_FIELDS = COLLECTION_FIELDS_BASE.filter((f) => [
+    'productId',
+    'search_blob',
+    'stock',
+    'currentStock',
+    'nearestExpiry',
+    'unit',
+    'gstRate',
+    'imageUrl',
+].includes(f.name));
 /** One ensure per warm instance â€” never on every search (hot path). */
 let ensureCollectionPromise = null;
 async function ensureCollection(client) {
@@ -166,6 +177,9 @@ function firestoreDataToTypesenseDoc(medicineId, data) {
     };
     if (searchBlob)
         doc.search_blob = searchBlob;
+    const imageUrl = typeof data.imageUrl === 'string' ? data.imageUrl.trim() : '';
+    if (imageUrl)
+        doc.imageUrl = imageUrl;
     return doc;
 }
 async function upsertMedicineInTypesense(medicineId, data) {
@@ -197,7 +211,7 @@ async function deleteMedicineFromTypesense(medicineId) {
 }
 /** Firestore sync: index on create/update, remove on delete or soft-delete. */
 exports.onMedicineWriteTypesense = functionRegion_1.ff
-    .runWith({ minInstances: 0, memory: '256MB', timeoutSeconds: 60 })
+    .runWith({ minInstances: 0, maxInstances: 10, memory: '256MB', timeoutSeconds: 60 })
     .firestore.document('medicines/{medicineId}')
     .onWrite(async (change, context) => {
     const medicineId = context.params.medicineId;
@@ -355,6 +369,7 @@ function medicinesFromTypesenseHitsOnly(hits) {
         const gstRate = typeof gstRaw === 'number' ? gstRaw : parseFloat(String(gstRaw !== null && gstRaw !== void 0 ? gstRaw : 5)) || 5;
         const unitRaw = d.unit;
         const productIdRaw = d.productId;
+        const imageRaw = d.imageUrl;
         out.push({
             id,
             name: String(d.name || ''),
@@ -370,6 +385,7 @@ function medicinesFromTypesenseHitsOnly(hits) {
             nearestExpiry,
             unit: unitRaw != null && String(unitRaw).trim() !== '' ? String(unitRaw) : undefined,
             gstRate,
+            imageUrl: imageRaw != null && String(imageRaw).trim() !== '' ? String(imageRaw).trim() : undefined,
         });
     }
     return out;
@@ -434,6 +450,11 @@ function buildMedicineFilters(data) {
         const in30 = now + 30 * 24 * 60 * 60 * 1000;
         filters.push(`nearestExpiry:>=${now} && nearestExpiry:<=${in30}`);
     }
+    const hsnFilter = String(data.hsnFilter || '').trim();
+    if (hsnFilter === 'present')
+        filters.push("code:!=''");
+    if (hsnFilter === 'missing')
+        filters.push("code:=''");
     return filters;
 }
 function resolveSortBy(data, browsing) {
