@@ -51,7 +51,8 @@ import type { PaymentStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useAppDialog } from '../context/AppDialogProvider';
 
-const ROWS_PER_PAGE = 10;
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+const DEFAULT_ROWS_PER_PAGE = 20;
 
 interface InvoiceRow {
   id: string;
@@ -93,6 +94,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [page, setPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(DEFAULT_ROWS_PER_PAGE);
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
@@ -116,7 +118,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
       sortField: sortKeyToField(sortKey),
       sortOrder: sortDirection,
       page,
-      perPage: ROWS_PER_PAGE,
+      perPage: rowsPerPage,
     },
     { enabled: !typesenseDisabled }
   );
@@ -175,7 +177,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const rows: InvoiceRow[] = useMemo(() => {
     if (typesenseDisabled) {
       return fallbackSorted
-        .slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE)
+        .slice((page - 1) * rowsPerPage, page * rowsPerPage)
         .map((inv) => ({
           id: inv.id,
           invoiceNumber: inv.invoiceNumber,
@@ -195,10 +197,10 @@ export const PurchaseInvoicesPage: React.FC = () => {
       totalAmount: r.totalAmount,
       paymentStatus: r.paymentStatus,
     }));
-  }, [typesenseDisabled, fallbackSorted, page, searchData]);
+  }, [typesenseDisabled, fallbackSorted, page, rowsPerPage, searchData]);
 
   const totalCount = typesenseDisabled ? fallbackSorted.length : searchData?.found ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalCount / ROWS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage));
 
   const totalInvoices = typesenseDisabled ? (invoices?.length ?? 0) : searchData?.totalAll ?? 0;
   const paidInvoices = typesenseDisabled
@@ -445,17 +447,35 @@ export const PurchaseInvoicesPage: React.FC = () => {
 
       {/* Pagination */}
       {totalCount > 0 && (
-        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2} flexWrap="wrap" gap={2}>
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel id="purchases-rows-per-page-label">Per page</InputLabel>
+            <Select
+              labelId="purchases-rows-per-page-label"
+              label="Per page"
+              value={rowsPerPage}
+              onChange={(e) => {
+                setRowsPerPage(Number(e.target.value));
+                setPage(1);
+              }}
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <MenuItem key={n} value={n}>
+                  {n}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
           <Pagination
             count={totalPages}
-            page={page}
+            page={Math.min(page, totalPages)}
             onChange={handlePageChange}
             color="primary"
             showFirstButton
             showLastButton
           />
-          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * ROWS_PER_PAGE + 1} to {Math.min(page * ROWS_PER_PAGE, totalCount)} of {totalCount} invoices
+          <Typography variant="body2" color="text.secondary">
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, totalCount)} of {totalCount} invoices
           </Typography>
         </Box>
       )}

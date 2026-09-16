@@ -511,6 +511,10 @@ export const cancelOrder = async (
   const currentTimeline = orderData?.timeline || [];
   const currentStatus = orderData?.status;
 
+  if (currentStatus === 'Cancelled') {
+    throw new Error('Order is already cancelled');
+  }
+
   let stockRestoreErrors: string[] = [];
   // Pending never deducted inventory; mark restored so repair UI does not double-add.
   let stockRestoredOnCancel = currentStatus === 'Pending';
