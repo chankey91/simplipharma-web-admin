@@ -4,13 +4,10 @@ import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
-<<<<<<< HEAD
 import { renderHtmlDocumentToJsPdf } from './htmlToJsPdf';
-=======
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
 import { hasGstSnapshot } from './gstSnapshot';
 import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
->>>>>>> 5b8cd4d1f4b08910bf29963111dac733c8ac2c6b
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
