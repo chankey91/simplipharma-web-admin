@@ -19,8 +19,9 @@ import {
   Tab,
   Chip,
   LinearProgress,
+  Tooltip,
 } from '@mui/material';
-import { Search, Download, Refresh, Build, CloudSync, Add } from '@mui/icons-material';
+import { Search, Download, Refresh, Build, CloudSync, Add, WhatsApp } from '@mui/icons-material';
 import { format } from 'date-fns';
 import {
   useCreditNotes,
@@ -39,6 +40,7 @@ import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generateCreditNotePdf } from '../utils/creditNote';
 import { generateDebitNotePdf } from '../utils/debitNote';
+import { shareCreditNoteOnWhatsApp, shareDebitNoteOnWhatsApp } from '../utils/noteWhatsApp';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
@@ -84,6 +86,7 @@ export const CreditNotesPage: React.FC = () => {
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [page, setPage] = useState(1);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [sharingId, setSharingId] = useState<string | null>(null);
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [createLedgerOpen, setCreateLedgerOpen] = useState(false);
@@ -297,6 +300,47 @@ export const CreditNotesPage: React.FC = () => {
       await alert('Failed to generate PDF', { severity: 'error' });
     } finally {
       setDownloadingId(null);
+    }
+  };
+
+  const handleWhatsApp = async (id: string) => {
+    setSharingId(id);
+    try {
+      if (isCredit) {
+        const note = await getCreditNoteById(id);
+        if (!note) {
+          await alert('Credit note not found', { severity: 'error' });
+          return;
+        }
+        const result = await shareCreditNoteOnWhatsApp(note);
+        if (!result.opened) {
+          await alert(
+            'Credit note PDF link copied. This store has no phone number on file — paste into WhatsApp Web and share the link.',
+            { severity: 'warning' }
+          );
+        }
+      } else {
+        const note = await getDebitNoteById(id);
+        if (!note) {
+          await alert('Debit note not found', { severity: 'error' });
+          return;
+        }
+        const result = await shareDebitNoteOnWhatsApp(note);
+        if (!result.opened) {
+          await alert(
+            'Debit note PDF link copied. This store has no phone number on file — paste into WhatsApp Web and share the link.',
+            { severity: 'warning' }
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Failed to share note on WhatsApp', err);
+      await alert(
+        `Failed to share on WhatsApp: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        { severity: 'error' }
+      );
+    } finally {
+      setSharingId(null);
     }
   };
 
@@ -553,14 +597,31 @@ export const CreditNotesPage: React.FC = () => {
                     <TableCell>{note.reason || '—'}</TableCell>
                     <TableCell align="right">{formatAmount(note.totalAmount)}</TableCell>
                     <TableCell align="right">
-                      <IconButton
-                        size="small"
-                        title={`Download ${isCredit ? 'credit' : 'debit'} note PDF`}
-                        onClick={() => handleDownload(note.id)}
-                        disabled={downloadingId === note.id}
-                      >
-                        <Download />
-                      </IconButton>
+                      <Tooltip title={`Download ${isCredit ? 'credit' : 'debit'} note PDF`}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => void handleDownload(note.id)}
+                            disabled={downloadingId === note.id || sharingId === note.id}
+                            aria-label={`Download ${isCredit ? 'credit' : 'debit'} note PDF`}
+                          >
+                            <Download />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Tooltip title="Send on WhatsApp">
+                        <span>
+                          <IconButton
+                            size="small"
+                            color="success"
+                            onClick={() => void handleWhatsApp(note.id)}
+                            disabled={downloadingId === note.id || sharingId === note.id}
+                            aria-label={`Send ${isCredit ? 'credit' : 'debit'} note on WhatsApp`}
+                          >
+                            <WhatsApp />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))

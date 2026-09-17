@@ -31,6 +31,8 @@ import {
   Divider,
   Checkbox,
   Toolbar,
+  Link,
+  Tooltip,
 } from '@mui/material';
 import {
   Search,
@@ -42,6 +44,7 @@ import {
   LocalShipping,
   CheckCircle,
   MergeType,
+  OpenInNew,
 } from '@mui/icons-material';
 import {
   useOrders,
@@ -62,7 +65,7 @@ import { Order, OrderStatus, User } from '../types';
 import { format } from 'date-fns';
 import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
-import { useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { exportPendingOrdersByStore, exportPendingOrdersProductSummary, exportSelectedOrderStores, formatTownDistrict } from '../utils/export';
 import { publishPurchaseList } from '../services/purchaseLists';
 import { useTableSort } from '../hooks/useTableSort';
@@ -80,8 +83,25 @@ import {
   isDateInIstDateTimeRange,
   parseIstDateTimeLocal,
 } from '../utils/dateTime';
+import { loadOrdersListView, saveOrdersListView } from '../utils/ordersListView';
 
-const ROWS_PER_PAGE = 10;
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+const DEFAULT_ROWS_PER_PAGE = 20;
+
+function getInitialOrdersListView() {
+  const saved = loadOrdersListView();
+  const defaultRange = getDefaultOrdersFilterRangeIST();
+  return {
+    searchTerm: saved.searchTerm ?? '',
+    statusFilter: saved.statusFilter ?? ('All' as const),
+    fromDateFilter: saved.fromDateFilter ?? defaultRange.fromDateTime,
+    toDateFilter: saved.toDateFilter ?? defaultRange.toDateTime,
+    page: saved.page ?? 1,
+    rowsPerPage: saved.rowsPerPage ?? DEFAULT_ROWS_PER_PAGE,
+    sortKey: saved.sortKey ?? 'orderDate',
+    sortDirection: saved.sortDirection ?? ('desc' as const),
+  };
+}
 
 const isBulkSelectableStatus = (status: OrderStatus) =>
   status === 'Pending' || status === 'Order Fulfillment' || status === 'In Transit';
@@ -138,16 +158,14 @@ export const OrdersPage: React.FC = () => {
   const canReindexOrders = panelRole === 'admin' || panelRole === 'operations';
   const { data: stores } = useStores();
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [debouncedTerm, setDebouncedTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
-  const [fromDateFilter, setFromDateFilter] = useState(
-    () => getDefaultOrdersFilterRangeIST().fromDateTime
-  );
-  const [toDateFilter, setToDateFilter] = useState(
-    () => getDefaultOrdersFilterRangeIST().toDateTime
-  );
-  const [page, setPage] = useState(1);
+  const [viewInit] = useState(getInitialOrdersListView);
+  const [searchTerm, setSearchTerm] = useState(viewInit.searchTerm);
+  const [debouncedTerm, setDebouncedTerm] = useState(viewInit.searchTerm.trim());
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>(viewInit.statusFilter);
+  const [fromDateFilter, setFromDateFilter] = useState(viewInit.fromDateFilter);
+  const [toDateFilter, setToDateFilter] = useState(viewInit.toDateFilter);
+  const [page, setPage] = useState(viewInit.page);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(viewInit.rowsPerPage);
   const [isExporting, setIsExporting] = useState(false);
   const [isExportingProductSummary, setIsExportingProductSummary] = useState(false);
   const [isPublishingPurchaseList, setIsPublishingPurchaseList] = useState(false);
@@ -180,12 +198,37 @@ export const OrdersPage: React.FC = () => {
     toDateTime: '',
   });
 
-  const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
+  const { sortKey, sortDirection, requestSort } = useTableSort(
+    viewInit.sortKey,
+    viewInit.sortDirection
+  );
+
+  useEffect(() => {
+    saveOrdersListView({
+      searchTerm,
+      statusFilter,
+      fromDateFilter,
+      toDateFilter,
+      page,
+      rowsPerPage,
+      sortKey,
+      sortDirection,
+    });
+  }, [
+    searchTerm,
+    statusFilter,
+    fromDateFilter,
+    toDateFilter,
+    page,
+    rowsPerPage,
+    sortKey,
+    sortDirection,
+  ]);
 
   // Drop selection when filters / paging change so actions match what's on screen.
   useEffect(() => {
     setSelectedById({});
-  }, [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, page, sortKey, sortDirection]);
+  }, [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, page, rowsPerPage, sortKey, sortDirection]);
 
   const storeNameByRetailerId = useMemo(() => {
     const map = new Map<string, string>();
@@ -282,7 +325,7 @@ export const OrdersPage: React.FC = () => {
     sortField: sortKeyToField(sortKey),
     sortOrder: sortDirection,
     page,
-    perPage: ROWS_PER_PAGE,
+    perPage: rowsPerPage,
     ...(fromDateFilter && !dateRangeInvalid ? { fromDate: fromDateFilter.slice(0, 10) } : {}),
     ...(toDateFilter && !dateRangeInvalid ? { toDate: toDateFilter.slice(0, 10) } : {}),
     ...(locationMatchedRetailerIds.length > 0
@@ -435,7 +478,7 @@ export const OrdersPage: React.FC = () => {
   const rows: OrderRow[] = useMemo(() => {
     if (useLocalList) {
       return localFilteredSorted
-        .slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE)
+        .slice((page - 1) * rowsPerPage, page * rowsPerPage)
         .map((o) => {
           const retailerId = resolveRetailerId(o.retailerId, o.retailerEmail);
           return {
@@ -469,6 +512,7 @@ export const OrdersPage: React.FC = () => {
     useLocalList,
     localFilteredSorted,
     page,
+    rowsPerPage,
     searchData,
     storeNameByRetailerId,
     storeByRetailerId,
@@ -477,7 +521,11 @@ export const OrdersPage: React.FC = () => {
 
   const statusCounts = useLocalList ? localStatusCounts : searchData?.statusCounts ?? {};
   const totalCount = useLocalList ? localFilteredSorted.length : searchData?.found ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalCount / ROWS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage));
+
+  useEffect(() => {
+    if (totalCount > 0 && page > totalPages) setPage(totalPages);
+  }, [totalCount, page, totalPages]);
 
   const ordersByStatus = {
     Pending: statusCounts['Pending'] ?? 0,
@@ -493,6 +541,15 @@ export const OrdersPage: React.FC = () => {
 
   const handlePageChange = (_event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
+  };
+
+  const openOrder = (orderId: string, newTab = false) => {
+    const path = `/orders/${orderId}`;
+    if (newTab) {
+      window.open(path, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    navigate(path);
   };
 
   const handleCancelOrder = async () => {
@@ -1286,7 +1343,19 @@ export const OrdersPage: React.FC = () => {
                   key={order.id}
                   hover
                   selected={selected}
-                  onClick={() => navigate(`/orders/${order.id}`)}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey) {
+                      openOrder(order.id, true);
+                      return;
+                    }
+                    openOrder(order.id);
+                  }}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      openOrder(order.id, true);
+                    }
+                  }}
                   sx={{ cursor: 'pointer' }}
                 >
                   {canEditOrders && (
@@ -1299,7 +1368,15 @@ export const OrdersPage: React.FC = () => {
                       />
                     </TableCell>
                   )}
-                  <TableCell>#{formatOrderNumberForDisplay(order.id)}</TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Link
+                      component={RouterLink}
+                      to={`/orders/${order.id}`}
+                      underline="hover"
+                    >
+                      #{formatOrderNumberForDisplay(order.id)}
+                    </Link>
+                  </TableCell>
                   <TableCell>{format(order.orderDate, 'MMM dd, yyyy hh:mm a')}</TableCell>
                   <TableCell>{order.storeName}</TableCell>
                   <TableCell>{order.townDistrict}</TableCell>
@@ -1320,23 +1397,35 @@ export const OrdersPage: React.FC = () => {
                       sx={{ fontWeight: 'bold' }}
                     />
                   </TableCell>
-                  <TableCell align="right">
-                    <IconButton
-                      size="small"
-                      color="primary"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/orders/${order.id}`);
-                      }}
-                    >
-                      <Visibility />
-                    </IconButton>
-                    {canEditOrders && order.status !== 'Cancelled' && order.status !== 'Delivered' && (
+                  <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                    <Tooltip title="View order">
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        onClick={() => openOrder(order.id)}
+                        aria-label={`View order ${order.id}`}
+                      >
+                        <Visibility />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Open in new tab">
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        component={RouterLink}
+                        to={`/orders/${order.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`Open order ${order.id} in a new tab`}
+                      >
+                        <OpenInNew fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    {canEditOrders && order.status !== 'Cancelled' && (
                       <IconButton
                         size="small"
                         color="error"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={() => {
                           setCancelDialog({ open: true, orderId: order.id, reason: '' });
                         }}
                       >
@@ -1354,17 +1443,35 @@ export const OrdersPage: React.FC = () => {
 
       {/* Pagination */}
       {totalCount > 0 && (
-        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2}>
+        <Box display="flex" justifyContent="center" alignItems="center" mt={3} mb={2} flexWrap="wrap" gap={2}>
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel id="orders-rows-per-page-label">Per page</InputLabel>
+            <Select
+              labelId="orders-rows-per-page-label"
+              label="Per page"
+              value={rowsPerPage}
+              onChange={(e) => {
+                setRowsPerPage(Number(e.target.value));
+                setPage(1);
+              }}
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <MenuItem key={n} value={n}>
+                  {n}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
           <Pagination
             count={totalPages}
-            page={page}
+            page={Math.min(page, totalPages)}
             onChange={handlePageChange}
             color="primary"
             showFirstButton
             showLastButton
           />
-          <Typography variant="body2" sx={{ ml: 2, color: 'text.secondary' }}>
-            Showing {(page - 1) * ROWS_PER_PAGE + 1} to {Math.min(page * ROWS_PER_PAGE, totalCount)} of {totalCount} orders
+          <Typography variant="body2" color="text.secondary">
+            Showing {(page - 1) * rowsPerPage + 1} to {Math.min(page * rowsPerPage, totalCount)} of {totalCount} orders
           </Typography>
         </Box>
       )}
@@ -1373,7 +1480,10 @@ export const OrdersPage: React.FC = () => {
       <Dialog open={cancelDialog.open} onClose={() => setCancelDialog({ ...cancelDialog, open: false })}>
         <DialogTitle>Cancel Order</DialogTitle>
         <DialogContent>
-          <Typography gutterBottom>Are you sure you want to cancel order #{formatOrderNumberForDisplay(cancelDialog.orderId)}?</Typography>
+          <Typography gutterBottom>
+            Are you sure you want to cancel order #{formatOrderNumberForDisplay(cancelDialog.orderId)}?
+            If stock was deducted, it will be restored to inventory.
+          </Typography>
           <TextField
             fullWidth
             label="Reason for cancellation"

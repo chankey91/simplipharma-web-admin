@@ -1553,7 +1553,10 @@ export const OrderDetailsPage: React.FC = () => {
           open: true,
           action: 'cancel',
           title: 'Cancel Order',
-          message: 'Please provide a reason for cancelling this order.'
+          message:
+            order.status === 'Pending'
+              ? 'Please provide a reason for cancelling this order.'
+              : 'Please provide a reason for cancelling this order. Allocated stock will be restored to inventory.',
         });
         break;
       case 'unfulfill':
@@ -3113,7 +3116,7 @@ export const OrderDetailsPage: React.FC = () => {
             Un-fulfill
           </Button>
         )}
-        {canEditOrders && order.status !== 'Cancelled' && order.status !== 'In Transit' && order.status !== 'Delivered' && (
+        {canEditOrders && order.status !== 'Cancelled' && (
           <Button
             variant="outlined"
             color="error"

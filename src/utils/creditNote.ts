@@ -1,11 +1,10 @@
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
 import { CreditNote } from '../types';
 import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
+import { renderHtmlDocumentToJsPdf } from './htmlToJsPdf';
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
 import { hasGstSnapshot } from './gstSnapshot';
 import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
@@ -283,94 +282,24 @@ ${buildGstInvoiceFooter('', summary.amountInWords, company.name, creditNoteTerms
 };
 
 export const generateCreditNotePdf = async (note: CreditNote) => {
-  const html = await getCreditNoteHTML(note);
-  const element = document.createElement('div');
-  element.innerHTML = html;
-  element.style.width = '210mm';
-  element.style.padding = '0';
-  element.style.margin = '0';
-  element.style.position = 'absolute';
-  element.style.left = '-9999px';
-  element.style.top = '0';
-  document.body.appendChild(element);
-
   try {
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      width: element.scrollWidth,
-      height: element.scrollHeight,
-    });
-
-    const imgData = canvas.toDataURL('image/png');
-    const imgWidth = 210;
-    const pageHeight = 297;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    let position = 0;
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-
+    const pdf = await renderHtmlDocumentToJsPdf(await getCreditNoteHTML(note));
     pdf.save(`credit-note-${note.creditNoteNumber}.pdf`);
   } catch (error) {
     console.error('Error generating credit note PDF:', error);
     await appAlert('Failed to generate credit note. Please try again.', { severity: 'error' });
-  } finally {
-    document.body.removeChild(element);
   }
 };
 
 export const generateCreditNotePdfDataUri = async (note: CreditNote): Promise<string> => {
-  const html = await getCreditNoteHTML(note);
-  const element = document.createElement('div');
-  element.innerHTML = html;
-  element.style.width = '210mm';
-  element.style.padding = '0';
-  element.style.margin = '0';
-  element.style.position = 'absolute';
-  element.style.left = '-9999px';
-  element.style.top = '0';
-  document.body.appendChild(element);
+  const pdf = await renderHtmlDocumentToJsPdf(await getCreditNoteHTML(note));
+  return pdf.output('datauristring');
+};
 
-  try {
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      width: element.scrollWidth,
-      height: element.scrollHeight,
-    });
-
-    const imgData = canvas.toDataURL('image/png');
-    const imgWidth = 210;
-    const pageHeight = 297;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    let position = 0;
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-
-    return pdf.output('datauristring');
-  } finally {
-    document.body.removeChild(element);
-  }
+export async function generateCreditNotePdfBlob(note: CreditNote): Promise<{ blob: Blob; fileName: string }> {
+  const pdf = await renderHtmlDocumentToJsPdf(await getCreditNoteHTML(note));
+  return {
+    blob: pdf.output('blob'),
+    fileName: `credit-note-${note.creditNoteNumber}.pdf`,
+  };
 };

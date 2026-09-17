@@ -46,7 +46,7 @@ import {
 } from '@mui/icons-material';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { useVendors } from '../hooks/useVendors';
-import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
+import { useCreatePurchaseInvoice, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { useCreateMedicine } from '../hooks/useInventory';
 import { createMedicine, getMedicineById } from '../services/inventory';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
@@ -548,6 +548,7 @@ const StackLines: React.FC<{
   linesTaxableTotal: number;
   linesGstTotal: number;
   linesAmountTotal: number;
+  nrNrxByMedicineId: Map<string, { nonReturnable: boolean; nrxDrug: boolean }>;
   patchLine: (lineId: string, patch: Partial<PurchaseInvoiceDraftResolvedLine>) => void;
   openAddMedicine: (
     line: PurchaseInvoiceDraftResolvedLine,
@@ -559,6 +560,7 @@ const StackLines: React.FC<{
   linesTaxableTotal,
   linesGstTotal,
   linesAmountTotal,
+  nrNrxByMedicineId,
   patchLine,
   openAddMedicine,
 }) => {
@@ -678,6 +680,7 @@ const StackLines: React.FC<{
               <LineMedicinePicker
                 line={line}
                 onPick={(medicineId, medicineName, productId, gstRate) => {
+                  const prior = nrNrxByMedicineId.get(medicineId);
                   patchLine(line.lineId, {
                     selectedMedicineId: medicineId,
                     selectedMedicineName: medicineName,
@@ -687,6 +690,8 @@ const StackLines: React.FC<{
                     ...(gstRate != null ? { gstRate } : {}),
                     matchStatus: 'matched',
                     matchReason: 'inventory',
+                    ...(prior?.nonReturnable ? { nonReturnable: true } : {}),
+                    ...(prior?.nrxDrug ? { nrxDrug: true } : {}),
                   });
                 }}
                 onClear={() => {
@@ -1023,6 +1028,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   const { data: vendors } = useVendors();
   const createInvoice = useCreatePurchaseInvoice();
   const createMedicine = useCreateMedicine();
+  const { nrNrxByMedicineId } = useVendorLastPurchases(undefined, undefined, { enabled: true });
   const { alert, confirm } = useAppDialog();
 
   const [draftId, setDraftId] = useState<string | null>(routeDraftId || null);
@@ -1058,6 +1064,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingLinesRef = useRef<PurchaseInvoiceDraftResolvedLine[] | null>(null);
   const linesDirtyRef = useRef(false);
+  const seededNrNrxDraftRef = useRef<string | null>(null);
 
   const refreshInbox = useCallback(async () => {
     if (draftId) return;
@@ -1128,6 +1135,33 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       }))
     );
   }, [draft?.resolvedLines]);
+
+  useEffect(() => {
+    if (!draftId) {
+      seededNrNrxDraftRef.current = null;
+      return;
+    }
+    if (seededNrNrxDraftRef.current === draftId) return;
+    if (!localLines.length || nrNrxByMedicineId.size === 0) return;
+    seededNrNrxDraftRef.current = draftId;
+    setLocalLines((prev) => {
+      let changed = false;
+      const next = prev.map((line) => {
+        const id = line.selectedMedicineId || line.medicineId;
+        if (!id) return line;
+        const prior = nrNrxByMedicineId.get(id);
+        if (!prior) return line;
+        const nonReturnable = line.nonReturnable === true || prior.nonReturnable;
+        const nrxDrug = line.nrxDrug === true || prior.nrxDrug;
+        if (nonReturnable === (line.nonReturnable === true) && nrxDrug === (line.nrxDrug === true)) {
+          return line;
+        }
+        changed = true;
+        return { ...line, ...(nonReturnable ? { nonReturnable: true } : {}), ...(nrxDrug ? { nrxDrug: true } : {}) };
+      });
+      return changed ? next : prev;
+    });
+  }, [draftId, localLines.length, nrNrxByMedicineId]);
 
   const flushLinePatches = useCallback(async () => {
     if (!draftId || !pendingLinesRef.current) return;
@@ -1338,6 +1372,8 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
           gstRate: existing.gstRate ?? (parseFloat(newMedicineData.gstRate) || 5),
           matchStatus: 'matched',
           matchReason: 'inventory',
+          ...(nrNrxByMedicineId.get(existing.id)?.nonReturnable ? { nonReturnable: true } : {}),
+          ...(nrNrxByMedicineId.get(existing.id)?.nrxDrug ? { nrxDrug: true } : {}),
         });
         closeAddMedicine();
         await alert(
@@ -2005,6 +2041,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                   linesTaxableTotal={linesTaxableTotal}
                   linesGstTotal={linesGstTotal}
                   linesAmountTotal={linesAmountTotal}
+                  nrNrxByMedicineId={nrNrxByMedicineId}
                   patchLine={patchLine}
                   openAddMedicine={openAddMedicine}
                 />

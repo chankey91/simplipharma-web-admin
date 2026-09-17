@@ -99,6 +99,68 @@ export function buildLastPurchaseByMedicineId(
   return map;
 }
 
+export type MedicineNrNrxFlags = {
+  nonReturnable: boolean;
+  nrxDrug: boolean;
+};
+
+/** If this medicine was ever bought as NR and/or NRX, remember those flags. */
+export function buildMedicineNrNrxFlags(
+  invoices: PurchaseInvoice[]
+): Map<string, MedicineNrNrxFlags> {
+  const map = new Map<string, MedicineNrNrxFlags>();
+  for (const inv of invoices) {
+    for (const item of inv.items || []) {
+      const medicineId = (item.medicineId || '').trim();
+      if (!medicineId) continue;
+      if (item.nonReturnable !== true && item.nrxDrug !== true) continue;
+      const existing = map.get(medicineId) || { nonReturnable: false, nrxDrug: false };
+      if (item.nonReturnable === true) existing.nonReturnable = true;
+      if (item.nrxDrug === true) existing.nrxDrug = true;
+      map.set(medicineId, existing);
+    }
+  }
+  return map;
+}
+
+export function flagsFromStockBatches(
+  batches: Array<{ nonReturnable?: boolean; nrxDrug?: boolean }> | undefined
+): MedicineNrNrxFlags {
+  let nonReturnable = false;
+  let nrxDrug = false;
+  for (const b of batches || []) {
+    if (b.nonReturnable === true) nonReturnable = true;
+    if (b.nrxDrug === true) nrxDrug = true;
+    if (nonReturnable && nrxDrug) break;
+  }
+  return { nonReturnable, nrxDrug };
+}
+
+/** Prior NR/NRX for a medicine: previous bills, lines on this bill, or existing stock batches. */
+export function resolveMedicineNrNrxFlags(opts: {
+  medicineId: string;
+  fromInvoices?: Map<string, MedicineNrNrxFlags>;
+  invoiceItems?: Array<{ medicineId?: string; nonReturnable?: boolean; nrxDrug?: boolean }>;
+  stockBatches?: Array<{ nonReturnable?: boolean; nrxDrug?: boolean }>;
+}): MedicineNrNrxFlags {
+  const medicineId = (opts.medicineId || '').trim();
+  const hist = medicineId ? opts.fromInvoices?.get(medicineId) : undefined;
+  const fromItems = (opts.invoiceItems || []).filter(
+    (i) => (i.medicineId || '').trim() === medicineId
+  );
+  const fromBatches = flagsFromStockBatches(opts.stockBatches);
+  return {
+    nonReturnable:
+      hist?.nonReturnable === true ||
+      fromItems.some((i) => i.nonReturnable === true) ||
+      fromBatches.nonReturnable,
+    nrxDrug:
+      hist?.nrxDrug === true ||
+      fromItems.some((i) => i.nrxDrug === true) ||
+      fromBatches.nrxDrug,
+  };
+}
+
 export type BestDiscountVendorPurchase = {
   medicineId: string;
   vendorName: string;

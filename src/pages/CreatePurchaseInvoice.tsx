@@ -71,6 +71,7 @@ import { normalizeFirestoreDate } from '../services/inventory';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { VendorFormDialog } from '../components/VendorFormDialog';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
+import { resolveMedicineNrNrxFlags } from '../utils/vendorLastPurchase';
 
 const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
 
@@ -159,7 +160,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     invoiceDate: getTodayDateStringIST(),
     notes: '',
   });
-  const { lastPurchaseByMedicineId } = useVendorLastPurchases(
+  const { lastPurchaseByMedicineId, nrNrxByMedicineId } = useVendorLastPurchases(
     undefined,
     undefined,
     { enabled: true }
@@ -241,6 +242,35 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   useEffect(() => {
     if (currentItemMedicineFull) rememberMedicine(currentItemMedicineFull);
   }, [currentItemMedicineFull, rememberMedicine]);
+
+  // Search hits often omit batches; once the full medicine loads, tick NR/NRX if it was used before.
+  useEffect(() => {
+    if (!itemDialog.open || itemDialog.itemIndex !== null) return;
+    const medicineId = String(currentItem.medicineId || '');
+    if (!medicineId || currentItemMedicineFull?.id !== medicineId) return;
+    const priorNrNrx = resolveMedicineNrNrxFlags({
+      medicineId,
+      fromInvoices: nrNrxByMedicineId,
+      invoiceItems: items,
+      stockBatches: currentItemMedicineFull.stockBatches,
+    });
+    if (!priorNrNrx.nonReturnable && !priorNrNrx.nrxDrug) return;
+    setCurrentItem((prev) => {
+      if (prev.medicineId !== medicineId) return prev;
+      if (prev.nonReturnable === true && prev.nrxDrug === true) return prev;
+      const nonReturnable = prev.nonReturnable === true || priorNrNrx.nonReturnable;
+      const nrxDrug = prev.nrxDrug === true || priorNrNrx.nrxDrug;
+      if (prev.nonReturnable === nonReturnable && prev.nrxDrug === nrxDrug) return prev;
+      return { ...prev, nonReturnable, nrxDrug };
+    });
+  }, [
+    itemDialog.open,
+    itemDialog.itemIndex,
+    currentItem.medicineId,
+    currentItemMedicineFull,
+    nrNrxByMedicineId,
+    items,
+  ]);
 
   const lookupMedicine = useCallback(
     (id: string | undefined | null): Medicine | undefined => {
@@ -541,6 +571,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return;
     }
     setExpiryDateError(''); // Clear error when opening dialog
+    const priorNrNrx = resolveMedicineNrNrxFlags({
+      medicineId: selectedMedicine.id,
+      fromInvoices: nrNrxByMedicineId,
+      invoiceItems: items,
+      stockBatches: selectedMedicine.stockBatches,
+    });
     setCurrentItem({
       medicineId: selectedMedicine.id,
       medicineName: selectedMedicine.name,
@@ -557,8 +593,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       gstRate: selectedMedicine.gstRate || 5, // Get GST rate from medicine master data
       standardDiscount: '20',
       discountPercentage: '',
-      nonReturnable: false,
-      nrxDrug: false,
+      nonReturnable: priorNrNrx.nonReturnable,
+      nrxDrug: priorNrNrx.nrxDrug,
     });
     setItemDialog({ open: true, itemIndex: null });
   };
