@@ -89,6 +89,9 @@ export const GST_INVOICE_STYLES = `
     padding-top: 3px;
     font-weight: bold;
   }
+  .totals-row.amount-due {
+    font-weight: bold;
+  }
   .center { text-align: center; }
   .right  { text-align: right; }
   .bold   { font-weight: bold; }
@@ -184,6 +187,9 @@ export type GstInvoiceSummary = {
   roundOff: string;
   grandTotal: string;
   amountInWords: string;
+  /** Wallet (credit notes) applied as payment — GST grand total is unchanged. */
+  walletApplied?: string;
+  amountDue?: string;
 };
 
 export function buildGstInvoiceItemsHtml(items: GstInvoiceLineItem[]): string {
@@ -272,6 +278,16 @@ export function buildGstInvoiceTotalsSection(
       <div class="totals-row"><span>GST</span><span>${totalGst}</span></div>
       <div class="totals-row"><span>Round Off</span><span>${roundOffSign}${summary.roundOff}</span></div>
       <div class="totals-row grand-total"><span>${totalLabel}</span><span>${summary.grandTotal}</span></div>
+      ${
+        summary.walletApplied && parseFloat(summary.walletApplied) > 0.01
+          ? `<div class="totals-row"><span>WALLET</span><span>-${summary.walletApplied}</span></div>`
+          : ''
+      }
+      ${
+        summary.amountDue != null && summary.amountDue !== ''
+          ? `<div class="totals-row amount-due"><span>AMOUNT DUE</span><span>${summary.amountDue}</span></div>`
+          : ''
+      }
     </td>
   </tr>
 </table>`;

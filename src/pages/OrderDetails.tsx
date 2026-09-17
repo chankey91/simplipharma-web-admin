@@ -72,6 +72,7 @@ import {
   useUpdatePaymentStatus,
   useRetailerLastSchemes,
 } from '../hooks/useOrders';
+import { useRetailerWallet } from '../hooks/useRetailerWallet';
 import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
 import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
 import { calculateOrderTotalsFromLines, hasBatchAssignment } from '../utils/orderTotals';
@@ -638,6 +639,11 @@ export const OrderDetailsPage: React.FC = () => {
     title: '',
     message: ''
   });
+  const [useWalletOnFulfill, setUseWalletOnFulfill] = useState(true);
+  const fulfillWalletQuery = useRetailerWallet(
+    order?.retailerId,
+    Boolean(confirmDialog.open && confirmDialog.action === 'fulfill')
+  );
   const [trayNumberDialog, setTrayNumberDialog] = useState<{ open: boolean; orderId: string | null }>({
     open: false,
     orderId: null
@@ -1520,6 +1526,7 @@ export const OrderDetailsPage: React.FC = () => {
             (m) => (m as { lineType?: string }).lineType !== 'product_demand'
           ).length;
           const isPartial = readyLines.length < medicineLineCount;
+          setUseWalletOnFulfill(true);
           setConfirmDialog({
             open: true,
             action: 'fulfill',
@@ -1612,7 +1619,7 @@ export const OrderDetailsPage: React.FC = () => {
           }))
         })));
         
-        await fulfillOrderMutation.mutateAsync({
+        const fulfillResult = await fulfillOrderMutation.mutateAsync({
           orderId: order.id,
           fulfilledBy: user.uid,
           fulfillmentData: {
@@ -1627,14 +1634,23 @@ export const OrderDetailsPage: React.FC = () => {
           },
           // Reuse React Query cache — fulfill must not re-download all purchase invoices.
           purchaseInvoices: purchaseInvoicesList,
+          applyWallet: Boolean(
+            useWalletOnFulfill &&
+              (fulfillWalletQuery.isError || (fulfillWalletQuery.data?.available ?? 0) > 0.01)
+          ),
         });
         clearSessionFulfillmentDraft(order.id);
         localPendingEditsRef.current = { orderId: order.id, dirty: false };
         setFulfillmentDirty(false);
         // Close before success alerts so MUI dialogs do not stack and block dismiss.
         closeConfirmDialog();
+        const walletPart =
+          fulfillResult?.walletApplied && fulfillResult.walletApplied > 0.01
+            ? ` Wallet ₹${fulfillResult.walletApplied.toFixed(2)} applied to this invoice.`
+            : '';
         await alert(
-          'Order fulfilled successfully! Invoice will be emailed when the order is marked Delivered.',
+          'Order fulfilled successfully! Invoice will be emailed when the order is marked Delivered.' +
+            walletPart,
           { severity: 'success' }
         );
       } else if (confirmDialog.action === 'dispatch') {
@@ -4241,6 +4257,12 @@ export const OrderDetailsPage: React.FC = () => {
                     <Typography variant="body2" color="textSecondary">Paid</Typography>
                     <Typography variant="body2" color="success.main">₹{(order.paidAmount ?? 0).toFixed(2)}</Typography>
                   </Box>
+                  {(order.creditApplied ?? 0) > 0.01 && (
+                    <Box display="flex" justifyContent="space-between" mb={0.5}>
+                      <Typography variant="body2" color="textSecondary">Wallet</Typography>
+                      <Typography variant="body2">₹{(order.creditApplied ?? 0).toFixed(2)}</Typography>
+                    </Box>
+                  )}
                   <Box display="flex" justifyContent="space-between">
                     <Typography variant="body2" color="textSecondary">Due</Typography>
                     <Typography variant="body2" fontWeight="bold" color={effectiveDueAmount > 0 ? 'error.main' : 'success.main'}>
@@ -4428,7 +4450,36 @@ export const OrderDetailsPage: React.FC = () => {
       <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ ...confirmDialog, open: false })}>
         <DialogTitle>{confirmDialog.title}</DialogTitle>
         <DialogContent>
-          <Typography>{confirmDialog.message}</Typography>
+          <Typography sx={{ whiteSpace: 'pre-wrap' }}>{confirmDialog.message}</Typography>
+          {confirmDialog.action === 'fulfill' && (
+            <Box sx={{ mt: 2 }}>
+              {fulfillWalletQuery.isLoading ? (
+                <Typography variant="body2" color="text.secondary">
+                  Checking retailer wallet…
+                </Typography>
+              ) : (fulfillWalletQuery.data?.available ?? 0) > 0.01 ? (
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={useWalletOnFulfill}
+                      onChange={(e) => setUseWalletOnFulfill(e.target.checked)}
+                    />
+                  }
+                  label={`Use retailer wallet (₹${(fulfillWalletQuery.data?.available ?? 0).toLocaleString(
+                    'en-IN',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+                  )} available; ₹${Math.min(
+                    fulfillWalletQuery.data?.available ?? 0,
+                    Math.max(0, grandTotal - (order.paidAmount ?? 0))
+                  ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} will be applied)`}
+                />
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No retailer wallet balance to apply.
+                </Typography>
+              )}
+            </Box>
+          )}
           {confirmDialog.action === 'cancel' && (
             <TextField
               fullWidth
@@ -4450,6 +4501,7 @@ export const OrderDetailsPage: React.FC = () => {
             onClick={executeAction}
             disabled={
               (confirmDialog.action === 'cancel' && !cancelReason) ||
+              (confirmDialog.action === 'fulfill' && fulfillWalletQuery.isLoading) ||
               fulfillOrderMutation.isPending ||
               unfulfillOrderMutation.isPending ||
               dispatchOrderMutation.isPending ||

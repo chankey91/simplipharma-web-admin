@@ -210,6 +210,8 @@ export interface Order {
   /** When wallet credit was applied on this order. */
   creditAppliedAt?: 'checkout' | 'dispatch' | 'payment';
   creditAppliedDate?: Date | any;
+  /** Credit notes consumed when wallet was applied at fulfill. */
+  walletCreditApplications?: PaymentRequestCreditApplication[];
   timeline: OrderTimelineEvent[];
   // NEW: Dispatch fields
   dispatchDate?: Date | any;
@@ -252,6 +254,7 @@ export interface Payment {
   remittanceStatus?: CashRemittanceStatus;
   remittanceId?: string;
   transactionId?: string; // For online payments
+  creditApplications?: PaymentRequestCreditApplication[];
 }
 
 /** Payment recorded against a purchase invoice (vendor payable). */
