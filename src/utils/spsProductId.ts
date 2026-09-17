@@ -35,7 +35,7 @@ export async function allocateSpsProductIds(count: number): Promise<string[]> {
     tx.set(
       counterRef,
       {
-        next: nextStart + n,
+        next: Math.floor(nextStart + n),
         updatedAt: new Date(),
       },
       { merge: true }

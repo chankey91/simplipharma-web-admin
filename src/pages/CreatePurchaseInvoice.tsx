@@ -46,7 +46,8 @@ import { useCreatePurchaseInvoice, usePurchaseInvoice, useUpdatePurchaseInvoiceW
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
 import { format } from 'date-fns';
-import { auth } from '../services/firebase';
+import { auth, isPermissionDeniedError, permissionDeniedUserMessage } from '../services/firebase';
+import { useAuth } from '../context/AuthContext';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
@@ -124,6 +125,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const isEditMode = Boolean(editInvoiceId);
   const { data: existingInvoice, isLoading: existingLoading } = usePurchaseInvoice(editInvoiceId || '');
   const { data: vendors } = useVendors();
+  const { canWrite } = useAuth();
+  const canEditPurchases = canWrite('purchases');
   const createMedicineMutation = useCreateMedicine();
   const createInvoiceMutation = useCreatePurchaseInvoice();
   const updateInvoiceMutation = useUpdatePurchaseInvoiceWithStock();
@@ -891,7 +894,12 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       setSelectedMedicine(newMedicine);
       closeAddMedicineDialog();
     } catch (error: any) {
-      await alert(error.message || 'Failed to add medicine', { severity: 'error' });
+      await alert(
+        isPermissionDeniedError(error)
+          ? permissionDeniedUserMessage('add a medicine')
+          : error.message || 'Failed to add medicine',
+        { severity: 'error' }
+      );
     }
   };
 
@@ -901,6 +909,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       createInvoiceMutation.isPending ||
       updateInvoiceMutation.isPending
     ) {
+      return;
+    }
+
+    if (!canEditPurchases) {
+      await alert(permissionDeniedUserMessage('save this purchase invoice'), { severity: 'error' });
       return;
     }
 
@@ -982,7 +995,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       navigate('/purchases');
     } catch (error: any) {
       await alert(
-        error.message || (isEditMode ? 'Failed to update invoice' : 'Failed to create invoice'),
+        isPermissionDeniedError(error)
+          ? permissionDeniedUserMessage(isEditMode ? 'update this purchase invoice' : 'save this purchase invoice')
+          : error.message || (isEditMode ? 'Failed to update invoice' : 'Failed to create invoice'),
         { severity: 'error' }
       );
     } finally {
@@ -1023,7 +1038,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           variant="contained"
           startIcon={<Save />}
           onClick={() => void handleSaveInvoice()}
-          disabled={isSavingInvoice}
+          disabled={isSavingInvoice || !canEditPurchases}
         >
           {isSavingInvoice ? 'Saving...' : isEditMode ? 'Update Invoice' : 'Save Invoice'}
         </Button>

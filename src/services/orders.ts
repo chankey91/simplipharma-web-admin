@@ -299,8 +299,13 @@ export const getOrdersByStatus = async (status: OrderStatus): Promise<Order[]> =
     return snapshot.docs.map(mapDoc);
   } catch (error) {
     console.warn('getOrdersByStatus query failed, falling back to full scan:', error);
-    const snapshot = await getDocs(ordersCol);
-    return snapshot.docs.map(mapDoc).filter((o) => o.status === status);
+    try {
+      const snapshot = await getDocs(ordersCol);
+      return snapshot.docs.map(mapDoc).filter((o) => o.status === status);
+    } catch (fallbackError) {
+      console.warn('getOrdersByStatus full scan failed:', fallbackError);
+      return [];
+    }
   }
 };
 

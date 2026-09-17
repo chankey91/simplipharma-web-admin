@@ -53,8 +53,25 @@ service cloud.firestore {
         && get(userDocPath()).data.writeAccess[module] == true;
     }
 
+    // Match src/auth/permissions.ts OFFICE_WRITE_DEFAULTS when writeAccess
+    // (or a module key) was never stored on the user doc.
+    function officeWriteDefault(module) {
+      return module == 'purchases' || module == 'inventory';
+    }
+
     function officeCanWrite(module) {
-      return isOffice() && hasWrite(module);
+      return isOffice() && (
+        (
+          'writeAccess' in get(userDocPath()).data
+          && module in get(userDocPath()).data.writeAccess
+        )
+          ? get(userDocPath()).data.writeAccess[module] == true
+          : officeWriteDefault(module)
+      );
+    }
+
+    function isWholeNumber(value) {
+      return value is int || (value is float && value == int(value));
     }
 
     function canMaintainGst() {
@@ -525,12 +542,12 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn()
         && counterId == 'spsProductId'
-        && request.resource.data.next is int
+        && isWholeNumber(request.resource.data.next)
         && request.resource.data.next >= 2;
       allow update: if signedIn()
         && counterId == 'spsProductId'
-        && request.resource.data.next is int
-        && resource.data.next is int
+        && isWholeNumber(request.resource.data.next)
+        && isWholeNumber(resource.data.next)
         && request.resource.data.next > resource.data.next
         && request.resource.data.next - resource.data.next <= 2000;
       allow delete: if false;
