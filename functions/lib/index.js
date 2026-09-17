@@ -680,6 +680,8 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
                 console.error('approveRetailerRequest: failed to generate store code:', codeErr);
             }
         }
+        const town = String(req.town || req.city || '').trim();
+        const district = String(req.district || '').trim();
         const userData = {
             uid: userRecord.uid,
             email: cred.email,
@@ -688,6 +690,8 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
             shopName: req.shopName,
             phoneNumber: req.phoneNumber,
             address: req.address,
+            town: town || undefined,
+            district: district || undefined,
             licenceNumber: req.licenceNumber,
             aadharNumber: req.aadharNumber,
             ownerName: req.ownerName,

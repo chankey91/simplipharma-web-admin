@@ -207,7 +207,7 @@ async function applyOneCreditApplication(
   return 0;
 }
 
-async function applyCreditApplications(
+export async function applyCreditApplications(
   apps: PaymentRequest['creditApplications']
 ): Promise<number> {
   if (!apps?.length) return 0;
@@ -216,6 +216,109 @@ async function applyCreditApplications(
     appliedTotal += await applyOneCreditApplication(app);
   }
   return roundMoney2(appliedTotal);
+}
+
+async function decrementCreditNoteUsed(id: string, apply: number): Promise<number> {
+  if (!id || apply <= 0.01) return 0;
+  const ref = doc(db, 'credit_notes', id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return 0;
+  const data = snap.data() as Record<string, unknown>;
+  const creditTotal = Math.max(0, Number(data.amount ?? data.totalAmount ?? 0));
+  const currentUsed = Math.max(0, Number(data.amountUsed ?? 0));
+  const usable = roundMoney2(Math.min(apply, currentUsed));
+  if (usable <= 0.01) return 0;
+  const nextUsed = roundMoney2(Math.max(0, currentUsed - usable));
+  const remaining = roundMoney2(creditTotal - nextUsed);
+  await updateDoc(ref, {
+    amountUsed: nextUsed,
+    status: remaining <= 0.01 ? 'fully_used' : 'available',
+    updatedAt: serverTimestamp(),
+  });
+  return usable;
+}
+
+async function decrementReturnCreditUsed(
+  collectionName: 'order_return_requests' | 'expiry_return_requests',
+  id: string,
+  apply: number
+): Promise<number> {
+  if (!id || apply <= 0.01) return 0;
+  const ref = doc(db, collectionName, id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return 0;
+  const data = snap.data() as Record<string, unknown>;
+  const currentUsed = Math.max(0, Number(data.creditAmountUsed ?? 0));
+  const usable = roundMoney2(Math.min(apply, currentUsed));
+  if (usable <= 0.01) return 0;
+  await updateDoc(ref, {
+    creditAmountUsed: roundMoney2(Math.max(0, currentUsed - usable)),
+    updatedAt: serverTimestamp(),
+  });
+  return usable;
+}
+
+async function reverseOneCreditApplication(
+  app: NonNullable<PaymentRequest['creditApplications']>[number]
+): Promise<number> {
+  const requestApply = roundMoney2(Math.max(0, Number(app.requestedApplyAmount ?? 0)));
+  if (requestApply <= 0.01) return 0;
+  const id = String(app.creditNoteId || '').trim();
+  if (!id) return 0;
+
+  const creditRef = doc(db, 'credit_notes', id);
+  const creditSnap = await getDoc(creditRef);
+  if (creditSnap.exists()) {
+    const reversed = await decrementCreditNoteUsed(id, requestApply);
+    if (reversed > 0.01) {
+      const data = creditSnap.data() as Record<string, unknown>;
+      const orderReturnId = String(data.orderReturnRequestId || data.returnRequestId || '').trim();
+      const expiryReturnId = String(data.expiryReturnRequestId || '').trim();
+      const typeRaw = String(data.type || data.returnType || '').trim();
+      if (orderReturnId || typeRaw === 'order_return') {
+        await decrementReturnCreditUsed(
+          'order_return_requests',
+          orderReturnId || String(data.returnRequestId || ''),
+          reversed
+        );
+      }
+      if (expiryReturnId || typeRaw === 'expiry_return') {
+        await decrementReturnCreditUsed(
+          'expiry_return_requests',
+          expiryReturnId || String(data.returnRequestId || ''),
+          reversed
+        );
+      }
+    }
+    return reversed;
+  }
+
+  const preferExpiry = app.source === 'expiry_return';
+  const firstCol = preferExpiry ? 'expiry_return_requests' : 'order_return_requests';
+  const secondCol = preferExpiry ? 'order_return_requests' : 'expiry_return_requests';
+  for (const col of [firstCol, secondCol] as const) {
+    const ref = doc(db, col, id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) continue;
+    const reversed = await decrementReturnCreditUsed(col, id, requestApply);
+    if (reversed > 0.01) {
+      const creditNoteId = String((snap.data() as Record<string, unknown>).creditNoteId || '').trim();
+      if (creditNoteId) await decrementCreditNoteUsed(creditNoteId, reversed);
+    }
+    return reversed;
+  }
+  return 0;
+}
+
+export async function reverseCreditApplications(
+  apps: PaymentRequest['creditApplications']
+): Promise<number> {
+  if (!apps?.length) return 0;
+  let reversedTotal = 0;
+  for (const app of apps) {
+    reversedTotal += await reverseOneCreditApplication(app);
+  }
+  return roundMoney2(reversedTotal);
 }
 
 async function existingSettlementKinds(

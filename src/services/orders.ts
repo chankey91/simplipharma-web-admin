@@ -25,6 +25,7 @@ import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
 import { createOutwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromOrderMedicines } from '../utils/gstLineSnapshot';
+import { roundMoney2 } from '../utils/retailerWallet';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -856,6 +857,8 @@ export type FulfillOrderOptions = {
    * the full purchaseInvoices collection (often multi-second).
    */
   purchaseInvoices?: PurchaseInvoice[];
+  /** Apply retailer wallet (credit notes) against this invoice total. */
+  applyWallet?: boolean;
 };
 
 export const fulfillOrder = async (
@@ -872,7 +875,7 @@ export const fulfillOrder = async (
     processedBy?: string;
   },
   options?: FulfillOrderOptions
-) => {
+): Promise<{ walletApplied: number }> => {
   const orderRef = doc(db, 'orders', orderId);
   const orderDoc = await getDoc(orderRef);
   const currentTimeline = orderDoc.data()?.timeline || [];
@@ -1396,15 +1399,47 @@ export const fulfillOrder = async (
     timeline: [...currentTimeline, createTimelineEvent('Order Fulfillment', fulfilledBy, 'Order items verified and tax added')]
   };
 
-  // Default payment fields so Store Receivables can query Unpaid bills
-  const existingPaymentStatus = orderDoc.data()?.paymentStatus;
-  if (!existingPaymentStatus || existingPaymentStatus === 'Unpaid') {
-    updateData.paymentStatus = 'Unpaid';
-    updateData.paidAmount = 0;
-    updateData.dueAmount = cleanFulfillmentData.totalAmount || 0;
-  } else if (existingPaymentStatus === 'Partial') {
-    const paid = Number(orderDoc.data()?.paidAmount) || 0;
-    updateData.dueAmount = Math.max(0, (cleanFulfillmentData.totalAmount || 0) - paid);
+  const invoiceTotal = Number(cleanFulfillmentData.totalAmount) || 0;
+  const existingPaid = Number(orderDoc.data()?.paidAmount) || 0;
+  const existingCredit = Number(orderDoc.data()?.creditApplied) || 0;
+
+  let walletApplied = 0;
+  if (options?.applyWallet && invoiceTotal > 0.01) {
+    const {
+      applyRetailerWalletTowardAmount,
+      postWalletPaymentOnOrder,
+      rollbackWalletApplications,
+    } = await import('./applyOrderWallet');
+    const remainingDue = Math.max(0, roundMoney2(invoiceTotal - existingPaid));
+    const wallet = await applyRetailerWalletTowardAmount(order.retailerId, remainingDue);
+    walletApplied = wallet.applied;
+    if (walletApplied > 0.01) {
+      try {
+        await postWalletPaymentOnOrder({
+          orderId,
+          amount: walletApplied,
+          applications: wallet.applications,
+          note: 'Wallet applied at invoice fulfill',
+        });
+      } catch (error) {
+        await rollbackWalletApplications(wallet.applications);
+        throw error;
+      }
+      updateData.walletCreditApplications = wallet.applications;
+      updateData.creditApplied = roundMoney2(existingCredit + walletApplied);
+      updateData.creditAppliedAt = 'dispatch';
+      updateData.creditAppliedDate = Timestamp.now();
+    }
+  }
+
+  const nextPaid = roundMoney2(existingPaid + walletApplied);
+  const nextDue = Math.max(0, roundMoney2(invoiceTotal - nextPaid));
+  updateData.paidAmount = nextPaid;
+  updateData.dueAmount = nextDue;
+  updateData.paymentStatus =
+    nextDue <= 0.01 ? 'Paid' : nextPaid > 0.01 ? 'Partial' : 'Unpaid';
+  if (walletApplied > 0.01 && nextPaid <= walletApplied + 0.01) {
+    updateData.paymentMethod = 'Wallet';
   }
   
   // Add invoice number if generated
@@ -1445,6 +1480,7 @@ export const fulfillOrder = async (
   }
   
   await updateDoc(orderRef, updateData);
+  return { walletApplied };
 };
 
 /**
@@ -1475,8 +1511,24 @@ export const unfulfillOrder = async (
   const stockRestoreErrors = await restoreStockForOrderMedicines(data.medicines as Order['medicines']);
   const currentTimeline = data.timeline || [];
 
+  if (Number(data?.creditApplied) > 0.01 || data?.walletCreditApplications) {
+    const { reverseFulfillmentWallet } = await import('./applyOrderWallet');
+    await reverseFulfillmentWallet(
+      orderId,
+      data?.walletCreditApplications as Parameters<typeof reverseFulfillmentWallet>[1]
+    );
+  }
+
   await updateDoc(orderRef, {
     status: 'Pending',
+    paidAmount: 0,
+    dueAmount: Number(data?.totalAmount) || 0,
+    paymentStatus: 'Unpaid',
+    paymentMethod: deleteField(),
+    creditApplied: deleteField(),
+    creditAppliedAt: deleteField(),
+    creditAppliedDate: deleteField(),
+    walletCreditApplications: deleteField(),
     timeline: [
       ...currentTimeline,
       createTimelineEvent(

@@ -25,6 +25,7 @@ import {
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
   type GstInvoiceLineItem,
+  type GstInvoiceSummary,
 } from './gstInvoiceTemplate';
 import {
   buildContinuationHeaderHtml,
@@ -86,15 +87,7 @@ const numberToWords = (num: number): string => {
 type OrderInvoiceLineItem = GstInvoiceLineItem;
 export type OrderInvoicePrepared = {
   items: OrderInvoiceLineItem[];
-  summary: {
-    subTotal: string;
-    discount: string;
-    sgst: string;
-    cgst: string;
-    roundOff: string;
-    grandTotal: string;
-    amountInWords: string;
-  };
+  summary: GstInvoiceSummary;
   tax: { taxable: string; cgst: string; sgst: string; rate: string; summaryAmt?: string };
   invoiceData: {
     no: string;
@@ -463,8 +456,15 @@ async function prepareOrderInvoiceData(
     summaryAmt: taxSummaryAmt,
   };
 
-  // Summary
-  const summary = {
+  const walletAppliedNum = Number(order.creditApplied) || 0;
+  const paidNum = Number(order.paidAmount) || 0;
+  const dueNum =
+    order.dueAmount != null
+      ? Math.max(0, Number(order.dueAmount) || 0)
+      : Math.max(0, grandTotal - paidNum);
+
+  // Summary (GST grand total is unchanged; wallet is a payment, not a tax deduction)
+  const summary: GstInvoiceSummary = {
     subTotal: totalSubTotal.toFixed(2),
     discount: totalProductDiscount.toFixed(2),
     sgst: totalSGST.toFixed(2),
@@ -472,6 +472,12 @@ async function prepareOrderInvoiceData(
     roundOff: roundoff.toFixed(2),
     grandTotal: grandTotal.toFixed(2),
     amountInWords: numberToWords(grandTotal),
+    ...(walletAppliedNum > 0.01
+      ? {
+          walletApplied: walletAppliedNum.toFixed(2),
+          amountDue: dueNum.toFixed(2),
+        }
+      : {}),
   };
 
   return {
@@ -609,6 +615,12 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ['GST', (parseFloat(summary.sgst) + parseFloat(summary.cgst)).toFixed(2)],
     ['ROUND OFF', summary.roundOff],
     ['GRAND TOTAL', summary.grandTotal],
+    ...(summary.walletApplied && parseFloat(summary.walletApplied) > 0.01
+      ? [['WALLET', `-${summary.walletApplied}`] as string[]]
+      : []),
+    ...(summary.amountDue != null && summary.amountDue !== ''
+      ? [['AMOUNT DUE', summary.amountDue] as string[]]
+      : []),
   ];
 
   const body = rows.map((r) => r.map((c) => escapeCsvField(c)).join(',')).join('\r\n');
