@@ -15,6 +15,9 @@ import {
 import { PurchaseReturn, PurchaseReturnItem } from '../types';
 import { reduceStockFromBatch } from './inventory';
 import { generatePurchaseReturnNumber } from '../utils/invoiceNumber';
+import { createInwardGstSnapshot } from './gstDocuments';
+import { assertDocumentDateWritable } from './gstPeriods';
+import { gstLinesFromPurchaseItems } from '../utils/gstLineSnapshot';
 
 function mapPurchaseReturnDoc(docSnap: {
   id: string;
@@ -34,6 +37,8 @@ function mapPurchaseReturnDoc(docSnap: {
     totalAmount: Number(data.totalAmount ?? 0),
     notes: data.notes != null ? String(data.notes) : undefined,
     reason: data.reason != null ? String(data.reason) : undefined,
+    vendorGstin: data.vendorGstin != null ? String(data.vendorGstin) : undefined,
+    gst: data.gst as PurchaseReturn['gst'],
     items:
       (data.items as unknown[])?.map((item: unknown) => {
         const it = item as Record<string, unknown>;
@@ -100,6 +105,38 @@ export const getPurchaseReturnsByVendor = async (vendorId: string): Promise<Purc
   }
 };
 
+export const getPurchaseReturnsInRange = async (
+  startMs: number,
+  endMs?: number
+): Promise<PurchaseReturn[]> => {
+  const col = collection(db, 'purchaseReturns');
+  const start = Timestamp.fromMillis(startMs);
+  try {
+    const q =
+      endMs != null
+        ? query(
+            col,
+            where('returnDate', '>=', start),
+            where('returnDate', '<', Timestamp.fromMillis(endMs)),
+            orderBy('returnDate', 'desc')
+          )
+        : query(col, where('returnDate', '>=', start), orderBy('returnDate', 'desc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((docSnap) => mapPurchaseReturnDoc(docSnap));
+  } catch (error) {
+    console.warn('getPurchaseReturnsInRange fallback:', error);
+    const all = await getAllPurchaseReturns();
+    return all.filter((row) => {
+      const t =
+        row.returnDate instanceof Date
+          ? row.returnDate.getTime()
+          : new Date(row.returnDate as string | number).getTime();
+      if (endMs != null) return t >= startMs && t < endMs;
+      return t >= startMs;
+    });
+  }
+};
+
 export const getPurchaseReturnById = async (
   returnId: string
 ): Promise<PurchaseReturn | null> => {
@@ -145,6 +182,7 @@ export const createPurchaseReturn = async (
 ): Promise<{ id: string; returnNumber: string }> => {
   if (!input.vendorId?.trim()) throw new Error('Vendor is required');
   if (!input.items?.length) throw new Error('Add at least one item to return');
+  await assertDocumentDateWritable(input.returnDate || new Date());
 
   for (const item of input.items) {
     if (!item.medicineId || !item.batchNumber?.trim()) {
@@ -179,6 +217,23 @@ export const createPurchaseReturn = async (
   };
   if (input.notes?.trim()) payload.notes = input.notes.trim();
   if (input.reason?.trim()) payload.reason = input.reason.trim();
+  if (input.vendorGstin?.trim()) payload.vendorGstin = input.vendorGstin.trim();
+
+  try {
+    payload.gst = await createInwardGstSnapshot({
+      taxAmount: Number(payload.taxAmount) || 0,
+      taxableValue: Number(payload.subTotal) || 0,
+      vendorGstin: input.vendorGstin,
+      vendorName: input.vendorName,
+      lines: gstLinesFromPurchaseItems(
+        input.items,
+        Number(payload.subTotal) || 0,
+        Number(payload.taxAmount) || 0
+      ),
+    });
+  } catch (error) {
+    console.warn('GST snapshot skipped on purchase return:', error);
+  }
 
   await setDoc(returnRef, payload);
   return { id: returnRef.id, returnNumber };

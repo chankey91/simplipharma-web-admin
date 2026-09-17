@@ -53,6 +53,12 @@ import { CreatePurchaseReturnPage } from './pages/CreatePurchaseReturn';
 import { PurchaseReturnDetailsPage } from './pages/PurchaseReturnDetails';
 import { MedicineDemandPage } from './pages/MedicineDemand';
 import { brandColors } from './theme/brand';
+import { GstDashboardPage } from './pages/gst/GstDashboard';
+import { GstSettingsPage } from './pages/gst/GstSettings';
+import { GstGstr1Page } from './pages/gst/GstGstr1';
+import { GstGstr3bPage } from './pages/gst/GstGstr3b';
+import { GstItcPage } from './pages/gst/GstItc';
+import { GstEinvoicePage } from './pages/gst/GstEinvoice';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -157,6 +163,12 @@ const router = createBrowserRouter([
   { path: '/medicine-demand', element: withLayout(<MedicineDemandPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
   { path: '/purchase-lists', element: withLayout(<PurchaseListsPage />) },
+  { path: '/gst', element: withLayout(<GstDashboardPage />) },
+  { path: '/gst/gstr-1', element: withLayout(<GstGstr1Page />) },
+  { path: '/gst/gstr-3b', element: withLayout(<GstGstr3bPage />) },
+  { path: '/gst/itc', element: withLayout(<GstItcPage />) },
+  { path: '/gst/e-invoice', element: withLayout(<GstEinvoicePage />) },
+  { path: '/gst/settings', element: withLayout(<GstSettingsPage />) },
 ]);
 
 function App() {

@@ -1,3 +1,7 @@
+import type { GstDocumentSnapshot } from './gst';
+
+export type { GstDocumentSnapshot, CompanyGstSettings, GstException } from './gst';
+
 // Reuse existing types and extend them
 export interface Medicine {
   id: string;
@@ -114,6 +118,8 @@ export interface OrderMedicine {
   /** User edited scheme on this order (override batch default). */
   orderSchemeManuallySet?: boolean;
   gstRate?: number; // GST rate for the item
+  /** HSN copied from medicine master at fulfill — not backfilled on old invoices. */
+  hsn?: string;
   mrp?: number; // MRP for the item
   /** When true, this line was fulfilled from non-returnable stock and must not be returned. */
   nonReturnable?: boolean;
@@ -167,6 +173,8 @@ export interface Order {
   status: OrderStatus;
   orderDate: Date | any;
   invoiceNumber?: string; // Auto-generated invoice number (SPS + YYYY + MM + 001)
+  /** Written on new fulfills only. Missing on historical invoices — PDFs use the legacy split. */
+  gst?: GstDocumentSnapshot;
   trayNumber?: string; // Tray number for order fulfillment
   processedBy?: string; // Name of person processing the order
   deliveryAddress?: string;
@@ -382,6 +390,8 @@ export interface User {
   licenceHolderName?: string;
   pan?: string;
   gst?: string;
+  /** Derived from GSTIN digits 1–2 when the GSTIN is valid. */
+  gstinStateCode?: string;
   shopImage?: string;
   shopImageUrl?: string;
   licenceImageUrl?: string;
@@ -409,6 +419,7 @@ export interface Vendor {
   phoneNumber?: string;
   address?: string;
   gstNumber: string; // Unique
+  gstinStateCode?: string;
   drugLicenseNumber?: string; // Unique
   pan?: string;
   bankDetails?: {
@@ -456,7 +467,13 @@ export interface PurchaseInvoice {
   invoiceNumber: string; // Unique
   vendorId: string;
   vendorName: string;
+  /** Vendor GSTIN copied at create time for GSTR-2B matching. */
+  vendorGstin?: string;
+  /** Same as the vendor tax-invoice number when the user entered the supplier bill no. */
+  vendorInvoiceNumber?: string;
   invoiceDate: Date | any;
+  /** Written on new purchase invoices only. */
+  gst?: GstDocumentSnapshot;
   items: PurchaseInvoiceItem[];
   subTotal: number;
   taxAmount: number;
@@ -496,7 +513,9 @@ export interface PurchaseReturn {
   returnNumber: string;
   vendorId: string;
   vendorName: string;
+  vendorGstin?: string;
   returnDate: Date | any;
+  gst?: GstDocumentSnapshot;
   items: PurchaseReturnItem[];
   subTotal: number;
   taxAmount: number;
@@ -589,6 +608,8 @@ export interface CreditNote {
   taxAmount: number;
   totalAmount: number;
   taxPercentage: number;
+  /** Written on newly issued credit notes only. */
+  gst?: GstDocumentSnapshot;
   /** Wallet balance (mobile app); mirrors totalAmount when issued. */
   amount?: number;
   amountUsed?: number;
@@ -619,6 +640,7 @@ export interface DebitNote {
   taxAmount: number;
   totalAmount: number;
   taxPercentage: number;
+  gst?: GstDocumentSnapshot;
   status: 'issued';
   createdBy?: string;
   createdAt: Date | any;

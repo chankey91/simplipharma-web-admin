@@ -963,6 +963,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           invoiceNumber,
           vendorId: invoiceData.vendorId,
           vendorName: selectedVendor?.vendorName || '',
+          vendorGstin: selectedVendor?.gstNumber || undefined,
+          vendorInvoiceNumber: invoiceNumber,
           invoiceDate: new Date(invoiceData.invoiceDate),
           items,
           subTotal,

@@ -14,6 +14,9 @@ import { buildPurchaseBatchDiscountLookup } from './orderFulfillmentDiscount';
 import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import { PAYMENT_QR_DATA_URI } from '../assets/paymentQr';
 import { calculateOrderTotalsFromLines, hasBatchAssignment } from './orderTotals';
+import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
+import { hasGstSnapshot } from './gstSnapshot';
+import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
 import {
   buildGstInvoiceTitleCell,
   formatInvoiceProductName,
@@ -377,15 +380,29 @@ async function prepareOrderInvoiceData(
       : uniqueGstRates.length === 1
         ? uniqueGstRates[0]!
         : fallbackTaxPct;
-  const totalSGST = totals.taxAmount / 2;
-  const totalCGST = totals.taxAmount / 2;
+  const printedTax = printTaxFromDocument({ gst: order.gst, taxAmount: totals.taxAmount });
+  const totalSGST = printedTax.sgst;
+  const totalCGST = printedTax.cgst;
+  const totalIGST = printedTax.igst;
   const roundoff = totals.roundoff;
   const grandTotal = totals.grandTotal;
   const totalSubTotal = totals.subTotal;
   const totalProductDiscount = totals.totalDiscount;
 
-  // Company details
-  const company = { ...COMPANY_INVOICE_DETAILS };
+  // Company details — settings only when this invoice has a GST snapshot (legacy PDFs stay hardcoded).
+  const companySettings = hasGstSnapshot(order)
+    ? await getCompanyGstSettings().catch(() => defaultCompanyGstSettings())
+    : null;
+  const company = companySettings
+    ? {
+        name: companySettings.legalName,
+        address: companySettings.address,
+        phone: companySettings.phone || '',
+        email: companySettings.email || '',
+        dl: companySettings.dl || '',
+        gstin: companySettings.gstin,
+      }
+    : { ...COMPANY_INVOICE_DETAILS };
   
   // Party/Retailer details - fetch from user if retailerId is available
   let party = {
@@ -402,14 +419,14 @@ async function prepareOrderInvoiceData(
     try {
       const retailer = await getUserProfile(order.retailerId);
       if (retailer) {
-        const resolvedState = resolveInvoiceState();
+        const buyerPrint = printBuyerStateFromDocument(order, retailer.gst);
         party = {
           name: retailer.shopName || retailer.displayName || retailer.email || party.name,
           address: retailer.address || retailer.location?.address || order.deliveryAddress || party.address,
-          ...resolvedState,
+          ...buyerPrint,
           phone: retailer.phoneNumber || party.phone,
           dl: retailer.licenceNumber || retailer.licenceHolderName || party.dl,
-          gstin: retailer.gst || party.gstin,
+          gstin: buyerPrint.gstin,
         };
       }
     } catch (error) {
@@ -417,6 +434,8 @@ async function prepareOrderInvoiceData(
       // Continue with order data
     }
   }
+  const buyerFromSnapshot = printBuyerStateFromDocument(order, party.gstin);
+  party = { ...party, ...buyerFromSnapshot, gstin: buyerFromSnapshot.gstin || party.gstin };
 
   // Invoice details
   const invoiceData = {
@@ -439,6 +458,7 @@ async function prepareOrderInvoiceData(
     taxable: amountAfterDiscount.toFixed(2),
     cgst: totalCGST.toFixed(2),
     sgst: totalSGST.toFixed(2),
+    igst: totalIGST.toFixed(2),
     rate: uniqueGstRates.length === 1 ? taxPercentage.toFixed(0) : 'mixed',
     summaryAmt: taxSummaryAmt,
   };
@@ -888,9 +908,15 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
   const avgGstRate = invoice.items.length > 0
     ? invoice.items.reduce((sum, item) => sum + (item.gstRate || 5), 0) / invoice.items.length
     : 5;
-  const totalGST = (amountAfterDiscount * avgGstRate) / 100;
-  const totalSGST = totalGST / 2;
-  const totalCGST = totalGST / 2;
+  const totalGST = invoice.gst
+    ? invoice.gst.cgst + invoice.gst.sgst + invoice.gst.igst
+    : (amountAfterDiscount * avgGstRate) / 100;
+  const printedPurchaseTax = printTaxFromDocument({
+    gst: invoice.gst,
+    taxAmount: invoice.taxAmount || totalGST,
+  });
+  const totalSGST = printedPurchaseTax.sgst;
+  const totalCGST = printedPurchaseTax.cgst;
   const calculatedTotal = amountAfterDiscount + totalGST;
   const roundoff = Math.round(calculatedTotal) - calculatedTotal;
   const grandTotal = Math.round(calculatedTotal);
@@ -901,6 +927,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     taxable: taxableAmount.toFixed(2),
     cgst: totalCGST.toFixed(2),
     sgst: totalSGST.toFixed(2),
+    igst: printedPurchaseTax.igst.toFixed(2),
     rate: avgGstRate.toFixed(0)
   };
   
