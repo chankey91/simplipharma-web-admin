@@ -89,7 +89,12 @@ async function resolveProductDemandScope(uid) {
     if (!userDoc.exists)
         return null;
     const role = String(((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.role) || '');
-    if (role === 'admin' || role === 'Admin' || role === 'operations' || role === 'Operations') {
+    if (role === 'admin' ||
+        role === 'Admin' ||
+        role === 'operations' ||
+        role === 'Operations' ||
+        role === 'office' ||
+        role === 'Office') {
         return undefined;
     }
     if (role === 'retailer') {

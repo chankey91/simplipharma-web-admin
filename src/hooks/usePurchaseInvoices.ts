@@ -55,7 +55,14 @@ export const useVendorLastPurchases = (
 ) => {
   const query = useQuery({
     queryKey: ['purchaseLastByMedicine'],
-    queryFn: () => getAllPurchaseInvoices(),
+    queryFn: async () => {
+      try {
+        return await getAllPurchaseInvoices();
+      } catch (error) {
+        console.warn('Last-purchase history unavailable:', error);
+        return [];
+      }
+    },
     enabled: options?.enabled ?? true,
     staleTime: 5 * 60 * 1000,
   });
