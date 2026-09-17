@@ -34,15 +34,21 @@ export function useMedicineResolutionContext(options?: { enabled?: boolean }) {
 
   const { data: demandsPage, isLoading: demandsLoading } = useQuery({
     queryKey: ['productDemands', 'pendingPrefetch'],
-    queryFn: () =>
-      searchProductDemandsTypesense({
-        query: '',
-        filter: 'pending',
-        perPage: 100,
-        page: 1,
-        sortField: 'createdAt',
-        sortOrder: 'desc',
-      }),
+    queryFn: async () => {
+      try {
+        return await searchProductDemandsTypesense({
+          query: '',
+          filter: 'pending',
+          perPage: 100,
+          page: 1,
+          sortField: 'createdAt',
+          sortOrder: 'desc',
+        });
+      } catch (error) {
+        console.warn('Pending product demands unavailable:', error);
+        return { rows: [], found: 0, page: 1, perPage: 100, facetCounts: {}, totalAll: 0, source: 'typesense' as const };
+      }
+    },
     enabled,
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,

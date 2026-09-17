@@ -149,6 +149,24 @@ export function getAuthErrorMessage(err: unknown): string {
   }
 }
 
+export function isPermissionDeniedError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  const code = String(e?.code || '');
+  const msg = String(e?.message || '');
+  return (
+    code === 'permission-denied' ||
+    code === 'functions/permission-denied' ||
+    /insufficient permissions/i.test(msg)
+  );
+}
+
+export function permissionDeniedUserMessage(action: string): string {
+  return (
+    `You do not have permission to ${action}. ` +
+    'If you are an office user, ask an admin to enable write access for Purchase invoices on your account.'
+  );
+}
+
 // User helpers
 export const getUserProfile = async (userId: string): Promise<{ id: string; role?: string; [key: string]: any } | null> => {
   const userRef = doc(db, 'users', userId);
