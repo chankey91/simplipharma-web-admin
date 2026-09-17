@@ -402,18 +402,23 @@ export const useFulfillOrder = () => {
       fulfilledBy, 
       fulfillmentData,
       purchaseInvoices,
+      applyWallet,
     }: { 
       orderId: string; 
       fulfilledBy: string; 
       fulfillmentData: any;
       /** Cached PI list from Order Details — skips a full collection download. */
       purchaseInvoices?: PurchaseInvoice[];
-    }) => fulfillOrder(orderId, fulfilledBy, fulfillmentData, { purchaseInvoices }),
+      applyWallet?: boolean;
+    }) => fulfillOrder(orderId, fulfilledBy, fulfillmentData, { purchaseInvoices, applyWallet }),
     onSuccess: (_, variables) => {
       invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ['medicines'] }); // Invalidate medicines to reflect stock changes
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] }); // Refresh tray availability
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
+      queryClient.invalidateQueries({ queryKey: ['debitNotes'] });
     }
   });
 };
@@ -436,6 +441,9 @@ export const useUnfulfillOrder = () => {
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
+      queryClient.invalidateQueries({ queryKey: ['debitNotes'] });
     },
   });
 };

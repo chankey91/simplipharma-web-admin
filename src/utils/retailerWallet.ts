@@ -77,6 +77,42 @@ export function computeWalletAvailable(
   return Math.max(0, roundMoney2(creditAvail - debitTotal));
 }
 
+export type WalletCreditApplication = {
+  creditNoteId: string;
+  creditNoteNumber?: string;
+  source?: 'order_return' | 'expiry_return' | 'credit_note';
+  requestedApplyAmount: number;
+};
+
+/** Oldest unused credit first, capped at `amount`. */
+export function allocateWalletApplications(
+  notes: WalletCreditNote[],
+  amount: number
+): WalletCreditApplication[] {
+  let remaining = roundMoney2(Math.max(0, amount));
+  if (remaining <= 0.01) return [];
+  const oldestFirst = [...notes].sort(
+    (a, b) => toMillis(a.creditNoteDate) - toMillis(b.creditNoteDate)
+  );
+  const apps: WalletCreditApplication[] = [];
+  for (const n of oldestFirst) {
+    if (remaining <= 0.01) break;
+    if (n.status === 'cancelled' || n.status === 'fully_used') continue;
+    const leftover = roundMoney2(n.amount - (n.amountUsed || 0));
+    if (leftover <= 0.01) continue;
+    const take = roundMoney2(Math.min(leftover, remaining));
+    if (take <= 0.01) continue;
+    apps.push({
+      creditNoteId: n.id,
+      creditNoteNumber: n.creditNoteNumber,
+      source: n.returnType,
+      requestedApplyAmount: take,
+    });
+    remaining = roundMoney2(remaining - take);
+  }
+  return apps;
+}
+
 type ReturnLike = {
   id: string;
   retailerId: string;

@@ -263,6 +263,28 @@ function getGcpProjectId() {
 function getVertexLocation() {
     return (0, runtimeConfig_1.getGeminiLocation)();
 }
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function isRetryableGeminiHttpStatus(status) {
+    return status === 429 || status === 500 || status === 503;
+}
+function parseRetryAfterMs(header, attempt) {
+    const raw = String(header || '').trim();
+    if (raw) {
+        const seconds = Number(raw);
+        if (Number.isFinite(seconds) && seconds >= 0) {
+            return Math.min(12000, Math.max(400, Math.round(seconds * 1000)));
+        }
+    }
+    return Math.min(8000, 700 * 2 ** (attempt - 1));
+}
+function formatGeminiUserError(raw) {
+    if (/\b429\b|resource exhausted|quota|rate.?limit/i.test(raw)) {
+        return 'Gemini quota is temporarily exhausted. Wait 1–2 minutes, then click Re-run extract — or add lines manually.';
+    }
+    return raw.replace(/\s+/g, ' ').trim().slice(0, 180);
+}
 /** Vertex (preferred, Cloud Billing) or AI Studio API key. */
 function isGeminiConfigured() {
     return Boolean(getGcpProjectId()) || Boolean(getGeminiApiKey());
@@ -298,31 +320,43 @@ async function callGeminiVertex(parts) {
     const location = getVertexLocation();
     const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}` +
         `/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
-    const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
+    const body = JSON.stringify({
+        contents: [{ role: 'user', parts: toVertexParts(parts) }],
+        generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
         },
-        body: JSON.stringify({
-            contents: [{ role: 'user', parts: toVertexParts(parts) }],
-            generationConfig: {
-                temperature: 0.1,
-                responseMimeType: 'application/json',
-            },
-        }),
     });
-    if (!res.ok) {
+    const maxAttempts = 4;
+    let lastErr = '';
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body,
+        });
+        if (res.ok) {
+            const json = (await res.json());
+            if ((_a = json.error) === null || _a === void 0 ? void 0 : _a.message)
+                throw new Error(json.error.message);
+            const text = ((_e = (_d = (_c = (_b = json.candidates) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.content) === null || _d === void 0 ? void 0 : _d.parts) === null || _e === void 0 ? void 0 : _e.map((p) => p.text || '').join('')) || '';
+            if (!text.trim())
+                throw new Error('Vertex Gemini returned empty response');
+            return { text, model: `vertex:${model}` };
+        }
         const errText = await res.text();
-        throw new Error(`Vertex Gemini failed (${res.status}): ${errText.slice(0, 500)}`);
+        lastErr = `Vertex Gemini failed (${res.status}): ${errText.slice(0, 500)}`;
+        if (!isRetryableGeminiHttpStatus(res.status) || attempt === maxAttempts) {
+            throw new Error(lastErr);
+        }
+        const waitMs = parseRetryAfterMs(res.headers.get('retry-after'), attempt);
+        console.warn(`Vertex Gemini ${res.status}, retry ${attempt}/${maxAttempts - 1} in ${waitMs}ms`);
+        await sleep(waitMs);
     }
-    const json = (await res.json());
-    if ((_a = json.error) === null || _a === void 0 ? void 0 : _a.message)
-        throw new Error(json.error.message);
-    const text = ((_e = (_d = (_c = (_b = json.candidates) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.content) === null || _d === void 0 ? void 0 : _d.parts) === null || _e === void 0 ? void 0 : _e.map((p) => p.text || '').join('')) || '';
-    if (!text.trim())
-        throw new Error('Vertex Gemini returned empty response');
-    return { text, model: `vertex:${model}` };
+    throw new Error(lastErr || 'Vertex Gemini failed');
 }
 async function callGeminiApiKey(parts) {
     var _a, _b, _c, _d, _e;
@@ -332,28 +366,40 @@ async function callGeminiApiKey(parts) {
     }
     const model = getGeminiModel();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-    const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{ role: 'user', parts }],
-            generationConfig: {
-                temperature: 0.1,
-                responseMimeType: 'application/json',
-            },
-        }),
+    const body = JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+        },
     });
-    if (!res.ok) {
+    const maxAttempts = 4;
+    let lastErr = '';
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+        });
+        if (res.ok) {
+            const json = (await res.json());
+            if ((_a = json.error) === null || _a === void 0 ? void 0 : _a.message)
+                throw new Error(json.error.message);
+            const text = ((_e = (_d = (_c = (_b = json.candidates) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.content) === null || _d === void 0 ? void 0 : _d.parts) === null || _e === void 0 ? void 0 : _e.map((p) => p.text || '').join('')) || '';
+            if (!text.trim())
+                throw new Error('Gemini returned empty response');
+            return { text, model };
+        }
         const errText = await res.text();
-        throw new Error(`Gemini API key failed (${res.status}): ${errText.slice(0, 400)}`);
+        lastErr = `Gemini API key failed (${res.status}): ${errText.slice(0, 400)}`;
+        if (!isRetryableGeminiHttpStatus(res.status) || attempt === maxAttempts) {
+            throw new Error(lastErr);
+        }
+        const waitMs = parseRetryAfterMs(res.headers.get('retry-after'), attempt);
+        console.warn(`Gemini API ${res.status}, retry ${attempt}/${maxAttempts - 1} in ${waitMs}ms`);
+        await sleep(waitMs);
     }
-    const json = (await res.json());
-    if ((_a = json.error) === null || _a === void 0 ? void 0 : _a.message)
-        throw new Error(json.error.message);
-    const text = ((_e = (_d = (_c = (_b = json.candidates) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.content) === null || _d === void 0 ? void 0 : _d.parts) === null || _e === void 0 ? void 0 : _e.map((p) => p.text || '').join('')) || '';
-    if (!text.trim())
-        throw new Error('Gemini returned empty response');
-    return { text, model };
+    throw new Error(lastErr || 'Gemini API key failed');
 }
 async function callGemini(parts) {
     const errors = [];
@@ -627,7 +673,7 @@ async function extractInvoiceFromFile(buffer, contentType) {
                     rawText: '',
                     lines: [],
                     message: geminiError
-                        ? `Image extract failed (${geminiError.slice(0, 180)}). Add lines manually in review.`
+                        ? `Image extract failed (${formatGeminiUserError(geminiError)})`
                         : 'Image uploaded. Vertex/Gemini not available and OCR is not configured. Add lines manually in review.',
                 };
             }
@@ -648,7 +694,7 @@ async function extractInvoiceFromFile(buffer, contentType) {
                 lines: linesFromText(ocrText),
                 vendorHint: { gstin: gstins[0] },
                 message: ocrText.trim()
-                    ? `Used heuristic OCR parse (Gemini unavailable${geminiError ? `: ${geminiError.slice(0, 160)}` : ''}). Review lines carefully.`
+                    ? `Used heuristic OCR parse (Gemini unavailable${geminiError ? `: ${formatGeminiUserError(geminiError)}` : ''}). Review lines carefully.`
                     : 'OCR returned no text. Add lines manually in review.',
             };
         }
@@ -696,10 +742,10 @@ async function extractInvoiceFromFile(buffer, contentType) {
             vendorHint: { gstin: gstins[0] },
             message: rawText.trim()
                 ? geminiReady
-                    ? `Used heuristic PDF parse${geminiError ? ` (Gemini failed: ${geminiError.slice(0, 120)})` : ''}. Review lines carefully.`
+                    ? `Used heuristic PDF parse${geminiError ? ` (Gemini failed: ${formatGeminiUserError(geminiError)})` : ''}. Review lines carefully.`
                     : 'PDF text parsed with heuristics. Configure gemini.api_key for better medicine-line extraction.'
                 : geminiError
-                    ? `Scanned PDF extract failed (${geminiError.slice(0, 160)}). Photograph the invoice or add lines manually.`
+                    ? `Scanned PDF extract failed (${formatGeminiUserError(geminiError)}). Photograph the invoice or add lines manually.`
                     : 'PDF had little/no extractable text (may be a scan). Photograph the invoice or add lines manually.',
         };
     }
