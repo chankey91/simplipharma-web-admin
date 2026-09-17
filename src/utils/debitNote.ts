@@ -1,14 +1,16 @@
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
 import { DebitNote } from '../types';
 import { appAlert } from './appDialog';
 import { getUserProfile } from '../services/firebase';
 import { getMedicineById } from '../services/inventory';
 import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
+<<<<<<< HEAD
+import { renderHtmlDocumentToJsPdf } from './htmlToJsPdf';
+=======
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
 import { hasGstSnapshot } from './gstSnapshot';
 import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
+>>>>>>> 5b8cd4d1f4b08910bf29963111dac733c8ac2c6b
 import {
   GST_INVOICE_STYLES,
   buildGstInvoiceTitleCell,
@@ -262,49 +264,19 @@ ${buildGstInvoiceFooter(note.reason || '', summary.amountInWords, company.name, 
 };
 
 export const generateDebitNotePdf = async (note: DebitNote) => {
-  const html = await getDebitNoteHTML(note);
-  const element = document.createElement('div');
-  element.innerHTML = html;
-  element.style.width = '210mm';
-  element.style.padding = '0';
-  element.style.margin = '0';
-  element.style.position = 'absolute';
-  element.style.left = '-9999px';
-  element.style.top = '0';
-  document.body.appendChild(element);
-
   try {
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      width: element.scrollWidth,
-      height: element.scrollHeight,
-    });
-
-    const imgData = canvas.toDataURL('image/png');
-    const imgWidth = 210;
-    const pageHeight = 297;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    let position = 0;
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-
+    const pdf = await renderHtmlDocumentToJsPdf(await getDebitNoteHTML(note));
     pdf.save(`debit-note-${note.debitNoteNumber}.pdf`);
   } catch (error) {
     console.error('Error generating debit note PDF:', error);
     await appAlert('Failed to generate debit note. Please try again.', { severity: 'error' });
-  } finally {
-    document.body.removeChild(element);
   }
+};
+
+export async function generateDebitNotePdfBlob(note: DebitNote): Promise<{ blob: Blob; fileName: string }> {
+  const pdf = await renderHtmlDocumentToJsPdf(await getDebitNoteHTML(note));
+  return {
+    blob: pdf.output('blob'),
+    fileName: `debit-note-${note.debitNoteNumber}.pdf`,
+  };
 };

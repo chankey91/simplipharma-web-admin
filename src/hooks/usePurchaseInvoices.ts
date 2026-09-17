@@ -21,7 +21,7 @@ import {
 import { TypesenseSearchParams, TypesenseSearchResult } from '../services/typesenseSearch';
 import { getPurchaseInvoiceAmountTotal } from '../services/dashboardAggregations';
 import { PurchaseInvoice } from '../types';
-import { buildLastPurchaseByMedicineId } from '../utils/vendorLastPurchase';
+import { buildLastPurchaseByMedicineId, buildMedicineNrNrxFlags } from '../utils/vendorLastPurchase';
 
 export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
   return useQuery({
@@ -63,7 +63,11 @@ export const useVendorLastPurchases = (
     () => buildLastPurchaseByMedicineId(query.data ?? [], excludeInvoiceId),
     [query.data, excludeInvoiceId]
   );
-  return { ...query, lastPurchaseByMedicineId };
+  const nrNrxByMedicineId = useMemo(
+    () => buildMedicineNrNrxFlags(query.data ?? []),
+    [query.data]
+  );
+  return { ...query, lastPurchaseByMedicineId, nrNrxByMedicineId };
 };
 
 /** Payable purchase bills only (Unpaid/Partial) — vendor ledger. */
