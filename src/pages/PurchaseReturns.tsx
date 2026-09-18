@@ -84,7 +84,12 @@ export const PurchaseReturnsPage: React.FC = () => {
     <Box>
       <Breadcrumbs items={[{ label: 'Purchase returns' }]} />
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h5">Purchase Returns</Typography>
+        <Box>
+          <Typography variant="h5">Purchase Returns</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Create return: add strips first, then a vendor-wise list from purchase invoices.
+          </Typography>
+        </Box>
         <Button
           variant="contained"
           startIcon={<Add />}
