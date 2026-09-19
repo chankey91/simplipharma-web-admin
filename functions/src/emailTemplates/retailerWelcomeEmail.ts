@@ -57,6 +57,9 @@ export type RetailerWelcomeEmailParams = {
   /** e.g. "Your store account has been created." */
   intro: string;
   subject?: string;
+  /** Public Storage URL for the current retailer Android APK. */
+  apkDownloadUrl?: string;
+  apkVersionName?: string;
 };
 
 export function buildRetailerWelcomeEmail(params: RetailerWelcomeEmailParams): {
@@ -71,6 +74,20 @@ export function buildRetailerWelcomeEmail(params: RetailerWelcomeEmailParams): {
   const shopName = params.shopName?.trim();
   const storeCode = params.storeCode?.trim();
   const intro = escapeHtml(params.intro);
+  const apkUrl = (params.apkDownloadUrl || '').trim();
+  const apkVersion = (params.apkVersionName || '').trim();
+  const androidHtml = apkUrl
+    ? `<p style="margin:0 0 12px;">
+                      <a href="${escapeHtml(apkUrl)}" style="display:inline-block;background:${BRAND.navy};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:700;font-size:15px;">Download Android app${apkVersion ? ` (v${escapeHtml(apkVersion)})` : ''}</a>
+                    </p>
+                    <p style="margin:0;font-size:13px;color:#666;">
+                      If the button does not open, copy this link into Chrome on your phone:<br />
+                      <a href="${escapeHtml(apkUrl)}" style="color:${BRAND.teal};word-break:break-all;">${escapeHtml(apkUrl)}</a>
+                    </p>`
+    : `<p style="margin:0;font-size:13px;color:#666;">Android app: <strong>Coming soon</strong></p>`;
+  const androidText = apkUrl
+    ? `Android app${apkVersion ? ` (v${apkVersion})` : ''}: ${apkUrl}`
+    : 'Android app: Coming soon';
 
   const subject =
     params.subject?.trim() || 'Welcome to SimpliPharma — Your retailer account is ready';
@@ -145,10 +162,10 @@ export function buildRetailerWelcomeEmail(params: RetailerWelcomeEmailParams): {
                     <p style="margin:0 0 12px;">
                       <a href="${landingUrl}/" style="display:inline-block;background:${BRAND.teal};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:700;font-size:15px;">Open SimpliPharma</a>
                     </p>
-                    <p style="margin:0;font-size:13px;color:#666;">
-                      Web: <a href="${landingUrl}/" style="color:${BRAND.teal};">${landingUrl}/</a><br />
-                      Android app: <strong>Coming soon</strong>
+                    <p style="margin:0 0 12px;font-size:13px;color:#666;">
+                      Web: <a href="${landingUrl}/" style="color:${BRAND.teal};">${landingUrl}/</a>
                     </p>
+                    ${androidHtml}
                   </td>
                 </tr>
               </table>
@@ -195,7 +212,7 @@ export function buildRetailerWelcomeEmail(params: RetailerWelcomeEmailParams): {
     'Please change your password after your first login.',
     '',
     `Open SimpliPharma: ${landingUrl}/`,
-    'Android app: Coming soon',
+    androidText,
     '',
     'How to use:',
     ...ONBOARDING_STEPS.map((s) => `- ${s.title}: ${s.caption}`),

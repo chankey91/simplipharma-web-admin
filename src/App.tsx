@@ -47,6 +47,7 @@ import { PaymentRequestsPage } from './pages/PaymentRequests';
 import { SoCashPage } from './pages/SoCash';
 import { SupportTicketsPage } from './pages/SupportTickets';
 import { HomeFeedPage } from './pages/HomeFeed';
+import { RetailerAppPage } from './pages/RetailerApp';
 import { PurchaseListsPage } from './pages/PurchaseLists';
 import { PurchaseReturnsPage } from './pages/PurchaseReturns';
 import { CreatePurchaseReturnPage } from './pages/CreatePurchaseReturn';
@@ -146,6 +147,7 @@ const router = createBrowserRouter([
   { path: '/credit-notes', element: withLayout(<CreditNotesPage />) },
   { path: '/banners', element: withLayout(<BannersPage />) },
   { path: '/home-feed', element: withLayout(<HomeFeedPage />) },
+  { path: '/retailer-app', element: withLayout(<RetailerAppPage />) },
   { path: '/sales-officers', element: withLayout(<SalesOfficersPage />) },
   { path: '/area-managers', element: withLayout(<AreaManagersPage />) },
   { path: '/so-visits', element: withLayout(<SoVisitsPage />) },

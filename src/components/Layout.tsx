@@ -49,6 +49,7 @@ import {
   Article,
   HeadsetMic,
   Stars,
+  Android,
   ShoppingBag,
   ReportProblem,
   ReceiptLong,
@@ -140,6 +141,7 @@ const MENU_SECTIONS: MenuSection[] = [
     items: [
       { text: 'Banners', icon: <Campaign />, path: '/banners' },
       { text: 'Home feed', icon: <Stars />, path: '/home-feed' },
+      { text: 'Retailer app', icon: <Android />, path: '/retailer-app' },
     ],
   },
   {

@@ -12,6 +12,7 @@ export type PurchaseReturnBatchOption = {
   purchasePrice: number;
   mrp?: number;
   gstRate?: number;
+  nonReturnable?: boolean;
   label: string;
 };
 
@@ -102,6 +103,7 @@ export function buildPurchaseReturnBatchOptions(
         purchasePrice: Number(batch.purchasePrice ?? medicine.purchasePrice ?? 0) || 0,
         mrp: batch.mrp != null ? Number(batch.mrp) : medicine.mrp,
         gstRate: medicine.gstRate,
+        nonReturnable: batch.nonReturnable === true,
         label,
       });
     }
