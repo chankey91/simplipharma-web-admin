@@ -57,6 +57,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/medicine-demand', label: 'Top sellers' },
   { path: '/banners', label: 'Banners' },
   { path: '/home-feed', label: 'Home feed' },
+  { path: '/retailer-app', label: 'Retailer app' },
   { path: '/operations', label: 'Fulfillment setup' },
   { path: '/operations-users', label: 'Panel users' },
 ];
