@@ -14,6 +14,7 @@ import {
   isOfficeRole,
 } from './panelAuth';
 import { buildRetailerWelcomeEmail } from './emailTemplates/retailerWelcomeEmail';
+import { getRetailerApkRelease } from './retailerApk';
 import { ff } from './functionRegion';
 import { generateNextStoreCode } from './storeCode';
 import { getAppConfigValue, getSmtpConfig, getSupportNotifyEmails } from './runtimeConfig';
@@ -393,6 +394,10 @@ async function sendStoreUserWelcomeEmail(options: {
   const { email, password, role, accountLabel, storeData } = options;
   try {
     if (role === 'retailer') {
+      const apk = await getRetailerApkRelease().catch((err) => {
+        console.warn('createStoreUser: could not load retailer APK release', err);
+        return null;
+      });
       const welcomeMail = buildRetailerWelcomeEmail({
         email,
         password,
@@ -400,6 +405,8 @@ async function sendStoreUserWelcomeEmail(options: {
         storeCode: storeData?.storeCode,
         intro: 'Your SimpliPharma retailer account has been created. Use the credentials below to sign in.',
         subject: 'Welcome to SimpliPharma — Your retailer account is ready',
+        apkDownloadUrl: apk?.downloadUrl,
+        apkVersionName: apk?.versionName,
       });
       const mailResult = await sendSmtpMail({
         to: email,
@@ -814,6 +821,10 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       ...(storeCode ? { storeCode } : {}),
     });
 
+    const apk = await getRetailerApkRelease().catch((err) => {
+      console.warn('approveRetailerRequest: could not load retailer APK release', err);
+      return null;
+    });
     const welcomeMail = buildRetailerWelcomeEmail({
       email: cred.email,
       password: cred.password,
@@ -821,6 +832,8 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       storeCode: storeCode || undefined,
       intro: 'Your retailer registration has been approved. Your SimpliPharma account is now active.',
       subject: 'Welcome to SimpliPharma — Your store account is approved',
+      apkDownloadUrl: apk?.downloadUrl,
+      apkVersionName: apk?.versionName,
     });
     const approvalMail = await sendSmtpMail({
       to: cred.email,
@@ -1926,6 +1939,8 @@ export const sendCreditNotePdfEmail = ff
 
     return { ok: true, emailedTo: toEmail };
   });
+
+export { broadcastRetailerApkUpdate } from './retailerApk';
 
 export {
   onMedicineWriteTypesense,
