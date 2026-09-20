@@ -99,7 +99,8 @@ export async function uploadRetailerApk(input: {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const storagePath = `retailer_apk/${uid}/${Date.now()}_${safeName}`;
   const fileRef = ref(storage, storagePath);
-  await uploadBytes(fileRef, file, {
+  const apkBlob = new Blob([file], { type: 'application/vnd.android.package-archive' });
+  await uploadBytes(fileRef, apkBlob, {
     contentType: 'application/vnd.android.package-archive',
   });
   const downloadUrl = await getDownloadURL(fileRef);

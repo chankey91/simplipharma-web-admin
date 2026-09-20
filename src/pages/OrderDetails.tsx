@@ -70,7 +70,6 @@ import {
   useCancelOrder,
   useRestoreCancelledOrderStock,
   useUpdatePaymentStatus,
-  useRetailerLastSchemes,
 } from '../hooks/useOrders';
 import { useRetailerWallet } from '../hooks/useRetailerWallet';
 import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
@@ -132,6 +131,7 @@ import {
   orderLineTaxableBeforeDiscount,
 } from '../utils/orderLineInvoiceEconomics';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
+import { buildFirstPurchaseSchemeByMedicineId } from '../utils/vendorLastPurchase';
 import {
   batchHasScheme,
   defaultOrderSchemeFieldsFromBatch,
@@ -528,6 +528,10 @@ export const OrderDetailsPage: React.FC = () => {
     () => buildPurchaseBatchDiscountLookup(purchaseInvoices || []),
     [purchaseInvoices]
   );
+  const firstSchemeByMedicineId = useMemo(
+    () => buildFirstPurchaseSchemeByMedicineId(purchaseInvoices || []),
+    [purchaseInvoices]
+  );
   const orderDemandRepairAttempted = useRef<string | null>(null);
   /** After fulfill, hydrate UI once — PI/medicines refetch must not remount lines (Disc flicker). */
   const fulfilledUiFrozenRef = useRef<string | null>(null);
@@ -611,12 +615,6 @@ export const OrderDetailsPage: React.FC = () => {
   const { data: trays, isError: traysQueryError, error: traysQueryErr, isFetching: traysFetching } = useTrays();
   const { data: operators, isError: operatorsQueryError, error: operatorsQueryErr } = useOperators();
   const { data: traysInUse = [] } = useTraysInUse(orderId || undefined);
-  const { lastSchemeByMedicineId } = useRetailerLastSchemes(
-    order?.retailerId,
-    order?.id,
-    { enabled: !!order?.retailerId }
-  );
-  
   const fulfillOrderMutation = useFulfillOrder();
   const unfulfillOrderMutation = useUnfulfillOrder();
   const recalculateOrderPricingMutation = useRecalculateOrderPricing();
@@ -3674,7 +3672,11 @@ export const OrderDetailsPage: React.FC = () => {
                                 </Box>
                                 {item.medicineId ? (
                                   <RetailerLastSchemeHint
-                                    lastScheme={lastSchemeByMedicineId.get(item.medicineId)}
+                                    lastScheme={firstSchemeByMedicineId.get(item.medicineId)}
+                                    contextLabel="First scheme on this item (purchase)"
+                                    emptyHint="No purchase scheme recorded for this item"
+                                    subjectLabel="this item"
+                                    leadLabel="First scheme"
                                   />
                                 ) : null}
                                 {showOrderSchemeControls ? renderOrderSchemeControls(item, index) : null}
@@ -3998,7 +4000,11 @@ export const OrderDetailsPage: React.FC = () => {
                             </Box>
                             {item.medicineId ? (
                               <RetailerLastSchemeHint
-                                lastScheme={lastSchemeByMedicineId.get(item.medicineId)}
+                                lastScheme={firstSchemeByMedicineId.get(item.medicineId)}
+                                contextLabel="First scheme on this item (purchase)"
+                                emptyHint="No purchase scheme recorded for this item"
+                                subjectLabel="this item"
+                                leadLabel="First scheme"
                               />
                             ) : null}
                             {showOrderSchemeControls ? renderOrderSchemeControls(item, index) : null}
