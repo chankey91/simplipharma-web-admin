@@ -71,17 +71,14 @@ service firebase.storage {
     }
 
     // Retailer Android APK: public read so registration / update emails can link without login.
-    // Writes scoped to auth uid (no firestore.get) — Spark-compatible like banner uploads.
-    match /retailer_apk/{userId}/{allPaths=**} {
+    // Writes scoped to auth uid (no firestore.get). Do not require a specific MIME type —
+    // Windows/Chrome often send zip/empty/octet-stream for .apk files.
+    match /retailer_apk/{userId}/{fileName} {
       allow read: if true;
       allow write: if request.auth != null
         && request.auth.uid == userId
         && request.resource.size < 150 * 1024 * 1024
-        && (
-          request.resource.contentType == 'application/vnd.android.package-archive'
-          || request.resource.contentType == 'application/octet-stream'
-          || request.resource.contentType == 'application/java-archive'
-        );
+        && fileName.matches('.*\\.apk$');
     }
 
     // Banner images: writes scoped to auth uid — no firestore.get(), so this works on Spark.

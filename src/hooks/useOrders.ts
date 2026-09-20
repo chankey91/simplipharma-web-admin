@@ -217,7 +217,7 @@ export const useRetailerLedgerData = (
 
 /**
  * Last applied sales scheme per medicineId for this retailer (prior fulfilled orders).
- * Used on Order Details scheme icon hover/click.
+ * Order Details gift icon now uses first purchase scheme; keep this for retailer-history callers.
  */
 export const useRetailerLastSchemes = (
   retailerId: string | undefined,

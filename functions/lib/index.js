@@ -11,12 +11,13 @@ var __rest = (this && this.__rest) || function (s, e) {
     return t;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.onPurchaseListManufacturerSubmit = exports.syncPurchaseManufacturerToOrders = exports.publishPurchaseListNet = exports.scheduledPurchaseListAfternoon = exports.scheduledPurchaseListNoon = exports.adminReindexProductDemandsTypesense = exports.searchProductDemandsTypesense = exports.onProductDemandWriteTypesense = exports.adminReindexDebitNotesTypesense = exports.searchDebitNotesTypesense = exports.onDebitNoteWriteTypesense = exports.adminReindexCreditNotesTypesense = exports.searchCreditNotesTypesense = exports.onCreditNoteWriteTypesense = exports.adminReindexPurchaseInvoicesTypesense = exports.searchPurchaseInvoicesTypesense = exports.onPurchaseInvoiceWriteTypesense = exports.adminReindexOrdersTypesense = exports.searchOrdersTypesense = exports.onOrderWriteTypesense = exports.adminSyncMedicineSynonymsTypesense = exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.sendCreditNotePdfEmail = exports.sendOrderInvoicePdfEmail = exports.processPurchaseInvoiceDraft = exports.onBulkMedicineJobCreated = exports.onSupportThreadAdminMessageCreated = exports.onSupportTicketCreated = exports.sendRetailerPasswordResetEmail = exports.sendPurchaseOfficerPasswordResetEmail = exports.sendSalesOfficerPasswordResetEmail = exports.sendPanelPasswordResetEmail = exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.updateRetailerEmail = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
+exports.onPurchaseListManufacturerSubmit = exports.syncPurchaseManufacturerToOrders = exports.publishPurchaseListNet = exports.scheduledPurchaseListAfternoon = exports.scheduledPurchaseListNoon = exports.adminReindexProductDemandsTypesense = exports.searchProductDemandsTypesense = exports.onProductDemandWriteTypesense = exports.adminReindexDebitNotesTypesense = exports.searchDebitNotesTypesense = exports.onDebitNoteWriteTypesense = exports.adminReindexCreditNotesTypesense = exports.searchCreditNotesTypesense = exports.onCreditNoteWriteTypesense = exports.adminReindexPurchaseInvoicesTypesense = exports.searchPurchaseInvoicesTypesense = exports.onPurchaseInvoiceWriteTypesense = exports.adminReindexOrdersTypesense = exports.searchOrdersTypesense = exports.onOrderWriteTypesense = exports.adminSyncMedicineSynonymsTypesense = exports.adminReindexMedicinesTypesense = exports.searchMedicinesTypesense = exports.onMedicineWriteTypesense = exports.broadcastRetailerApkUpdate = exports.sendCreditNotePdfEmail = exports.sendOrderInvoicePdfEmail = exports.processPurchaseInvoiceDraft = exports.onBulkMedicineJobCreated = exports.onSupportThreadAdminMessageCreated = exports.onSupportTicketCreated = exports.sendRetailerPasswordResetEmail = exports.sendPurchaseOfficerPasswordResetEmail = exports.sendSalesOfficerPasswordResetEmail = exports.sendPanelPasswordResetEmail = exports.onRetailerRegistrationRequestCreated = exports.rejectRetailerRequest = exports.approveRetailerRequest = exports.updateRetailerEmail = exports.createStoreUser = exports.sendVendorPasswordEmail = exports.sendVendorPasswordEmailHttp = void 0;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 const panelAuth_1 = require("./panelAuth");
 const retailerWelcomeEmail_1 = require("./emailTemplates/retailerWelcomeEmail");
+const retailerApk_1 = require("./retailerApk");
 const functionRegion_1 = require("./functionRegion");
 const storeCode_1 = require("./storeCode");
 const runtimeConfig_1 = require("./runtimeConfig");
@@ -335,6 +336,10 @@ async function sendStoreUserWelcomeEmail(options) {
     const { email, password, role, accountLabel, storeData } = options;
     try {
         if (role === 'retailer') {
+            const apk = await (0, retailerApk_1.getRetailerApkRelease)().catch((err) => {
+                console.warn('createStoreUser: could not load retailer APK release', err);
+                return null;
+            });
             const welcomeMail = (0, retailerWelcomeEmail_1.buildRetailerWelcomeEmail)({
                 email,
                 password,
@@ -342,6 +347,8 @@ async function sendStoreUserWelcomeEmail(options) {
                 storeCode: storeData === null || storeData === void 0 ? void 0 : storeData.storeCode,
                 intro: 'Your SimpliPharma retailer account has been created. Use the credentials below to sign in.',
                 subject: 'Welcome to SimpliPharma — Your retailer account is ready',
+                apkDownloadUrl: apk === null || apk === void 0 ? void 0 : apk.downloadUrl,
+                apkVersionName: apk === null || apk === void 0 ? void 0 : apk.versionName,
             });
             const mailResult = await sendSmtpMail({
                 to: email,
@@ -680,8 +687,6 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
                 console.error('approveRetailerRequest: failed to generate store code:', codeErr);
             }
         }
-        const town = String(req.town || req.city || '').trim();
-        const district = String(req.district || '').trim();
         const userData = {
             uid: userRecord.uid,
             email: cred.email,
@@ -690,8 +695,6 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
             shopName: req.shopName,
             phoneNumber: req.phoneNumber,
             address: req.address,
-            town: town || undefined,
-            district: district || undefined,
             licenceNumber: req.licenceNumber,
             aadharNumber: req.aadharNumber,
             ownerName: req.ownerName,
@@ -714,6 +717,10 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
         }
         await admin.firestore().collection('users').doc(userRecord.uid).set(userData);
         await reqRef.update(Object.assign({ status: 'approved', reviewedBy: context.auth.uid, reviewedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, (storeCode ? { storeCode } : {})));
+        const apk = await (0, retailerApk_1.getRetailerApkRelease)().catch((err) => {
+            console.warn('approveRetailerRequest: could not load retailer APK release', err);
+            return null;
+        });
         const welcomeMail = (0, retailerWelcomeEmail_1.buildRetailerWelcomeEmail)({
             email: cred.email,
             password: cred.password,
@@ -721,6 +728,8 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
             storeCode: storeCode || undefined,
             intro: 'Your retailer registration has been approved. Your SimpliPharma account is now active.',
             subject: 'Welcome to SimpliPharma — Your store account is approved',
+            apkDownloadUrl: apk === null || apk === void 0 ? void 0 : apk.downloadUrl,
+            apkVersionName: apk === null || apk === void 0 ? void 0 : apk.versionName,
         });
         const approvalMail = await sendSmtpMail({
             to: cred.email,
@@ -1648,6 +1657,8 @@ exports.sendCreditNotePdfEmail = functionRegion_1.ff
     }
     return { ok: true, emailedTo: toEmail };
 });
+var retailerApk_2 = require("./retailerApk");
+Object.defineProperty(exports, "broadcastRetailerApkUpdate", { enumerable: true, get: function () { return retailerApk_2.broadcastRetailerApkUpdate; } });
 var typesenseMedicines_1 = require("./typesenseMedicines");
 Object.defineProperty(exports, "onMedicineWriteTypesense", { enumerable: true, get: function () { return typesenseMedicines_1.onMedicineWriteTypesense; } });
 Object.defineProperty(exports, "searchMedicinesTypesense", { enumerable: true, get: function () { return typesenseMedicines_1.searchMedicinesTypesense; } });
