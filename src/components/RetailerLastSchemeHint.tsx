@@ -16,6 +16,8 @@ type Props = {
   emptyHint?: string;
   /** Used in tooltip summary, e.g. "this store" / "this vendor". */
   subjectLabel?: string;
+  /** Tooltip lead, e.g. "Last (this store)" / "First scheme". */
+  leadLabel?: string;
 };
 
 /**
@@ -28,12 +30,14 @@ export const RetailerLastSchemeHint: React.FC<Props> = ({
   contextLabel = 'Previous order (same store · same item)',
   emptyHint = 'No prior order for this store on this item',
   subjectLabel = 'this store',
+  leadLabel,
 }) => {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const hasHistory = !!lastScheme;
   const hint = formatLastRetailerSchemeHint(lastScheme, {
     subject: subjectLabel,
     emptyHint,
+    lead: leadLabel,
   });
   const rows = hasHistory
     ? getLastRetailerSchemeDetailRows(lastScheme)

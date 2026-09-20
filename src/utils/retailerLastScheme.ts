@@ -220,7 +220,7 @@ function pct(n?: number): string {
 
 export function formatLastRetailerSchemeHint(
   last: LastRetailerScheme | undefined,
-  options?: { subject?: string; emptyHint?: string }
+  options?: { subject?: string; emptyHint?: string; lead?: string }
 ): string {
   const subject = options?.subject ?? 'this store';
   if (!last) {
@@ -232,7 +232,8 @@ export function formatLastRetailerSchemeHint(
     month: 'short',
     year: 'numeric',
   });
-  const parts: string[] = [`Last (${subject}) · ${ref} · ${dateStr}`];
+  const lead = options?.lead ?? `Last (${subject})`;
+  const parts: string[] = [`${lead} · ${ref} · ${dateStr}`];
 
   if (last.schemePaidQty && last.schemeFreeQty) {
     parts.push(`Scheme ${formatPurchaseSchemeLabel(last.schemePaidQty, last.schemeFreeQty)}`);

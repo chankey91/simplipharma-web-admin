@@ -20,6 +20,79 @@ function toNum(v: unknown): number {
 /** Same shape as retailer last-line history — reused by the hint UI. */
 export type LastVendorPurchaseLine = LastRetailerScheme;
 
+function toHintLine(
+  inv: PurchaseInvoice,
+  item: PurchaseInvoice['items'][number],
+  schemePaid: number,
+  schemeFree: number,
+  hasScheme: boolean
+): LastVendorPurchaseLine {
+  const discount = toNum(item.discountPercentage);
+  const price = toNum(item.purchasePrice ?? item.unitPrice);
+  const mrp = toNum(item.mrp);
+  const gstRate = toNum(item.gstRate);
+  const quantity = toNum(item.quantity);
+  const freeQuantity = toNum(item.freeQuantity);
+  const batchNumber = (item.batchNumber || '').trim() || undefined;
+  const vendorLabel = (inv.vendorName || '').trim();
+  return {
+    medicineId: (item.medicineId || '').trim(),
+    medicineName: item.medicineName,
+    schemePaidQty: hasScheme ? schemePaid : undefined,
+    schemeFreeQty: hasScheme ? schemeFree : undefined,
+    discountPercentage:
+      item.discountPercentage !== undefined && item.discountPercentage !== null
+        ? discount
+        : undefined,
+    price: price > 0 ? price : undefined,
+    mrp: mrp > 0 ? mrp : undefined,
+    gstRate: gstRate > 0 ? gstRate : undefined,
+    quantity: quantity > 0 ? quantity : undefined,
+    freeQuantity: freeQuantity > 0 ? freeQuantity : undefined,
+    batchNumber,
+    orderId: inv.id,
+    orderDate: toDate(inv.invoiceDate),
+    invoiceNumber: vendorLabel
+      ? `${inv.invoiceNumber || inv.id} (${vendorLabel})`
+      : inv.invoiceNumber,
+  };
+}
+
+function invoiceTime(inv: PurchaseInvoice): number {
+  const invoiceMs = toDate(inv.invoiceDate).getTime();
+  if (invoiceMs > 0) return invoiceMs;
+  return toDate(inv.createdAt).getTime();
+}
+
+/**
+ * Oldest purchase line that actually carried a scheme, per medicineId.
+ * Used on Order Details fulfill — gift icon shows first time we got a scheme on the item.
+ */
+export function buildFirstPurchaseSchemeByMedicineId(
+  invoices: PurchaseInvoice[]
+): Map<string, LastVendorPurchaseLine> {
+  const sorted = [...invoices].sort((a, b) => {
+    const byDate = invoiceTime(a) - invoiceTime(b);
+    if (byDate !== 0) return byDate;
+    return (a.id || '').localeCompare(b.id || '');
+  });
+  const map = new Map<string, LastVendorPurchaseLine>();
+
+  for (const inv of sorted) {
+    if (!inv?.id) continue;
+    for (const item of inv.items || []) {
+      const medicineId = (item.medicineId || '').trim();
+      if (!medicineId || map.has(medicineId)) continue;
+      const schemePaid = toNum(item.schemePaidQty);
+      const schemeFree = toNum(item.schemeFreeQty);
+      if (!(schemePaid > 0 && schemeFree > 0)) continue;
+      map.set(medicineId, toHintLine(inv, item, schemePaid, schemeFree, true));
+    }
+  }
+
+  return map;
+}
+
 /**
  * Most recent purchase line per medicineId across all vendors
  * (excludes current invoice). Includes scheme, discount, rate, MRP, GST, qty, batch.
@@ -60,38 +133,12 @@ export function buildLastPurchaseByMedicineId(
         continue;
       }
 
-      const discount = toNum(item.discountPercentage);
       const price = toNum(item.purchasePrice ?? item.unitPrice);
       const mrp = toNum(item.mrp);
-      const gstRate = toNum(item.gstRate);
       const quantity = toNum(item.quantity);
-      const freeQuantity = toNum(item.freeQuantity);
-      const batchNumber = (item.batchNumber || '').trim() || undefined;
-
       if (!hasScheme && !(price > 0) && !(mrp > 0) && !(quantity > 0)) continue;
 
-      const vendorLabel = (inv.vendorName || '').trim();
-      map.set(medicineId, {
-        medicineId,
-        medicineName: item.medicineName,
-        schemePaidQty: hasScheme ? schemePaid : undefined,
-        schemeFreeQty: hasScheme ? schemeFree : undefined,
-        discountPercentage:
-          item.discountPercentage !== undefined && item.discountPercentage !== null
-            ? discount
-            : undefined,
-        price: price > 0 ? price : undefined,
-        mrp: mrp > 0 ? mrp : undefined,
-        gstRate: gstRate > 0 ? gstRate : undefined,
-        quantity: quantity > 0 ? quantity : undefined,
-        freeQuantity: freeQuantity > 0 ? freeQuantity : undefined,
-        batchNumber,
-        orderId: inv.id,
-        orderDate: toDate(inv.invoiceDate),
-        invoiceNumber: vendorLabel
-          ? `${inv.invoiceNumber || inv.id} (${vendorLabel})`
-          : inv.invoiceNumber,
-      });
+      map.set(medicineId, toHintLine(inv, item, schemePaid, schemeFree, hasScheme));
       if (!hasScheme) needsScheme.add(medicineId);
     }
   }
