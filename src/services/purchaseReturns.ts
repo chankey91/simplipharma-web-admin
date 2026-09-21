@@ -11,13 +11,18 @@ import {
   getDoc,
   where,
   auth,
+  updateDoc,
 } from './firebase';
 import { PurchaseReturn, PurchaseReturnItem } from '../types';
-import { reduceStockFromBatch } from './inventory';
+import { reduceStockBatchesFromMedicine } from './inventory';
 import { generatePurchaseReturnNumber } from '../utils/invoiceNumber';
 import { createInwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromPurchaseItems } from '../utils/gstLineSnapshot';
+import {
+  derivePurchaseReturnFulfillmentStatus,
+  itemReturnOutcome,
+} from '../utils/purchaseReturnFulfillment';
 
 function mapPurchaseReturnDoc(docSnap: {
   id: string;
@@ -39,6 +44,12 @@ function mapPurchaseReturnDoc(docSnap: {
     reason: data.reason != null ? String(data.reason) : undefined,
     vendorGstin: data.vendorGstin != null ? String(data.vendorGstin) : undefined,
     gst: data.gst as PurchaseReturn['gst'],
+    fulfillmentStatus:
+      data.fulfillmentStatus === 'pending' ||
+      data.fulfillmentStatus === 'partial' ||
+      data.fulfillmentStatus === 'completed'
+        ? data.fulfillmentStatus
+        : undefined,
     items:
       (data.items as unknown[])?.map((item: unknown) => {
         const it = item as Record<string, unknown>;
@@ -63,6 +74,15 @@ function mapPurchaseReturnDoc(docSnap: {
               : undefined,
           expiryDate: (it.expiryDate as { toDate?: () => Date })?.toDate?.() || undefined,
           totalAmount: Number(it.totalAmount ?? 0),
+          returnOutcome:
+            it.returnOutcome === 'returned' ||
+            it.returnOutcome === 'not_returned' ||
+            it.returnOutcome === 'pending'
+              ? it.returnOutcome
+              : undefined,
+          stockDeducted:
+            it.stockDeducted === true ? true : it.stockDeducted === false ? false : undefined,
+          returnedAt: (it.returnedAt as { toDate?: () => Date })?.toDate?.() || undefined,
         } as PurchaseReturnItem;
       }) || [],
   };
@@ -163,6 +183,16 @@ function serializeItem(item: PurchaseReturnItem): Record<string, unknown> {
         ? Timestamp.fromDate(item.expiryDate)
         : item.expiryDate;
   }
+  if (item.returnOutcome === 'returned' || item.returnOutcome === 'not_returned' || item.returnOutcome === 'pending') {
+    row.returnOutcome = item.returnOutcome;
+  }
+  if (item.stockDeducted === true) row.stockDeducted = true;
+  if (item.returnedAt) {
+    row.returnedAt =
+      item.returnedAt instanceof Date
+        ? Timestamp.fromDate(item.returnedAt)
+        : item.returnedAt;
+  }
   return row;
 }
 
@@ -174,8 +204,8 @@ export type CreatePurchaseReturnInput = Omit<
 };
 
 /**
- * Create a purchase return: deduct stock per line, then persist the document.
- * Stock is reduced before the doc write; if the write fails after stock moves, the error is thrown.
+ * Create a purchase return list for a vendor.
+ * Stock is deducted later, when items are marked returned.
  */
 export const createPurchaseReturn = async (
   input: CreatePurchaseReturnInput
@@ -195,10 +225,13 @@ export const createPurchaseReturn = async (
 
   const returnNumber = input.returnNumber?.trim() || (await generatePurchaseReturnNumber());
   const returnRef = doc(collection(db, 'purchaseReturns'));
-
-  for (const item of input.items) {
-    await reduceStockFromBatch(item.medicineId, item.batchNumber, item.quantity);
-  }
+  const items = input.items.map((item) =>
+    serializeItem({
+      ...item,
+      returnOutcome: 'pending',
+      stockDeducted: false,
+    })
+  );
 
   const payload: Record<string, unknown> = {
     returnNumber,
@@ -208,10 +241,11 @@ export const createPurchaseReturn = async (
       input.returnDate instanceof Date
         ? Timestamp.fromDate(input.returnDate)
         : Timestamp.fromDate(new Date(input.returnDate)),
-    items: input.items.map(serializeItem),
+    items,
     subTotal: Math.round((input.subTotal ?? 0) * 100) / 100,
     taxAmount: Math.round((input.taxAmount ?? 0) * 100) / 100,
     totalAmount: Math.round((input.totalAmount ?? 0) * 100) / 100,
+    fulfillmentStatus: 'pending',
     createdBy: auth.currentUser?.uid || '',
     createdAt: serverTimestamp(),
   };
@@ -241,7 +275,6 @@ export const createPurchaseReturn = async (
 
 /**
  * Create one purchase return per vendor group (multi-vendor session on one screen).
- * Processes groups sequentially so stock deductions stay consistent.
  */
 export const createPurchaseReturnsMultiVendor = async (
   inputs: CreatePurchaseReturnInput[]
@@ -253,4 +286,79 @@ export const createPurchaseReturnsMultiVendor = async (
     results.push({ ...created, vendorName: input.vendorName });
   }
   return results;
+};
+
+export type PurchaseReturnItemOutcomeUpdate = {
+  index: number;
+  outcome: 'returned' | 'not_returned';
+};
+
+/**
+ * Mark return lines as taken back by the vendor (deducts stock) or not returned.
+ * Already-returned lines are left unchanged.
+ */
+export const updatePurchaseReturnItemOutcomes = async (
+  returnId: string,
+  updates: PurchaseReturnItemOutcomeUpdate[]
+): Promise<PurchaseReturn> => {
+  const existing = await getPurchaseReturnById(returnId);
+  if (!existing) throw new Error('Purchase return not found');
+  if (!updates.length) return existing;
+
+  const items = [...(existing.items || [])];
+  const toDeduct: Array<{ medicineId: string; batchNumber: string; quantity: number }> = [];
+
+  for (const update of updates) {
+    const item = items[update.index];
+    if (!item) continue;
+    const current = itemReturnOutcome(item, existing);
+    if (current === 'returned') continue;
+
+    if (update.outcome === 'returned') {
+      if (!item.stockDeducted) {
+        toDeduct.push({
+          medicineId: item.medicineId,
+          batchNumber: item.batchNumber,
+          quantity: item.quantity,
+        });
+      }
+      items[update.index] = {
+        ...item,
+        returnOutcome: 'returned',
+        stockDeducted: true,
+        returnedAt: new Date(),
+      };
+    } else if (current === 'pending') {
+      items[update.index] = {
+        ...item,
+        returnOutcome: 'not_returned',
+        stockDeducted: false,
+      };
+    }
+  }
+
+  const grouped = new Map<string, Array<{ batchNumber: string; quantity: number }>>();
+  for (const row of toDeduct) {
+    const list = grouped.get(row.medicineId) || [];
+    const key = row.batchNumber.trim().toLowerCase();
+    const found = list.find((d) => d.batchNumber.trim().toLowerCase() === key);
+    if (found) found.quantity += row.quantity;
+    else list.push({ batchNumber: row.batchNumber, quantity: row.quantity });
+    grouped.set(row.medicineId, list);
+  }
+
+  for (const [medicineId, deductions] of grouped) {
+    await reduceStockBatchesFromMedicine(medicineId, deductions);
+  }
+
+  const fulfillmentStatus = derivePurchaseReturnFulfillmentStatus(items);
+
+  await updateDoc(doc(db, 'purchaseReturns', returnId), {
+    items: items.map(serializeItem),
+    fulfillmentStatus,
+  });
+
+  const refreshed = await getPurchaseReturnById(returnId);
+  if (!refreshed) throw new Error('Purchase return not found after update');
+  return refreshed;
 };

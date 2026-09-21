@@ -352,6 +352,9 @@ export const createPurchaseInvoice = async (
   if (invoiceData.discount !== undefined && invoiceData.discount !== null) {
     invoiceDoc.discount = invoiceData.discount;
   }
+  if (invoiceData.additionalDiscount !== undefined && invoiceData.additionalDiscount !== null) {
+    invoiceDoc.additionalDiscount = invoiceData.additionalDiscount;
+  }
   if (invoiceData.paymentMethod) {
     invoiceDoc.paymentMethod = invoiceData.paymentMethod;
   }

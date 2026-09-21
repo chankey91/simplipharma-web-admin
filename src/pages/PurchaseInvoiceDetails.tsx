@@ -46,6 +46,10 @@ import { Loading } from '../components/Loading';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
+import {
+  normalizeAdditionalDiscount,
+  roundPurchaseInvoicePayable,
+} from '../utils/purchaseInvoiceTotals';
 import { PurchaseInvoiceItem } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useAuth } from '../context/AuthContext';
@@ -150,7 +154,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     return item.purchasePrice || 0;
   };
 
-  const calculateTotals = (invoiceItems: PurchaseInvoiceItem[]) => {
+  const calculateTotals = (invoiceItems: PurchaseInvoiceItem[], extraDiscount: unknown = 0) => {
     const subTotal = invoiceItems.reduce((sum, item) => {
       const quantity = item.quantity || 0;
       const purchasePrice = getPurchasePriceFromItem(item);
@@ -170,11 +174,15 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       ? invoiceItems.reduce((sum, item) => sum + (item.gstRate || 5), 0) / invoiceItems.length
       : 5;
     const totalTax = (amountAfterDiscount * avgGstRate) / 100;
-    const calculatedTotal = subTotal - totalDiscount + totalTax;
-    const roundoff = Math.round(calculatedTotal) - calculatedTotal;
-    const grandTotal = Math.round(calculatedTotal);
+    const additionalDiscount = normalizeAdditionalDiscount(extraDiscount);
+    const { roundoff, grandTotal } = roundPurchaseInvoicePayable({
+      subTotal,
+      lineDiscount: totalDiscount,
+      tax: totalTax,
+      additionalDiscount,
+    });
 
-    return { subTotal, totalDiscount, totalTax, roundoff, grandTotal };
+    return { subTotal, totalDiscount, totalTax, additionalDiscount, roundoff, grandTotal };
   };
 
   const handleEditItem = (index: number) => {
@@ -203,7 +211,10 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     if (!invoice) {
       throw new Error('Invoice not found');
     }
-    const { subTotal, totalDiscount, totalTax, grandTotal } = calculateTotals(updatedItems);
+    const { subTotal, totalDiscount, totalTax, additionalDiscount, grandTotal } = calculateTotals(
+      updatedItems,
+      invoice.additionalDiscount
+    );
     const result = await updateInvoiceMutation.mutateAsync({
       invoiceId: invoice.id,
       invoiceData: {
@@ -211,6 +222,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
         subTotal,
         taxAmount: totalTax,
         discount: totalDiscount > 0 ? totalDiscount : 0,
+        additionalDiscount: additionalDiscount > 0 ? additionalDiscount : 0,
         totalAmount: grandTotal,
       },
     });
@@ -336,8 +348,18 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     }
   };
 
-  const { subTotal: recalculatedSubTotal, totalDiscount: recalculatedDiscount, totalTax: recalculatedTaxAmount, roundoff, grandTotal } =
-    useMemo(() => calculateTotals(items), [items]);
+  const {
+    subTotal: recalculatedSubTotal,
+    totalDiscount: recalculatedDiscount,
+    totalTax: recalculatedTaxAmount,
+    additionalDiscount: recalculatedAdditionalDiscount,
+    roundoff,
+    grandTotal,
+  } =
+    useMemo(
+      () => calculateTotals(items, invoice?.additionalDiscount),
+      [items, invoice?.additionalDiscount]
+    );
 
   if (isLoading) return <Loading message="Loading invoice..." />;
   if (!invoice) return <Typography>Invoice not found</Typography>;
@@ -348,7 +370,10 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const displaySubTotal = recalculatedSubTotal > 0 ? recalculatedSubTotal : invoice.subTotal;
   const displayDiscount = recalculatedDiscount > 0 ? recalculatedDiscount : (invoice.discount || 0);
   const displayTaxAmount = recalculatedTaxAmount > 0 ? recalculatedTaxAmount : invoice.taxAmount;
-  const calculatedTotal = displaySubTotal - displayDiscount + displayTaxAmount;
+  const displayAdditionalDiscount =
+    recalculatedAdditionalDiscount > 0
+      ? recalculatedAdditionalDiscount
+      : invoice.additionalDiscount || 0;
   const invoiceTotal = invoice.totalAmount ?? grandTotal;
   const paidAmount = invoice.paidAmount ?? 0;
   const dueAmount = Math.max(0, invoiceTotal - paidAmount);
@@ -587,6 +612,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
               <Typography color="textSecondary">Tax:</Typography>
               <Typography>₹{displayTaxAmount.toFixed(2)}</Typography>
             </Box>
+            {displayAdditionalDiscount > 0 && (
+              <Box display="flex" justifyContent="space-between" mb={1}>
+                <Typography color="textSecondary">Additional discount:</Typography>
+                <Typography color="error">-₹{displayAdditionalDiscount.toFixed(2)}</Typography>
+              </Box>
+            )}
             {Math.abs(roundoff) > 0.01 && (
               <Box display="flex" justifyContent="space-between" mb={1}>
                 <Typography color="textSecondary">Round Off:</Typography>

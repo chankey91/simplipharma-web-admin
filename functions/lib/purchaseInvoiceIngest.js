@@ -166,7 +166,7 @@ async function matchVendor(db, gstin, nameHint) {
 exports.processPurchaseInvoiceDraft = functionRegion_1.ff
     .runWith({ minInstances: 0, timeoutSeconds: 300, memory: '512MB' })
     .https.onCall(async (data, context) => {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     if (!((_a = context.auth) === null || _a === void 0 ? void 0 : _a.uid)) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
     }
@@ -214,12 +214,13 @@ exports.processPurchaseInvoiceDraft = functionRegion_1.ff
             invoiceNumber: extracted.invoiceNumber || null,
             invoiceDate: extracted.invoiceDate || null,
             notes: extracted.notes || null,
+            additionalDiscount: (_d = extracted.additionalDiscount) !== null && _d !== void 0 ? _d : null,
             rawTextPreview: (extracted.rawText || '').slice(0, 8000),
             extractedLines: extracted.lines,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }), { merge: true });
         const pendingIds = await collectPendingMedicineIds(db);
-        const vendor = await matchVendor(db, (_d = extracted.vendorHint) === null || _d === void 0 ? void 0 : _d.gstin, (_e = extracted.vendorHint) === null || _e === void 0 ? void 0 : _e.name);
+        const vendor = await matchVendor(db, (_e = extracted.vendorHint) === null || _e === void 0 ? void 0 : _e.gstin, (_f = extracted.vendorHint) === null || _f === void 0 ? void 0 : _f.name);
         const resolvedLines = [];
         for (const line of extracted.lines) {
             const candidates = await searchMedicineCandidates(line.productName, pendingIds);

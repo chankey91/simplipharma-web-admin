@@ -1,5 +1,6 @@
 import { endOfDay, startOfDay } from 'date-fns';
 import { PurchaseInvoice, PurchaseReturn, Vendor, VendorInvoicePayment } from '../types';
+import { purchaseReturnSettledAmount } from './purchaseReturnFulfillment';
 
 export type VendorLedgerVchType = 'Purchase' | 'Payment' | 'Purchase Return' | 'Opening';
 
@@ -197,7 +198,7 @@ export function buildVendorLedger(
 
   for (const ret of purchaseReturns) {
     const retDate = toLedgerDate(ret.returnDate);
-    const amt = ret.totalAmount ?? 0;
+    const amt = purchaseReturnSettledAmount(ret);
     if (amt <= 0) continue;
 
     if (beforeRange(retDate, from)) {
