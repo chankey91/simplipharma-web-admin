@@ -26,6 +26,7 @@ Return ONLY valid JSON (no markdown fences) with this exact shape:
   "invoiceNumber": string|null,
   "invoiceDate": string|null,
   "notes": string|null,
+  "additionalDiscount": number|null,
   "lines": [
     {
       "productName": string,
@@ -52,6 +53,7 @@ Rules:
 - Include ONLY product/medicine rows from the item table (transactional stock lines).
 - IGNORE completely: seller/buyer names & addresses, phone/email, GSTIN header blocks, IRN/QR, bank details, tax summary (CGST/SGST/IGST totals), grand total, round-off, signatures, page headers/footers, HSN-only summary rows without a product name.
 - notes = short invoice-level remark/terms snippet when clearly printed (else null). Do not invent notes.
+- additionalDiscount = whole-bill extra/cash/special discount in RUPEES (not %), when printed as a bill-level deduction (e.g. Additional Discount, Extra Discount, Less: Discount, CD on bill, special discount). Do NOT copy line Disc %. Use null if not shown.
 - invoiceDate as YYYY-MM-DD when possible; otherwise as printed.
 - productName = medicine/product name as printed (do not append pack, batch, qty, or prices).
 - packaging = pack size / packing as printed when present (e.g. "10 TAB", "15 ML", "1X10", "STRIP", "BOTTLE"). Do NOT put packaging inside productName. Use null if not shown.
@@ -246,12 +248,14 @@ function parseGeminiJson(text) {
         gstin = normalizeGstin(gstin);
     const vendorHint = name || gstin
         ? Object.assign(Object.assign({}, (name ? { name } : {})), (gstin ? { gstin } : {})) : undefined;
+    const extraDisc = asFiniteNumber(parsed.additionalDiscount);
     return {
         lines: normalizeGeminiLines(parsed.lines),
         vendorHint,
         invoiceNumber: asNonEmptyString(parsed.invoiceNumber),
         invoiceDate: normalizeInvoiceDate(asNonEmptyString(parsed.invoiceDate)),
         notes: asNonEmptyString(parsed.notes),
+        additionalDiscount: extraDisc != null && extraDisc > 0 ? Math.round(extraDisc * 100) / 100 : undefined,
     };
 }
 function getGeminiApiKey() {
@@ -393,6 +397,7 @@ async function extractWithGeminiFromPdfBytes(buffer) {
         invoiceNumber: parsed.invoiceNumber,
         invoiceDate: parsed.invoiceDate,
         notes: parsed.notes,
+        additionalDiscount: parsed.additionalDiscount,
         message: parsed.lines.length === 0
             ? 'Gemini found no medicine line items on the PDF. Add lines manually in review.'
             : undefined,
@@ -415,6 +420,7 @@ async function extractWithGeminiFromImage(buffer, contentType) {
         invoiceNumber: parsed.invoiceNumber,
         invoiceDate: parsed.invoiceDate,
         notes: parsed.notes,
+        additionalDiscount: parsed.additionalDiscount,
         message: parsed.lines.length === 0
             ? 'Gemini found no medicine line items. Add lines manually in review.'
             : undefined,
@@ -435,6 +441,7 @@ async function extractWithGeminiFromText(invoiceText) {
         invoiceNumber: parsed.invoiceNumber,
         invoiceDate: parsed.invoiceDate,
         notes: parsed.notes,
+        additionalDiscount: parsed.additionalDiscount,
         message: parsed.lines.length === 0
             ? 'Gemini found no medicine line items. Add lines manually in review.'
             : undefined,

@@ -187,6 +187,8 @@ export type GstInvoiceSummary = {
   roundOff: string;
   grandTotal: string;
   amountInWords: string;
+  /** Whole-invoice extra discount in rupees (purchase payable). */
+  additionalDiscount?: string;
   /** Wallet (credit notes) applied as payment — GST grand total is unchanged. */
   walletApplied?: string;
   amountDue?: string;
@@ -276,6 +278,11 @@ export function buildGstInvoiceTotalsSection(
       <div class="totals-row"><span>SUB TOTAL</span><span>${summary.subTotal}</span></div>
       <div class="totals-row"><span>PRODUCT DISCOUNT</span><span>-${summary.discount}</span></div>
       <div class="totals-row"><span>GST</span><span>${totalGst}</span></div>
+      ${
+        summary.additionalDiscount && parseFloat(summary.additionalDiscount) > 0.001
+          ? `<div class="totals-row"><span>ADDITIONAL DISCOUNT</span><span>-${summary.additionalDiscount}</span></div>`
+          : ''
+      }
       <div class="totals-row"><span>Round Off</span><span>${roundOffSign}${summary.roundOff}</span></div>
       <div class="totals-row grand-total"><span>${totalLabel}</span><span>${summary.grandTotal}</span></div>
       ${
