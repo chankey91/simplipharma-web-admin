@@ -15,6 +15,7 @@ import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import { PAYMENT_QR_DATA_URI } from '../assets/paymentQr';
 import { calculateOrderTotalsFromLines, hasBatchAssignment } from './orderTotals';
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
+import { normalizeAdditionalDiscount } from './purchaseInvoiceTotals';
 import { hasGstSnapshot } from './gstSnapshot';
 import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
 import {
@@ -613,6 +614,9 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ['SUB TOTAL', summary.subTotal],
     ['PRODUCT DISCOUNT', summary.discount],
     ['GST', (parseFloat(summary.sgst) + parseFloat(summary.cgst)).toFixed(2)],
+    ...(summary.additionalDiscount && parseFloat(summary.additionalDiscount) > 0.001
+      ? [['ADDITIONAL DISCOUNT', `-${summary.additionalDiscount}`] as string[]]
+      : []),
     ['ROUND OFF', summary.roundOff],
     ['GRAND TOTAL', summary.grandTotal],
     ...(summary.walletApplied && parseFloat(summary.walletApplied) > 0.01
@@ -929,9 +933,9 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
   });
   const totalSGST = printedPurchaseTax.sgst;
   const totalCGST = printedPurchaseTax.cgst;
-  const calculatedTotal = amountAfterDiscount + totalGST;
+  const calculatedTotal = amountAfterDiscount + totalGST - normalizeAdditionalDiscount(invoice.additionalDiscount);
   const roundoff = Math.round(calculatedTotal) - calculatedTotal;
-  const grandTotal = Math.round(calculatedTotal);
+  const grandTotal = Math.round(Math.max(0, calculatedTotal));
   
   // Tax summary
   const taxableAmount = amountAfterDiscount;
@@ -942,6 +946,8 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     igst: printedPurchaseTax.igst.toFixed(2),
     rate: avgGstRate.toFixed(0)
   };
+
+  const additionalDiscountAmt = normalizeAdditionalDiscount(invoice.additionalDiscount);
   
   // Summary (calculated after tax calculations)
   const summary = {
@@ -952,6 +958,7 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     roundOff: roundoff.toFixed(2),
     grandTotal: grandTotal.toFixed(2),
     amountInWords: numberToWords(grandTotal),
+    ...(additionalDiscountAmt > 0 ? { additionalDiscount: additionalDiscountAmt.toFixed(2) } : {}),
   };
   
   // Party details - buyer (SimpliPharma / Sanchet on purchase invoices)

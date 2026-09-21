@@ -17,6 +17,7 @@ import {
   FormControlLabel,
   Grid,
   IconButton,
+  InputAdornment,
   LinearProgress,
   List,
   ListItem,
@@ -51,6 +52,7 @@ import { useCreateMedicine } from '../hooks/useInventory';
 import { createMedicine, getMedicineById } from '../services/inventory';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
 import { getTodayDateStringIST } from '../utils/dateTime';
+import { normalizeAdditionalDiscount, roundPurchaseInvoicePayable } from '../utils/purchaseInvoiceTotals';
 import { auth } from '../services/firebase';
 import {
   createAndUploadInvoiceDraft,
@@ -547,7 +549,8 @@ const StackLines: React.FC<{
   busy: boolean;
   linesTaxableTotal: number;
   linesGstTotal: number;
-  linesAmountTotal: number;
+  additionalDiscount: number;
+  payableGrandTotal: number;
   nrNrxByMedicineId: Map<string, { nonReturnable: boolean; nrxDrug: boolean }>;
   patchLine: (lineId: string, patch: Partial<PurchaseInvoiceDraftResolvedLine>) => void;
   openAddMedicine: (
@@ -559,7 +562,8 @@ const StackLines: React.FC<{
   busy,
   linesTaxableTotal,
   linesGstTotal,
-  linesAmountTotal,
+  additionalDiscount,
+  payableGrandTotal,
   nrNrxByMedicineId,
   patchLine,
   openAddMedicine,
@@ -1013,9 +1017,17 @@ const StackLines: React.FC<{
         </Box>
         <Box textAlign="right">
           <Typography variant="caption" color="text.secondary">
+            Additional disc.
+          </Typography>
+          <Typography variant="body2">
+            {additionalDiscount > 0 ? `−₹${formatAmount(additionalDiscount)}` : '—'}
+          </Typography>
+        </Box>
+        <Box textAlign="right">
+          <Typography variant="caption" color="text.secondary">
             Grand total
           </Typography>
-          <Typography variant="subtitle1">₹{formatAmount(linesAmountTotal)}</Typography>
+          <Typography variant="subtitle1">₹{formatAmount(payableGrandTotal)}</Typography>
         </Box>
       </Box>
     </Box>
@@ -1043,6 +1055,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
   const [notes, setNotes] = useState('');
+  const [additionalDiscount, setAdditionalDiscount] = useState('');
   const [inboxDrafts, setInboxDrafts] = useState<PurchaseInvoiceDraft[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [addMedicineLineId, setAddMedicineLineId] = useState<string | null>(null);
@@ -1120,7 +1133,10 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     if (draft?.invoiceNumber) setInvoiceNumber(draft.invoiceNumber);
     if (draft?.invoiceDate) setInvoiceDate(draft.invoiceDate);
     if (draft?.notes != null) setNotes(draft.notes);
-  }, [draft?.invoiceNumber, draft?.invoiceDate, draft?.notes]);
+    if (draft?.additionalDiscount != null && draft.additionalDiscount > 0) {
+      setAdditionalDiscount(String(draft.additionalDiscount));
+    }
+  }, [draft?.invoiceNumber, draft?.invoiceDate, draft?.notes, draft?.additionalDiscount]);
 
   useEffect(() => {
     if (!draft?.resolvedLines) {
@@ -1202,6 +1218,8 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     () => lines.reduce((sum, line) => sum + lineAmountTotal(line), 0),
     [lines]
   );
+  const additionalDiscountAmt = normalizeAdditionalDiscount(additionalDiscount);
+  const payableGrandTotal = Math.round(Math.max(0, linesAmountTotal - additionalDiscountAmt));
 
   const avgLineConfidence = useMemo(() => {
     const vals = lines
@@ -1298,6 +1316,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       invoiceNumber,
       invoiceDate,
       notes: notes.trim() || null,
+      additionalDiscount: additionalDiscountAmt > 0 ? additionalDiscountAmt : null,
     });
   };
 
@@ -1607,8 +1626,12 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
         const afterDisc = base - (base * (i.discountPercentage || 0)) / 100;
         return s + (afterDisc * (i.gstRate || 0)) / 100;
       }, 0);
-      const calculatedTotal = subTotal - totalDiscount + taxAmount;
-      const grandTotal = Math.round(calculatedTotal);
+      const { grandTotal } = roundPurchaseInvoicePayable({
+        subTotal,
+        lineDiscount: totalDiscount,
+        tax: taxAmount,
+        additionalDiscount: additionalDiscountAmt,
+      });
       const taxPercentage = 0;
       setCommitProgress({
         open: true,
@@ -1630,6 +1653,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
           subTotal: Math.round(subTotal * 100) / 100,
           taxAmount: Math.round(taxAmount * 100) / 100,
           discount: totalDiscount > 0 ? Math.round(totalDiscount * 100) / 100 : undefined,
+          additionalDiscount: additionalDiscountAmt > 0 ? additionalDiscountAmt : undefined,
           taxPercentage,
           totalAmount: grandTotal,
           paymentStatus: 'Unpaid',
@@ -1994,6 +2018,21 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                     onChange={(e) => setInvoiceDate(e.target.value)}
                   />
                 </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Additional discount (₹)"
+                    size="small"
+                    value={additionalDiscount}
+                    onChange={(e) => setAdditionalDiscount(e.target.value)}
+                    helperText="Whole-invoice discount to settle the bill"
+                    inputProps={{ min: 0, step: 0.01 }}
+                    InputProps={{
+                      startAdornment: <InputAdornment position="start">₹</InputAdornment>,
+                    }}
+                  />
+                </Grid>
                 <Grid item xs={12}>
                   <TextField
                     fullWidth
@@ -2040,7 +2079,8 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                   busy={busy}
                   linesTaxableTotal={linesTaxableTotal}
                   linesGstTotal={linesGstTotal}
-                  linesAmountTotal={linesAmountTotal}
+                  additionalDiscount={additionalDiscountAmt}
+                  payableGrandTotal={payableGrandTotal}
                   nrNrxByMedicineId={nrNrxByMedicineId}
                   patchLine={patchLine}
                   openAddMedicine={openAddMedicine}

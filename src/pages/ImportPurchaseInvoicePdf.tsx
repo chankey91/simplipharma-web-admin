@@ -18,6 +18,7 @@ import {
   Autocomplete,
   CircularProgress,
   Alert,
+  InputAdornment,
 } from '@mui/material';
 import { ArrowBack, Delete, PictureAsPdf, Add } from '@mui/icons-material';
 import { format } from 'date-fns';
@@ -51,6 +52,7 @@ import {
 import type { MedicineResolveOption } from '../services/medicineResolution';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 import { getTodayDateStringIST } from '../utils/dateTime';
+import { normalizeAdditionalDiscount, roundPurchaseInvoicePayable } from '../utils/purchaseInvoiceTotals';
 import { Medicine, PurchaseInvoiceItem } from '../types';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { useAppDialog } from '../context/AppDialogProvider';
@@ -177,6 +179,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
   const [vendorId, setVendorId] = useState('');
+  const [additionalDiscount, setAdditionalDiscount] = useState('');
   const [detectedGstins, setDetectedGstins] = useState<string[]>([]);
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -354,6 +357,16 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
       const afterDisc = base - (base * (i.discountPercentage || 0)) / 100;
       return s + (afterDisc * (i.gstRate || 0)) / 100;
     }, 0);
+    const additionalDiscountAmt = normalizeAdditionalDiscount(additionalDiscount);
+    const { grandTotal } = roundPurchaseInvoicePayable({
+      subTotal,
+      lineDiscount: items.reduce((s, i) => {
+        const base = (i.purchasePrice || 0) * (i.quantity || 0);
+        return s + (base * (i.discountPercentage || 0)) / 100;
+      }, 0),
+      tax: taxAmount,
+      additionalDiscount: additionalDiscountAmt,
+    });
 
     try {
       await createInvoiceMutation.mutateAsync({
@@ -365,7 +378,8 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
           items,
           subTotal,
           taxAmount,
-          totalAmount: subTotal + taxAmount,
+          additionalDiscount: additionalDiscountAmt > 0 ? additionalDiscountAmt : undefined,
+          totalAmount: grandTotal,
           paymentStatus: 'Unpaid',
           createdBy: user.uid,
           createdAt: new Date(),
@@ -438,6 +452,21 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
               InputLabelProps={{ shrink: true }}
               value={invoiceDate}
               onChange={(e) => setInvoiceDate(e.target.value)}
+            />
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <TextField
+              fullWidth
+              size="small"
+              type="number"
+              label="Additional discount (₹)"
+              value={additionalDiscount}
+              onChange={(e) => setAdditionalDiscount(e.target.value)}
+              helperText="Whole-invoice discount to settle the bill"
+              inputProps={{ min: 0, step: 0.01 }}
+              InputProps={{
+                startAdornment: <InputAdornment position="start">₹</InputAdornment>,
+              }}
             />
           </Grid>
           <Grid item xs={12} md={6}>

@@ -6,6 +6,8 @@ import {
   getAllPurchaseReturns,
   getPurchaseReturnById,
   getPurchaseReturnsByVendor,
+  updatePurchaseReturnItemOutcomes,
+  type PurchaseReturnItemOutcomeUpdate,
 } from '../services/purchaseReturns';
 
 export const usePurchaseReturns = (opts?: { enabled?: boolean }) => {
@@ -54,6 +56,25 @@ export const useCreatePurchaseReturnsMultiVendor = () => {
       createPurchaseReturnsMultiVendor(inputs),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['purchaseReturns'] });
+      void queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      void queryClient.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+};
+
+export const useUpdatePurchaseReturnItemOutcomes = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      returnId,
+      updates,
+    }: {
+      returnId: string;
+      updates: PurchaseReturnItemOutcomeUpdate[];
+    }) => updatePurchaseReturnItemOutcomes(returnId, updates),
+    onSuccess: (_data, vars) => {
+      void queryClient.invalidateQueries({ queryKey: ['purchaseReturns'] });
+      void queryClient.invalidateQueries({ queryKey: ['purchaseReturn', vars.returnId] });
       void queryClient.invalidateQueries({ queryKey: ['medicines'] });
       void queryClient.invalidateQueries({ queryKey: ['inventory'] });
     },

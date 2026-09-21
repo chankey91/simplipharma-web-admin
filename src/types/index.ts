@@ -481,7 +481,13 @@ export interface PurchaseInvoice {
   subTotal: number;
   taxAmount: number;
   taxPercentage?: number;
+  /** Sum of line trade-discount amounts (from item discount %). */
   discount?: number;
+  /**
+   * Extra rupee discount on the whole bill (cash / special / additional).
+   * Reduces payable `totalAmount`; does not change line GST taxable.
+   */
+  additionalDiscount?: number;
   totalAmount: number;
   paymentStatus: PaymentStatus;
   paymentMethod?: PaymentMethod;
@@ -508,7 +514,17 @@ export interface PurchaseReturnItem {
   gstRate?: number;
   expiryDate?: Date | any;
   totalAmount: number;
+  /**
+   * Whether the vendor actually took this line back.
+   * Missing on older docs = already returned (stock was deducted on create).
+   */
+  returnOutcome?: 'pending' | 'returned' | 'not_returned';
+  /** True after inventory was reduced for this line. */
+  stockDeducted?: boolean;
+  returnedAt?: Date | any;
 }
+
+export type PurchaseReturnFulfillmentStatus = 'pending' | 'partial' | 'completed';
 
 /** Goods returned from warehouse stock to a vendor. */
 export interface PurchaseReturn {
@@ -527,6 +543,8 @@ export interface PurchaseReturn {
   reason?: string;
   createdAt: Date | any;
   createdBy: string;
+  /** Missing on older docs = already completed (stock deducted on create). */
+  fulfillmentStatus?: PurchaseReturnFulfillmentStatus;
 }
 
 export type ProductDemandStatus = 'pending' | 'fulfilled' | 'rejected';
@@ -744,6 +762,8 @@ export interface PurchaseInvoiceDraft {
   vendorName?: string;
   invoiceNumber?: string;
   invoiceDate?: string;
+  /** Whole-invoice extra discount in rupees (extracted or entered on review). */
+  additionalDiscount?: number;
   /** Operator / extracted notes (aligned with Add Invoice). */
   notes?: string;
   extractedLines?: PurchaseInvoiceDraftExtractedLine[];

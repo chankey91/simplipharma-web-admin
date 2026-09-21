@@ -521,7 +521,7 @@ export const CreatePurchaseReturnPage: React.FC = () => {
       .map((g) => `• ${g.vendorName}: ${g.lines.length} item(s)`)
       .join('\n');
     const ok = await confirm(
-      `Create ${assignedGroups.length} purchase return(s) for ${items.length} item(s), total ₹${totalAmount.toFixed(2)}?\n\n${vendorSummary}\n\nStock will be deducted from inventory.`
+      `Create ${assignedGroups.length} purchase return(s) for ${items.length} item(s), total ₹${totalAmount.toFixed(2)}?\n\n${vendorSummary}\n\nStock stays in inventory until you mark items as returned.`
     );
     if (!ok) return;
 
@@ -618,7 +618,7 @@ export const CreatePurchaseReturnPage: React.FC = () => {
       <Alert severity="info" sx={{ mb: 2 }}>
         Add every strip first (name or batch). Vendor is filled from the purchase invoice that
         billed that batch. The list is grouped by vendor — download Excel to pack, then create
-        one purchase return per vendor. Stock is not deducted until you save.
+        one purchase return per vendor. Stock is deducted later, when you mark items as returned.
       </Alert>
       {invoicesLoading && (
         <Alert severity="warning" sx={{ mb: 2 }}>

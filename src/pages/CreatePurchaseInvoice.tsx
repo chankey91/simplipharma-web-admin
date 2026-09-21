@@ -30,6 +30,7 @@ import {
   CardContent,
   FormControlLabel,
   Checkbox,
+  InputAdornment,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -73,6 +74,10 @@ import { useAppDialog } from '../context/AppDialogProvider';
 import { VendorFormDialog } from '../components/VendorFormDialog';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 import { resolveMedicineNrNrxFlags } from '../utils/vendorLastPurchase';
+import {
+  normalizeAdditionalDiscount,
+  roundPurchaseInvoicePayable,
+} from '../utils/purchaseInvoiceTotals';
 
 const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
 
@@ -162,6 +167,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     vendorId: '',
     invoiceDate: getTodayDateStringIST(),
     notes: '',
+    additionalDiscount: '',
   });
   const { lastPurchaseByMedicineId, nrNrxByMedicineId } = useVendorLastPurchases(
     undefined,
@@ -312,6 +318,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       vendorId: existingInvoice.vendorId || '',
       invoiceDate: getTodayDateStringIST(invDate),
       notes: existingInvoice.notes || '',
+      additionalDiscount:
+        existingInvoice.additionalDiscount != null && existingInvoice.additionalDiscount > 0
+          ? String(existingInvoice.additionalDiscount)
+          : '',
     });
     setItems(existingInvoice.items || []);
   }, [isEditMode, existingInvoice]);
@@ -429,17 +439,19 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       return sum + gstAmount;
     }, 0);
 
-    // Calculate total: subtotal - discount + tax
-    const calculatedTotal = subTotal - totalDiscount + totalTax;
-    
-    // Calculate round off
-    const roundoff = Math.round(calculatedTotal) - calculatedTotal;
-    const grandTotal = Math.round(calculatedTotal);
+    // Payable: subtotal - line discount + tax - additional (whole-invoice) discount
+    const additionalDiscount = normalizeAdditionalDiscount(invoiceData.additionalDiscount);
+    const { roundoff, grandTotal } = roundPurchaseInvoicePayable({
+      subTotal,
+      lineDiscount: totalDiscount,
+      tax: totalTax,
+      additionalDiscount,
+    });
 
-    return { subTotal, totalDiscount, totalTax, roundoff, grandTotal };
+    return { subTotal, totalDiscount, totalTax, additionalDiscount, roundoff, grandTotal };
   };
 
-  const { subTotal, totalDiscount, totalTax, roundoff, grandTotal } = calculateTotals();
+  const { subTotal, totalDiscount, totalTax, additionalDiscount, roundoff, grandTotal } = calculateTotals();
 
   const parseNumber = (value: string | number | undefined): number => {
     if (value === undefined || value === null || value === '') return 0;
@@ -955,6 +967,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             subTotal,
             taxAmount: totalTax,
             discount: totalDiscount > 0 ? totalDiscount : 0,
+            additionalDiscount: additionalDiscount > 0 ? additionalDiscount : 0,
             totalAmount: grandTotal,
             notes: invoiceData.notes || undefined,
           },
@@ -983,6 +996,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           subTotal,
           taxAmount: totalTax,
           discount: totalDiscount > 0 ? totalDiscount : undefined,
+          additionalDiscount: additionalDiscount > 0 ? additionalDiscount : undefined,
           totalAmount: grandTotal,
           paymentStatus: 'Unpaid',
           notes: invoiceData.notes || undefined,
@@ -1141,6 +1155,20 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
               <Typography color="textSecondary">Tax:</Typography>
               <Typography>₹{totalTax.toFixed(2)}</Typography>
             </Box>
+            <TextField
+              fullWidth
+              size="small"
+              type="number"
+              label="Additional discount"
+              value={invoiceData.additionalDiscount}
+              onChange={(e) => setInvoiceData({ ...invoiceData, additionalDiscount: e.target.value })}
+              helperText="Whole-invoice discount to settle the bill amount"
+              inputProps={{ min: 0, step: 0.01 }}
+              InputProps={{
+                startAdornment: <InputAdornment position="start">₹</InputAdornment>,
+              }}
+              sx={{ my: 1.5 }}
+            />
             {Math.abs(roundoff) > 0.01 && (
               <Box display="flex" justifyContent="space-between" mb={1}>
                 <Typography color="textSecondary">Round Off:</Typography>

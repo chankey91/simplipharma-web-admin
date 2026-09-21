@@ -241,6 +241,7 @@ export const processPurchaseInvoiceDraft = ff
           invoiceNumber: extracted.invoiceNumber || null,
           invoiceDate: extracted.invoiceDate || null,
           notes: extracted.notes || null,
+          additionalDiscount: extracted.additionalDiscount ?? null,
           rawTextPreview: (extracted.rawText || '').slice(0, 8000),
           extractedLines: extracted.lines,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),

@@ -163,6 +163,7 @@ export async function updateInvoiceDraftReview(
     invoiceNumber?: string;
     invoiceDate?: string;
     notes?: string | null;
+    additionalDiscount?: number | null;
     resolvedLines?: PurchaseInvoiceDraftResolvedLine[];
     status?: PurchaseInvoiceDraftStatus;
   }
