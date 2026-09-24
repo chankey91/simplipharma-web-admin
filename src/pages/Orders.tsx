@@ -45,6 +45,7 @@ import {
   CheckCircle,
   MergeType,
   OpenInNew,
+  Refresh,
 } from '@mui/icons-material';
 import {
   useOrders,
@@ -352,7 +353,7 @@ export const OrdersPage: React.FC = () => {
     };
   }, [hasDateFilter, fromFilterMs, toFilterMs]);
 
-  const { data: rangedOrders, isLoading: rangeLoading } = useQuery({
+  const { data: rangedOrders, isLoading: rangeLoading, isFetching: rangeFetching } = useQuery({
     queryKey: ['ordersInRange', dateRangeBounds?.startMs, dateRangeBounds?.endMsExclusive],
     queryFn: () =>
       getOrdersInRange(dateRangeBounds!.startMs, dateRangeBounds!.endMsExclusive),
@@ -363,7 +364,7 @@ export const OrdersPage: React.FC = () => {
   });
 
   // Fallback path: full collection when Typesense unavailable and no date filter.
-  const { data: allOrders, isLoading: allLoading } = useOrders({
+  const { data: allOrders, isLoading: allLoading, isFetching: allFetching } = useOrders({
     enabled: typesenseDisabled && !hasDateFilter,
   });
 
@@ -703,13 +704,21 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
-  const refreshListsAfterBulk = async () => {
+  const refreshOrderLists = async () => {
     await invalidateOrderListQueries(queryClient);
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ['ordersSearch'], type: 'active' }),
       queryClient.refetchQueries({ queryKey: ['ordersInRange'], type: 'active' }),
       queryClient.refetchQueries({ queryKey: ['orders'], type: 'active' }),
     ]);
+  };
+
+  const handleRefresh = () => {
+    void refreshOrderLists();
+  };
+
+  const refreshListsAfterBulk = async () => {
+    await refreshOrderLists();
     setSelectedById({});
   };
 
@@ -1004,23 +1013,37 @@ export const OrdersPage: React.FC = () => {
     return <Loading message="Loading orders..." />;
   }
 
-  const isBusy = !useLocalList && searchFetching;
+  const isBusy = useLocalList
+    ? hasDateFilter
+      ? rangeFetching && !rangeLoading
+      : allFetching && !allLoading
+    : searchFetching;
 
   return (
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Orders Management</Typography>
-        {canReindexOrders && (
-        <Button
-          variant="outlined"
-          color="secondary"
-          startIcon={<CloudSync />}
-          onClick={() => void handleReindex()}
-          disabled={reindexing}
-        >
-          {reindexing ? 'Indexing…' : 'Rebuild search index'}
-        </Button>
-        )}
+        <Box display="flex" gap={1} alignItems="center">
+          <Button
+            variant="outlined"
+            startIcon={<Refresh />}
+            onClick={handleRefresh}
+            disabled={isBusy}
+          >
+            Refresh
+          </Button>
+          {canReindexOrders && (
+            <Button
+              variant="outlined"
+              color="secondary"
+              startIcon={<CloudSync />}
+              onClick={() => void handleReindex()}
+              disabled={reindexing}
+            >
+              {reindexing ? 'Indexing…' : 'Rebuild search index'}
+            </Button>
+          )}
+        </Box>
       </Box>
 
       {reindexMessage && (
