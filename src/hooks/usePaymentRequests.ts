@@ -4,6 +4,7 @@ import {
   getPaymentRequestsByStatus,
   getPaymentRequestStatusCounts,
   rejectPaymentRequest,
+  revertPaymentRequest,
 } from '../services/paymentRequests';
 import { getOrderPaymentStatuses } from '../services/orders';
 import { PaymentRequestStatus } from '../types';
@@ -91,6 +92,36 @@ export const useRejectPaymentRequest = () => {
       queryClient.invalidateQueries({ queryKey: ['order'] });
       queryClient.invalidateQueries({ queryKey: ['orderPaymentStatuses'] });
       queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
+    },
+  });
+};
+
+export const useRevertPaymentRequest = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      requestId,
+      reviewedBy,
+      revertReason,
+    }: {
+      requestId: string;
+      reviewedBy: string;
+      revertReason?: string;
+    }) => revertPaymentRequest(requestId, { reviewedBy, revertReason }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['paymentRequests'] });
+      queryClient.invalidateQueries({ queryKey: ['paymentRequestStatusCounts'] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] });
+      queryClient.invalidateQueries({ queryKey: ['order'] });
+      queryClient.invalidateQueries({ queryKey: ['orderPaymentStatuses'] });
+      queryClient.invalidateQueries({ queryKey: ['receivableOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
+      queryClient.invalidateQueries({ queryKey: ['so-cash-unremitted'] });
+      if (result?.orderId) {
+        queryClient.invalidateQueries({ queryKey: ['order', result.orderId] });
+      }
     },
   });
 };
