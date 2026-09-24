@@ -72,6 +72,20 @@ function getRetailerRegistrationEmail(req) {
     const email = String((_c = (_b = (_a = req.email) !== null && _a !== void 0 ? _a : req.retailerEmail) !== null && _b !== void 0 ? _b : req.contactEmail) !== null && _c !== void 0 ? _c : '').trim();
     return email || null;
 }
+function firstNonEmptyString(...values) {
+    for (const value of values) {
+        const text = String(value !== null && value !== void 0 ? value : '').trim();
+        if (text)
+            return text;
+    }
+    return '';
+}
+/** Town / district keys from the SO/retailer registration app. */
+function resolveRetailerRequestLocation(req) {
+    const town = firstNonEmptyString(req.town, req.city, req.cityName, req.townName);
+    const district = firstNonEmptyString(req.district, req.districtName);
+    return Object.assign(Object.assign({}, (town ? { town } : {})), (district ? { district } : {}));
+}
 function escapeHtmlText(s) {
     return String(s)
         .replace(/&/g, '&amp;')
@@ -687,6 +701,7 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
                 console.error('approveRetailerRequest: failed to generate store code:', codeErr);
             }
         }
+        const requestLocation = resolveRetailerRequestLocation(req);
         const userData = {
             uid: userRecord.uid,
             email: cred.email,
@@ -695,6 +710,8 @@ exports.approveRetailerRequest = functionRegion_1.ff.https.onCall(async (data, c
             shopName: req.shopName,
             phoneNumber: req.phoneNumber,
             address: req.address,
+            town: requestLocation.town,
+            district: requestLocation.district,
             licenceNumber: req.licenceNumber,
             aadharNumber: req.aadharNumber,
             ownerName: req.ownerName,

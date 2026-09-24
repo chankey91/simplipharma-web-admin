@@ -117,6 +117,114 @@ function mapStoreDoc(docSnap: { id: string; data: () => Record<string, unknown> 
   } as User;
 }
 
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function locationFromRegistration(data: Record<string, unknown>): { town?: string; district?: string } {
+  const town = firstNonEmptyString(data.town, data.city, data.cityName, data.townName);
+  const district = firstNonEmptyString(data.district, data.districtName);
+  return {
+    ...(town ? { town } : {}),
+    ...(district ? { district } : {}),
+  };
+}
+
+/**
+ * Older approvals omitted town/district on the user doc even when the
+ * registration request had them. Fill gaps for list + details, and persist
+ * when the signed-in user can write stores.
+ */
+async function hydrateTownDistrictFromRegistrationRequests(stores: User[]): Promise<User[]> {
+  const needsHydrate = stores.some(
+    (s) => !String(s.town || '').trim() || !String(s.district || '').trim()
+  );
+  if (!needsHydrate) return stores;
+
+  const col = collection(db, 'retailer_registration_requests');
+  let requestDocs: QueryDocumentSnapshot[] = [];
+  try {
+    const snap = await getDocs(query(col, where('status', '==', 'approved')));
+    requestDocs = snap.docs;
+  } catch {
+    try {
+      const snap = await getDocs(col);
+      requestDocs = snap.docs.filter((d) => String(d.data()?.status || '') === 'approved');
+    } catch {
+      return stores;
+    }
+  }
+
+  const byEmail = new Map<string, { town?: string; district?: string }>();
+  for (const d of requestDocs) {
+    const data = d.data() as Record<string, unknown>;
+    const email = String(data.email ?? data.retailerEmail ?? data.contactEmail ?? '')
+      .trim()
+      .toLowerCase();
+    if (!email) continue;
+    const loc = locationFromRegistration(data);
+    if (!loc.town && !loc.district) continue;
+    const prev = byEmail.get(email) || {};
+    byEmail.set(email, {
+      town: prev.town || loc.town,
+      district: prev.district || loc.district,
+    });
+  }
+  if (byEmail.size === 0) return stores;
+
+  const next = stores.map((store) => {
+    const email = String(store.email || '').trim().toLowerCase();
+    const loc = email ? byEmail.get(email) : undefined;
+    if (!loc) return store;
+    return {
+      ...store,
+      town: String(store.town || '').trim() || loc.town,
+      district: String(store.district || '').trim() || loc.district,
+    };
+  });
+
+  const toPersist = next.filter((store, i) => {
+    const before = stores[i];
+    return (
+      String(store.town || '').trim() !== String(before.town || '').trim() ||
+      String(store.district || '').trim() !== String(before.district || '').trim()
+    );
+  });
+
+  if (toPersist.length > 0) {
+    try {
+      let batch = writeBatch(db);
+      let ops = 0;
+      const flush = async () => {
+        if (ops === 0) return;
+        await batch.commit();
+        batch = writeBatch(db);
+        ops = 0;
+      };
+      for (const store of toPersist) {
+        const payload: Record<string, string> = {};
+        const town = String(store.town || '').trim();
+        const district = String(store.district || '').trim();
+        if (town) payload.town = town;
+        if (district) payload.district = district;
+        if (Object.keys(payload).length === 0) continue;
+        batch.update(doc(db, 'users', store.id), payload);
+        ops += 1;
+        if (ops >= FIRESTORE_BATCH_LIMIT) await flush();
+      }
+      await flush();
+    } catch {
+      // In-memory merge still returns town/district when the client cannot write.
+    }
+  }
+
+  return next;
+}
+
 export const getAllStores = async (): Promise<User[]> => {
   const usersCol = collection(db, 'users');
   const [retailersSnap, dualSnap] = await Promise.all([
@@ -130,7 +238,7 @@ export const getAllStores = async (): Promise<User[]> => {
   for (const d of dualSnap.docs) {
     if (!byId.has(d.id)) byId.set(d.id, mapStoreDoc(d));
   }
-  return Array.from(byId.values());
+  return hydrateTownDistrictFromRegistrationRequests(Array.from(byId.values()));
 };
 
 /**
