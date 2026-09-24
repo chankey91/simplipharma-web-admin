@@ -1,6 +1,7 @@
 import {
   collection,
   db,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -646,4 +647,176 @@ export const rejectPaymentRequest = async (
     rejectionReason: payload.rejectionReason,
     updatedAt: serverTimestamp(),
   });
+};
+
+function paymentKind(data: Record<string, unknown>): 'cash' | 'wallet' {
+  const kind = String(data.settlementKind || '').trim();
+  if (kind === 'wallet' || kind === 'cash') return kind;
+  const method = String(data.paymentMethod || '').trim().toLowerCase();
+  return method === 'wallet' ? 'wallet' : 'cash';
+}
+
+function isRemittedStatus(value: unknown): boolean {
+  return String(value || '').trim() === 'remitted';
+}
+
+/**
+ * Undo an approved payment request: zero its order payment rows, restore wallet
+ * credit notes, and recompute order paid/due/status. Blocked if SO cash was remitted.
+ */
+export const revertPaymentRequest = async (
+  requestId: string,
+  payload: { reviewedBy: string; revertReason?: string }
+): Promise<{ orderId: string; paymentStatus: 'Paid' | 'Partial' | 'Unpaid' }> => {
+  const reqRef = doc(db, 'payment_requests', requestId);
+  const reqSnap = await getDoc(reqRef);
+  if (!reqSnap.exists()) {
+    throw new Error('Payment request not found');
+  }
+
+  const request = parsePaymentRequestDoc(
+    reqSnap.id,
+    reqSnap.data() as Record<string, unknown>
+  );
+  if (request.status !== 'approved') {
+    throw new Error('Only approved payment requests can be reverted');
+  }
+  if (isRemittedStatus(request.remittanceStatus)) {
+    throw new Error(
+      'Cannot revert: sales officer cash for this request has already been remitted to office.'
+    );
+  }
+
+  const orderRef = doc(db, 'orders', request.orderId);
+  const orderSnap = await getDoc(orderRef);
+  if (!orderSnap.exists()) {
+    throw new Error('Order not found for this payment request');
+  }
+
+  const order = { id: orderSnap.id, ...(orderSnap.data() as Record<string, unknown>) } as Order;
+  const paymentsSnap = await getDocs(collection(db, 'orders', request.orderId, 'payments'));
+
+  let reversedWallet = 0;
+  let foundMatchingRow = false;
+  let foundWalletRow = false;
+  const appsFromPayments: NonNullable<PaymentRequest['creditApplications']> = [];
+
+  for (const d of paymentsSnap.docs) {
+    const data = d.data() as Record<string, unknown>;
+    if (String(data.paymentRequestId || '') !== requestId) continue;
+    if (
+      isRemittedStatus(data.remittanceStatus) &&
+      roundMoney2(Math.max(0, Number(data.amount ?? 0))) > 0.01
+    ) {
+      throw new Error(
+        'Cannot revert: sales officer cash for this request has already been remitted to office.'
+      );
+    }
+  }
+
+  for (const d of paymentsSnap.docs) {
+    const data = d.data() as Record<string, unknown>;
+    if (String(data.paymentRequestId || '') !== requestId) continue;
+    foundMatchingRow = true;
+    const amt = roundMoney2(Math.max(0, Number(data.amount ?? 0)));
+    const kind = paymentKind(data);
+    if (kind === 'wallet') foundWalletRow = true;
+    if (amt <= 0.01) continue;
+    if (kind === 'wallet' && Array.isArray(data.creditApplications)) {
+      appsFromPayments.push(
+        ...(data.creditApplications as NonNullable<PaymentRequest['creditApplications']>)
+      );
+    }
+    const existingNotes = String(data.notes || '').trim();
+    await updateDoc(d.ref, {
+      amount: 0,
+      reversedAt: Timestamp.now(),
+      notes: existingNotes
+        ? `${existingNotes} (reverted payment request ${requestId})`
+        : `Reverted payment request ${requestId}`,
+    });
+    if (kind === 'wallet') reversedWallet = roundMoney2(reversedWallet + amt);
+  }
+
+  const approvedCredit = roundMoney2(Math.max(0, Number(request.approvedCreditAmount ?? 0)));
+  const shouldReverseWallet =
+    reversedWallet > 0.01 || (!foundWalletRow && approvedCredit > 0.01);
+  if (shouldReverseWallet) {
+    const toReverse =
+      appsFromPayments.length > 0 ? appsFromPayments : request.creditApplications;
+    if (toReverse?.length) await reverseCreditApplications(toReverse);
+  }
+
+  let nextPaid = 0;
+  let nextWallet = 0;
+  let lastMethod: Order['paymentMethod'] = 'Cash';
+  let lastTxn: string | null = null;
+
+  for (const d of paymentsSnap.docs) {
+    const data = d.data() as Record<string, unknown>;
+    const amt =
+      String(data.paymentRequestId || '') === requestId
+        ? 0
+        : roundMoney2(Math.max(0, Number(data.amount ?? 0)));
+    if (amt <= 0.01) continue;
+    nextPaid = roundMoney2(nextPaid + amt);
+    if (paymentKind(data) === 'wallet') {
+      nextWallet = roundMoney2(nextWallet + amt);
+    }
+    const method = String(data.paymentMethod || '').trim();
+    if (method) lastMethod = method as Order['paymentMethod'];
+    const txn = String(data.transactionId || '').trim();
+    if (txn) lastTxn = txn;
+  }
+
+  const approvedCash = roundMoney2(Math.max(0, Number(request.approvedAmount ?? 0)));
+  if (!foundMatchingRow && approvedCash + approvedCredit > 0.01) {
+    const currentPaid = Number(order.paidAmount ?? 0);
+    const previousCredit = Number(order.creditApplied ?? 0);
+    nextPaid = roundMoney2(Math.max(0, currentPaid - approvedCash - approvedCredit));
+    nextWallet = roundMoney2(Math.max(0, previousCredit - approvedCredit));
+  }
+
+  const totalAmount = Number(order.totalAmount ?? request.orderTotalSnapshot ?? 0);
+  nextPaid = roundMoney2(Math.min(totalAmount, Math.max(0, nextPaid)));
+  const nextDue = roundMoney2(Math.max(0, totalAmount - nextPaid));
+  const nextStatus: 'Paid' | 'Partial' | 'Unpaid' =
+    nextDue <= 0.01 ? 'Paid' : nextPaid > 0.01 ? 'Partial' : 'Unpaid';
+
+  await updateDoc(orderRef, {
+    paidAmount: nextPaid,
+    dueAmount: nextDue,
+    paymentStatus: nextStatus,
+    paymentMethod: lastMethod,
+    transactionId: lastTxn,
+    paymentReviewStatus: nextStatus === 'Paid' ? 'none' : 'pending_admin_review',
+    paymentRejectedReason: null,
+    lastPaymentRequestId: requestId,
+    ...(nextWallet > 0.01
+      ? { creditApplied: nextWallet }
+      : {
+          creditApplied: deleteField(),
+          creditAppliedAt: deleteField(),
+          creditAppliedDate: deleteField(),
+        }),
+  });
+
+  await updateDoc(reqRef, {
+    status: 'pending_admin_review',
+    approvedAmount: 0,
+    approvedCreditAmount: 0,
+    reviewedBy: deleteField(),
+    reviewedAt: deleteField(),
+    reviewNote: deleteField(),
+    rejectionReason: deleteField(),
+    remittanceStatus: deleteField(),
+    remittanceId: deleteField(),
+    remittedAt: deleteField(),
+    revertedBy: payload.reviewedBy,
+    revertedAt: serverTimestamp(),
+    revertReason: payload.revertReason || null,
+    updatedAt: serverTimestamp(),
+  });
+
+  return { orderId: request.orderId, paymentStatus: nextStatus };
 };

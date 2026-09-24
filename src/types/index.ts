@@ -319,6 +319,9 @@ export interface PaymentRequest {
   rejectionReason?: string;
   approvedAmount?: number;
   approvedCreditAmount?: number;
+  revertedBy?: string;
+  revertedAt?: Date | any;
+  revertReason?: string;
   orderTotalSnapshot: number;
   dueBeforeRequestSnapshot: number;
   creditAvailableSnapshot?: number;

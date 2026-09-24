@@ -16,6 +16,7 @@ import {
   TableRow,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { Refresh } from '@mui/icons-material';
@@ -27,8 +28,10 @@ import {
   usePaymentRequestStatusCounts,
   useOrderPaymentStatuses,
   useRejectPaymentRequest,
+  useRevertPaymentRequest,
 } from '../hooks/usePaymentRequests';
 import { useAppDialog } from '../context/AppDialogProvider';
+import type { PaymentRequest } from '../types';
 
 type RequestTab = 'pending_admin_review' | 'approved' | 'rejected';
 
@@ -60,8 +63,11 @@ export const PaymentRequestsPage: React.FC = () => {
   const { data: orderPaymentByIdMap } = useOrderPaymentStatuses(orderIds);
   const approveMutation = useApprovePaymentRequest();
   const rejectMutation = useRejectPaymentRequest();
-  const { alert } = useAppDialog();
+  const revertMutation = useRevertPaymentRequest();
+  const { alert, confirm } = useAppDialog();
   const [rejectReasonById, setRejectReasonById] = useState<Record<string, string>>({});
+  const actionPending =
+    approveMutation.isPending || rejectMutation.isPending || revertMutation.isPending;
 
   const handleApprove = async (requestId: string, resettle = false) => {
     try {
@@ -103,6 +109,35 @@ export const PaymentRequestsPage: React.FC = () => {
     }
   };
 
+  const handleRevert = async (request: PaymentRequest) => {
+    if (request.remittanceStatus === 'remitted') {
+      await alert(
+        'Cannot revert: sales officer cash for this request has already been remitted to office.',
+        { severity: 'warning' }
+      );
+      return;
+    }
+    const cash = Number(request.approvedAmount ?? request.requestedAmount ?? 0);
+    const wallet = Number(request.approvedCreditAmount ?? requestedWallet(request));
+    const ok = await confirm(
+      `Revert this approved payment? This undoes posted cash/online (${formatCurrency(cash)}) and wallet credit (${formatCurrency(wallet)}), restores credit notes, and recalculates the invoice. The request returns to pending.`,
+      { title: 'Revert approved payment', confirmLabel: 'Revert', destructive: true }
+    );
+    if (!ok) return;
+    try {
+      const result = await revertMutation.mutateAsync({
+        requestId: request.id,
+        reviewedBy: auth.currentUser?.email || auth.currentUser?.uid || 'admin',
+      });
+      await alert(
+        `Payment reverted. Invoice is now ${result.paymentStatus}. The request is back in pending.`,
+        { severity: 'success' }
+      );
+    } catch (err: any) {
+      await alert(err?.message || 'Failed to revert payment request', { severity: 'error' });
+    }
+  };
+
   const handleRefresh = () => {
     refetch();
   };
@@ -130,7 +165,8 @@ export const PaymentRequestsPage: React.FC = () => {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Retailer/SO payment requests for delivered invoices. Approve posts cash/online plus wallet
         credit. Wallet-only requests show ₹0.00 requested — they still settle the invoice when
-        approved.
+        approved. Revert on an approved request undoes those postings unless SO cash is already
+        remitted.
       </Typography>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
@@ -285,7 +321,7 @@ export const PaymentRequestsPage: React.FC = () => {
                           size="small"
                           variant="contained"
                           onClick={() => handleApprove(r.id)}
-                          disabled={approveMutation.isPending || rejectMutation.isPending}
+                          disabled={actionPending}
                         >
                           Approve
                         </Button>
@@ -302,21 +338,43 @@ export const PaymentRequestsPage: React.FC = () => {
                           color="error"
                           variant="outlined"
                           onClick={() => handleReject(r.id)}
-                          disabled={approveMutation.isPending || rejectMutation.isPending}
+                          disabled={actionPending}
                         >
                           Reject
                         </Button>
                       </Box>
-                    ) : r.status === 'approved' &&
-                      (orderPaymentByIdMap?.get(r.orderId) || 'Unpaid') !== 'Paid' ? (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={() => handleApprove(r.id, true)}
-                        disabled={approveMutation.isPending || rejectMutation.isPending}
-                      >
-                        Apply to invoice
-                      </Button>
+                    ) : r.status === 'approved' ? (
+                      <Box display="flex" justifyContent="flex-end" gap={1} flexWrap="wrap">
+                        {(orderPaymentByIdMap?.get(r.orderId) || 'Unpaid') !== 'Paid' && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => handleApprove(r.id, true)}
+                            disabled={actionPending}
+                          >
+                            Apply to invoice
+                          </Button>
+                        )}
+                        <Tooltip
+                          title={
+                            r.remittanceStatus === 'remitted'
+                              ? 'SO cash already remitted — cannot revert'
+                              : 'Undo posted cash, wallet, and invoice totals'
+                          }
+                        >
+                          <span>
+                            <Button
+                              size="small"
+                              color="error"
+                              variant="outlined"
+                              onClick={() => handleRevert(r)}
+                              disabled={actionPending || r.remittanceStatus === 'remitted'}
+                            >
+                              Revert
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      </Box>
                     ) : (
                       '—'
                     )}
