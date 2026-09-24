@@ -518,12 +518,23 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     ]
   );
 
+  /** Stock-batch key on the line when Add/Edit dialog opened. Empty for a new line. */
+  const lineBatchKeyWhenOpenedRef = useRef('');
+
+  const currentLineStockBatchKey = purchaseItemStockBatchNumber({
+    batchNumber: String(currentItem.batchNumber || ''),
+    receivedBatchNumber: String(currentItem.receivedBatchNumber || ''),
+  });
+  const batchKeyChangedSinceOpen =
+    currentLineStockBatchKey !== lineBatchKeyWhenOpenedRef.current;
+  /** Fill from inventory on add, or when editing after the batch number actually changed. */
+  const shouldFillFromExistingBatch =
+    itemDialog.itemIndex === null || batchKeyChangedSinceOpen;
+
   /** Fill item fields from inventory when batch already exists for this medicine (quantity unchanged). */
   const applyExistingBatchDetails = () => {
-    const stockBatchNumber = purchaseItemStockBatchNumber({
-      batchNumber: String(currentItem.batchNumber || ''),
-      receivedBatchNumber: String(currentItem.receivedBatchNumber || ''),
-    });
+    if (!shouldFillFromExistingBatch) return;
+    const stockBatchNumber = currentLineStockBatchKey;
     if (!currentItem.medicineId || !stockBatchNumber) return;
 
     const batch = findExistingStockBatch(currentItem.medicineId, stockBatchNumber);
@@ -611,6 +622,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       nonReturnable: priorNrNrx.nonReturnable,
       nrxDrug: priorNrNrx.nrxDrug,
     });
+    lineBatchKeyWhenOpenedRef.current = '';
     setItemDialog({ open: true, itemIndex: null });
   };
 
@@ -750,13 +762,15 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       ...(currentItem.nrxDrug === true ? { nrxDrug: true } : {}),
     };
 
-    if (itemDialog.itemIndex !== null) {
-      const newItems = [...items];
-      newItems[itemDialog.itemIndex] = newItem;
-      setItems(newItems);
-    } else {
-      setItems([...items, newItem]);
-    }
+    const editIndex = itemDialog.itemIndex;
+    setItems((prev) => {
+      if (editIndex !== null) {
+        const next = [...prev];
+        next[editIndex] = newItem;
+        return next;
+      }
+      return [...prev, newItem];
+    });
 
     setItemDialog({ open: false, itemIndex: null });
     setSelectedMedicine(null);
@@ -819,6 +833,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     // Keep medicine in picker cache so GST / batch helpers work while editing.
     const cached = lookupMedicine(item.medicineId);
     if (cached) setSelectedMedicine(cached);
+    lineBatchKeyWhenOpenedRef.current = purchaseItemStockBatchNumber({
+      batchNumber: item.batchNumber || '',
+      receivedBatchNumber: item.receivedBatchNumber || '',
+    });
     setItemDialog({ open: true, itemIndex: index });
   };
 
@@ -1455,7 +1473,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 onChange={(e) => setCurrentItem({ ...currentItem, batchNumber: e.target.value })}
                 onBlur={applyExistingBatchDetails}
                 helperText={
-                  existingBatchForCurrentItem
+                  existingBatchForCurrentItem && shouldFillFromExistingBatch
                     ? 'Existing stock batch found — other fields filled from inventory (enter quantity for this bill)'
                     : 'Batch as printed on the vendor bill'
                 }
