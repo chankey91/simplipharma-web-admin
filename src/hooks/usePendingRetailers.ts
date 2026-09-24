@@ -21,6 +21,7 @@ export const useApproveRetailerRequest = () => {
     mutationFn: (requestId: string) => approveRetailerRequest(requestId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pendingRetailerRequests'] });
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
     },
   });
 };

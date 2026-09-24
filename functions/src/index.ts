@@ -79,6 +79,24 @@ function getRetailerRegistrationEmail(req: Record<string, any>): string | null {
   return email || null;
 }
 
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+/** Town / district keys from the SO/retailer registration app. */
+function resolveRetailerRequestLocation(req: Record<string, any>): { town?: string; district?: string } {
+  const town = firstNonEmptyString(req.town, req.city, req.cityName, req.townName);
+  const district = firstNonEmptyString(req.district, req.districtName);
+  return {
+    ...(town ? { town } : {}),
+    ...(district ? { district } : {}),
+  };
+}
+
 function escapeHtmlText(s: string): string {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -782,6 +800,7 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       }
     }
 
+    const requestLocation = resolveRetailerRequestLocation(req);
     const userData: Record<string, any> = {
       uid: userRecord.uid,
       email: cred.email,
@@ -790,6 +809,8 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       shopName: req.shopName,
       phoneNumber: req.phoneNumber,
       address: req.address,
+      town: requestLocation.town,
+      district: requestLocation.district,
       licenceNumber: req.licenceNumber,
       aadharNumber: req.aadharNumber,
       ownerName: req.ownerName,
