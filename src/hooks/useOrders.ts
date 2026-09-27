@@ -21,6 +21,7 @@ import {
   unfulfillOrder,
   recalculateOrderPricing,
   restoreStockForCancelledOrder,
+  restoreStockAfterUnfulfill,
   mergePendingOrders,
   getOrderById,
   getOrdersByRetailer,
@@ -378,6 +379,15 @@ export const useMergePendingOrders = () => {
   });
 };
 
+const invalidateInventoryStockQueries = (
+  queryClient: ReturnType<typeof useQueryClient>
+) => {
+  queryClient.invalidateQueries({ queryKey: ['medicines'] });
+  queryClient.invalidateQueries({ queryKey: ['medicineBatches'] });
+  queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
+  queryClient.invalidateQueries({ queryKey: ['expiredMedicines'] });
+};
+
 export const useRestoreCancelledOrderStock = () => {
   const queryClient = useQueryClient();
 
@@ -386,9 +396,26 @@ export const useRestoreCancelledOrderStock = () => {
     onSuccess: (_, orderId) => {
       invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', orderId] });
-      queryClient.invalidateQueries({ queryKey: ['medicines'] });
-      queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
-      queryClient.invalidateQueries({ queryKey: ['expiredMedicines'] });
+      invalidateInventoryStockQueries(queryClient);
+    },
+  });
+};
+
+export const useRestoreStockAfterUnfulfill = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      orderId,
+      restoredBy,
+    }: {
+      orderId: string;
+      restoredBy?: string;
+    }) => restoreStockAfterUnfulfill(orderId, restoredBy),
+    onSuccess: (_, variables) => {
+      invalidateOrderListQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
+      invalidateInventoryStockQueries(queryClient);
     },
   });
 };
@@ -414,7 +441,7 @@ export const useFulfillOrder = () => {
     onSuccess: (_, variables) => {
       invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
-      queryClient.invalidateQueries({ queryKey: ['medicines'] }); // Invalidate medicines to reflect stock changes
+      invalidateInventoryStockQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] }); // Refresh tray availability
       queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
       queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
@@ -439,7 +466,7 @@ export const useUnfulfillOrder = () => {
     onSuccess: (_, variables) => {
       invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
-      queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      invalidateInventoryStockQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['traysInUse'] });
       queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
       queryClient.invalidateQueries({ queryKey: ['creditNotes'] });

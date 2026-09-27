@@ -185,8 +185,20 @@ export interface Order {
   estimatedDelivery?: string;
   cancelReason?: string;
   cancelledAt?: Date | any;
-  /** Set when cancel/unfulfill successfully put deducted stock back on inventory batches. */
+  /** Set when cancel successfully put deducted stock back on inventory batches. */
   stockRestoredOnCancel?: boolean;
+  /** Set when un-fulfill (or retry restore) put deducted stock back on inventory batches. */
+  stockRestoredOnUnfulfill?: boolean;
+  /** Snapshot of batch qty deducted at last fulfill — used to restore on un-fulfill. */
+  inventoryDeductions?: Array<{
+    medicineId: string;
+    medicineName?: string;
+    batchNumber: string;
+    quantity: number;
+    expiryDate?: Date | any;
+    mrp?: number;
+    purchasePrice?: number;
+  }>;
   /**
    * When true, retailer apps must not list or open this order (e.g. Pending merge source).
    * Admin still sees Cancelled + cancelReason for audit.
