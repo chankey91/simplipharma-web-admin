@@ -905,10 +905,19 @@ export const restoreStockToBatch = async (
   await restoreStockBatchesToMedicine(medicineId, [{ batchNumber, quantity: quantityToRestore }]);
 };
 
+export type StockRestoreSpec = {
+  batchNumber: string;
+  quantity: number;
+  expiryDate?: unknown;
+  mrp?: number;
+  purchasePrice?: number;
+};
+
 /** Restore multiple batch quantities on one medicine in a single read/write. */
 export const restoreStockBatchesToMedicine = async (
   medicineId: string,
-  restores: Array<{ batchNumber: string; quantity: number }>
+  restores: StockRestoreSpec[],
+  options?: { topUpOnly?: boolean }
 ) => {
   if (!restores.length) return;
 
@@ -925,23 +934,42 @@ export const restoreStockBatchesToMedicine = async (
     gstRate
   );
 
+  let changed = false;
   for (const restore of restores) {
     if (!restore.batchNumber || restore.quantity <= 0) continue;
     const key = batchKey(restore.batchNumber);
-    const batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
+    let batchIndex = batches.findIndex((b) => batchKey(b.batchNumber) === key);
     if (batchIndex === -1) {
-      throw new Error(`Batch ${restore.batchNumber} not found for medicine ${medicineId}`);
+      batches.push(
+        parseStockBatchFromRaw(
+          {
+            batchNumber: String(restore.batchNumber).trim(),
+            quantity: 0,
+            expiryDate: restore.expiryDate,
+            mrp: restore.mrp,
+            purchasePrice: restore.purchasePrice,
+          },
+          { medicineId, gstRate }
+        )
+      );
+      batchIndex = batches.length - 1;
     }
     const currentQuantity = batches[batchIndex].quantity || 0;
+    const toAdd = options?.topUpOnly
+      ? Math.max(0, restore.quantity - currentQuantity)
+      : restore.quantity;
+    if (toAdd <= 0) continue;
     batches[batchIndex] = {
       ...batches[batchIndex],
-      quantity: currentQuantity + restore.quantity,
+      quantity: currentQuantity + toAdd,
     };
+    changed = true;
     console.log(
-      `Restoring stock for medicine ${medicineId}, batch ${restore.batchNumber}: ${currentQuantity} + ${restore.quantity} = ${batches[batchIndex].quantity}`
+      `Restoring stock for medicine ${medicineId}, batch ${restore.batchNumber}: ${currentQuantity} + ${toAdd} = ${batches[batchIndex].quantity}`
     );
   }
 
+  if (!changed) return;
   await replaceMedicineBatchesDocs(medicineId, batches);
   console.log(`✓ Stock restored successfully`);
 };

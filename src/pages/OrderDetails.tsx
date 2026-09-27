@@ -69,6 +69,7 @@ import {
   useMarkOrderDelivered,
   useCancelOrder,
   useRestoreCancelledOrderStock,
+  useRestoreStockAfterUnfulfill,
   useUpdatePaymentStatus,
 } from '../hooks/useOrders';
 import { useRetailerWallet } from '../hooks/useRetailerWallet';
@@ -622,6 +623,7 @@ export const OrderDetailsPage: React.FC = () => {
   const deliverOrderMutation = useMarkOrderDelivered();
   const cancelOrderMutation = useCancelOrder();
   const restoreCancelledOrderStockMutation = useRestoreCancelledOrderStock();
+  const restoreStockAfterUnfulfillMutation = useRestoreStockAfterUnfulfill();
   const updatePaymentStatusMutation = useUpdatePaymentStatus();
   
   const [activeStep, setActiveStep] = useState(0);
@@ -1574,6 +1576,17 @@ export const OrderDetailsPage: React.FC = () => {
             'The invoice number and line assignments will be kept. You will need to fulfill again to deduct stock.',
         });
         break;
+      case 'restoreStock':
+        setConfirmDialog({
+          open: true,
+          action: 'restoreStock',
+          title: 'Restore deducted stock',
+          message:
+            'Put back the quantities this order still has assigned, on batches that are short in inventory.\n\n' +
+            'Use this only if Un-fulfill left batch qty at 0. Do not use if another invoice already sold these batches.\n\n' +
+            'The order stays Pending. You can fulfill again after stock is back.',
+        });
+        break;
     }
   };
 
@@ -1733,6 +1746,24 @@ export const OrderDetailsPage: React.FC = () => {
         } else {
           await alert(
             'Order un-fulfilled. Stock restored — you can edit batches/pricing and fulfill again.',
+            { severity: 'success' }
+          );
+        }
+      } else if (confirmDialog.action === 'restoreStock') {
+        const res = await restoreStockAfterUnfulfillMutation.mutateAsync({
+          orderId: order.id,
+          restoredBy: user.uid,
+        });
+        closeConfirmDialog();
+        await queryClient.refetchQueries({ queryKey: ['medicines'] });
+        if (res.stockRestoreErrors.length > 0) {
+          await alert(
+            `Some stock could not be restored:\n${res.stockRestoreErrors.slice(0, 8).join('\n')}`,
+            { severity: 'warning' }
+          );
+        } else {
+          await alert(
+            `Stock restored on ${res.restoredCount} batch assignment(s). Refresh if the warning remains, then fulfill.`,
             { severity: 'success' }
           );
         }
@@ -3369,15 +3400,39 @@ export const OrderDetailsPage: React.FC = () => {
             </Alert>
           )}
           {batchStockConflicts.length > 0 && order.status === 'Pending' && (
-            <Alert severity="warning" sx={{ mb: 2 }}>
+            <Alert
+              severity="warning"
+              sx={{ mb: 2 }}
+              action={
+                canEditOrders && order.stockRestoredOnUnfulfill !== true ? (
+                  <Button
+                    color="inherit"
+                    size="small"
+                    startIcon={
+                      restoreStockAfterUnfulfillMutation.isPending ? (
+                        <CircularProgress size={16} color="inherit" />
+                      ) : (
+                        <Refresh />
+                      )
+                    }
+                    disabled={restoreStockAfterUnfulfillMutation.isPending}
+                    onClick={() => handleAction('restoreStock')}
+                  >
+                    Restore stock
+                  </Button>
+                ) : undefined
+              }
+            >
               <Typography variant="subtitle2" gutterBottom>
-                Batch assignments may be stale — stock conflict with other pending orders
+                {batchStockConflicts.some((c) => (c.reservedElsewhere || 0) > 0)
+                  ? 'Batch assignments exceed available stock — some units are reserved on other pending orders'
+                  : 'Batch assignments exceed inventory — stock was not returned after un-fulfill'}
               </Typography>
               {batchStockConflicts.map((c) => (
                 <Typography key={`${c.medicineId}:${c.batchNumber}`} variant="body2" sx={{ mb: 0.5 }}>
                   {c.medicineName} / {c.batchNumber}: {c.allocatedOnThisOrder} allocated, only{' '}
                   {c.effectiveAvailable} available ({c.stockQuantity} in stock, {c.reservedElsewhere}{' '}
-                  reserved elsewhere). Re-assign batches before fulfilling.
+                  reserved elsewhere). Re-assign batches or restore stock before fulfilling.
                 </Typography>
               ))}
             </Alert>
@@ -4510,6 +4565,7 @@ export const OrderDetailsPage: React.FC = () => {
               (confirmDialog.action === 'fulfill' && fulfillWalletQuery.isLoading) ||
               fulfillOrderMutation.isPending ||
               unfulfillOrderMutation.isPending ||
+              restoreStockAfterUnfulfillMutation.isPending ||
               dispatchOrderMutation.isPending ||
               deliverOrderMutation.isPending ||
               cancelOrderMutation.isPending
@@ -4519,7 +4575,9 @@ export const OrderDetailsPage: React.FC = () => {
               ? 'Confirm Cancellation'
               : confirmDialog.action === 'unfulfill'
                 ? 'Un-fulfill'
-                : 'Proceed'}
+                : confirmDialog.action === 'restoreStock'
+                  ? 'Restore stock'
+                  : 'Proceed'}
           </Button>
         </DialogActions>
       </Dialog>
