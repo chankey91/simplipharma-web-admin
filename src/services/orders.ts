@@ -10,6 +10,12 @@ import {
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
 import {
+  collectOrderInventoryDeltas,
+  medicinesHaveBatchAssignments,
+  normalizeInventoryDeltas,
+  type OrderInventoryDelta,
+} from '../utils/orderInventoryDeltas';
+import {
   applyOrderSchemeFieldsToTarget,
   recomputeFulfillmentLineScheme,
 } from '../utils/orderSchemeOverride';
@@ -34,61 +40,48 @@ const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: stri
   note
 });
 
+function resolveOrderInventoryDeltas(data: {
+  inventoryDeductions?: unknown;
+  medicines?: Order['medicines'];
+  fulfillmentDraft?: { medicines?: Order['medicines'] };
+}): OrderInventoryDelta[] {
+  const fromSnapshot = normalizeInventoryDeltas(data.inventoryDeductions);
+  if (fromSnapshot.length > 0) return fromSnapshot;
+  const fromMedicines = collectOrderInventoryDeltas(data.medicines);
+  if (fromMedicines.length > 0) return fromMedicines;
+  return collectOrderInventoryDeltas(data.fulfillmentDraft?.medicines);
+}
+
 /** Restore inventory deducted at fulfill time (paid + scheme-free physical qty). */
-async function restoreStockForOrderMedicines(medicines: Order['medicines'] | undefined): Promise<string[]> {
+async function restoreStockForOrderMedicines(
+  medicines: Order['medicines'] | undefined,
+  options?: { topUpOnly?: boolean; deltas?: OrderInventoryDelta[] }
+): Promise<string[]> {
+  const deltas = options?.deltas ?? collectOrderInventoryDeltas(medicines);
+  return applyInventoryRestores(deltas, options?.topUpOnly === true);
+}
+
+async function applyInventoryRestores(
+  deltas: OrderInventoryDelta[],
+  topUpOnly = false
+): Promise<string[]> {
   const errors: string[] = [];
-  if (!medicines?.length) return errors;
+  if (!deltas.length) return errors;
 
-  // Aggregate qty per medicine+batch, then one read/write per medicine in parallel.
-  const byMedicine = new Map<
-    string,
-    { label: string; batches: Map<string, { batchNumber: string; quantity: number }> }
-  >();
-
-  const addRestore = (
-    medicineId: string,
-    label: string,
-    batchNumber: string,
-    quantity: number
-  ) => {
-    if (!medicineId || !batchNumber || quantity <= 0) return;
-    const batchKey = String(batchNumber).trim().toLowerCase();
-    let entry = byMedicine.get(medicineId);
+  const byMedicine = new Map<string, { label: string; batches: OrderInventoryDelta[] }>();
+  for (const delta of deltas) {
+    let entry = byMedicine.get(delta.medicineId);
     if (!entry) {
-      entry = { label, batches: new Map() };
-      byMedicine.set(medicineId, entry);
+      entry = { label: delta.medicineName || delta.medicineId, batches: [] };
+      byMedicine.set(delta.medicineId, entry);
     }
-    const prev = entry.batches.get(batchKey);
-    if (prev) {
-      prev.quantity += quantity;
-    } else {
-      entry.batches.set(batchKey, { batchNumber: String(batchNumber).trim(), quantity });
-    }
-  };
-
-  for (const item of medicines) {
-    if (item.lineType === 'product_demand') continue;
-    if (!item.medicineId) continue;
-    const label = String(item.name || item.medicineId);
-
-    if (item.batchAllocations && Array.isArray(item.batchAllocations) && item.batchAllocations.length > 0) {
-      for (const allocation of item.batchAllocations) {
-        const qty = physicalQtyFromAllocation(allocation);
-        if (!allocation.batchNumber || qty <= 0) continue;
-        addRestore(item.medicineId, label, allocation.batchNumber, qty);
-      }
-    } else if (item.batchNumber) {
-      const qty = toNum(item.quantity) + toNum(item.freeQuantity);
-      const restoreQty = qty > 0 ? qty : toNum(item.quantity);
-      if (restoreQty <= 0) continue;
-      addRestore(item.medicineId, label, item.batchNumber, restoreQty);
-    }
+    entry.batches.push(delta);
   }
 
   await Promise.all(
     [...byMedicine.entries()].map(async ([medicineId, { label, batches }]) => {
       try {
-        await restoreStockBatchesToMedicine(medicineId, [...batches.values()]);
+        await restoreStockBatchesToMedicine(medicineId, batches, { topUpOnly });
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
         errors.push(`Failed to restore stock for ${label}: ${msg}`);
@@ -531,7 +524,8 @@ export const cancelOrder = async (
   // If order has been fulfilled (stock deducted), restore inventory batches
   if (currentStatus && currentStatus !== 'Pending' && currentStatus !== 'Cancelled' && orderData.medicines) {
     console.log(`Order ${orderId} has status ${currentStatus}, restoring stock from batches...`);
-    stockRestoreErrors = await restoreStockForOrderMedicines(orderData.medicines);
+    const deltas = resolveOrderInventoryDeltas(orderData);
+    stockRestoreErrors = await restoreStockForOrderMedicines(orderData.medicines, { deltas });
     stockRestoredOnCancel = stockRestoreErrors.length === 0;
     if (stockRestoreErrors.length > 0) {
       console.warn('Some stock restorations failed during cancel:', stockRestoreErrors);
@@ -843,8 +837,8 @@ export const restoreStockForCancelledOrder = async (
     throw new Error('Stock was already restored for this cancelled order');
   }
 
-  const medicines = data?.medicines as Order['medicines'] | undefined;
-  const stockRestoreErrors = await restoreStockForOrderMedicines(medicines);
+  const deltas = resolveOrderInventoryDeltas(data);
+  const stockRestoreErrors = await applyInventoryRestores(deltas);
   if (stockRestoreErrors.length === 0) {
     await updateDoc(orderRef, { stockRestoredOnCancel: true });
   }
@@ -1396,6 +1390,15 @@ export const fulfillOrder = async (
     medicines: processedMedicines, // Use processed medicines array with proper Timestamps
     status: 'Order Fulfillment',
     fulfillmentDraft: deleteField(),
+    stockRestoredOnUnfulfill: deleteField(),
+    inventoryDeductions: [...stockByMedicine.entries()].flatMap(([medicineId, { label, batches }]) =>
+      [...batches.values()].map((b) => ({
+        medicineId,
+        medicineName: label,
+        batchNumber: b.batchNumber,
+        quantity: b.quantity,
+      }))
+    ),
     timeline: [...currentTimeline, createTimelineEvent('Order Fulfillment', fulfilledBy, 'Order items verified and tax added')]
   };
 
@@ -1508,7 +1511,16 @@ export const unfulfillOrder = async (
     );
   }
 
-  const stockRestoreErrors = await restoreStockForOrderMedicines(data.medicines as Order['medicines']);
+  const restoreDeltas = resolveOrderInventoryDeltas(data);
+  if (
+    restoreDeltas.length === 0 &&
+    medicinesHaveBatchAssignments(data.medicines as Order['medicines'])
+  ) {
+    throw new Error(
+      'Cannot un-fulfill: no restorable batch quantities were found on this order. Assignments exist but qty is missing — restore stock from Inventory first, or contact support.'
+    );
+  }
+  const stockRestoreErrors = await applyInventoryRestores(restoreDeltas);
   const currentTimeline = data.timeline || [];
 
   if (Number(data?.creditApplied) > 0.01 || data?.walletCreditApplications) {
@@ -1529,17 +1541,69 @@ export const unfulfillOrder = async (
     creditAppliedAt: deleteField(),
     creditAppliedDate: deleteField(),
     walletCreditApplications: deleteField(),
+    stockRestoredOnUnfulfill: stockRestoreErrors.length === 0,
     timeline: [
       ...currentTimeline,
       createTimelineEvent(
         'Pending',
         unfulfilledBy,
-        note || 'Order un-fulfilled; stock restored and order returned to Pending for edits'
+        stockRestoreErrors.length === 0
+          ? note || 'Order un-fulfilled; stock restored and order returned to Pending for edits'
+          : note ||
+            'Order un-fulfilled and returned to Pending, but some stock could not be restored'
       ),
     ],
   });
 
   return { stockRestoreErrors };
+};
+
+/**
+ * Repair path: Pending order after un-fulfill whose deducted stock never came back.
+ * Tops up each assigned batch to the deducted qty (will not double if stock is already there).
+ */
+export const restoreStockAfterUnfulfill = async (
+  orderId: string,
+  restoredBy?: string
+): Promise<{ stockRestoreErrors: string[]; restoredCount: number }> => {
+  const orderRef = doc(db, 'orders', orderId);
+  const orderDoc = await getDoc(orderRef);
+
+  if (!orderDoc.exists()) {
+    throw new Error('Order not found');
+  }
+
+  const data = orderDoc.data();
+  if (data?.status !== 'Pending') {
+    throw new Error('Stock restore is only available for Pending orders after un-fulfill');
+  }
+  if (data?.stockRestoredOnUnfulfill === true) {
+    throw new Error('Stock was already restored for this un-fulfilled order');
+  }
+
+  const deltas = resolveOrderInventoryDeltas(data);
+  if (deltas.length === 0) {
+    throw new Error(
+      'No batch quantities to restore on this order. Re-assign batches from Inventory instead.'
+    );
+  }
+
+  const stockRestoreErrors = await applyInventoryRestores(deltas, true);
+  if (stockRestoreErrors.length === 0) {
+    await updateDoc(orderRef, {
+      stockRestoredOnUnfulfill: true,
+      timeline: [
+        ...(data.timeline || []),
+        createTimelineEvent(
+          'Pending',
+          restoredBy || 'system',
+          'Retry restore: deducted batch stock put back on inventory'
+        ),
+      ],
+    });
+  }
+
+  return { stockRestoreErrors, restoredCount: deltas.length };
 };
 
 /** Recompute line prices/discounts from current inventory and persist order totals. */
