@@ -78,6 +78,11 @@ import {
   normalizeAdditionalDiscount,
   roundPurchaseInvoicePayable,
 } from '../utils/purchaseInvoiceTotals';
+import {
+  clearLocalFormDraft,
+  readLocalFormDraft,
+  writeLocalFormDraft,
+} from '../utils/localFormDraft';
 
 const EXPIRY_MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
 
@@ -137,6 +142,43 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const updateInvoiceMutation = useUpdatePurchaseInvoiceWithStock();
   const { alert, confirm, prompt } = useAppDialog();
   const hydratedEditRef = useRef<string | null>(null);
+  const purchaseDraftHydratedRef = useRef(false);
+  const [purchaseDraftReady, setPurchaseDraftReady] = useState(false);
+  const [purchaseDraftRestored, setPurchaseDraftRestored] = useState(false);
+
+  type PurchaseLocalDraft = {
+    invoiceData: {
+      invoiceNumber: string;
+      vendorId: string;
+      invoiceDate: string;
+      notes: string;
+      additionalDiscount: string;
+    };
+    items: PurchaseInvoiceItem[];
+    currentItem: {
+      medicineId?: string;
+      medicineName?: string;
+      batchNumber?: string;
+      receivedBatchNumber?: string;
+      expiryDate?: string;
+      quantity?: string | number;
+      freeQuantity?: string | number;
+      schemePaidQty?: string | number;
+      schemeFreeQty?: string | number;
+      unitPrice?: string | number;
+      purchasePrice?: string | number;
+      mrp?: string | number;
+      gstRate?: string | number;
+      standardDiscount?: string | number;
+      discountPercentage?: string | number;
+      nonReturnable?: boolean;
+      nrxDrug?: boolean;
+    };
+  };
+
+  const purchaseDraftKey = isEditMode
+    ? `purchase-invoice:${editInvoiceId}`
+    : 'purchase-invoice:new';
 
   /** Session cache of medicines touched this visit — never load the full catalog. */
   const [medicineCache, setMedicineCache] = useState<Record<string, Medicine>>({});
@@ -304,10 +346,41 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   }, [vendors, selectedVendor]);
   const isSavingInvoice = createInvoiceMutation.isPending || updateInvoiceMutation.isPending;
 
-  // Prefill create form when editing an existing invoice (header stays locked).
+  // Restore a local draft (offline / refresh), else prefill from the existing invoice when editing.
   useEffect(() => {
-    if (!isEditMode || !existingInvoice?.id) return;
-    if (hydratedEditRef.current === existingInvoice.id) return;
+    if (isEditMode && existingLoading) return;
+    if (purchaseDraftHydratedRef.current) return;
+    purchaseDraftHydratedRef.current = true;
+
+    const local = readLocalFormDraft<PurchaseLocalDraft>(purchaseDraftKey);
+    const hasLocalWork =
+      Boolean(local?.data) &&
+      ((local!.data.items?.length || 0) > 0 ||
+        Boolean(local!.data.invoiceData?.invoiceNumber?.trim()) ||
+        Boolean(local!.data.invoiceData?.vendorId) ||
+        Boolean(String(local!.data.currentItem?.medicineName || '').trim()) ||
+        Boolean(String(local!.data.currentItem?.batchNumber || '').trim()));
+
+    if (hasLocalWork && local?.data) {
+      setInvoiceData(local.data.invoiceData);
+      setItems(local.data.items || []);
+      if (local.data.currentItem) setCurrentItem(local.data.currentItem);
+      if (isEditMode && existingInvoice?.id) {
+        hydratedEditRef.current = existingInvoice.id;
+      }
+      setPurchaseDraftRestored(true);
+      setPurchaseDraftReady(true);
+      return;
+    }
+
+    if (!isEditMode || !existingInvoice?.id) {
+      setPurchaseDraftReady(true);
+      return;
+    }
+    if (hydratedEditRef.current === existingInvoice.id) {
+      setPurchaseDraftReady(true);
+      return;
+    }
     hydratedEditRef.current = existingInvoice.id;
     const invDate =
       existingInvoice.invoiceDate instanceof Date
@@ -324,7 +397,30 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           : '',
     });
     setItems(existingInvoice.items || []);
-  }, [isEditMode, existingInvoice]);
+    setPurchaseDraftReady(true);
+  }, [isEditMode, existingLoading, existingInvoice, purchaseDraftKey]);
+
+  useEffect(() => {
+    if (!purchaseDraftReady) return;
+    const timer = window.setTimeout(() => {
+      const hasWork =
+        items.length > 0 ||
+        Boolean(invoiceData.invoiceNumber.trim()) ||
+        Boolean(invoiceData.vendorId) ||
+        Boolean(String(currentItem.medicineName || '').trim()) ||
+        Boolean(String(currentItem.batchNumber || '').trim());
+      if (!hasWork) {
+        clearLocalFormDraft(purchaseDraftKey);
+        return;
+      }
+      writeLocalFormDraft<PurchaseLocalDraft>(purchaseDraftKey, {
+        invoiceData,
+        items,
+        currentItem,
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [invoiceData, items, currentItem, purchaseDraftKey, purchaseDraftReady]);
 
   const mainSkip =
     selectedMedicine != null ? getMedicinePickerLabel(selectedMedicine) : undefined;
@@ -998,6 +1094,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         } else {
           await alert('Invoice and stock updated successfully.', { severity: 'success' });
         }
+        clearLocalFormDraft(purchaseDraftKey);
         navigate(`/purchases/${editInvoiceId}`);
         return;
       }
@@ -1024,6 +1121,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         updateStock: true,
       });
 
+      clearLocalFormDraft(purchaseDraftKey);
       navigate('/purchases');
     } catch (error: any) {
       await alert(
@@ -1079,6 +1177,27 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       {isEditMode ? (
         <Alert severity="info" sx={{ mb: 2 }}>
           Edit invoice number, date, vendor, or line items below — stock will sync on update.
+        </Alert>
+      ) : null}
+
+      {purchaseDraftRestored ? (
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                clearLocalFormDraft(purchaseDraftKey);
+                setPurchaseDraftRestored(false);
+              }}
+            >
+              Dismiss
+            </Button>
+          }
+        >
+          Restored unsaved work from this device (saved if internet dropped or the page was refreshed).
         </Alert>
       ) : null}
 

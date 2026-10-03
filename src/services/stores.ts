@@ -227,15 +227,13 @@ async function hydrateTownDistrictFromRegistrationRequests(stores: User[]): Prom
 
 export const getAllStores = async (): Promise<User[]> => {
   const usersCol = collection(db, 'users');
-  const [retailersSnap, dualSnap] = await Promise.all([
+  const [retailersSnap, dualSnap, rolesSnap] = await Promise.all([
     getDocs(query(usersCol, where('role', '==', 'retailer'))),
     getDocs(query(usersCol, where('alsoRetailer', '==', true))),
+    getDocs(query(usersCol, where('roles', 'array-contains', 'retailer'))),
   ]);
   const byId = new Map<string, User>();
-  for (const d of retailersSnap.docs) {
-    byId.set(d.id, mapStoreDoc(d));
-  }
-  for (const d of dualSnap.docs) {
+  for (const d of [...retailersSnap.docs, ...dualSnap.docs, ...rolesSnap.docs]) {
     if (!byId.has(d.id)) byId.set(d.id, mapStoreDoc(d));
   }
   return hydrateTownDistrictFromRegistrationRequests(Array.from(byId.values()));
@@ -400,7 +398,7 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
         throw new Error(
           errorMessage.includes('already')
             ? errorMessage
-            : 'This email is already registered. Use a different email or update the existing retailer account.'
+            : 'This email is already registered as a retailer. Use a different email or edit that store.'
         );
       }
 

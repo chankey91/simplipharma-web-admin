@@ -637,6 +637,7 @@ export const SalesOfficersPage: React.FC = () => {
                 type="email"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                helperText="Same email can already be a retailer, AM, or panel user — not another Sales Officer."
               />
             </Grid>
             <Grid item xs={12}>

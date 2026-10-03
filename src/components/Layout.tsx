@@ -46,6 +46,7 @@ import {
   AssignmentReturn,
   AccountBalance,
   AccountBalanceWallet,
+  Payments,
   Article,
   HeadsetMic,
   Stars,
@@ -57,6 +58,7 @@ import {
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
+import { OfflineBanner } from './OfflineBanner';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { brandColors } from '../theme/brand';
 import { useAuth } from '../context/AuthContext';
@@ -99,6 +101,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Vendors', icon: <Business />, path: '/vendors' },
       { text: 'Vendor ledger', icon: <AccountBalanceWallet />, path: '/vendor-ledger' },
       { text: 'Store ledger', icon: <AccountBalance />, path: '/store-ledger' },
+      { text: 'Accounts', icon: <Payments />, path: '/accounts' },
     ],
   },
   {
@@ -378,6 +381,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         }}
       >
         <Toolbar />
+        <OfflineBanner />
         {children}
       </Box>
 

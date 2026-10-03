@@ -1,19 +1,10 @@
-import { collection, getDocs, query, where, doc, updateDoc, db, functions } from './firebase';
+import { doc, updateDoc, db, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
+import { getUsersMatchingRoles } from './usersByRole';
 
 export const getPurchaseOfficers = async (): Promise<User[]> => {
-  const usersCol = collection(db, 'users');
-  const q = query(usersCol, where('role', '==', 'purchaseOfficer'));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(
-    (d) =>
-      ({
-        id: d.id,
-        uid: d.id,
-        ...d.data(),
-      }) as User
-  );
+  return getUsersMatchingRoles(['purchaseOfficer']);
 };
 
 export const createPurchaseOfficer = async (

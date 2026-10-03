@@ -595,7 +595,11 @@ export const OrderDetailsPage: React.FC = () => {
         taxPercentage: taxPct ?? order.taxPercentage ?? 5,
       };
       writeSessionFulfillmentDraft(order.id, payload);
-      await saveOrderFulfillmentDraft(order.id, payload);
+      try {
+        await saveOrderFulfillmentDraft(order.id, payload);
+      } catch (err) {
+        console.warn('Fulfillment draft kept on this device (server save failed):', err);
+      }
       // Do not invalidate order lists here — that refetch remounted Pending UI / conflict checks.
     },
     [canEditOrders, order?.id, order?.status, order?.taxPercentage]
