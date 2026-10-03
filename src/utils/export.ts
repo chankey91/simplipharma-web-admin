@@ -557,16 +557,30 @@ export const exportSelectedOrderStores = async (
   });
 
   const excelData: (string | number)[][] = [
-    ['Store Code', 'Shop Name', 'Phone', 'Order Count'],
+    ['Store Code', 'Shop Name', 'Town', 'District', 'Phone', 'Order Count'],
   ];
 
   sorted.forEach((row) => {
-    excelData.push([row.storeCode, row.shopName, row.phone, row.orderIds.length]);
+    excelData.push([
+      row.storeCode,
+      row.shopName,
+      row.town,
+      row.district,
+      row.phone,
+      row.orderIds.length,
+    ]);
   });
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(excelData);
-  ws['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 12 }];
+  ws['!cols'] = [
+    { wch: 12 },
+    { wch: 30 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 14 },
+    { wch: 12 },
+  ];
   XLSX.utils.book_append_sheet(wb, ws, 'Stores');
   XLSX.writeFile(wb, `${filename}-${istDateStampCompact()}.xlsx`);
 };
