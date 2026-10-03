@@ -56,7 +56,7 @@ service cloud.firestore {
     // Match src/auth/permissions.ts OFFICE_WRITE_DEFAULTS when writeAccess
     // (or a module key) was never stored on the user doc.
     function officeWriteDefault(module) {
-      return module == 'purchases' || module == 'inventory';
+      return module == 'purchases' || module == 'inventory' || module == 'accounts';
     }
 
     function officeCanWrite(module) {
@@ -648,6 +648,16 @@ service cloud.firestore {
     match /gst_periods/{periodId} {
       allow read: if signedIn() && (isAdminOrOperations() || isOffice());
       allow write: if isAdminOrOperations() || officeCanWrite('gst');
+    }
+
+    match /accountLedgers/{ledgerId} {
+      allow read: if signedIn() && (isAdminOrOperations() || isOffice());
+      allow create, update, delete: if isAdminOrOperations() || officeCanWrite('accounts');
+    }
+
+    match /accountVouchers/{voucherId} {
+      allow read: if signedIn() && (isAdminOrOperations() || isOffice());
+      allow create, update, delete: if isAdminOrOperations() || officeCanWrite('accounts');
     }
 
     match /purchase_invoice_drafts/{draftId} {

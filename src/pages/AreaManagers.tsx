@@ -567,6 +567,7 @@ export const AreaManagersPage: React.FC = () => {
               value={formData.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               fullWidth
+              helperText="Same email can already be used for a different role — not another Area Manager."
             />
             <TextField
               label="Phone"

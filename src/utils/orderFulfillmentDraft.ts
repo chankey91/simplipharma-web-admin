@@ -14,6 +14,22 @@ export type StoredFulfillmentDraft = {
 };
 
 const sessionKey = (orderId: string) => `sp-fulfillment-draft:${orderId}`;
+const localKey = (orderId: string) => `sp-fulfillment-draft-local:${orderId}`;
+
+function readStoredDraft(storage: Storage, key: string): FulfillmentDraftPayload | null {
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as FulfillmentDraftPayload;
+  } catch {
+    try {
+      storage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+}
 
 const DATE_FIELDS = ['batchExpiryDate', 'expiryDate'] as const;
 
@@ -49,52 +65,58 @@ function draftTimestampMs(draft: FulfillmentDraftPayload | StoredFulfillmentDraf
   return 0;
 }
 
-/** Pick newest draft from Firestore field vs sessionStorage. */
+/** Pick newest draft from Firestore, sessionStorage, or localStorage (offline / tab reopen). */
 export function pickFulfillmentDraft(
   orderId: string,
   firestoreDraft?: StoredFulfillmentDraft | null
 ): FulfillmentDraftPayload | null {
-  let sessionDraft: FulfillmentDraftPayload | null = null;
-  try {
-    const raw = sessionStorage.getItem(sessionKey(orderId));
-    if (raw) sessionDraft = JSON.parse(raw) as FulfillmentDraftPayload;
-  } catch {
-    sessionStorage.removeItem(sessionKey(orderId));
-  }
+  const sessionDraft = readStoredDraft(sessionStorage, sessionKey(orderId));
+  const localDraft = readStoredDraft(localStorage, localKey(orderId));
 
   const fsMs = draftTimestampMs(firestoreDraft ?? undefined);
   const ssMs = draftTimestampMs(sessionDraft ?? undefined);
+  const lsMs = draftTimestampMs(localDraft ?? undefined);
+  const newestLocal = lsMs >= ssMs ? localDraft : sessionDraft;
+  const newestLocalMs = Math.max(ssMs, lsMs);
 
-  if (firestoreDraft?.medicines?.length && fsMs >= ssMs) {
+  if (firestoreDraft?.medicines?.length && fsMs >= newestLocalMs) {
     return {
       medicines: reviveDraftMedicines(firestoreDraft.medicines),
       taxPercentage: firestoreDraft.taxPercentage,
       updatedAtMs: fsMs,
     };
   }
-  if (sessionDraft?.medicines?.length) {
+  if (newestLocal?.medicines?.length) {
     return {
-      ...sessionDraft,
-      medicines: reviveDraftMedicines(sessionDraft.medicines),
+      ...newestLocal,
+      medicines: reviveDraftMedicines(newestLocal.medicines),
     };
   }
   return null;
 }
 
 export function writeSessionFulfillmentDraft(orderId: string, payload: FulfillmentDraftPayload): void {
+  const stored = JSON.stringify({ ...payload, updatedAtMs: Date.now() });
   try {
-    sessionStorage.setItem(
-      sessionKey(orderId),
-      JSON.stringify({ ...payload, updatedAtMs: Date.now() })
-    );
+    sessionStorage.setItem(sessionKey(orderId), stored);
   } catch (err) {
     console.warn('Failed to write fulfillment draft to sessionStorage:', err);
+  }
+  try {
+    localStorage.setItem(localKey(orderId), stored);
+  } catch (err) {
+    console.warn('Failed to write fulfillment draft to localStorage:', err);
   }
 }
 
 export function clearSessionFulfillmentDraft(orderId: string): void {
   try {
     sessionStorage.removeItem(sessionKey(orderId));
+  } catch {
+    /* ignore */
+  }
+  try {
+    localStorage.removeItem(localKey(orderId));
   } catch {
     /* ignore */
   }

@@ -359,6 +359,8 @@ export interface User {
   uid: string;
   email: string;
   role?: 'retailer' | 'admin' | 'salesOfficer' | 'areaManager' | 'operations' | 'purchaseOfficer' | 'office';
+  /** Extra roles on the same login (email is unique per role, not globally). */
+  roles?: Array<'retailer' | 'admin' | 'salesOfficer' | 'areaManager' | 'operations' | 'purchaseOfficer' | 'office'>;
   /** Custom sidebar paths for office/operations panel users. */
   menuPaths?: string[];
   /** Per-module write flags (office default: stores/receivables/orders false). */
@@ -368,6 +370,8 @@ export interface User {
     orders?: boolean;
     purchases?: boolean;
     inventory?: boolean;
+    gst?: boolean;
+    accounts?: boolean;
   };
   /** After login; office defaults to /stores. */
   homePath?: string;
@@ -786,4 +790,53 @@ export interface PurchaseInvoiceDraft {
   errors?: string[];
   purchaseInvoiceId?: string;
   rawTextPreview?: string;
+}
+
+/** Chart-of-accounts row for the in-app Cash / Bank module. */
+export type AccountLedgerType = 'cash' | 'bank' | 'expense' | 'income';
+
+export interface AccountLedger {
+  id: string;
+  code: string;
+  name: string;
+  type: AccountLedgerType;
+  openingBalance?: number;
+  isSystem?: boolean;
+  isActive?: boolean;
+  createdAt?: Date | any;
+  createdBy?: string;
+}
+
+export type AccountVoucherType = 'receipt' | 'payment' | 'contra' | 'expense';
+
+export type AccountPartyType = 'vendor' | 'retailer' | 'other';
+
+/** Day-book voucher: money in/out of Cash or Bank (Tally-style). */
+export interface AccountVoucher {
+  id: string;
+  voucherNo: string;
+  voucherType: AccountVoucherType;
+  date: Date | any;
+  amount: number;
+  /** Cash or Bank ledger the money hits (source for payment/expense/contra-out). */
+  cashBankLedgerId: string;
+  cashBankLedgerName: string;
+  /** Destination cash/bank for contra. */
+  contraLedgerId?: string;
+  contraLedgerName?: string;
+  /** Expense or income ledger. */
+  categoryLedgerId?: string;
+  categoryLedgerName?: string;
+  partyType?: AccountPartyType;
+  partyId?: string;
+  partyName?: string;
+  paymentMethod?: PaymentMethod;
+  transactionId?: string;
+  narration?: string;
+  linkedPurchaseInvoiceId?: string;
+  linkedPurchaseInvoiceNumber?: string;
+  linkedOrderId?: string;
+  linkedOrderNumber?: string;
+  createdAt?: Date | any;
+  createdBy?: string;
 }

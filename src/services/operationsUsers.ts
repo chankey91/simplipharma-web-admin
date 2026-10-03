@@ -1,6 +1,7 @@
-import { collection, getDocs, query, where, doc, updateDoc, db, functions } from './firebase';
+import { doc, updateDoc, db, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
+import { getUsersMatchingRoles } from './usersByRole';
 import {
   defaultHomePath,
   defaultMenuPaths,
@@ -10,14 +11,7 @@ import {
 } from '../auth/permissions';
 
 export const getOperationsUsers = async (): Promise<User[]> => {
-  const usersCol = collection(db, 'users');
-  const q = query(usersCol, where('role', 'in', ['operations', 'office']));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({
-    id: d.id,
-    uid: d.id,
-    ...d.data(),
-  } as User));
+  return getUsersMatchingRoles(['operations', 'office']);
 };
 
 export type CreatePanelUserInput = Partial<User> & {

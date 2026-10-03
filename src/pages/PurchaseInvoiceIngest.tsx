@@ -72,6 +72,12 @@ import type {
   PurchaseInvoiceItem,
 } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
+import {
+  clearLocalFormDraft,
+  isOfflineOrNetworkError,
+  readLocalFormDraft,
+  writeLocalFormDraft,
+} from '../utils/localFormDraft';
 import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import {
   useGroupedMedicineResolveOptions,
@@ -1078,6 +1084,26 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   const pendingLinesRef = useRef<PurchaseInvoiceDraftResolvedLine[] | null>(null);
   const linesDirtyRef = useRef(false);
   const seededNrNrxDraftRef = useRef<string | null>(null);
+  const ingestDraftKey = draftId ? `pi-ingest:${draftId}` : '';
+
+  type IngestLocalDraft = {
+    lines: PurchaseInvoiceDraftResolvedLine[];
+    invoiceNumber: string;
+    invoiceDate: string;
+    notes: string;
+    additionalDiscount: string;
+  };
+
+  const persistIngestLocal = (nextLines: PurchaseInvoiceDraftResolvedLine[]) => {
+    if (!ingestDraftKey) return;
+    writeLocalFormDraft<IngestLocalDraft>(ingestDraftKey, {
+      lines: nextLines,
+      invoiceNumber,
+      invoiceDate,
+      notes,
+      additionalDiscount,
+    });
+  };
 
   const refreshInbox = useCallback(async () => {
     if (draftId) return;
@@ -1136,9 +1162,37 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     if (draft?.additionalDiscount != null && draft.additionalDiscount > 0) {
       setAdditionalDiscount(String(draft.additionalDiscount));
     }
-  }, [draft?.invoiceNumber, draft?.invoiceDate, draft?.notes, draft?.additionalDiscount]);
+    if (!draftId) return;
+    const local = readLocalFormDraft<IngestLocalDraft>(`pi-ingest:${draftId}`);
+    if (!local?.data) return;
+    const serverMs =
+      typeof (draft as { updatedAt?: { toMillis?: () => number } } | null)?.updatedAt?.toMillis ===
+      'function'
+        ? (draft as { updatedAt: { toMillis: () => number } }).updatedAt.toMillis()
+        : 0;
+    if (local.updatedAt >= serverMs) {
+      if (local.data.invoiceNumber) setInvoiceNumber(local.data.invoiceNumber);
+      if (local.data.invoiceDate) setInvoiceDate(local.data.invoiceDate);
+      if (local.data.notes != null) setNotes(local.data.notes);
+      if (local.data.additionalDiscount != null) setAdditionalDiscount(local.data.additionalDiscount);
+    }
+  }, [draft?.invoiceNumber, draft?.invoiceDate, draft?.notes, draft?.additionalDiscount, draftId, draft]);
 
   useEffect(() => {
+    if (!draftId) return;
+    const local = readLocalFormDraft<IngestLocalDraft>(`pi-ingest:${draftId}`);
+    const serverMs =
+      typeof (draft as { updatedAt?: { toMillis?: () => number } } | null)?.updatedAt?.toMillis ===
+      'function'
+        ? (draft as { updatedAt: { toMillis: () => number } }).updatedAt.toMillis()
+        : 0;
+    if (local?.data?.lines?.length && local.updatedAt >= serverMs) {
+      if (!linesDirtyRef.current) {
+        setLocalLines(local.data.lines);
+        linesDirtyRef.current = true;
+      }
+      return;
+    }
     if (!draft?.resolvedLines) {
       if (!linesDirtyRef.current) setLocalLines([]);
       return;
@@ -1150,7 +1204,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
         expiryMmYyyy: l.expiryMmYyyy ? toExpiryMmYy(l.expiryMmYyyy) : l.expiryMmYyyy,
       }))
     );
-  }, [draft?.resolvedLines]);
+  }, [draft?.resolvedLines, draftId, draft]);
 
   useEffect(() => {
     if (!draftId) {
@@ -1187,6 +1241,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     }
     const resolvedLines = stripUndefinedDeep(pendingLinesRef.current);
     pendingLinesRef.current = null;
+    persistIngestLocal(resolvedLines);
     try {
       await updateInvoiceDraftReview(draftId, {
         resolvedLines,
@@ -1194,8 +1249,13 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       });
       linesDirtyRef.current = false;
     } catch (e: unknown) {
-      linesDirtyRef.current = false;
-      setError(e instanceof Error ? e.message : String(e));
+      pendingLinesRef.current = resolvedLines;
+      linesDirtyRef.current = true;
+      if (isOfflineOrNetworkError(e)) {
+        setError('Offline — line edits are saved on this device. They will sync when internet returns.');
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     }
   }, [draftId]);
 
@@ -1298,6 +1358,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       );
       pendingLinesRef.current = resolvedLines;
       linesDirtyRef.current = true;
+      persistIngestLocal(resolvedLines);
       if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
       patchTimerRef.current = setTimeout(() => {
         void flushLinePatches();
@@ -1340,6 +1401,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     if (!ok) return;
     try {
       await discardInvoiceDraft(id);
+      clearLocalFormDraft(`pi-ingest:${id}`);
       if (draftId === id) {
         setDraftId(null);
         navigate('/purchases/ingest', { replace: true });
@@ -1693,6 +1755,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
       });
 
       await markInvoiceDraftCommitted(draft.id, String(invoiceId));
+      clearLocalFormDraft(`pi-ingest:${draft.id}`);
       setCommitProgress({
         open: true,
         label: 'Done',

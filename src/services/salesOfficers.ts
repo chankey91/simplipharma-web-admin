@@ -2,16 +2,10 @@ import { collection, getDocs, query, where, doc, updateDoc, deleteField, db, fun
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { User } from '../types';
+import { getUsersMatchingRoles } from './usersByRole';
 
 export const getSalesOfficers = async (): Promise<User[]> => {
-  const usersCol = collection(db, 'users');
-  const q = query(usersCol, where('role', '==', 'salesOfficer'));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({
-    id: d.id,
-    uid: d.id,
-    ...d.data(),
-  } as User));
+  return getUsersMatchingRoles(['salesOfficer']);
 };
 
 export const getRetailersBySalesOfficer = async (salesOfficerId: string): Promise<User[]> => {

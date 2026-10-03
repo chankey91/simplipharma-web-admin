@@ -38,7 +38,7 @@ import {
 import { getStorage } from 'firebase/storage';
 import {
   buildPanelPermissions,
-  canAccessPanel,
+  resolvePanelRole,
   type PanelPermissions,
   type PanelRole,
 } from '../auth/permissions';
@@ -192,13 +192,14 @@ export const getUserPanelPermissions = async (
 ): Promise<PanelPermissions | null> => {
   try {
     const profile = await getUserProfile(userId);
-    if (!profile?.role || !canAccessPanel(profile.role)) {
+    const panelRole = resolvePanelRole(profile);
+    if (!profile || !panelRole) {
       return null;
     }
     if (profile.isActive === false) {
       return null;
     }
-    return buildPanelPermissions(profile.role as PanelRole, {
+    return buildPanelPermissions(panelRole, {
       menuPaths: profile.menuPaths,
       writeAccess: profile.writeAccess,
       homePath: profile.homePath,
