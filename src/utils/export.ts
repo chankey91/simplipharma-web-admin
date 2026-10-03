@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Order, User } from '../types';
-import { getMedicineById } from '../services/inventory';
+import { getMedicineById, getMedicinesByIdsWithBatches } from '../services/inventory';
 import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
 import { istDateStampCompact } from './dateTime';
 import { appAlert } from './appDialog';
@@ -20,6 +20,23 @@ function resolvePackaging(med?: { unit?: string; description?: string } | null):
   return packaging || '—';
 }
 
+async function loadPackagingByMedicineId(
+  medicineIds: Iterable<string>
+): Promise<Map<string, string>> {
+  const ids = [...new Set([...medicineIds].map((id) => String(id || '').trim()).filter(Boolean))];
+  const map = new Map<string, string>();
+  if (!ids.length) return map;
+  try {
+    const meds = await getMedicinesByIdsWithBatches(ids);
+    for (const med of meds) {
+      map.set(med.id, resolvePackaging(med));
+    }
+  } catch (error) {
+    console.warn('Failed to load packaging for pending-order export:', error);
+  }
+  return map;
+}
+
 export const exportPendingOrdersByStore = async (
   orders: Order[],
   stores: User[],
@@ -34,6 +51,12 @@ export const exportPendingOrdersByStore = async (
 
   const storeById = new Map(stores.map((s) => [s.id, s]));
 
+  const packagingByMedicineId = await loadPackagingByMedicineId(
+    pendingOrders.flatMap((order) =>
+      (order.medicines || []).map((m) => m.medicineId).filter(Boolean)
+    )
+  );
+
   // Aggregate by store + medicine (name + id when present)
   const medicineAggregate = new Map<
     string,
@@ -42,6 +65,7 @@ export const exportPendingOrdersByStore = async (
       townDistrict: string;
       shopName: string;
       medicineName: string;
+      packaging: string;
       quantity: number;
       shopNameForSort: string;
     }
@@ -57,6 +81,10 @@ export const exportPendingOrdersByStore = async (
     for (const medicine of order.medicines) {
       const medKey = medicine.medicineId?.trim() || medicine.name.trim().toLowerCase();
       const key = `${storeId}|${medKey}`;
+      const packaging =
+        (medicine.medicineId && packagingByMedicineId.get(medicine.medicineId)) ||
+        medicine.requestedUnit?.trim() ||
+        '—';
 
       if (medicineAggregate.has(key)) {
         medicineAggregate.get(key)!.quantity += medicine.quantity || 0;
@@ -66,6 +94,7 @@ export const exportPendingOrdersByStore = async (
           townDistrict,
           shopName,
           medicineName: medicine.name,
+          packaging,
           quantity: medicine.quantity || 0,
           shopNameForSort: shopName,
         });
@@ -80,7 +109,7 @@ export const exportPendingOrdersByStore = async (
   });
 
   const excelData: (string | number)[][] = [
-    ['Store Code', 'Town / District', 'Shop Name', 'Medicine Name', 'Quantity'],
+    ['Store Code', 'Town / District', 'Shop Name', 'Medicine Name', 'Packaging', 'Quantity'],
   ];
 
   rows.forEach((row) => {
@@ -89,13 +118,14 @@ export const exportPendingOrdersByStore = async (
       row.townDistrict,
       row.shopName,
       row.medicineName,
+      row.packaging,
       row.quantity || '',
     ]);
   });
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(excelData);
-  ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 35 }, { wch: 40 }, { wch: 10 }];
+  ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 35 }, { wch: 40 }, { wch: 18 }, { wch: 10 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Pending Orders');
 
   const dateStr = istDateStampCompact();

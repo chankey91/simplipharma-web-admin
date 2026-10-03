@@ -53,6 +53,7 @@ import {
   Refresh,
   Add,
   Remove,
+  Delete,
   SwapHoriz,
   ContentCopy,
 } from '@mui/icons-material';
@@ -2895,6 +2896,45 @@ export const OrderDetailsPage: React.FC = () => {
     }
   };
 
+  const handleDeleteOrderItem = async (itemIndex: number) => {
+    if (!order || order.status !== 'Pending') return;
+    const item = fulfillmentData.medicines[itemIndex];
+    if (!item) return;
+
+    const remainingCount = fulfillmentData.medicines.length - 1;
+    const lastItemNote =
+      remainingCount <= 0
+        ? '\n\nThis is the last item. The order will have no lines until you add a product.'
+        : '';
+    const confirmed = await confirm(
+      `Remove "${item.name || 'this item'}" from the order?${lastItemNote}\n\n` +
+        'This only removes the line. Stock is not changed (inventory is deducted at fulfill).',
+      { title: 'Remove item', confirmLabel: 'Remove' }
+    );
+    if (!confirmed) return;
+
+    const newMedicines = fulfillmentData.medicines.filter((_, i) => i !== itemIndex);
+    markFulfillmentDirty();
+    setFulfillmentData((prev) => ({ ...prev, medicines: newMedicines }));
+
+    if (batchAllocationDialog.open) {
+      setBatchAllocationDialog((prev) => ({ ...prev, open: false, itemIndex: -1 }));
+    }
+    if (replaceProductDialog.open) {
+      closeReplaceProductDialog();
+    }
+
+    try {
+      await updateOrderMedicines(order.id, newMedicines.map(toPersistedOrderMedicine));
+      scheduleFulfillmentDraftSave(newMedicines);
+      queryClient.invalidateQueries({ queryKey: ['order', order.id] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    } catch (err) {
+      console.error('Failed to remove order item:', err);
+      await alert('Failed to remove item. Please try again.', { severity: 'error' });
+    }
+  };
+
   const renderOrderedQtyControls = (item: any, itemIndex: number) => {
     const orderedQty = getOrderedPhysicalQty(item);
     const showReassignHint = item.qtyAdjustedNeedsBatch === true;
@@ -3592,12 +3632,12 @@ export const OrderDetailsPage: React.FC = () => {
                                 No inventory batch on this line — map the product in Product requests when ready.
                               </Typography>
                             ) : null}
+                            <Box display="flex" flexWrap="wrap" alignItems="center" gap={1} sx={{ mt: 1 }}>
                             {showFulfill && canEditOrders ? (
                               <Button
                                 size="small"
                                 variant="contained"
                                 color="warning"
-                                sx={{ mt: 1 }}
                                 onClick={() => {
                                   markFulfillmentDirty();
                                   void persistFulfillmentDraft(fulfillmentData.medicines).finally(() => {
@@ -3613,6 +3653,18 @@ export const OrderDetailsPage: React.FC = () => {
                                 Fulfill request
                               </Button>
                             ) : null}
+                            {showPendingActions ? (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="error"
+                                startIcon={<Delete fontSize="small" />}
+                                onClick={() => void handleDeleteOrderItem(index)}
+                              >
+                                Remove
+                              </Button>
+                            ) : null}
+                            </Box>
                               </Box>
                             </Box>
                           </TableCell>
@@ -3791,6 +3843,14 @@ export const OrderDetailsPage: React.FC = () => {
                                     title="Mark Verified"
                                   >
                                     <CheckCircle fontSize="small" />
+                                  </IconButton>
+                                  <IconButton
+                                    size="small"
+                                    color="error"
+                                    onClick={() => void handleDeleteOrderItem(index)}
+                                    title="Remove item from order"
+                                  >
+                                    <Delete fontSize="small" />
                                   </IconButton>
                                 </Box>
                               </TableCell>
@@ -4199,6 +4259,14 @@ export const OrderDetailsPage: React.FC = () => {
                                 title="Mark Verified"
                               >
                                 <CheckCircle fontSize="small" />
+                              </IconButton>
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => void handleDeleteOrderItem(index)}
+                                title="Remove item from order"
+                              >
+                                <Delete fontSize="small" />
                               </IconButton>
                             </Box>
                           </TableCell>
