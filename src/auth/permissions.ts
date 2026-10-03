@@ -2,7 +2,14 @@ export type PanelRole = 'admin' | 'operations' | 'office';
 
 export type AppRole = PanelRole | 'retailer' | 'salesOfficer' | 'areaManager' | 'purchaseOfficer';
 
-export type WriteModule = 'stores' | 'receivables' | 'orders' | 'purchases' | 'inventory' | 'gst';
+export type WriteModule =
+  | 'stores'
+  | 'receivables'
+  | 'orders'
+  | 'purchases'
+  | 'inventory'
+  | 'gst'
+  | 'accounts';
 
 export type WriteAccess = Record<WriteModule, boolean>;
 
@@ -20,6 +27,7 @@ export const WRITE_MODULES: { id: WriteModule; label: string }[] = [
   { id: 'purchases', label: 'Can edit purchase invoices' },
   { id: 'inventory', label: 'Can edit inventory' },
   { id: 'gst', label: 'Can edit GST settings' },
+  { id: 'accounts', label: 'Can edit accounts' },
 ];
 
 /** Sidebar/route catalog — used for admin menu checkboxes. */
@@ -38,6 +46,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/vendors', label: 'Vendors' },
   { path: '/vendor-ledger', label: 'Vendor ledger' },
   { path: '/store-ledger', label: 'Store ledger' },
+  { path: '/accounts', label: 'Accounts' },
   { path: '/order-returns', label: 'Order returns' },
   { path: '/expiry-returns', label: 'Expiry returns' },
   { path: '/purchase-returns', label: 'Purchase returns' },
@@ -78,6 +87,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/purchases',
     '/vendor-ledger',
     '/store-ledger',
+    '/accounts',
     '/orders',
     '/order-shortfalls',
     '/product-demands',
@@ -87,7 +97,17 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/medicine-demand',
     '/support',
   ],
-  office: ['/stores', '/store-receivables', '/so-receivables', '/so-cash', '/payment-requests', '/orders', '/purchases', '/inventory'],
+  office: [
+    '/stores',
+    '/store-receivables',
+    '/so-receivables',
+    '/so-cash',
+    '/payment-requests',
+    '/orders',
+    '/purchases',
+    '/inventory',
+    '/accounts',
+  ],
 };
 
 const FULL_WRITE: WriteAccess = {
@@ -97,9 +117,10 @@ const FULL_WRITE: WriteAccess = {
   purchases: true,
   inventory: true,
   gst: true,
+  accounts: true,
 };
 
-/** Office default: view stores / receivables / orders; full purchase invoices + inventory. */
+/** Office default: view stores / receivables / orders; full purchase invoices + inventory + accounts. */
 export const OFFICE_WRITE_DEFAULTS: WriteAccess = {
   stores: false,
   receivables: false,
@@ -107,12 +128,60 @@ export const OFFICE_WRITE_DEFAULTS: WriteAccess = {
   purchases: true,
   inventory: true,
   gst: false,
+  accounts: true,
 };
 
 export const PANEL_ROLES: PanelRole[] = ['admin', 'operations', 'office'];
 
 export function isPanelRole(role: string | undefined): role is PanelRole {
   return role === 'admin' || role === 'operations' || role === 'office';
+}
+
+function canonicalizeAppRole(raw: unknown): AppRole | undefined {
+  const key = String(raw || '')
+    .trim()
+    .toLowerCase();
+  const map: Record<string, AppRole> = {
+    admin: 'admin',
+    operations: 'operations',
+    office: 'office',
+    retailer: 'retailer',
+    salesofficer: 'salesOfficer',
+    areamanager: 'areaManager',
+    purchaseofficer: 'purchaseOfficer',
+  };
+  return map[key];
+}
+
+/** Roles on one login: primary `role`, `roles[]`, and alsoRetailer. */
+export function collectUserRoles(profile: {
+  role?: string;
+  roles?: unknown;
+  alsoRetailer?: boolean;
+} | null | undefined): AppRole[] {
+  const roles = new Set<AppRole>();
+  const primary = canonicalizeAppRole(profile?.role);
+  if (primary) roles.add(primary);
+  if (Array.isArray(profile?.roles)) {
+    for (const item of profile.roles) {
+      const role = canonicalizeAppRole(item);
+      if (role) roles.add(role);
+    }
+  }
+  if (profile?.alsoRetailer === true) roles.add('retailer');
+  return [...roles];
+}
+
+export function resolvePanelRole(profile: {
+  role?: string;
+  roles?: unknown;
+  alsoRetailer?: boolean;
+} | null | undefined): PanelRole | null {
+  const roles = collectUserRoles(profile);
+  if (roles.includes('admin')) return 'admin';
+  if (roles.includes('operations')) return 'operations';
+  if (roles.includes('office')) return 'office';
+  return null;
 }
 
 export function canAccessPanel(role: string | undefined): role is PanelRole {
@@ -154,6 +223,7 @@ function normalizeWriteAccess(role: PanelRole, raw: unknown): WriteAccess {
     purchases: src.purchases === undefined ? base.purchases : src.purchases === true,
     inventory: src.inventory === undefined ? base.inventory : src.inventory === true,
     gst: src.gst === undefined ? base.gst : src.gst === true,
+    accounts: src.accounts === undefined ? base.accounts : src.accounts === true,
   };
 }
 

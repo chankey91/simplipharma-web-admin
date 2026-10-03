@@ -1,39 +1,18 @@
-import { collection, getDocs, query, where, doc, updateDoc, deleteField, db, functions } from './firebase';
+import { doc, updateDoc, deleteField, db, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { User } from '../types';
+import { getUsersMatchingRoles } from './usersByRole';
+import { getSalesOfficers } from './salesOfficers';
 
 export const getAreaManagers = async (): Promise<User[]> => {
-  const usersCol = collection(db, 'users');
-  const q = query(usersCol, where('role', '==', 'areaManager'));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(
-    (d) =>
-      ({
-        id: d.id,
-        uid: d.id,
-        ...d.data(),
-      }) as User
-  );
+  return getUsersMatchingRoles(['areaManager']);
 };
 
 export const getSalesOfficersByAreaManager = async (
   areaManagerId: string
 ): Promise<User[]> => {
-  const usersCol = collection(db, 'users');
-  const q = query(
-    usersCol,
-    where('role', '==', 'salesOfficer'),
-    where('areaManagerId', '==', areaManagerId)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(
-    (d) =>
-      ({
-        id: d.id,
-        uid: d.id,
-        ...d.data(),
-      }) as User
-  );
+  const officers = await getSalesOfficers();
+  return officers.filter((so) => so.areaManagerId === areaManagerId);
 };
 
 export const createAreaManager = async (

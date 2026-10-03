@@ -10,8 +10,6 @@ import {
   isSalesOfficerRole,
   isPurchaseOfficerRole,
   isRetailerRole,
-  isOperationsRole,
-  isOfficeRole,
 } from './panelAuth';
 import { buildRetailerWelcomeEmail } from './emailTemplates/retailerWelcomeEmail';
 import { getRetailerApkRelease } from './retailerApk';
@@ -397,6 +395,9 @@ function cleanStoreDataForFirestore(
   cleanData.uid = uid;
   cleanData.email = email;
   cleanData.role = role;
+  const roles = new Set<string>([role]);
+  if (storeData?.alsoRetailer === true) roles.add('retailer');
+  cleanData.roles = [...roles];
   cleanData.mustResetPassword = true;
   cleanData.isActive = storeData?.isActive !== false;
   return cleanData;
@@ -468,23 +469,62 @@ async function sendStoreUserWelcomeEmail(options: {
   }
 }
 
-function roleMatchesRequested(existingRole: string | undefined, requestedRole: string): boolean {
-  if (!existingRole) return true;
-  if (requestedRole === 'retailer') return isRetailerRole(existingRole);
-  if (requestedRole === 'salesOfficer') return isSalesOfficerRole(existingRole);
-  if (requestedRole === 'areaManager') return existingRole === 'areaManager';
-  if (requestedRole === 'operations') return isOperationsRole(existingRole);
-  if (requestedRole === 'office') return isOfficeRole(existingRole);
-  return existingRole === requestedRole;
+function canonicalizeAccountRole(raw: unknown): string | undefined {
+  const key = String(raw || '')
+    .trim()
+    .toLowerCase();
+  const map: Record<string, string> = {
+    retailer: 'retailer',
+    salesofficer: 'salesOfficer',
+    areamanager: 'areaManager',
+    operations: 'operations',
+    office: 'office',
+    purchaseofficer: 'purchaseOfficer',
+    admin: 'admin',
+  };
+  return map[key];
 }
 
-/** Same person can be SO + medical store under one email (alsoRetailer). */
-function canDualRoleMerge(existingRole: string | undefined, requestedRole: string): boolean {
-  if (!existingRole) return false;
-  if (requestedRole === 'salesOfficer' && isRetailerRole(existingRole)) return true;
-  if (requestedRole === 'retailer' && isSalesOfficerRole(existingRole)) return true;
-  return false;
+function collectRolesFromData(data: Record<string, any> | undefined): string[] {
+  const roles = new Set<string>();
+  const primary = canonicalizeAccountRole(data?.role);
+  if (primary) roles.add(primary);
+  if (Array.isArray(data?.roles)) {
+    for (const item of data.roles) {
+      const role = canonicalizeAccountRole(item);
+      if (role) roles.add(role);
+    }
+  }
+  if (data?.alsoRetailer === true) roles.add('retailer');
+  return [...roles];
 }
+
+function accountHasRole(data: Record<string, any> | undefined, requestedRole: string): boolean {
+  return collectRolesFromData(data).includes(requestedRole);
+}
+
+function roleDisplayName(role: string): string {
+  const labels: Record<string, string> = {
+    retailer: 'a retailer',
+    salesOfficer: 'a Sales Officer',
+    areaManager: 'an Area Manager',
+    operations: 'an operations user',
+    office: 'an office user',
+    purchaseOfficer: 'a Purchase Officer',
+    admin: 'an admin',
+  };
+  return labels[role] || `a ${role} account`;
+}
+
+function nextPrimaryRole(existingPrimary: string | undefined, requestedRole: string, existingRoles: string[]): string {
+  const all = new Set([...existingRoles, requestedRole]);
+  // Mobile SO + retailer apps already expect primary role salesOfficer + alsoRetailer.
+  if (all.has('salesOfficer') && (requestedRole === 'salesOfficer' || requestedRole === 'retailer')) {
+    return 'salesOfficer';
+  }
+  return existingPrimary || requestedRole;
+}
+
 
 export const createStoreUser = ff.https.onCall(async (data, context) => {
   if (!context.auth) {
@@ -556,61 +596,60 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
 
       userRecord = await admin.auth().getUserByEmail(email);
       const existingDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
-      const existingRole = existingDoc.exists
-        ? String(existingDoc.data()?.role || '')
-        : undefined;
-      const dualMerge = canDualRoleMerge(existingRole, role);
+      const existingData = existingDoc.exists ? (existingDoc.data() as Record<string, any>) : undefined;
+      const existingRoles = collectRolesFromData(existingData);
 
-      if (!roleMatchesRequested(existingRole, role) && !dualMerge) {
+      if (accountHasRole(existingData, role)) {
         throw new functions.https.HttpsError(
           'already-exists',
-          `This email is already registered as ${existingRole || 'another account type'}. Use a different email or update the existing account.`
+          `This email is already registered as ${roleDisplayName(role)}. Use a different email or edit that account.`
         );
       }
 
-      await admin.auth().updateUser(userRecord.uid, {
-        password,
-        displayName,
-        disabled: false,
-      });
-      userRecord = await admin.auth().getUser(userRecord.uid);
-      reprovisioned = true;
-      console.log(
-        'createStoreUser: reprovisioned existing auth user',
-        userRecord.uid,
-        email,
-        dualMerge ? `(dual-role merge from ${existingRole} → ${role})` : ''
-      );
-
-      if (dualMerge) {
-        // Keep one Auth user: primary role becomes salesOfficer; store capability via alsoRetailer.
+      // Same login can hold different roles. Keep the existing password so we do not lock the other role out.
+      if (!existingDoc.exists) {
+        await admin.auth().updateUser(userRecord.uid, {
+          password,
+          displayName,
+          disabled: false,
+        });
+        userRecord = await admin.auth().getUser(userRecord.uid);
+        reprovisioned = true;
+      } else {
+        await admin.auth().updateUser(userRecord.uid, { disabled: false });
         const incoming = { ...(storeData || {}) } as Record<string, any>;
         delete incoming.role;
+        const nextRoles = [...new Set([...existingRoles, role, incoming.alsoRetailer === true ? 'retailer' : ''])].filter(
+          Boolean
+        );
+        const nextPrimary = nextPrimaryRole(
+          canonicalizeAccountRole(existingData?.role),
+          role,
+          existingRoles
+        );
         const merged: Record<string, any> = {
           ...incoming,
           uid: userRecord.uid,
           email,
-          role: 'salesOfficer',
-          alsoRetailer: true,
-          mustResetPassword: true,
+          role: nextPrimary,
+          roles: nextRoles,
           isActive: storeData?.isActive !== false,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
-        // Self-assign so this store appears under the SO territory.
-        if (!merged.salesOfficerId) {
-          merged.salesOfficerId = userRecord.uid;
-        }
-        if (!merged.shopName && existingDoc.exists) {
-          const prev = existingDoc.data() || {};
-          if (prev.shopName) merged.shopName = prev.shopName;
-          if (prev.storeCode && !merged.storeCode) merged.storeCode = prev.storeCode;
-          if (prev.address && !merged.address) merged.address = prev.address;
-        }
-        if (merged.alsoRetailer && !String(merged.storeCode || '').trim()) {
-          try {
-            merged.storeCode = await generateNextStoreCode();
-          } catch (codeErr) {
-            console.error('createStoreUser dual-merge: store code failed', codeErr);
+        if (nextRoles.includes('retailer') && nextPrimary !== 'retailer') {
+          merged.alsoRetailer = true;
+          if (!merged.salesOfficerId && nextRoles.includes('salesOfficer')) {
+            merged.salesOfficerId = userRecord.uid;
+          }
+          if (!merged.shopName && existingData?.shopName) merged.shopName = existingData.shopName;
+          if (!merged.storeCode && existingData?.storeCode) merged.storeCode = existingData.storeCode;
+          if (!merged.address && existingData?.address) merged.address = existingData.address;
+          if (!String(merged.storeCode || '').trim()) {
+            try {
+              merged.storeCode = await generateNextStoreCode();
+            } catch (codeErr) {
+              console.error('createStoreUser cross-role: store code failed', codeErr);
+            }
           }
         }
         for (const [k, v] of Object.entries(merged)) {
@@ -621,17 +660,23 @@ export const createStoreUser = ff.https.onCall(async (data, context) => {
         const emailSent = await sendStoreUserWelcomeEmail({
           email,
           password,
-          role: 'salesOfficer',
-          accountLabel: 'Sales Officer',
+          role,
+          accountLabel,
           storeData: merged,
         });
+        console.log(
+          'createStoreUser: attached role to existing email',
+          userRecord.uid,
+          email,
+          `${existingRoles.join(',') || 'none'} + ${role}`
+        );
         return {
           success: true,
           uid: userRecord.uid,
           id: userRecord.uid,
           emailSent,
-          reprovisioned: true,
-          dualRoleMerged: true,
+          roleAttached: true,
+          roles: nextRoles,
         };
       }
     }
@@ -710,7 +755,7 @@ export const updateRetailerEmail = ff.https.onCall(async (data, context) => {
   }
 
   const userData = userDoc.data() as Record<string, unknown>;
-  if (!isRetailerRole(String(userData.role || ''))) {
+  if (!accountHasRole(userData, 'retailer')) {
     throw new functions.https.HttpsError('failed-precondition', 'User is not a retailer account');
   }
 
@@ -780,13 +825,31 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
   }
 
   try {
-    const userRecord = await admin.auth().createUser({
-      email: cred.email,
-      password: cred.password,
-      displayName: req.displayName || req.shopName || cred.email,
-      emailVerified: false,
-      disabled: false,
-    });
+    let userRecord: admin.auth.UserRecord;
+    let attachedToExisting = false;
+    try {
+      userRecord = await admin.auth().createUser({
+        email: cred.email,
+        password: cred.password,
+        displayName: req.displayName || req.shopName || cred.email,
+        emailVerified: false,
+        disabled: false,
+      });
+    } catch (createErr: any) {
+      if (createErr?.code !== 'auth/email-already-exists') {
+        throw createErr;
+      }
+      userRecord = await admin.auth().getUserByEmail(cred.email);
+      const existingSnap = await admin.firestore().collection('users').doc(userRecord.uid).get();
+      const existingData = existingSnap.exists ? (existingSnap.data() as Record<string, any>) : undefined;
+      if (accountHasRole(existingData, 'retailer')) {
+        throw new functions.https.HttpsError(
+          'already-exists',
+          'This email is already registered as a retailer.'
+        );
+      }
+      attachedToExisting = existingSnap.exists;
+    }
 
     let storeCode =
       typeof req.storeCode === 'string' && req.storeCode.trim()
@@ -801,10 +864,20 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
     }
 
     const requestLocation = resolveRetailerRequestLocation(req);
+    const existingSnap = await admin.firestore().collection('users').doc(userRecord.uid).get();
+    const existingData = existingSnap.exists ? (existingSnap.data() as Record<string, any>) : undefined;
+    const existingRoles = collectRolesFromData(existingData);
+    const nextRoles = [...new Set([...existingRoles, 'retailer'])];
+    const nextPrimary = nextPrimaryRole(
+      canonicalizeAccountRole(existingData?.role),
+      'retailer',
+      existingRoles
+    );
     const userData: Record<string, any> = {
       uid: userRecord.uid,
       email: cred.email,
-      role: 'retailer',
+      role: nextPrimary,
+      roles: nextRoles,
       displayName: req.displayName,
       shopName: req.shopName,
       phoneNumber: req.phoneNumber,
@@ -824,15 +897,25 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
       licenceImageUrl: req.licenceImageUrl || req.licenceImage || req.licenseImageUrl,
       aadharImageUrl: req.aadharImageUrl || req.aadharImage || req.aadharCardUrl,
       location: req.location,
-      mustResetPassword: true,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
+    if (nextRoles.includes('retailer') && nextPrimary !== 'retailer') {
+      userData.alsoRetailer = true;
+      if (!userData.salesOfficerId && nextRoles.includes('salesOfficer')) {
+        userData.salesOfficerId = userRecord.uid;
+      }
+    }
+    if (attachedToExisting) {
+      userData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    } else {
+      userData.mustResetPassword = true;
+      userData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    }
 
     for (const [k, v] of Object.entries(userData)) {
       if (v === undefined) delete userData[k];
     }
 
-    await admin.firestore().collection('users').doc(userRecord.uid).set(userData);
+    await admin.firestore().collection('users').doc(userRecord.uid).set(userData, { merge: attachedToExisting });
 
     await reqRef.update({
       status: 'approved',
@@ -875,6 +958,9 @@ export const approveRetailerRequest = ff.https.onCall(async (data, context) => {
     };
   } catch (error: any) {
     console.error('approveRetailerRequest error:', error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
     throw new functions.https.HttpsError('internal', error.message || 'Failed to approve request');
   }
 });

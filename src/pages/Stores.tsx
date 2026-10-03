@@ -1017,7 +1017,7 @@ export const StoresPage: React.FC = () => {
                   helperText={
                     editingStore
                       ? 'Updates the retailer login email in Firebase Auth'
-                      : 'Required — login credentials are sent to this address'
+                      : 'Required — login is sent here. The same email can be used for a different role, not twice as a retailer.'
                   }
                 />
               </Grid>
