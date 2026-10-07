@@ -48,6 +48,7 @@ import {
   Edit,
   Assignment,
   Payment,
+  AccountBalanceWallet,
   AttachMoney,
   Undo,
   Refresh,
@@ -74,6 +75,7 @@ import {
   useUpdatePaymentStatus,
 } from '../hooks/useOrders';
 import { useRetailerWallet } from '../hooks/useRetailerWallet';
+import { ApplyWalletToInvoiceDialog } from '../components/ApplyWalletToInvoiceDialog';
 import { updateOrderMedicines, updateOrderTotalAmount, saveOrderFulfillmentDraft, getOrderById } from '../services/orders';
 import { setOrderTotalOverride } from '../utils/orderTotalOverrides';
 import { calculateOrderTotalsFromLines, hasBatchAssignment } from '../utils/orderTotals';
@@ -645,6 +647,7 @@ export const OrderDetailsPage: React.FC = () => {
     message: ''
   });
   const [useWalletOnFulfill, setUseWalletOnFulfill] = useState(true);
+  const [applyWalletOpen, setApplyWalletOpen] = useState(false);
   const fulfillWalletQuery = useRetailerWallet(
     order?.retailerId,
     Boolean(confirmDialog.open && confirmDialog.action === 'fulfill')
@@ -4414,6 +4417,25 @@ export const OrderDetailsPage: React.FC = () => {
                   )}
                 </Box>
 
+                {canEditOrders &&
+                (order.status === 'Order Fulfillment' ||
+                  order.status === 'In Transit' ||
+                  order.status === 'Delivered') &&
+                (order.paymentStatus === 'Unpaid' ||
+                  !order.paymentStatus ||
+                  order.paymentStatus === 'Partial') ? (
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    startIcon={<AccountBalanceWallet />}
+                    disabled={order.paymentReviewStatus === 'pending_admin_review'}
+                    onClick={() => setApplyWalletOpen(true)}
+                    sx={{ mb: 1 }}
+                  >
+                    Apply wallet
+                  </Button>
+                ) : null}
+
                 {/* Actions - only when dispatched */}
                 {(order.status === 'In Transit' || order.status === 'Delivered') && canEditOrders && (
                   <>
@@ -4765,6 +4787,15 @@ export const OrderDetailsPage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {order?.retailerId ? (
+        <ApplyWalletToInvoiceDialog
+          open={applyWalletOpen}
+          retailerId={order.retailerId}
+          lockOrderId={order.id}
+          onClose={() => setApplyWalletOpen(false)}
+        />
+      ) : null}
 
       {/* Record Payment Dialog */}
       <Dialog

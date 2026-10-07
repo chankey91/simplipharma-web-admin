@@ -26,7 +26,9 @@ import {
   getOrderById,
   getOrdersByRetailer,
   getRetailerOrdersForSchemeHistory,
-  updatePaymentStatus
+  updatePaymentStatus,
+  applyWalletToUnpaidOrder,
+  getUnpaidInvoicesByRetailer,
 } from '../services/orders';
 import { getCreditNotesByRetailer } from '../services/creditNotes';
 import { getDebitNotesByRetailer } from '../services/debitNotes';
@@ -548,5 +550,35 @@ export const useUpdatePaymentStatus = () => {
       queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
     }
+  });
+};
+
+export const useUnpaidInvoicesByRetailer = (
+  retailerId: string | null | undefined,
+  open: boolean
+) => {
+  const rid = retailerId?.trim() || '';
+  return useQuery({
+    queryKey: ['unpaidInvoices', rid],
+    queryFn: () => getUnpaidInvoicesByRetailer(rid),
+    enabled: open && !!rid,
+    staleTime: 0,
+  });
+};
+
+export const useApplyWalletToUnpaidOrder = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, amount }: { orderId: string; amount?: number }) =>
+      applyWalletToUnpaidOrder(orderId, amount),
+    onSuccess: (_, variables) => {
+      void invalidateOrderListQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });
+      queryClient.invalidateQueries({ queryKey: ['unpaidInvoices'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
+      queryClient.invalidateQueries({ queryKey: ['debitNotes'] });
+      queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] });
+    },
   });
 };

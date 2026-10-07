@@ -34,6 +34,8 @@ import {
   Upload,
   Download,
   CloudSync,
+  Inventory2,
+  RestartAlt,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
 import { searchMedicinesCatalog } from '../services/medicineSearch';
@@ -48,14 +50,18 @@ import { auth, db, storage, functions } from '../services/firebase';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useAppDialog } from '../context/AppDialogProvider';
+import { zeroAllStockChunk } from '../services/inventory';
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { canWrite, panelRole } = useAuth();
+  const { alert, confirm, prompt } = useAppDialog();
   const canEditInventory = canWrite('inventory');
   const canReindexInventory = panelRole === 'admin' || panelRole === 'operations';
+  const canZeroAllStock = panelRole === 'admin';
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
@@ -74,6 +80,8 @@ export const InventoryPage: React.FC = () => {
   const [jobStatusLine, setJobStatusLine] = useState('');
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+  const [zeroing, setZeroing] = useState(false);
+  const [zeroMessage, setZeroMessage] = useState<string | null>(null);
   const jobUnsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -254,6 +262,63 @@ export const InventoryPage: React.FC = () => {
     }
   };
 
+  const handleZeroAllStock = async () => {
+    const ok = await confirm(
+      'This sets every batch quantity to 0. Batches are not deleted (batch number, expiry, MRP stay). Pending order fulfillment will see no stock until you enter physical qty on Update stock. Pause fulfilling first.',
+      { title: 'Zero all stock?', confirmLabel: 'Continue', destructive: true }
+    );
+    if (!ok) return;
+    const typed = await prompt('Type ZERO STOCK to confirm', {
+      title: 'Confirm zero all stock',
+      confirmLabel: 'Zero stock',
+    });
+    if (typed == null) return;
+    if (typed.trim().toUpperCase() !== 'ZERO STOCK') {
+      await alert('Stock was not changed. Confirmation text did not match.', { severity: 'info' });
+      return;
+    }
+
+    setZeroing(true);
+    setZeroMessage(null);
+    try {
+      let phase: 'batches' | 'medicines' = 'batches';
+      let startAfterId: string | null = null;
+      let batchesZeroed = 0;
+      let medicinesUpdated = 0;
+      let chunk = 0;
+      for (;;) {
+        chunk += 1;
+        setZeroMessage(
+          `Zeroing stock… ${phase} chunk ${chunk}` +
+            (batchesZeroed ? ` (${batchesZeroed.toLocaleString()} batches set to 0)` : '') +
+            ' — keep this tab open.'
+        );
+        const d = await zeroAllStockChunk({
+          phase,
+          startAfterId,
+        });
+        batchesZeroed += d.batchesZeroed ?? 0;
+        medicinesUpdated += d.medicinesUpdated ?? 0;
+        if (d.done) break;
+        if (!d.nextStartAfterId && d.phase === phase) {
+          throw new Error('Zero job returned incomplete without a resume cursor');
+        }
+        phase = d.phase;
+        startAfterId = d.nextStartAfterId || null;
+      }
+      setZeroMessage(
+        `All batch quantities are 0. ${batchesZeroed.toLocaleString()} batches updated, ${medicinesUpdated.toLocaleString()} medicines. Batches were not deleted. Use Update stock to enter physical qty, then Rebuild search index.`
+      );
+      void queryClient.invalidateQueries({ queryKey: ['medicines'] });
+    } catch (e: unknown) {
+      const err = e as { message?: string; code?: string };
+      const msg = [err.code, err.message].filter(Boolean).join(' — ') || String(e);
+      setZeroMessage(`Zero all stock failed: ${msg}. Click Zero all stock again to continue if a chunk timed out.`);
+    } finally {
+      setZeroing(false);
+    }
+  };
+
   const handleDownloadTemplate = () => {
     const templateData = [
       {
@@ -370,14 +435,33 @@ export const InventoryPage: React.FC = () => {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3} gap={2} flexWrap="wrap">
         <Typography variant="h4">Inventory Management</Typography>
-        <Box>
+        <Box display="flex" gap={1} flexWrap="wrap">
+          {canEditInventory && (
+            <Button
+              variant="contained"
+              startIcon={<Inventory2 />}
+              onClick={() => navigate('/inventory/stock-update')}
+            >
+              Update stock
+            </Button>
+          )}
+          {canZeroAllStock && (
+            <Button
+              variant="outlined"
+              color="error"
+              startIcon={<RestartAlt />}
+              onClick={() => void handleZeroAllStock()}
+              disabled={zeroing}
+            >
+              {zeroing ? 'Zeroing…' : 'Zero all stock'}
+            </Button>
+          )}
           <Button
             variant="outlined"
             startIcon={<Download />}
             onClick={handleDownloadTemplate}
-            sx={{ mr: 2 }}
           >
             Download Template
           </Button>
@@ -388,14 +472,13 @@ export const InventoryPage: React.FC = () => {
             startIcon={<CloudSync />}
             onClick={() => void handleReindexTypesense()}
             disabled={reindexing}
-            sx={{ mr: 2 }}
           >
             {reindexing ? 'Indexing…' : 'Rebuild search index'}
           </Button>
           )}
           {canEditInventory && (
           <Button
-            variant="contained"
+            variant="outlined"
             startIcon={<Upload />}
             onClick={() => setBulkUploadOpen(true)}
           >
@@ -404,6 +487,16 @@ export const InventoryPage: React.FC = () => {
           )}
         </Box>
       </Box>
+
+      {zeroMessage && (
+        <Alert
+          severity={zeroMessage.startsWith('All batch') ? 'success' : zeroMessage.startsWith('Zeroing') ? 'info' : 'error'}
+          onClose={zeroing ? undefined : () => setZeroMessage(null)}
+          sx={{ mb: 2 }}
+        >
+          {zeroMessage}
+        </Alert>
+      )}
 
       {reindexMessage && (
         <Alert

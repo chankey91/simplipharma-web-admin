@@ -187,6 +187,7 @@ export function buildStoreLedger(
   }
 
   for (const note of debitNotes) {
+    if (String(note.status || '').toLowerCase() === 'cancelled') continue;
     const noteDate = toLedgerDate(note.debitNoteDate);
     const total = note.totalAmount ?? 0;
     if (total <= 0) continue;
@@ -208,6 +209,7 @@ export function buildStoreLedger(
   }
 
   for (const note of creditNotes) {
+    if (String(note.status || '').toLowerCase() === 'cancelled') continue;
     const noteDate = toLedgerDate(note.creditNoteDate);
     const total = note.totalAmount ?? 0;
     if (total <= 0) continue;

@@ -653,7 +653,9 @@ export interface CreditNote {
   /** Wallet balance (mobile app); mirrors totalAmount when issued. */
   amount?: number;
   amountUsed?: number;
-  status: 'issued';
+  status: 'issued' | 'cancelled';
+  cancelledAt?: Date | any;
+  cancelledBy?: string;
   createdBy?: string;
   createdAt: Date | any;
 }
@@ -681,7 +683,9 @@ export interface DebitNote {
   totalAmount: number;
   taxPercentage: number;
   gst?: GstDocumentSnapshot;
-  status: 'issued';
+  status: 'issued' | 'cancelled';
+  cancelledAt?: Date | any;
+  cancelledBy?: string;
   createdBy?: string;
   createdAt: Date | any;
 }

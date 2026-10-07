@@ -21,7 +21,7 @@ import {
   LinearProgress,
   Tooltip,
 } from '@mui/material';
-import { Search, Download, Refresh, Build, CloudSync, Add, WhatsApp } from '@mui/icons-material';
+import { Search, Download, Refresh, Build, CloudSync, Add, WhatsApp, Block } from '@mui/icons-material';
 import { format } from 'date-fns';
 import {
   useCreditNotes,
@@ -46,6 +46,8 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { CreateLedgerNoteDialog } from '../components/CreateLedgerNoteDialog';
+import { voidLedgerNote } from '../services/ledgerNotes';
+import { useInvalidateRetailerWallet } from '../hooks/useRetailerWallet';
 
 type NoteTab = 'credit' | 'debit';
 
@@ -62,6 +64,7 @@ interface NoteRow {
   originalInvoiceNumber: string;
   reason: string;
   totalAmount: number;
+  status?: string;
 }
 
 const mapSortField = (key: string, isCredit: boolean): string => {
@@ -90,8 +93,11 @@ export const CreditNotesPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [createLedgerOpen, setCreateLedgerOpen] = useState(false);
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [voidedIds, setVoidedIds] = useState<Set<string>>(new Set());
   const backfillMutation = useBackfillCreditNotes();
   const { alert, confirm } = useAppDialog();
+  const invalidateWallet = useInvalidateRetailerWallet();
 
   const { sortKey, sortDirection, requestSort } = useTableSort('documentDate', 'desc');
 
@@ -243,6 +249,7 @@ export const CreditNotesPage: React.FC = () => {
         originalInvoiceNumber: n.originalInvoiceNumber || (isCredit ? '' : n.orderId) || '',
         reason: isCredit ? n.reason || (n.type === 'ledger_adjustment' ? 'Ledger adjustment' : '') : n.reason || n.sourceType || '',
         totalAmount: n.totalAmount ?? 0,
+        status: n.status,
       }));
     }
     if (isCredit) {
@@ -341,6 +348,26 @@ export const CreditNotesPage: React.FC = () => {
       );
     } finally {
       setSharingId(null);
+    }
+  };
+
+  const handleVoid = async (note: NoteRow) => {
+    const ok = await confirm(
+      `Void ${note.documentNumber}? This removes it from wallet and store ledger. The note is kept as cancelled, not deleted.`,
+      { title: 'Void note', confirmLabel: 'Void', destructive: true }
+    );
+    if (!ok) return;
+    setVoidingId(note.id);
+    try {
+      const result = await voidLedgerNote(isCredit ? 'credit' : 'debit', note.id);
+      setVoidedIds((prev) => new Set(prev).add(note.id));
+      invalidateWallet();
+      handleRefresh();
+      await alert(`${result.documentNumber} voided.`, { severity: 'success' });
+    } catch (err) {
+      await alert(err instanceof Error ? err.message : 'Failed to void note', { severity: 'error' });
+    } finally {
+      setVoidingId(null);
     }
   };
 
@@ -491,12 +518,13 @@ export const CreditNotesPage: React.FC = () => {
         <Alert severity="info" sx={{ mb: 2 }}>
           Return credit notes are created when order returns are approved. Use{' '}
           <strong>Create ledger credit note</strong> to add wallet credit directly (also on store ledger).
-          Use &quot;Repair batch/MRP&quot; once to fix older return notes missing batch/MRP on lines.
+          Void unused ledger notes if they were posted in error. Use &quot;Repair batch/MRP&quot; once to
+          fix older return notes missing batch/MRP on lines.
         </Alert>
       ) : (
         <Alert severity="info" sx={{ mb: 2 }}>
           Use <strong>Create ledger debit note</strong> to post a charge to the retailer&apos;s wallet and store
-          ledger (no approval request).
+          ledger (no approval request). Void unused ledger debit notes if they were posted in error.
         </Alert>
       )}
 
@@ -588,9 +616,17 @@ export const CreditNotesPage: React.FC = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                rows.map((note) => (
-                  <TableRow key={note.id} hover>
-                    <TableCell>{note.documentNumber}</TableCell>
+                rows.map((note) => {
+                  const cancelled =
+                    voidedIds.has(note.id) || String(note.status || '').toLowerCase() === 'cancelled';
+                  return (
+                  <TableRow key={note.id} hover sx={cancelled ? { opacity: 0.6 } : undefined}>
+                    <TableCell>
+                      <Box display="flex" alignItems="center" gap={1}>
+                        {note.documentNumber}
+                        {cancelled ? <Chip size="small" label="Voided" color="default" /> : null}
+                      </Box>
+                    </TableCell>
                     <TableCell>{format(note.date, 'dd MMM yyyy')}</TableCell>
                     <TableCell>{note.retailer}</TableCell>
                     <TableCell>{note.originalInvoiceNumber || '—'}</TableCell>
@@ -622,9 +658,23 @@ export const CreditNotesPage: React.FC = () => {
                           </IconButton>
                         </span>
                       </Tooltip>
+                      <Tooltip title={cancelled ? 'Already voided' : 'Void this note'}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => void handleVoid(note)}
+                            disabled={cancelled || voidingId === note.id}
+                            aria-label={`Void ${isCredit ? 'credit' : 'debit'} note`}
+                          >
+                            <Block />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -642,6 +692,7 @@ export const CreditNotesPage: React.FC = () => {
         kind={tab}
         onClose={() => setCreateLedgerOpen(false)}
         onCreated={async ({ documentNumber }) => {
+          invalidateWallet();
           handleRefresh();
           await alert(
             `${tab === 'credit' ? 'Credit' : 'Debit'} note ${documentNumber} created. It is reflected in the store ledger and retailer wallet.`,
