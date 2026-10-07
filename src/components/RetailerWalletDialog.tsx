@@ -17,11 +17,17 @@ import {
   Paper,
   Chip,
   Alert,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
+import { Block } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useRetailerWallet, useInvalidateRetailerWallet } from '../hooks/useRetailerWallet';
 import { Loading } from './Loading';
 import { CreateLedgerNoteDialog } from './CreateLedgerNoteDialog';
+import { ApplyWalletToInvoiceDialog } from './ApplyWalletToInvoiceDialog';
+import { useAppDialog } from '../context/AppDialogProvider';
+import { voidLedgerNote } from '../services/ledgerNotes';
 import type { User } from '../types';
 import type { WalletTxn } from '../utils/retailerWallet';
 
@@ -40,9 +46,13 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
   const retailerId = store?.id || '';
   const { data, isLoading, error, refetch, isFetching } = useRetailerWallet(retailerId, open);
   const invalidateWallet = useInvalidateRetailerWallet();
+  const { alert, confirm } = useAppDialog();
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [ledgerKind, setLedgerKind] = useState<'credit' | 'debit' | null>(null);
+  const [setBalanceOpen, setSetBalanceOpen] = useState(false);
+  const [applyInvoiceOpen, setApplyInvoiceOpen] = useState(false);
+  const [voidingId, setVoidingId] = useState<string | null>(null);
 
   const storeName = store?.shopName || store?.displayName || store?.email || 'Store';
 
@@ -62,6 +72,27 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
   const handleNoteCreated = () => {
     invalidateWallet(retailerId);
     void refetch();
+  };
+
+  const handleVoid = async (tx: WalletTxn) => {
+    if (!tx.noteId || (tx.source !== 'credit_note' && tx.source !== 'debit_note')) return;
+    const kind = tx.source === 'credit_note' ? 'credit' : 'debit';
+    const ok = await confirm(
+      `Void ${tx.ref}? This removes it from wallet and store ledger. The note is kept as cancelled, not deleted.`,
+      { title: 'Void note', confirmLabel: 'Void', destructive: true }
+    );
+    if (!ok) return;
+    setVoidingId(tx.id);
+    try {
+      const result = await voidLedgerNote(kind, tx.noteId);
+      invalidateWallet(retailerId);
+      await refetch();
+      await alert(`${result.documentNumber} voided.`, { severity: 'success' });
+    } catch (e: unknown) {
+      await alert(e instanceof Error ? e.message : 'Failed to void note', { severity: 'error' });
+    } finally {
+      setVoidingId(null);
+    }
   };
 
   return (
@@ -107,13 +138,24 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
                   <Button variant="contained" color="warning" onClick={() => setLedgerKind('debit')}>
                     Debit
                   </Button>
+                  <Button variant="outlined" onClick={() => setSetBalanceOpen(true)}>
+                    Set balance
+                  </Button>
+                  <Button
+                    variant="contained"
+                    disabled={(data?.available ?? 0) <= 0.01}
+                    onClick={() => setApplyInvoiceOpen(true)}
+                  >
+                    Apply to invoice
+                  </Button>
                 </Box>
                 ) : null}
               </Box>
 
               <Alert severity="info" sx={{ mb: 2 }}>
-                Debit posts a ledger debit note with reason and reduces wallet balance immediately.
-                Credits and invoice wallet usage also appear below.
+                Credit / Debit post a ledger note immediately. Set balance posts the difference so
+                wallet equals the amount you enter. Apply to invoice uses wallet on any unpaid bill.
+                Unused ledger notes can be voided.
               </Alert>
 
               <Box display="flex" gap={2} flexWrap="wrap" mb={2}>
@@ -168,6 +210,7 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
                         <TableCell>Reason</TableCell>
                         <TableCell align="right">Amount</TableCell>
                         <TableCell align="right">Balance</TableCell>
+                        {!readOnly ? <TableCell align="right"> </TableCell> : null}
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -201,6 +244,25 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
                             </Typography>
                           </TableCell>
                           <TableCell align="right">{formatAmount(tx.balanceAfter || 0)}</TableCell>
+                          {!readOnly ? (
+                            <TableCell align="right">
+                              {tx.canVoid ? (
+                                <Tooltip title="Void this note">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      color="error"
+                                      disabled={voidingId === tx.id}
+                                      onClick={() => void handleVoid(tx)}
+                                      aria-label={`Void ${tx.ref}`}
+                                    >
+                                      <Block fontSize="small" />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                              ) : null}
+                            </TableCell>
+                          ) : null}
                         </TableRow>
                       ))}
                     </TableBody>
@@ -219,14 +281,33 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
       </Dialog>
 
       {!readOnly ? (
-        <CreateLedgerNoteDialog
-          open={ledgerKind != null}
-          kind={ledgerKind ?? 'debit'}
-          initialRetailerId={retailerId}
-          lockRetailer
-          onClose={() => setLedgerKind(null)}
-          onCreated={handleNoteCreated}
-        />
+        <>
+          <CreateLedgerNoteDialog
+            open={ledgerKind != null}
+            kind={ledgerKind ?? 'debit'}
+            initialRetailerId={retailerId}
+            lockRetailer
+            onClose={() => setLedgerKind(null)}
+            onCreated={handleNoteCreated}
+          />
+          <CreateLedgerNoteDialog
+            open={setBalanceOpen}
+            kind="credit"
+            mode="set-balance"
+            currentWalletAvailable={data?.available ?? 0}
+            initialRetailerId={retailerId}
+            lockRetailer
+            initialAmount={data?.available ?? 0}
+            onClose={() => setSetBalanceOpen(false)}
+            onCreated={handleNoteCreated}
+          />
+          <ApplyWalletToInvoiceDialog
+            open={applyInvoiceOpen}
+            retailerId={retailerId}
+            onClose={() => setApplyInvoiceOpen(false)}
+            onApplied={handleNoteCreated}
+          />
+        </>
       ) : null}
     </>
   );

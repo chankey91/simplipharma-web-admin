@@ -1702,6 +1702,7 @@ export const onSupportThreadAdminMessageCreated = ff.firestore
   });
 
 export { onBulkMedicineJobCreated } from './bulkMedicineJob';
+export { adminZeroAllStock } from './zeroAllStock';
 export { processPurchaseInvoiceDraft } from './purchaseInvoiceIngest';
 
 const MAX_ORDER_INVOICE_PDF_BYTES = 12 * 1024 * 1024;

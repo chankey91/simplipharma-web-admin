@@ -62,6 +62,7 @@ export async function buildGstr1Export(
   }
 
   for (const note of books.creditNotes) {
+    if (String(note.status || '').toLowerCase() === 'cancelled') continue;
     if (!hasGstSnapshot(note) || !note.gst) {
       skippedNoSnapshot += 1;
       continue;
@@ -80,6 +81,7 @@ export async function buildGstr1Export(
   }
 
   for (const note of books.debitNotes) {
+    if (String(note.status || '').toLowerCase() === 'cancelled') continue;
     if (!hasGstSnapshot(note) || !note.gst) {
       skippedNoSnapshot += 1;
       continue;
@@ -109,8 +111,12 @@ export async function buildGstr1Export(
       issuedInvoices: books.orders
         .filter((o) => o.invoiceNumber && o.status !== 'Pending')
         .map((o) => ({ number: o.invoiceNumber as string, cancelled: o.status === 'Cancelled' })),
-      issuedCreditNotes: books.creditNotes.map((n) => ({ number: n.creditNoteNumber })),
-      issuedDebitNotes: books.debitNotes.map((n) => ({ number: n.debitNoteNumber })),
+      issuedCreditNotes: books.creditNotes
+        .filter((n) => String(n.status || '').toLowerCase() !== 'cancelled')
+        .map((n) => ({ number: n.creditNoteNumber })),
+      issuedDebitNotes: books.debitNotes
+        .filter((n) => String(n.status || '').toLowerCase() !== 'cancelled')
+        .map((n) => ({ number: n.debitNoteNumber })),
     })
   );
 }

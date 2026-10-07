@@ -22,6 +22,8 @@ export type WalletDebitNote = {
   amount: number;
   debitNoteDate?: Date | null;
   reason?: string;
+  sourceType?: string;
+  status?: 'issued' | 'cancelled';
 };
 
 export type WalletOrderDebit = {
@@ -42,6 +44,9 @@ export type WalletTxn = {
   at: Date | null;
   reason?: string;
   balanceAfter?: number;
+  source?: 'credit_note' | 'debit_note' | 'invoice';
+  noteId?: string;
+  canVoid?: boolean;
 };
 
 function toMillis(d: Date | unknown): number {
@@ -200,15 +205,26 @@ export function buildWalletTransactions(
 ): WalletTxn[] {
   const credits: WalletTxn[] = notes
     .filter((n) => n.creditNoteNumber?.trim() && (n.amount || 0) > 0.01)
-    .map((n) => ({
-      id: `cn:${n.id}`,
-      kind: 'credit' as const,
-      label: 'Credited',
-      ref: n.creditNoteNumber,
-      amount: Math.max(0, n.amount || 0),
-      at: asDate(n.creditNoteDate),
-      reason: n.reason,
-    }));
+    .map((n) => {
+      const unused = roundMoney2(n.amount - (n.amountUsed || 0));
+      const isLedgerCredit =
+        n.status !== 'cancelled' &&
+        unused > 0.01 &&
+        (n.amountUsed || 0) <= 0.01 &&
+        (n.returnType === 'credit_note' || !n.returnType);
+      return {
+        id: `cn:${n.id}`,
+        kind: 'credit' as const,
+        label: 'Credited',
+        ref: n.creditNoteNumber,
+        amount: Math.max(0, n.amount || 0),
+        at: asDate(n.creditNoteDate),
+        reason: n.reason,
+        source: 'credit_note' as const,
+        noteId: n.id,
+        canVoid: isLedgerCredit,
+      };
+    });
 
   const fromOrders: WalletTxn[] = orderDebits.map((o) => ({
     id: `ord:${o.id}`,
@@ -221,6 +237,7 @@ export function buildWalletTransactions(
         ? o.creditAppliedDate ?? o.orderDate
         : o.orderDate
     ),
+    source: 'invoice' as const,
   }));
 
   const fromDebits: WalletTxn[] = debitNotes.map((n) => ({
@@ -231,6 +248,11 @@ export function buildWalletTransactions(
     amount: Math.max(0, n.amount || 0),
     at: asDate(n.debitNoteDate),
     reason: n.reason,
+    source: 'debit_note' as const,
+    noteId: n.id,
+    canVoid:
+      n.status !== 'cancelled' &&
+      (!n.sourceType || n.sourceType === 'ledger_adjustment' || n.sourceType === 'manual'),
   }));
 
   const debits = [...fromOrders, ...fromDebits].filter((tx) => tx.amount > 0.01);

@@ -2,6 +2,8 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
+  updateDoc,
   Timestamp,
   serverTimestamp,
   db,
@@ -14,6 +16,7 @@ import { CreditNoteLine } from '../types';
 import { createOutwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromNoteItems } from '../utils/gstLineSnapshot';
+import { invalidateGstPeriodBooksCache } from './gstPeriodBooks';
 
 export const LEDGER_NOTE_GST_RATES = [5, 18] as const;
 export type LedgerNoteGstRate = (typeof LEDGER_NOTE_GST_RATES)[number];
@@ -195,4 +198,70 @@ export async function createDirectLedgerDebitNote(
   );
 
   return { id: noteRef.id, debitNoteNumber };
+}
+
+export function isCancelledNote(note: { status?: string } | null | undefined): boolean {
+  return String(note?.status || '').toLowerCase() === 'cancelled';
+}
+
+/**
+ * Void an unused ledger credit/debit note. Does not delete the document.
+ * Used credit notes (wallet already applied to invoices) cannot be voided.
+ */
+export async function voidLedgerNote(
+  kind: 'credit' | 'debit',
+  noteId: string
+): Promise<{ id: string; documentNumber: string }> {
+  const id = noteId.trim();
+  if (!id) throw new Error('Note id is required');
+  const col = kind === 'credit' ? 'credit_notes' : 'debit_notes';
+  const ref = doc(db, col, id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error('Note not found');
+  const data = snap.data();
+  if (isCancelledNote(data)) {
+    throw new Error('This note is already voided');
+  }
+
+  const noteDate = kind === 'credit' ? data.creditNoteDate : data.debitNoteDate;
+  await assertDocumentDateWritable(noteDate || data.createdAt || new Date());
+
+  if (kind === 'credit') {
+    const type = String(data.type || '');
+    const hasReturn =
+      type === 'order_return' ||
+      type === 'expiry_return' ||
+      String(data.orderReturnRequestId || '').trim() !== '' ||
+      String(data.expiryReturnRequestId || '').trim() !== '';
+    if (hasReturn) {
+      throw new Error('Return credit notes cannot be voided here. Reverse the return instead.');
+    }
+    const used = Number(data.amountUsed) || 0;
+    if (used > 0.01) {
+      throw new Error(
+        'This credit has already been used on invoices. Post a debit note to reduce wallet instead.'
+      );
+    }
+  } else {
+    const source = String(data.sourceType || '');
+    if (source && source !== 'ledger_adjustment' && source !== 'manual') {
+      throw new Error('Only ledger debit notes can be voided here.');
+    }
+  }
+
+  const documentNumber =
+    kind === 'credit'
+      ? String(data.creditNoteNumber || id)
+      : String(data.debitNoteNumber || id);
+
+  await updateDoc(
+    ref,
+    stripUndefinedDeep({
+      status: 'cancelled',
+      cancelledAt: serverTimestamp(),
+      cancelledBy: auth.currentUser?.uid || undefined,
+    })
+  );
+  invalidateGstPeriodBooksCache();
+  return { id, documentNumber };
 }

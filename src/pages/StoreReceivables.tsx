@@ -25,7 +25,7 @@ import {
   FormControlLabel,
   Switch,
 } from '@mui/material';
-import { Search, Visibility, Receipt, WhatsApp } from '@mui/icons-material';
+import { Search, Visibility, Receipt, WhatsApp, AccountBalanceWallet } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { useReceivableOrders } from '../hooks/useOrders';
@@ -48,6 +48,7 @@ import {
 } from '../utils/retailerPaymentBlock';
 import { Order } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { ApplyWalletToInvoiceDialog } from '../components/ApplyWalletToInvoiceDialog';
 import { useAuth } from '../context/AuthContext';
 import {
   buildWhatsAppUrl,
@@ -78,6 +79,9 @@ export const StoreReceivablesPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(10);
   const [drillDown, setDrillDown] = useState<StoreReceivableSummary | null>(null);
+  const [walletApply, setWalletApply] = useState<{ retailerId: string; orderId: string } | null>(
+    null
+  );
 
   const { sortKey, sortDirection, requestSort } = useTableSort('outstanding', 'desc');
 
@@ -491,6 +495,10 @@ export const StoreReceivablesPage: React.FC = () => {
                       <ReceivableOrderRow
                         key={order.id}
                         order={order}
+                        canApplyWallet={canEditReceivables}
+                        onApplyWallet={() =>
+                          setWalletApply({ retailerId: drillDown.retailerId, orderId: order.id })
+                        }
                         onOpen={() => {
                           setDrillDown(null);
                           navigate(`/orders/${order.id}`);
@@ -515,6 +523,14 @@ export const StoreReceivablesPage: React.FC = () => {
           </>
         )}
       </Dialog>
+      {walletApply ? (
+        <ApplyWalletToInvoiceDialog
+          open
+          retailerId={walletApply.retailerId}
+          lockOrderId={walletApply.orderId}
+          onClose={() => setWalletApply(null)}
+        />
+      ) : null}
     </Box>
   );
 };
@@ -522,7 +538,9 @@ export const StoreReceivablesPage: React.FC = () => {
 const ReceivableOrderRow: React.FC<{
   order: Order & { outstanding: number };
   onOpen: () => void;
-}> = ({ order, onOpen }) => {
+  canApplyWallet?: boolean;
+  onApplyWallet?: () => void;
+}> = ({ order, onOpen, canApplyWallet, onApplyWallet }) => {
   const paid = order.paidAmount ?? 0;
   const total = order.totalAmount ?? 0;
   const blocksOrdering = isOrderPlacementBlockingOrder(order);
@@ -561,6 +579,11 @@ const ReceivableOrderRow: React.FC<{
         </Typography>
       </TableCell>
       <TableCell align="right">
+        {canApplyWallet ? (
+          <IconButton size="small" onClick={onApplyWallet} title="Apply wallet to this invoice">
+            <AccountBalanceWallet />
+          </IconButton>
+        ) : null}
         <IconButton size="small" onClick={onOpen} title="Open order & collect payment">
           <Visibility />
         </IconButton>

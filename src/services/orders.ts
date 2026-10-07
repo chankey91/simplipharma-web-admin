@@ -1,6 +1,6 @@
 import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where, writeBatch, getUserProfile } from './firebase';
 import { deleteField } from 'firebase/firestore';
-import { Order, OrderStatus, OrderTimelineEvent, OrderMedicine, Medicine, PurchaseInvoice, Payment } from '../types';
+import { Order, OrderStatus, OrderTimelineEvent, OrderMedicine, Medicine, PurchaseInvoice, Payment, PaymentRequestCreditApplication } from '../types';
 import {
   reduceStockBatchesFromMedicine,
   restoreStockToBatch,
@@ -27,7 +27,9 @@ import {
 } from '../utils/orderFulfillmentDiscount';
 import { getAllPurchaseInvoices } from './purchaseInvoices';
 import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
-import { calculateOrderTotalsFromLines } from '../utils/orderTotals';
+import { calculateOrderTotalsFromLines, resolveOrderInvoiceGrandTotal } from '../utils/orderTotals';
+import { isReceivableOrder, orderOutstanding } from '../utils/storeReceivables';
+import { formatOrderInvoiceLabel } from '../utils/orderDisplay';
 import { createOutwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromOrderMedicines } from '../utils/gstLineSnapshot';
@@ -1484,6 +1486,113 @@ export const fulfillOrder = async (
   
   await updateDoc(orderRef, updateData);
   return { walletApplied };
+};
+
+export type UnpaidInvoiceOption = {
+  id: string;
+  label: string;
+  orderDate: Date;
+  outstanding: number;
+  totalAmount: number;
+  paymentStatus: string;
+};
+
+export async function getUnpaidInvoicesByRetailer(
+  retailerId: string
+): Promise<UnpaidInvoiceOption[]> {
+  const rid = retailerId.trim();
+  if (!rid) return [];
+  const orders = await getOrdersByRetailer(rid);
+  return orders
+    .filter((o) => isReceivableOrder(o))
+    .map((o) => {
+      const date = o.orderDate instanceof Date ? o.orderDate : new Date(o.orderDate);
+      return {
+        id: o.id,
+        label: formatOrderInvoiceLabel(o),
+        orderDate: Number.isNaN(date.getTime()) ? new Date() : date,
+        outstanding: roundMoney2(orderOutstanding(o)),
+        totalAmount: roundMoney2(resolveOrderInvoiceGrandTotal(o)),
+        paymentStatus: o.paymentStatus || 'Unpaid',
+      };
+    })
+    .filter((row) => row.outstanding > 0.01)
+    .sort((a, b) => a.orderDate.getTime() - b.orderDate.getTime());
+}
+
+/**
+ * Apply retailer wallet to an unpaid / partial billed invoice (not only at fulfill).
+ * Consumes credit notes, posts a Wallet payment, and recalculates paid/due.
+ */
+export async function applyWalletToUnpaidOrder(
+  orderId: string,
+  amount?: number
+): Promise<{ applied: number; paymentStatus: 'Paid' | 'Partial' | 'Unpaid'; remainingDue: number }> {
+  const order = await getOrderById(orderId);
+  if (!order) throw new Error('Invoice not found');
+  if (order.status === 'Cancelled' || order.status === 'Pending') {
+    throw new Error('Wallet can only be applied to a billed invoice');
+  }
+
+  const invoiceTotal = roundMoney2(resolveOrderInvoiceGrandTotal(order));
+  const paid = roundMoney2(Number(order.paidAmount) || 0);
+  const due = roundMoney2(Math.max(0, invoiceTotal - paid));
+  if (due <= 0.01) throw new Error('This invoice is already paid');
+
+  const wanted =
+    amount != null && Number.isFinite(Number(amount)) ? roundMoney2(Number(amount)) : due;
+  if (wanted <= 0.01) throw new Error('Enter an amount greater than zero');
+  const cap = roundMoney2(Math.min(wanted, due));
+
+  const {
+    applyRetailerWalletTowardAmount,
+    postWalletPaymentOnOrder,
+    rollbackWalletApplications,
+  } = await import('./applyOrderWallet');
+  const wallet = await applyRetailerWalletTowardAmount(order.retailerId, cap);
+  if (wallet.applied <= 0.01) {
+    throw new Error('No wallet balance available to apply');
+  }
+
+  try {
+    await postWalletPaymentOnOrder({
+      orderId,
+      amount: wallet.applied,
+      applications: wallet.applications,
+      note: 'Wallet applied to unpaid invoice',
+    });
+  } catch (error) {
+    await rollbackWalletApplications(wallet.applications);
+    throw error;
+  }
+
+  const existingCredit = roundMoney2(Number(order.creditApplied) || 0);
+  const existingApps: PaymentRequestCreditApplication[] = Array.isArray(
+    order.walletCreditApplications
+  )
+    ? order.walletCreditApplications
+    : [];
+  const nextPaid = roundMoney2(paid + wallet.applied);
+  const nextDue = roundMoney2(Math.max(0, invoiceTotal - nextPaid));
+  const nextStatus: 'Paid' | 'Partial' | 'Unpaid' =
+    nextDue <= 0.01 ? 'Paid' : nextPaid > 0.01 ? 'Partial' : 'Unpaid';
+
+  const orderRef = doc(db, 'orders', orderId);
+  await updateDoc(
+    orderRef,
+    stripUndefinedDeep({
+      paidAmount: nextPaid,
+      dueAmount: nextDue,
+      paymentStatus: nextStatus,
+      creditApplied: roundMoney2(existingCredit + wallet.applied),
+      creditAppliedAt: 'payment',
+      creditAppliedDate: Timestamp.now(),
+      walletCreditApplications: [...existingApps, ...wallet.applications],
+      ...(paid <= 0.01 ? { paymentMethod: 'Wallet' } : {}),
+    })
+  );
+
+  return { applied: wallet.applied, paymentStatus: nextStatus, remainingDue: nextDue };
 };
 
 /**
