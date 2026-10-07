@@ -150,6 +150,7 @@ export function computeReturnMarginSummary(
   const expiryReturnIds = new Set<string>();
 
   for (const note of creditNotes ?? []) {
+    if (String(note.status || '').toLowerCase() === 'cancelled') continue;
     const date = coerceToDate(note.creditNoteDate ?? note.createdAt);
     if (!dateInMarginPeriod(date, period)) continue;
     orderReturnIds.add(note.id);

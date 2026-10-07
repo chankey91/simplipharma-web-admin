@@ -5,6 +5,12 @@ import { getOrdersByRetailer } from './orders';
 import { getOrderReturnRequests } from './orderReturns';
 import { getExpiryReturnRequests } from './expiryReturns';
 import {
+  createDirectLedgerCreditNote,
+  createDirectLedgerDebitNote,
+  type CreateDirectLedgerNoteInput,
+  type LedgerNoteGstRate,
+} from './ledgerNotes';
+import {
   buildWalletTransactions,
   computeWalletAvailable,
   mergeWalletCreditNotes,
@@ -220,12 +226,15 @@ export async function getRetailerWalletSummary(
 
   const debitNotes: WalletDebitNote[] = debitNotesRaw
     .filter((n) => n.ledgerOnly !== true)
+    .filter((n) => String(n.status || 'issued') !== 'cancelled')
     .map((n) => ({
       id: n.id,
       debitNoteNumber: n.debitNoteNumber || `DN-${n.id.slice(0, 8)}`,
       amount: roundMoney2(Number(n.totalAmount) || 0),
       debitNoteDate: toDate(n.debitNoteDate),
       reason: n.reason,
+      sourceType: n.sourceType,
+      status: 'issued' as const,
     }))
     .filter((n) => n.amount > 0.01);
 
@@ -255,5 +264,66 @@ export async function getRetailerWalletSummary(
     notes,
     debitNotes,
     transactions,
+  };
+}
+
+export async function setRetailerWalletBalance(input: {
+  retailerId: string;
+  targetAmount: number;
+  reason: string;
+  noteDate?: Date;
+  originalInvoiceNumber?: string;
+  taxPercentage?: LedgerNoteGstRate;
+}): Promise<{
+  kind: 'credit' | 'debit' | 'none';
+  id?: string;
+  documentNumber?: string;
+  postedAmount: number;
+  previousAvailable: number;
+  targetAmount: number;
+}> {
+  const retailerId = input.retailerId.trim();
+  if (!retailerId) throw new Error('Select a medical store');
+  const targetAmount = roundMoney2(Number(input.targetAmount));
+  if (!Number.isFinite(targetAmount) || targetAmount < 0) {
+    throw new Error('Enter a wallet balance of zero or more');
+  }
+
+  const summary = await getRetailerWalletSummary(retailerId);
+  const previousAvailable = roundMoney2(summary.available);
+  const postedAmount = roundMoney2(targetAmount - previousAvailable);
+  if (Math.abs(postedAmount) <= 0.01) {
+    return { kind: 'none', postedAmount: 0, previousAvailable, targetAmount };
+  }
+
+  const payload: CreateDirectLedgerNoteInput = {
+    retailerId,
+    totalAmount: Math.abs(postedAmount),
+    reason: input.reason,
+    noteDate: input.noteDate,
+    originalInvoiceNumber: input.originalInvoiceNumber,
+    taxPercentage: input.taxPercentage,
+  };
+
+  if (postedAmount > 0) {
+    const result = await createDirectLedgerCreditNote(payload);
+    return {
+      kind: 'credit',
+      id: result.id,
+      documentNumber: result.creditNoteNumber,
+      postedAmount,
+      previousAvailable,
+      targetAmount,
+    };
+  }
+
+  const result = await createDirectLedgerDebitNote(payload);
+  return {
+    kind: 'debit',
+    id: result.id,
+    documentNumber: result.debitNoteNumber,
+    postedAmount,
+    previousAvailable,
+    targetAmount,
   };
 }

@@ -65,8 +65,14 @@ export async function loadGstHealthReport(date = new Date()): Promise<GstHealthR
     if (hasGstSnapshot(order)) snapshotsThisPeriod += 1;
     else legacyInvoicesThisPeriod += 1;
   }
-  const legacyCreditNotesThisPeriod = books.creditNotes.filter((n) => !hasGstSnapshot(n)).length;
-  const legacyDebitNotesThisPeriod = books.debitNotes.filter((n) => !hasGstSnapshot(n)).length;
+  const activeCreditNotes = books.creditNotes.filter(
+    (n) => String(n.status || '').toLowerCase() !== 'cancelled'
+  );
+  const activeDebitNotes = books.debitNotes.filter(
+    (n) => String(n.status || '').toLowerCase() !== 'cancelled'
+  );
+  const legacyCreditNotesThisPeriod = activeCreditNotes.filter((n) => !hasGstSnapshot(n)).length;
+  const legacyDebitNotesThisPeriod = activeDebitNotes.filter((n) => !hasGstSnapshot(n)).length;
   const legacyPurchaseInvoicesThisPeriod = books.purchases.filter((p) => !hasGstSnapshot(p)).length;
   const legacyTotal =
     legacyInvoicesThisPeriod +

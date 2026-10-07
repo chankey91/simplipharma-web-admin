@@ -21,6 +21,7 @@ import {
   LEDGER_NOTE_GST_RATES,
   type LedgerNoteGstRate,
 } from '../services/ledgerNotes';
+import { setRetailerWalletBalance } from '../services/retailerWallet';
 
 type NoteKind = 'credit' | 'debit';
 
@@ -37,6 +38,9 @@ type Props = {
   initialAmount?: number;
   /** Prefill reason. */
   initialReason?: string;
+  /** `set-balance` posts a credit or debit so wallet equals the entered amount. */
+  mode?: 'direct' | 'set-balance';
+  currentWalletAvailable?: number;
 };
 
 const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
@@ -77,6 +81,8 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
   lockRetailer,
   initialAmount,
   initialReason,
+  mode = 'direct',
+  currentWalletAvailable = 0,
 }) => {
   const { data: stores = [] } = useStores(open);
   const [retailerId, setRetailerId] = useState('');
@@ -95,16 +101,18 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
     setStoreSearch('');
     setNoteDate(toInputDate(new Date()));
     setTotalAmount(
-      initialAmount != null && Number.isFinite(initialAmount) && initialAmount > 0
+      initialAmount != null && Number.isFinite(initialAmount) && initialAmount >= 0
         ? String(Math.round(initialAmount * 100) / 100)
-        : ''
+        : mode === 'set-balance' && Number.isFinite(currentWalletAvailable)
+          ? String(Math.round(currentWalletAvailable * 100) / 100)
+          : ''
     );
     setTaxPercentage(5);
     setReason(initialReason?.trim() || '');
     setOriginalInvoiceNumber('');
     setError('');
     setSaving(false);
-  }, [open, kind, initialRetailerId, initialAmount, initialReason]);
+  }, [open, kind, initialRetailerId, initialAmount, initialReason, mode, currentWalletAvailable]);
 
   const filteredStores = useMemo(() => {
     const q = storeSearch.trim().toLowerCase();
@@ -123,6 +131,26 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
     setError('');
     setSaving(true);
     try {
+      if (mode === 'set-balance') {
+        const result = await setRetailerWalletBalance({
+          retailerId,
+          targetAmount: parseFloat(totalAmount),
+          reason,
+          noteDate: parseLocalDateInput(noteDate),
+          originalInvoiceNumber: originalInvoiceNumber.trim() || undefined,
+          taxPercentage,
+        });
+        if (result.kind === 'none') {
+          setError('Wallet is already at this amount.');
+          return;
+        }
+        onCreated({
+          id: result.id || '',
+          documentNumber: result.documentNumber || '',
+        });
+        onClose();
+        return;
+      }
       const payload = {
         retailerId,
         totalAmount: parseFloat(totalAmount),
@@ -150,15 +178,37 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
     }
   };
 
-  const title = kind === 'credit' ? 'Create ledger credit note' : 'Create ledger debit note';
+  const isSetBalance = mode === 'set-balance';
+  const targetAmount = parseFloat(totalAmount);
+  const setBalanceDelta =
+    isSetBalance && Number.isFinite(targetAmount)
+      ? Math.round((targetAmount - currentWalletAvailable) * 100) / 100
+      : 0;
+  const title = isSetBalance
+    ? 'Set wallet balance'
+    : kind === 'credit'
+      ? 'Create ledger credit note'
+      : 'Create ledger debit note';
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         <Alert severity="info" sx={{ mt: 1, mb: 2 }}>
-          Posted to the store ledger and the retailer&apos;s wallet immediately (no return approval required).
+          {isSetBalance
+            ? `Current wallet ${`₹${(currentWalletAvailable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}. A ledger credit or debit note is posted for the difference.`
+            : "Posted to the store ledger and the retailer's wallet immediately (no return approval required)."}
         </Alert>
+        {isSetBalance && Number.isFinite(targetAmount) && Math.abs(setBalanceDelta) > 0.01 ? (
+          <Alert severity={setBalanceDelta > 0 ? 'success' : 'warning'} sx={{ mb: 2 }}>
+            Will post a {setBalanceDelta > 0 ? 'credit' : 'debit'} note of ₹
+            {Math.abs(setBalanceDelta).toLocaleString('en-IN', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+            .
+          </Alert>
+        ) : null}
         {error ? (
           <Alert
             severity="error"
@@ -240,7 +290,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
             <TextField
               fullWidth
               size="small"
-              label="Total amount (incl. tax)"
+              label={isSetBalance ? 'New wallet balance' : 'Total amount (incl. tax)'}
               type="number"
               inputProps={{ min: 0, step: '0.01' }}
               value={totalAmount}
@@ -292,7 +342,7 @@ export const CreateLedgerNoteDialog: React.FC<Props> = ({
           Cancel
         </Button>
         <Button variant="contained" onClick={() => void handleSubmit()} disabled={saving}>
-          {saving ? 'Creating…' : 'Create note'}
+          {saving ? 'Saving…' : isSetBalance ? 'Set balance' : 'Create note'}
         </Button>
       </DialogActions>
     </Dialog>

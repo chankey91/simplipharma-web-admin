@@ -14,7 +14,9 @@ import {
   deleteField,
   limit,
   db,
+  functions,
 } from './firebase';
+import { httpsCallable } from 'firebase/functions';
 import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
 import { Medicine, StockBatch } from '../types';
 import { standardDiscountFromStockBatch } from '../utils/orderFulfillmentDiscount';
@@ -1193,6 +1195,50 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
 
   await setDoc(medicineRef, newMedicine);
   return medicineRef.id;
+};
+
+/** Replace quantity on an existing batch. Does not create or delete the batch. */
+export const setStockBatchQuantity = async (
+  medicineId: string,
+  batchNumber: string,
+  quantity: number
+): Promise<void> => {
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  if (!medicineDoc.exists()) throw new Error('Medicine not found');
+  const gstRate = parseGstRate(medicineDoc.data());
+  const batches = await loadBatchesForMedicine(
+    medicineId,
+    medicineDoc.data()?.stockBatches,
+    gstRate
+  );
+  const existing = batches.find((b) => batchKey(b.batchNumber) === batchKey(batchNumber));
+  if (!existing) throw new Error(`Batch ${batchNumber} not found`);
+  await upsertMedicineBatchesDocs(medicineId, [
+    { batch: { ...existing, quantity: qty }, mode: 'set' },
+  ]);
+};
+
+export type ZeroAllStockChunk = {
+  done: boolean;
+  phase: 'batches' | 'medicines';
+  nextStartAfterId?: string | null;
+  scanned?: number;
+  batchesZeroed?: number;
+  medicinesUpdated?: number;
+};
+
+export const zeroAllStockChunk = async (input?: {
+  phase?: 'batches' | 'medicines';
+  startAfterId?: string | null;
+}): Promise<ZeroAllStockChunk> => {
+  const fn = httpsCallable(functions, 'adminZeroAllStock', { timeout: 180000 });
+  const res = await fn({
+    phase: input?.phase || 'batches',
+    startAfterId: input?.startAfterId || '',
+  });
+  return res.data as ZeroAllStockChunk;
 };
 
 /**
