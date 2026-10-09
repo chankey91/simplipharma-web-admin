@@ -5,30 +5,36 @@ import {
   Box,
   Button,
   Checkbox,
+  Chip,
   Collapse,
   IconButton,
   Link,
   Paper,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  Tabs,
   TextField,
   Typography,
 } from '@mui/material';
 import { ExpandLess, ExpandMore, FileDownload, Refresh } from '@mui/icons-material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { endOfDay, format, startOfDay, startOfMonth } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { auth } from '../services/firebase';
 import {
   backfillSoCashCollectionFields,
-  getUnremittedSoCashRequests,
+  getSoCashRequests,
   groupUnremittedBySo,
+  isSoCashRemitted,
   remittanceSoCash,
+  soCashRecordDate,
   type SoCashBagRow,
+  type SoCashStatusFilter,
 } from '../services/soCash';
 import type { PaymentRequest } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
@@ -52,28 +58,110 @@ const formatRequestDate = (r: PaymentRequest) => {
   return d ? format(d, 'dd MMM yyyy') : '—';
 };
 
+const formatRemittedDate = (r: PaymentRequest) => {
+  const d = soCashRecordDate(r);
+  return d && isSoCashRemitted(r) ? format(d, 'dd MMM yyyy') : '—';
+};
+
 const safeFilePart = (name: string) =>
   name
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 40) || 'so';
 
+const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
+
+function parseRange(fromDate: string, toDate: string): { fromMs?: number; toMs?: number } | null {
+  if (!fromDate && !toDate) return {};
+  if (!fromDate || !toDate) return null;
+  const fromMs = startOfDay(new Date(`${fromDate}T00:00:00`)).getTime();
+  const toMs = endOfDay(new Date(`${toDate}T00:00:00`)).getTime();
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs) || fromMs > toMs) return null;
+  return { fromMs, toMs };
+}
+
+function exportSoCashRows(
+  rows: SoCashBagRow[],
+  filename: string,
+  sheetName: string
+) {
+  const exportRows = rows.flatMap((so) => so.requests.map((r) => ({ so, r })));
+  const excelData: (string | number)[][] = [
+    [
+      'Sales officer',
+      'Sales officer ID',
+      'Status',
+      'Invoice',
+      'Order ID',
+      'Retailer',
+      'Amount',
+      'Approved',
+      'Remitted',
+      'Payment request ID',
+    ],
+    ...exportRows.map(({ so, r }) => [
+      so.salesOfficerName,
+      so.salesOfficerId,
+      isSoCashRemitted(r) ? 'Remitted' : 'Unremitted',
+      r.invoiceNumber || r.orderId,
+      r.orderId,
+      r.retailerName || r.retailerId,
+      requestAmount(r),
+      formatRequestDate(r),
+      formatRemittedDate(r),
+      r.id,
+    ]),
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(excelData);
+  ws['!cols'] = [
+    { wch: 24 },
+    { wch: 28 },
+    { wch: 12 },
+    { wch: 18 },
+    { wch: 22 },
+    { wch: 28 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 28 },
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, filename);
+}
+
 export const SoCashPage: React.FC = () => {
   const { alert, confirm } = useAppDialog();
   const queryClient = useQueryClient();
+  const [tab, setTab] = useState<SoCashStatusFilter>('unremitted');
+  const [fromDate, setFromDate] = useState(toInputDate(startOfMonth(new Date())));
+  const [toDate, setToDate] = useState(toInputDate(new Date()));
   const [expandedSoId, setExpandedSoId] = useState<string | null>(null);
   const [notesBySo, setNotesBySo] = useState<Record<string, string>>({});
   const [selectedBySo, setSelectedBySo] = useState<Record<string, string[]>>({});
 
+  const range = useMemo(() => parseRange(fromDate, toDate), [fromDate, toDate]);
+  const rangeInvalid = Boolean(fromDate || toDate) && range == null;
+
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ['so-cash-unremitted'],
-    queryFn: getUnremittedSoCashRequests,
+    queryKey: ['so-cash', tab, range?.fromMs ?? null, range?.toMs ?? null],
+    queryFn: () =>
+      getSoCashRequests({
+        status: tab,
+        fromMs: range?.fromMs,
+        toMs: range?.toMs,
+      }),
+    enabled: !rangeInvalid,
   });
 
   const rows = useMemo(() => groupUnremittedBySo(data ?? []), [data]);
-  const totalUnremitted = useMemo(
-    () => rows.reduce((sum, r) => sum + r.unremittedAmount, 0),
-    [rows]
+  const totalAmount = useMemo(
+    () =>
+      rows.reduce(
+        (sum, r) => sum + (tab === 'remitted' ? r.remittedAmount : r.unremittedAmount),
+        0
+      ),
+    [rows, tab]
   );
 
   const selectedIdsFor = (row: SoCashBagRow) => {
@@ -100,7 +188,7 @@ export const SoCashPage: React.FC = () => {
   const backfillMutation = useMutation({
     mutationFn: backfillSoCashCollectionFields,
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ['so-cash-unremitted'] });
+      await queryClient.invalidateQueries({ queryKey: ['so-cash'] });
       await alert(
         `Backfill done. Updated ${result.requestsUpdated} payment request(s) and ${result.paymentsUpdated} payment row(s).`,
         { severity: 'success' }
@@ -114,7 +202,7 @@ export const SoCashPage: React.FC = () => {
   const remitMutation = useMutation({
     mutationFn: remittanceSoCash,
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ['so-cash-unremitted'] });
+      await queryClient.invalidateQueries({ queryKey: ['so-cash'] });
       await alert(
         `Recorded remittance of ${formatCurrency(result.amount)} (${result.paymentRequestIds.length} request(s)).`,
         { severity: 'success' }
@@ -151,61 +239,45 @@ export const SoCashPage: React.FC = () => {
     setSelectedBySo((prev) => ({ ...prev, [row.salesOfficerId]: [] }));
   };
 
-  const handleExport = async (row?: SoCashBagRow) => {
-    const source = row ? [row] : rows;
-    const exportRows = source.flatMap((so) =>
-      so.requests.map((r) => ({ so, r }))
-    );
-    if (exportRows.length === 0) {
-      await alert('No pending invoices to export', { severity: 'warning' });
+  const handleExport = async (row?: SoCashBagRow, both = false) => {
+    if (rangeInvalid) {
+      await alert('Select a valid From and To date.', { severity: 'warning' });
       return;
     }
-
-    const excelData: (string | number)[][] = [
-      [
-        'Sales officer',
-        'Sales officer ID',
-        'Invoice',
-        'Order ID',
-        'Retailer',
-        'Amount',
-        'Approved',
-        'Payment request ID',
-      ],
-      ...exportRows.map(({ so, r }) => [
-        so.salesOfficerName,
-        so.salesOfficerId,
-        r.invoiceNumber || r.orderId,
-        r.orderId,
-        r.retailerName || r.retailerId,
-        requestAmount(r),
-        formatRequestDate(r),
-        r.id,
-      ]),
-    ];
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(excelData);
-    ws['!cols'] = [
-      { wch: 24 },
-      { wch: 28 },
-      { wch: 18 },
-      { wch: 22 },
-      { wch: 28 },
-      { wch: 12 },
-      { wch: 14 },
-      { wch: 28 },
-    ];
-    XLSX.utils.book_append_sheet(wb, ws, 'Pending invoices');
-
+    if (both) {
+      const all = await getSoCashRequests({
+        status: 'all',
+        fromMs: range?.fromMs,
+        toMs: range?.toMs,
+      });
+      const grouped = groupUnremittedBySo(all);
+      if (grouped.length === 0) {
+        await alert('No remitted or unremitted records in this date range', {
+          severity: 'warning',
+        });
+        return;
+      }
+      exportSoCashRows(
+        grouped,
+        `so-cash-all-${fromDate || 'start'}-${toDate || 'end'}-${istDateStampCompact()}.xlsx`,
+        'SO cash'
+      );
+      return;
+    }
+    const source = row ? [row] : rows;
+    if (source.every((so) => so.requests.length === 0)) {
+      await alert('No records to export', { severity: 'warning' });
+      return;
+    }
     const stamp = istDateStampCompact();
     const filename = row
-      ? `so-cash-pending-${safeFilePart(row.salesOfficerName || row.salesOfficerId)}-${stamp}.xlsx`
-      : `so-cash-pending-${stamp}.xlsx`;
-    XLSX.writeFile(wb, filename);
+      ? `so-cash-${tab}-${safeFilePart(row.salesOfficerName || row.salesOfficerId)}-${stamp}.xlsx`
+      : `so-cash-${tab}-${fromDate || 'all'}-${toDate || 'all'}-${stamp}.xlsx`;
+    exportSoCashRows(source, filename, tab === 'remitted' ? 'Remitted' : 'Unremitted');
   };
 
   const busy = remitMutation.isPending || backfillMutation.isPending;
+  const isRemittedTab = tab === 'remitted';
 
   if (isLoading) return <Typography>Loading SO cash…</Typography>;
   if (error) {
@@ -232,9 +304,17 @@ export const SoCashPage: React.FC = () => {
             variant="outlined"
             startIcon={<FileDownload />}
             onClick={() => void handleExport()}
-            disabled={rows.length === 0}
+            disabled={rows.length === 0 || rangeInvalid}
           >
-            Export pending
+            Export this tab
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<FileDownload />}
+            onClick={() => void handleExport(undefined, true)}
+            disabled={rangeInvalid}
+          >
+            Export remitted + unremitted
           </Button>
           <Button
             variant="outlined"
@@ -248,21 +328,65 @@ export const SoCashPage: React.FC = () => {
       </Box>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Cash collected by sales officers (via payment requests) that has been approved but not yet
-        handed to the office. Expand an officer, tick invoices to remit only those amounts, or leave
-        none ticked to remit all. Use Backfill once to stamp older approved SO cash.
+        Cash collected by sales officers. Unremitted is cash still with the SO. Remitted is cash
+        already handed to the office. Date range filters approved date (unremitted) or remitted
+        date. Export remitted + unremitted uses the same dates.
       </Typography>
 
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="subtitle1">
-          Total unremitted:{' '}
+        <Box display="flex" gap={2} flexWrap="wrap" alignItems="center">
+          <TextField
+            size="small"
+            label="From"
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+          />
+          <TextField
+            size="small"
+            label="To"
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+          />
+          <Button
+            size="small"
+            onClick={() => {
+              setFromDate('');
+              setToDate('');
+            }}
+          >
+            All dates
+          </Button>
+        </Box>
+        {rangeInvalid ? (
+          <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+            From must be on or before To.
+          </Typography>
+        ) : null}
+        <Typography variant="subtitle1" sx={{ mt: 2 }}>
+          {isRemittedTab ? 'Total remitted' : 'Total unremitted'}:{' '}
           <Typography component="span" fontWeight={700}>
-            {formatCurrency(totalUnremitted)}
+            {formatCurrency(totalAmount)}
           </Typography>
           {' · '}
           {rows.length} sales officer{rows.length === 1 ? '' : 's'}
         </Typography>
       </Paper>
+
+      <Tabs
+        value={tab}
+        onChange={(_, v: SoCashStatusFilter) => {
+          setTab(v);
+          setExpandedSoId(null);
+        }}
+        sx={{ mb: 2 }}
+      >
+        <Tab value="unremitted" label="Unremitted" />
+        <Tab value="remitted" label="Remitted" />
+      </Tabs>
 
       <TableContainer component={Paper}>
         <Table size="small">
@@ -270,18 +394,20 @@ export const SoCashPage: React.FC = () => {
             <TableRow>
               <TableCell width={48} />
               <TableCell>Sales officer</TableCell>
-              <TableCell align="right">Unremitted</TableCell>
+              <TableCell align="right">{isRemittedTab ? 'Remitted' : 'Unremitted'}</TableCell>
               <TableCell align="right">Requests</TableCell>
-              <TableCell>Notes</TableCell>
+              {!isRemittedTab ? <TableCell>Notes</TableCell> : null}
               <TableCell align="right">Action</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">
+                <TableCell colSpan={isRemittedTab ? 5 : 6} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
-                    No unremitted SO cash.
+                    {isRemittedTab
+                      ? 'No remitted SO cash in this date range.'
+                      : 'No unremitted SO cash in this date range.'}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -319,28 +445,30 @@ export const SoCashPage: React.FC = () => {
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
-                        {formatCurrency(row.unremittedAmount)}
-                        {someSelected && (
+                        {formatCurrency(isRemittedTab ? row.remittedAmount : row.unremittedAmount)}
+                        {!isRemittedTab && someSelected && (
                           <Typography variant="caption" color="primary" display="block">
                             {formatCurrency(selectedAmount)} selected
                           </Typography>
                         )}
                       </TableCell>
                       <TableCell align="right">{row.requestCount}</TableCell>
-                      <TableCell>
-                        <TextField
-                          size="small"
-                          placeholder="Remittance note"
-                          value={notesBySo[row.salesOfficerId] || ''}
-                          onChange={(e) =>
-                            setNotesBySo((prev) => ({
-                              ...prev,
-                              [row.salesOfficerId]: e.target.value,
-                            }))
-                          }
-                          sx={{ minWidth: 160 }}
-                        />
-                      </TableCell>
+                      {!isRemittedTab ? (
+                        <TableCell>
+                          <TextField
+                            size="small"
+                            placeholder="Remittance note"
+                            value={notesBySo[row.salesOfficerId] || ''}
+                            onChange={(e) =>
+                              setNotesBySo((prev) => ({
+                                ...prev,
+                                [row.salesOfficerId]: e.target.value,
+                              }))
+                            }
+                            sx={{ minWidth: 160 }}
+                          />
+                        </TableCell>
+                      ) : null}
                       <TableCell align="right">
                         <Box display="flex" gap={1} justifyContent="flex-end" flexWrap="wrap">
                           <Button
@@ -352,54 +480,56 @@ export const SoCashPage: React.FC = () => {
                           >
                             Export
                           </Button>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            onClick={() => handleRemit(row)}
-                            disabled={busy}
-                          >
-                            {remitLabel}
-                          </Button>
+                          {!isRemittedTab ? (
+                            <Button
+                              size="small"
+                              variant="contained"
+                              onClick={() => handleRemit(row)}
+                              disabled={busy}
+                            >
+                              {remitLabel}
+                            </Button>
+                          ) : null}
                         </Box>
                       </TableCell>
                     </TableRow>
                     <TableRow>
-                      <TableCell colSpan={6} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
+                      <TableCell
+                        colSpan={isRemittedTab ? 5 : 6}
+                        sx={{ py: 0, borderBottom: open ? undefined : 'none' }}
+                      >
                         <Collapse in={open} timeout="auto" unmountOnExit>
                           <Box sx={{ py: 1.5, px: 1 }}>
-                            <Box
-                              display="flex"
-                              justifyContent="space-between"
-                              alignItems="center"
-                              flexWrap="wrap"
-                              gap={1}
-                              sx={{ mb: 1 }}
-                            >
-                              <Typography variant="body2" color="text.secondary">
+                            {!isRemittedTab ? (
+                              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                                 {selectedIds.length > 0
                                   ? `${selectedIds.length} invoice(s) selected · ${formatCurrency(selectedAmount)}`
                                   : 'Tick invoices to remit individually. Leave none ticked to remit all.'}
                               </Typography>
-                            </Box>
+                            ) : null}
                             <Table size="small">
                               <TableHead>
                                 <TableRow>
-                                  <TableCell padding="checkbox">
-                                    <Checkbox
-                                      size="small"
-                                      checked={allSelected}
-                                      indeterminate={someSelected}
-                                      disabled={row.requests.length === 0 || busy}
-                                      onChange={() => toggleAllForSo(row)}
-                                      inputProps={{
-                                        'aria-label': `Select all pending invoices for ${row.salesOfficerName}`,
-                                      }}
-                                    />
-                                  </TableCell>
+                                  {!isRemittedTab ? (
+                                    <TableCell padding="checkbox">
+                                      <Checkbox
+                                        size="small"
+                                        checked={allSelected}
+                                        indeterminate={someSelected}
+                                        disabled={row.requests.length === 0 || busy}
+                                        onChange={() => toggleAllForSo(row)}
+                                        inputProps={{
+                                          'aria-label': `Select all pending invoices for ${row.salesOfficerName}`,
+                                        }}
+                                      />
+                                    </TableCell>
+                                  ) : null}
                                   <TableCell>Invoice</TableCell>
                                   <TableCell>Retailer</TableCell>
                                   <TableCell align="right">Amount</TableCell>
                                   <TableCell>Approved</TableCell>
+                                  {isRemittedTab ? <TableCell>Remitted</TableCell> : null}
+                                  {isRemittedTab ? <TableCell>Status</TableCell> : null}
                                 </TableRow>
                               </TableHead>
                               <TableBody>
@@ -407,17 +537,19 @@ export const SoCashPage: React.FC = () => {
                                   const checked = selectedIds.includes(r.id);
                                   return (
                                     <TableRow key={r.id} hover selected={checked}>
-                                      <TableCell padding="checkbox">
-                                        <Checkbox
-                                          size="small"
-                                          checked={checked}
-                                          disabled={busy}
-                                          onChange={() => toggleRequest(row.salesOfficerId, r.id)}
-                                          inputProps={{
-                                            'aria-label': `Select invoice ${r.invoiceNumber || r.orderId}`,
-                                          }}
-                                        />
-                                      </TableCell>
+                                      {!isRemittedTab ? (
+                                        <TableCell padding="checkbox">
+                                          <Checkbox
+                                            size="small"
+                                            checked={checked}
+                                            disabled={busy}
+                                            onChange={() => toggleRequest(row.salesOfficerId, r.id)}
+                                            inputProps={{
+                                              'aria-label': `Select invoice ${r.invoiceNumber || r.orderId}`,
+                                            }}
+                                          />
+                                        </TableCell>
+                                      ) : null}
                                       <TableCell>
                                         <Link
                                           component={RouterLink}
@@ -432,6 +564,14 @@ export const SoCashPage: React.FC = () => {
                                         {formatCurrency(requestAmount(r))}
                                       </TableCell>
                                       <TableCell>{formatRequestDate(r)}</TableCell>
+                                      {isRemittedTab ? (
+                                        <TableCell>{formatRemittedDate(r)}</TableCell>
+                                      ) : null}
+                                      {isRemittedTab ? (
+                                        <TableCell>
+                                          <Chip size="small" label="Remitted" color="success" />
+                                        </TableCell>
+                                      ) : null}
                                     </TableRow>
                                   );
                                 })}
