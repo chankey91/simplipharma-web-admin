@@ -1229,6 +1229,10 @@ export const OrdersPage: React.FC = () => {
             {isExportingProductSummary ? 'Exporting…' : 'Export Product Summary'}
           </Button>
         </Box>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'right' }}>
+          A product summary of all pending orders is emailed daily at 3:33 PM IST, except Sundays and
+          holidays set under Fulfillment setup → Holidays &amp; order email.
+        </Typography>
       </Paper>
 
       {canEditOrders && selectedIds.length > 0 && (
