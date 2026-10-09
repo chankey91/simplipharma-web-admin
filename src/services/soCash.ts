@@ -46,12 +46,46 @@ export type SoCashBagRow = {
   salesOfficerId: string;
   salesOfficerName: string;
   unremittedAmount: number;
+  remittedAmount: number;
   requestCount: number;
   requests: PaymentRequest[];
 };
 
-/** Approved SO-collected cash not yet remitted to office. */
-export async function getUnremittedSoCashRequests(): Promise<PaymentRequest[]> {
+export type SoCashStatusFilter = 'unremitted' | 'remitted' | 'all';
+
+export function isSoCashRemitted(r: PaymentRequest): boolean {
+  return r.remittanceStatus === 'remitted';
+}
+
+function requestDate(value: unknown): Date | null {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value as string);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Date used for range filters: remittedAt for remitted, else approved/created. */
+export function soCashRecordDate(r: PaymentRequest): Date | null {
+  if (isSoCashRemitted(r)) {
+    return requestDate(r.remittedAt) || requestDate(r.reviewedAt) || requestDate(r.createdAt);
+  }
+  return requestDate(r.reviewedAt) || requestDate(r.createdAt);
+}
+
+export function inSoCashDateRange(
+  r: PaymentRequest,
+  fromMs?: number,
+  toMs?: number
+): boolean {
+  if (fromMs == null && toMs == null) return true;
+  const d = soCashRecordDate(r);
+  if (!d) return false;
+  const t = d.getTime();
+  if (fromMs != null && t < fromMs) return false;
+  if (toMs != null && t > toMs) return false;
+  return true;
+}
+
+async function loadApprovedSoCashRequests(): Promise<PaymentRequest[]> {
   const snap = await getDocs(
     query(
       collection(db, 'payment_requests'),
@@ -63,11 +97,29 @@ export async function getUnremittedSoCashRequests(): Promise<PaymentRequest[]> {
     .map((d) => parsePaymentRequestDoc(d.id, d.data() as Record<string, unknown>))
     .filter((r) => {
       if (!isSoCollectedCashRequest(r)) return false;
-      if (r.remittanceStatus === 'remitted' || r.remittanceStatus === 'n_a') return false;
-      // Treat missing remittanceStatus as unremitted (legacy / pending backfill).
-      return true;
-    })
-    .filter((r) => Number(r.approvedAmount ?? r.requestedAmount ?? 0) > 0.01);
+      if (r.remittanceStatus === 'n_a') return false;
+      return Number(r.approvedAmount ?? r.requestedAmount ?? 0) > 0.01;
+    });
+}
+
+/** Approved SO-collected cash not yet remitted to office. */
+export async function getUnremittedSoCashRequests(): Promise<PaymentRequest[]> {
+  const all = await loadApprovedSoCashRequests();
+  return all.filter((r) => !isSoCashRemitted(r));
+}
+
+export async function getSoCashRequests(opts?: {
+  status?: SoCashStatusFilter;
+  fromMs?: number;
+  toMs?: number;
+}): Promise<PaymentRequest[]> {
+  const status = opts?.status ?? 'unremitted';
+  const all = await loadApprovedSoCashRequests();
+  return all.filter((r) => {
+    if (status === 'unremitted' && isSoCashRemitted(r)) return false;
+    if (status === 'remitted' && !isSoCashRemitted(r)) return false;
+    return inSoCashDateRange(r, opts?.fromMs, opts?.toMs);
+  });
 }
 
 export function groupUnremittedBySo(requests: PaymentRequest[]): SoCashBagRow[] {
@@ -76,9 +128,11 @@ export function groupUnremittedBySo(requests: PaymentRequest[]): SoCashBagRow[] 
     const collector = resolveSoCashCollector(r);
     if (!collector) continue;
     const amount = roundMoney2(Number(r.approvedAmount ?? r.requestedAmount ?? 0));
+    const remitted = isSoCashRemitted(r);
     const existing = map.get(collector.id);
     if (existing) {
-      existing.unremittedAmount = roundMoney2(existing.unremittedAmount + amount);
+      if (remitted) existing.remittedAmount = roundMoney2(existing.remittedAmount + amount);
+      else existing.unremittedAmount = roundMoney2(existing.unremittedAmount + amount);
       existing.requestCount += 1;
       existing.requests.push(r);
       if (!existing.salesOfficerName && collector.name) {
@@ -88,13 +142,17 @@ export function groupUnremittedBySo(requests: PaymentRequest[]): SoCashBagRow[] 
       map.set(collector.id, {
         salesOfficerId: collector.id,
         salesOfficerName: collector.name,
-        unremittedAmount: amount,
+        unremittedAmount: remitted ? 0 : amount,
+        remittedAmount: remitted ? amount : 0,
         requestCount: 1,
         requests: [r],
       });
     }
   }
-  return [...map.values()].sort((a, b) => b.unremittedAmount - a.unremittedAmount);
+  return [...map.values()].sort(
+    (a, b) =>
+      b.unremittedAmount + b.remittedAmount - (a.unremittedAmount + a.remittedAmount)
+  );
 }
 
 /**

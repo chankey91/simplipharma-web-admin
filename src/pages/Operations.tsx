@@ -32,6 +32,7 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { PurchaseOfficersTab } from '../components/PurchaseOfficersTab';
+import { PendingOrderEmailHolidaysTab } from '../components/PendingOrderEmailHolidaysTab';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -180,6 +181,7 @@ export const OperationsPage: React.FC = () => {
           <Tab label="Tray Numbers" />
           <Tab label="Operators" />
           <Tab label="Purchase Officers" />
+          <Tab label="Holidays & order email" />
         </Tabs>
 
         <TabPanel value={tabValue} index={0}>
@@ -356,6 +358,10 @@ export const OperationsPage: React.FC = () => {
 
         <TabPanel value={tabValue} index={2}>
           <PurchaseOfficersTab />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={3}>
+          <PendingOrderEmailHolidaysTab />
         </TabPanel>
       </Paper>
     </Box>

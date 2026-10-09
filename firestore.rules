@@ -660,6 +660,11 @@ service cloud.firestore {
       allow create, update, delete: if isAdminOrOperations() || officeCanWrite('accounts');
     }
 
+    match /app_settings/{settingsId} {
+      allow read: if signedIn() && (isAdminOrOperations() || isOffice());
+      allow create, update, delete: if isAdminOrOperations();
+    }
+
     match /purchase_invoice_drafts/{draftId} {
       allow read: if isAdminOrOperations() || isPurchaseOfficer() || isOffice();
       allow create: if (isAdminOrOperations() || isPurchaseOfficer() || officeCanWrite('purchases'))
