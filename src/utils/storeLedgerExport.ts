@@ -7,6 +7,7 @@ import { COMPANY_INVOICE_DETAILS } from './invoicePartyDefaults';
 import { formatLedgerAmount, type StoreLedgerResult } from './storeLedger';
 import { istDateStampCompact } from './dateTime';
 import { buildWhatsAppUrl, normalizeWhatsAppPhone } from './orderWhatsAppItems';
+import { formatWhatsAppPdfText, registerSharedPdfLink } from './sharePdfWhatsApp';
 
 const ledgerDateFmt = (d: Date) => format(d, 'd-MMM-yy');
 const periodFmt = (d: Date) => format(d, 'd-MMM-yy');
@@ -187,20 +188,33 @@ export async function shareStoreLedgerPdfOnWhatsApp(
   const fileRef = ref(storage, path);
   await uploadBytes(fileRef, blob, { contentType: 'application/pdf' });
   const downloadUrl = await getDownloadURL(fileRef);
+  let shareUrl = downloadUrl;
+  try {
+    shareUrl = await registerSharedPdfLink({
+      fileName,
+      downloadUrl,
+      storagePath: path,
+      uid,
+    });
+  } catch (err) {
+    console.warn('Could not register short ledger PDF link; using storage URL', err);
+  }
 
   const period = `${periodFmt(ledger.fromDate)} to ${periodFmt(ledger.toDate)}`;
   const closing =
     ledger.closingBalance >= 0
       ? `Dr ${formatLedgerAmount(ledger.closingBalance)}`
       : `Cr ${formatLedgerAmount(Math.abs(ledger.closingBalance))}`;
-  const text = [
-    `SimpliPharma — Store ledger`,
-    `Store: ${ledger.storeName}${ledger.storeCode !== '—' ? ` (${ledger.storeCode})` : ''}`,
-    `Period: ${period}`,
-    `Closing: *${closing}*`,
-    '',
-    `PDF: ${downloadUrl}`,
-  ].join('\n');
+  const text = formatWhatsAppPdfText(
+    [
+      `SimpliPharma — Store ledger`,
+      `Store: ${ledger.storeName}${ledger.storeCode !== '—' ? ` (${ledger.storeCode})` : ''}`,
+      `Period: ${period}`,
+      `Closing: *${closing}*`,
+    ].join('\n'),
+    fileName,
+    shareUrl
+  );
 
   try {
     await navigator.clipboard.writeText(text);

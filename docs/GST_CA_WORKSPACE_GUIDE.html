@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SimpliPharma GST Workspace — CA how-to guide</title>
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #4a4a4a;
+      --line: #d6d6d6;
+      --fill: #f4f4f4;
+      --accent: #1d4ed8;
+      --warn: #9a3412;
+      --warn-bg: #fff7ed;
+      --ok: #166534;
+    }
+    * { box-sizing: border-box; }
+    @page { size: A4; margin: 16mm 14mm; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      color: var(--ink);
+      font: 11pt/1.45 "Segoe UI", Calibri, Arial, sans-serif;
+    }
+    h1 { font-size: 20pt; margin: 0 0 8px; }
+    h2 { font-size: 13.5pt; margin: 22px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; page-break-after: avoid; }
+    h3 { font-size: 11.5pt; margin: 14px 0 6px; page-break-after: avoid; }
+    p, li { margin: 0 0 8px; }
+    .sub { color: var(--muted); margin-bottom: 14px; }
+    .banner {
+      background: var(--warn-bg);
+      border: 1px solid #fed7aa;
+      padding: 10px 12px;
+      margin: 12px 0 18px;
+    }
+    .banner strong { color: var(--warn); }
+    .kicker { font-size: 9pt; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 18px 1fr;
+      gap: 6px 0;
+      margin: 12px 0 16px;
+      page-break-inside: avoid;
+    }
+    .step {
+      background: var(--fill);
+      border: 1px solid var(--line);
+      padding: 7px 9px;
+      font-size: 9.5pt;
+    }
+    .step b { display: block; color: var(--accent); font-size: 8.5pt; }
+    .arrow { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14pt; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 10pt; page-break-inside: auto; }
+    th, td { border: 1px solid var(--line); padding: 5px 7px; vertical-align: top; text-align: left; }
+    th { background: var(--fill); font-weight: 650; }
+    tr { page-break-inside: avoid; }
+    ol, ul { padding-left: 1.2em; margin: 0 0 10px; }
+    .status {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 10px 0 14px;
+      page-break-inside: avoid;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      padding: 5px 8px;
+      font-size: 9pt;
+      background: #fff;
+    }
+    .pill span { display: block; font-weight: 700; }
+    .check { page-break-inside: avoid; }
+    .check label { display: block; margin: 3px 0; }
+    .footer { margin-top: 22px; font-size: 8.5pt; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media print {
+      .banner, .step, .pill { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="kicker">SimpliPharma Admin</div>
+  <h1>GST workspace — CA how-to guide</h1>
+  <p class="sub">For the chartered accountant / tax team preparing GSTR-1, GSTR-3B, ITC, and e-invoice JSON.</p>
+
+  <div class="banner">
+    <strong>This app does not file the return.</strong>
+    It classifies books and downloads offline GSTN JSON. You upload and file on gst.gov.in.
+    Issued invoice numbers and tax rupees are never rewritten.
+    It does not generate an IRN, pull GSTR-2B live, or store GSTN passwords.
+  </div>
+
+  <h2>1. Monthly picture</h2>
+  <div class="flow">
+    <div class="step"><b>1–2</b>Open GST workspace, pick month/year. Save company GSTIN in Settings (once).</div>
+    <div class="arrow">→</div>
+    <div class="step"><b>3</b>Overview: fix store/vendor GSTINs, then Preview &amp; backfill until orange badges are gone.</div>
+    <div class="step"><b>4–5</b>GSTR-1 tab: review register, download JSON, upload on gst.gov.in → Returns → GSTR-1 → Prepare Offline.</div>
+    <div class="arrow">→</div>
+    <div class="step"><b>6</b>Lock the period. Mark GSTR-1 filed and save ARN.</div>
+    <div class="step"><b>7–8</b>ITC: upload GSTR-2B JSON from the portal, download Excel. GSTR-3B: check table 3.1, download JSON.</div>
+    <div class="arrow">→</div>
+    <div class="step"><b>9–10</b>File 3B on the portal, mark filed + ARN. If IRN is required, E-invoice tab → NIC bulk tool.</div>
+  </div>
+  <p><strong>Rule of thumb:</strong> Overview until orange badges are gone → GSTR-1 JSON → portal → lock → 3B / ITC.</p>
+
+  <h2>2. How to open it</h2>
+  <ol>
+    <li>Sign in to <strong>SimpliPharma Admin</strong>.</li>
+    <li>Left menu: <strong>GST → GST workspace</strong> (path <code>/gst</code>).</li>
+    <li>Permission <strong>Can edit GST settings</strong> is required to save settings, backfill, lock, or mark filed. Without it you can still view and download.</li>
+  </ol>
+  <table>
+    <thead><tr><th>Control</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Month / Year</strong></td><td>GST return period (Indian calendar month, IST). April 2026 → GSTR fp <code>042026</code>.</td></tr>
+      <tr><td><strong>Status chip</strong></td><td><code>open</code> → <code>gstr1 ready</code> (locked) → <code>gstr1 filed</code> → <code>gstr3b filed</code>.</td></tr>
+      <tr><td><strong>Lock period</strong></td><td>Stops backfill and new bills dated in this month.</td></tr>
+      <tr><td><strong>Reopen</strong></td><td>Unlocks books. Use only if the portal file was not final.</td></tr>
+      <tr><td><strong>Mark GSTR-1 / 3B filed</strong></td><td>After filing on gst.gov.in. Optional ARN is stored on the period.</td></tr>
+      <tr><td><strong>Settings</strong></td><td>Company GSTIN, legal name, address, state, filing frequency, e-invoice flag.</td></tr>
+      <tr><td><strong>Tabs</strong></td><td>Overview · GSTR-1 · GSTR-3B · ITC / GSTR-2B · E-invoice. Orange badge = missing GST snapshot.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3. One-time: company GST settings</h2>
+  <p>Open <strong>Settings</strong> (top right of the GST bar). Fill legal name, trade name, <strong>15-character GSTIN</strong>, address, state + state code, pincode, phone, email, drug licence.</p>
+  <ul>
+    <li><strong>Filing frequency:</strong> Monthly or QRMP. QRMP only sets <code>filing_typ: Q</code> on the JSON; you still pick a month for the books.</li>
+    <li><strong>E-invoice (IRN) required:</strong> Turn on only if turnover requires IRN. Enables IRP JSON download. Does <em>not</em> call NIC.</li>
+  </ul>
+  <p>Click <strong>Save settings</strong>. Format is checked (15 characters). There is no GSTN check-digit or portal lookup.</p>
+
+  <h2>4. Overview — clean the books before export</h2>
+  <h3>4.1 Cards</h3>
+  <ul>
+    <li><strong>Company GSTIN</strong> — from settings.</li>
+    <li><strong>This month — invoiced orders</strong> — invoices vs snapshots.</li>
+    <li><strong>Master-data exceptions</strong> — invalid store/vendor GSTIN; medicines with no HSN (code).</li>
+  </ul>
+  <h3>4.2 Exception actions</h3>
+  <table>
+    <thead><tr><th>Severity</th><th>Typical message</th><th>What you do</th></tr></thead>
+    <tbody>
+      <tr><td>Info</td><td>N sales / CN / DN / PI have no GST snapshot</td><td><strong>Preview &amp; backfill</strong></td></tr>
+      <tr><td>Warning</td><td>Store has no GSTIN</td><td><strong>Fix GSTIN</strong> — blank is allowed (B2C)</td></tr>
+      <tr><td>Error</td><td>Store / vendor GSTIN is not 15 characters</td><td><strong>Fix GSTIN</strong></td></tr>
+      <tr><td>Warning</td><td>Medicines have no HSN</td><td>Open inventory and fill medicine <strong>code</strong>. New lines without HSN use <strong>300490</strong>.</td></tr>
+    </tbody>
+  </table>
+  <p>Fix GSTINs <strong>before</strong> backfill when you can. Backfill uses the GSTIN at the time you run it. Changing a GSTIN later does not rewrite old snapshots.</p>
+  <h3>4.3 Backfill (historical invoices)</h3>
+  <ol>
+    <li>Click <strong>Process this period</strong> or <strong>Preview &amp; backfill</strong>.</li>
+    <li>Read the preview (counts + sample CGST/SGST split).</li>
+    <li>Confirm. Only a <code>gst</code> snapshot is written. Invoice numbers and tax rupees stay as billed.</li>
+  </ol>
+  <p>Backfill is faithful to the issued bill: existing tax split as intra-state CGST + SGST (place of supply = company state). It does <em>not</em> re-rate mixed 5%/12% lines on old invoices. <strong>New</strong> fulfilments and notes store line-level HSN, rate, taxable, tax (one GSTR-1 item per rate). Locked periods must be reopened before backfill.</p>
+
+  <h2>5. GSTR-1 — outward supplies JSON</h2>
+  <p>You will see B2B / B2CL / B2CS / CDNR / CDNUR / HSN counts, GSTIN, fp, SHA-256 hash, file size, warnings, and an invoice register (number, date, type, party, rates, taxable, tax, total — first 400 rows).</p>
+  <table>
+    <thead><tr><th>Type</th><th>Meaning in this app</th></tr></thead>
+    <tbody>
+      <tr><td><strong>B2B</strong></td><td>Buyer GSTIN is a valid 15 characters</td></tr>
+      <tr><td><strong>B2CL</strong></td><td>Unregistered, inter-state, invoice value ≥ ₹1 lakh (from August 2024)</td></tr>
+      <tr><td><strong>B2CS</strong></td><td>Other B2C (including small inter-state)</td></tr>
+      <tr><td><strong>CDNR</strong></td><td>Credit / debit note to a registered buyer</td></tr>
+      <tr><td><strong>CDNUR</strong></td><td>Credit / debit note to unregistered</td></tr>
+    </tbody>
+  </table>
+  <p>JSON version <strong>GST3.2.1</strong>. Document numbers cleaned to GSTN-safe characters (max 16). Mixed-rate invoices emit one item per rate. Files over <strong>5 MB</strong> are rejected.</p>
+  <h3>Download and upload</h3>
+  <ol>
+    <li>If the register is empty or snapshots are missing → Overview and backfill.</li>
+    <li>Click <strong>Download GSTR-1 JSON</strong>.</li>
+    <li>Confirm <strong>Lock this period</strong> when asked (stores filename, SHA-256 hash, fingerprints for amendments).</li>
+    <li>On <strong>gst.gov.in</strong>: Returns → <strong>GSTR-1</strong> → <strong>Prepare Offline</strong> → upload <code>returns_MMYYYY_GSTR1_&lt;GSTIN&gt;.json</code> → validate in the GSTN offline tool → file.</li>
+    <li>In the app: <strong>Mark GSTR-1 filed</strong> and paste the <strong>ARN</strong>.</li>
+  </ol>
+  <p>After lock, <strong>Download amendment JSON</strong> emits B2BA / CDNRA only for invoices whose fingerprint changed. B2CS cannot go in amendment tables here.</p>
+
+  <h2>6. Period lock</h2>
+  <div class="status">
+    <div class="pill"><span>open</span>Backfill and dated writes allowed</div>
+    <div class="pill"><span>gstr1 ready</span>Locked after GSTR-1 download</div>
+    <div class="pill"><span>gstr1 filed</span>ARN saved after portal file</div>
+    <div class="pill"><span>gstr3b filed</span>Month closed for GST</div>
+  </div>
+  <p>While status is not <code>open</code> you cannot fulfil a sales order, or create a credit note, debit note, purchase invoice, or purchase return, <strong>dated in that month</strong>, and you cannot backfill. Reopen only if you will regenerate JSON and re-upload if already filed.</p>
+
+  <h2>7. ITC / GSTR-2B</h2>
+  <p>The app cannot pull 2B from GSTN. Download GSTR-2B JSON from the portal, then click <strong>Upload GSTR-2B JSON</strong>.</p>
+  <table>
+    <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>matched</td><td>Same vendor GSTIN + invoice number; taxable/tax within ₹1</td></tr>
+      <tr><td>amount mismatch</td><td>Found on both sides, figures differ</td></tr>
+      <tr><td>books only</td><td>In SimpliPharma, not in uploaded 2B (or vendor GSTIN missing)</td></tr>
+      <tr><td>portal only</td><td>In 2B, not in this month’s purchase books</td></tr>
+    </tbody>
+  </table>
+  <p>Eligible ITC is from inward snapshots with a valid vendor GSTIN; purchase returns reverse ITC. Use <strong>Download ITC Excel</strong> for working papers. ITC is not auto-claimed on the portal.</p>
+
+  <h2>8. GSTR-3B</h2>
+  <table>
+    <thead><tr><th>Table 3.1 row</th><th>Source in this app</th></tr></thead>
+    <tbody>
+      <tr><td>(a) Outward taxable supplies</td><td>Sales invoices + debit notes − credit notes (snapshots)</td></tr>
+      <tr><td>(b) Zero rated</td><td>Always 0</td></tr>
+      <tr><td>(c) Nil / exempt</td><td>Always 0</td></tr>
+      <tr><td>(d) Reverse charge inward</td><td>Always 0</td></tr>
+      <tr><td>(e) Non-GST outward</td><td>Always 0</td></tr>
+    </tbody>
+  </table>
+  <p><strong>ITC (OTH)</strong> = purchase invoices with valid vendor GSTIN, net of purchase returns. Reverse charge, imports, ISD, and nil are not captured — add them on the portal if they apply.</p>
+  <ol>
+    <li>Review 3.1 vs GSTR-1 and 2B workings.</li>
+    <li><strong>Download GSTR-3B JSON</strong>.</li>
+    <li>gst.gov.in → Returns → GSTR-3B. Confirm 3.1 and ITC.</li>
+    <li><strong>Mark GSTR-3B filed</strong> and save ARN.</li>
+  </ol>
+
+  <h2>9. E-invoice (IRP JSON)</h2>
+  <p>Only if <strong>E-invoice (IRN) required</strong> is on in Settings. Downloads IRP JSON version 1.1 for B2B invoices with a snapshot. Upload in the NIC / e-invoice bulk / taxpayer tool. The app does not generate an IRN, call NIC, or create e-way bills. IRN is not written back onto the SimpliPharma invoice in this version.</p>
+
+  <h2>10. What lands in GST automatically</h2>
+  <table>
+    <thead><tr><th>Document</th><th>When snapshot is written</th></tr></thead>
+    <tbody>
+      <tr><td>Sales invoice</td><td>Order fulfilment, if that month is still open</td></tr>
+      <tr><td>Credit note (return / ledger)</td><td>When the note is issued</td></tr>
+      <tr><td>Debit note (ledger)</td><td>When the note is issued</td></tr>
+      <tr><td>Purchase invoice</td><td>When the PI is saved</td></tr>
+      <tr><td>Purchase return</td><td>When the PR is saved</td></tr>
+    </tbody>
+  </table>
+
+  <h2>11. CA checklist</h2>
+  <div class="two">
+    <div class="check">
+      <h3>Before the 11th (GSTR-1 monthly)</h3>
+      <label>☐ Month/year correct on the GST bar</label>
+      <label>☐ Company GSTIN and state code in Settings</label>
+      <label>☐ Store / vendor GSTINs fixed on Overview</label>
+      <label>☐ Backfill run; orange badges at or near zero</label>
+      <label>☐ GSTR-1 register reviewed (types, rates, HSN)</label>
+      <label>☐ JSON downloaded and validated in GSTN offline tool</label>
+      <label>☐ Uploaded and filed on gst.gov.in</label>
+      <label>☐ Period locked; GSTR-1 marked filed; ARN saved</label>
+    </div>
+    <div class="check">
+      <h3>Before GSTR-3B due date</h3>
+      <label>☐ GSTR-2B JSON uploaded on ITC tab; mismatches explained</label>
+      <label>☐ ITC Excel archived</label>
+      <label>☐ 3.1 grid agrees with GSTR-1 (net of notes)</label>
+      <label>☐ Manual 3B rows on portal if RCM / import / ISD / nil apply</label>
+      <label>☐ GSTR-3B filed on gst.gov.in</label>
+      <label>☐ GSTR-3B marked filed; ARN saved</label>
+      <label>☐ If IRN required: IRP JSON processed in NIC tool</label>
+    </div>
+  </div>
+
+  <h2>12. Troubleshooting</h2>
+  <table>
+    <thead><tr><th>Symptom</th><th>Likely cause</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td>“Nothing to export. Backfill this period first.”</td><td>No snapshots</td><td>Overview → Process this period</td></tr>
+      <tr><td>GSTR-1 warning: N documents have no snapshot</td><td>Legacy bills</td><td>Backfill; refresh GSTR-1</td></tr>
+      <tr><td>Cannot fulfil / save PI in a past month</td><td>Period locked</td><td>Reopen only if you will re-export</td></tr>
+      <tr><td>Invoice classified B2C unexpectedly</td><td>Store GSTIN blank/invalid when snapshot was written</td><td>Fix GSTIN; only new invoices pick it up</td></tr>
+      <tr><td>Mixed 5% and 12% on an old invoice show as one rate</td><td>Backfill is header-level</td><td>Accept for history; new fulfilments are line-level</td></tr>
+      <tr><td>ITC not claimed</td><td>Vendor GSTIN missing/invalid on the PI</td><td>Fix vendor GSTIN before creating the PI</td></tr>
+      <tr><td>File larger than 5 MB</td><td>Very large month</td><td>GSTN hard limit; contact ops</td></tr>
+      <tr><td>E-invoice button disabled</td><td>Flag off, or no B2B snapshots</td><td>Enable e-invoice in Settings; backfill / fulfil B2B</td></tr>
+    </tbody>
+  </table>
+
+  <h2>13. What this screen will never do</h2>
+  <ul>
+    <li>File GSTR-1 or GSTR-3B by itself</li>
+    <li>Log in to GSTN or store portal passwords</li>
+    <li>Generate IRN or e-way bill numbers</li>
+    <li>Recalculate or change a bill already sent to the retailer</li>
+    <li>Fill 3B reverse charge, imports, or ISD from operations data</li>
+    <li>Prove a GSTIN with the official check digit or GSTN search</li>
+  </ul>
+
+  <h2>14. Who to ask internally</h2>
+  <table>
+    <thead><tr><th>Topic</th><th>Owner</th></tr></thead>
+    <tbody>
+      <tr><td>Login, GST permission, locking a period</td><td>SimpliPharma admin / ops</td></tr>
+      <tr><td>Store / vendor GSTIN, HSN on medicines</td><td>Ops / master data</td></tr>
+      <tr><td>Issued invoice vs snapshot mismatch</td><td>Ops (do not edit tax on a processed invoice for GST)</td></tr>
+      <tr><td>Portal filing, ARN, 2B download</td><td>CA / tax team</td></tr>
+    </tbody>
+  </table>
+
+  <p class="footer">SimpliPharma Admin · GST workspace · Offline GSTN JSON (GSTR-1 GST3.2.1, GSTR-3B, GSTR-2B match, IRP 1.1). Amounts on issued documents are not rewritten.</p>
+</body>
+</html>

@@ -4,6 +4,7 @@ import {
   getAllPurchaseInvoices,
   getPayablePurchaseInvoices,
   getPurchaseInvoicesByVendor,
+  getPurchaseInvoicesInRange,
   getPurchaseInvoiceById, 
   createPurchaseInvoice, 
   updatePurchaseInvoice,
@@ -32,6 +33,18 @@ export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
     staleTime: 5 * 60 * 1000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
+  });
+};
+
+export const usePurchaseInvoicesInDateRange = (
+  fromMs: number | null,
+  toMs: number | null,
+  options?: { enabled?: boolean }
+) => {
+  return useQuery({
+    queryKey: ['purchaseInvoicesInRange', fromMs, toMs],
+    queryFn: () => getPurchaseInvoicesInRange(fromMs ?? 0, toMs ?? undefined),
+    enabled: options?.enabled ?? true,
   });
 };
 

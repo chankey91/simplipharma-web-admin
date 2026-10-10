@@ -2096,3 +2096,5 @@ export {
   scheduledPendingOrderSummaryEmail,
   sendPendingOrderSummaryNow,
 } from './pendingOrderSummaryEmail';
+
+export { openSharedPdf } from './sharedPdf';
