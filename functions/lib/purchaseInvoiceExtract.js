@@ -18,6 +18,9 @@ const BATCH_LIKE = /^[A-Za-z0-9][A-Za-z0-9./_-]{3,28}$/;
 function getGeminiModel() {
     return (0, runtimeConfig_1.getGeminiModel)();
 }
+function getGeminiApiModel() {
+    return (0, runtimeConfig_1.getGeminiApiModel)();
+}
 const GEMINI_PROMPT = `You extract transactional line items from Indian pharmacy / pharmaceutical wholesale purchase invoices (GST tax invoices).
 
 Return ONLY valid JSON (no markdown fences) with this exact shape:
@@ -334,7 +337,7 @@ async function callGeminiApiKey(parts) {
     if (!apiKey) {
         throw new Error('Gemini API key not configured');
     }
-    const model = getGeminiModel();
+    const model = getGeminiApiModel();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const res = await fetch(url, {
         method: 'POST',

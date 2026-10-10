@@ -93,6 +93,8 @@ export const useCreditNotesInPeriod = (period: MarginPeriodFilter) => {
     queryKey: ['creditNotesInPeriod', period, range?.startMs ?? null, range?.endMs ?? null],
     queryFn: () =>
       range ? getCreditNotesInRange(range.startMs, range.endMs) : getAllCreditNotes(),
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 };
 

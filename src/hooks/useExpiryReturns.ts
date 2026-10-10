@@ -16,5 +16,7 @@ export const useExpiryReturnsInPeriod = (period: MarginPeriodFilter) => {
     queryKey: ['expiryReturnsInPeriod', period, range?.startMs ?? null, range?.endMs ?? null],
     queryFn: () =>
       range ? getExpiryReturnsInRange(range.startMs, range.endMs) : getExpiryReturnRequests(),
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 };

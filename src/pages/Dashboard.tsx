@@ -435,7 +435,7 @@ export const DashboardPage: React.FC = () => {
               caption={`Orders ${formatInr(stats.lifetimeGross)} − credits ${formatInr(stats.lifetimeCredits)} + debits ${formatInr(stats.lifetimeDebits)}`}
               accent={accent.success}
               icon={<TrendingUp sx={{ fontSize: 36 }} />}
-              onClick={() => navigate('/credit-notes')}
+              onClick={() => navigate('/margin?period=all')}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={4}>
@@ -445,7 +445,7 @@ export const DashboardPage: React.FC = () => {
               caption={`Orders ${formatInr(stats.thisMonthGross)} − credits ${formatInr(stats.thisMonthCredits)} − expiry ${formatInr(stats.thisMonthExpiryRefunds)} + debits ${formatInr(stats.thisMonthDebits)}`}
               accent={theme.palette.secondary.main}
               icon={<TrendingUp sx={{ fontSize: 36 }} />}
-              onClick={() => navigate('/credit-notes')}
+              onClick={() => navigate('/margin?period=this_month')}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={4}>
@@ -455,7 +455,7 @@ export const DashboardPage: React.FC = () => {
               caption="Active orders marked unpaid"
               accent={stats.unpaid > 0 ? accent.warning : theme.palette.grey[500]}
               icon={<AccountBalanceWalletOutlined sx={{ fontSize: 36 }} />}
-              onClick={() => navigate('/orders')}
+              onClick={() => navigate('/invoices?tab=order&payment=Unpaid')}
             />
           </Grid>
         </Grid>
