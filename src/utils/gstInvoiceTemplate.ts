@@ -9,8 +9,8 @@ export const GST_INVOICE_STYLES = `
     width: 100%;
     max-width: 1000px;
     margin: auto;
-    border: 1px solid #000;
-    padding: 0;
+    border: none;
+    padding: 2px;
     box-sizing: border-box;
   }
   table {
@@ -29,11 +29,12 @@ export const GST_INVOICE_STYLES = `
     vertical-align: top;
     word-wrap: break-word;
   }
-  tr > *:last-child {
-    border-right: none;
+  tr > *:first-child {
+    border-left: 1px solid #000;
   }
-  .invoice-box > table:last-child tr:last-child > * {
-    border-bottom: none;
+  .invoice-box > table:first-child tr:first-child > *,
+  .invoice-box [data-invoice-section="header"] table:first-of-type tr:first-child > * {
+    border-top: 1px solid #000;
   }
   .ellipsis-cell {
     white-space: nowrap;
@@ -117,10 +118,25 @@ export const GST_INVOICE_STYLES = `
     text-decoration: line-through;
     color: #666;
   }
+  .invoice-header,
+  .invoice-items,
+  .invoice-footer {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+  .invoice-spacer {
+    flex: 1 1 auto;
+    min-height: 4px;
+    border-left: 1px solid #000;
+    border-right: 1px solid #000;
+  }
+  .invoice-footer table:first-of-type tr:first-child > * {
+    border-top: 1px solid #000;
+  }
   .footer-terms { font-size: 10px; line-height: 1.2; }
   .signatory { vertical-align: bottom; }
   .pay-qr { text-align: center; vertical-align: top; }
-  .pay-qr img { width: 90px; height: 90px; display: block; margin: 0 auto 2px; }
+  .pay-qr img { width: 70px; height: 70px; display: block; margin: 0 auto 2px; }
   .pay-qr .pay-qr-label { font-size: 9px; font-weight: bold; }
   @media print {
     body { margin: 0; }
@@ -245,6 +261,136 @@ export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): strin
 </table>`;
 }
 
+export function parseInvoiceLineGstPercent(gst: string): number {
+  const n = parseFloat(String(gst || '').replace('%', ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function summarizeGstInvoicePageItems(items: GstInvoiceLineItem[]): {
+  subTotal: number;
+  discount: number;
+  gst: number;
+  cgst: number;
+  sgst: number;
+  pageTotal: number;
+  byRate: Map<number, { taxable: number; gst: number }>;
+} {
+  const byRate = new Map<number, { taxable: number; gst: number }>();
+  let subTotal = 0;
+  let discount = 0;
+  let gst = 0;
+  for (const item of items) {
+    const amount = parseFloat(item.amount) || 0;
+    const discPct = parseFloat(item.disc) || 0;
+    const gstPct = parseInvoiceLineGstPercent(item.gst);
+    const discAmt = amount * discPct / 100;
+    const taxable = Math.max(0, amount - discAmt);
+    const gstAmt = taxable * gstPct / 100;
+    subTotal += amount;
+    discount += discAmt;
+    gst += gstAmt;
+    const bucket = byRate.get(gstPct) || { taxable: 0, gst: 0 };
+    bucket.taxable += taxable;
+    bucket.gst += gstAmt;
+    byRate.set(gstPct, bucket);
+  }
+  return {
+    subTotal,
+    discount,
+    gst,
+    cgst: gst / 2,
+    sgst: gst / 2,
+    pageTotal: subTotal - discount + gst,
+    byRate,
+  };
+}
+
+function formatPageTaxSummary(page: ReturnType<typeof summarizeGstInvoicePageItems>): string {
+  const rates = [...page.byRate.keys()].sort((a, b) => a - b);
+  if (rates.length === 0) {
+    return 'Amt: 0.00 | CGST: 0.00 | SGST: 0.00';
+  }
+  return rates
+    .map((rate) => {
+      const bucket = page.byRate.get(rate)!;
+      const half = rate / 2;
+      return `Amt ${rate.toFixed(0)}%: ${bucket.taxable.toFixed(2)} | CGST ${half.toFixed(1)}%: ${(bucket.gst / 2).toFixed(2)} | SGST ${half.toFixed(1)}%: ${(bucket.gst / 2).toFixed(2)}`;
+    })
+    .join('<br>');
+}
+
+export function buildGstInvoicePageTotalsSection(opts: {
+  pageItems: GstInvoiceLineItem[];
+  carriedForward: number;
+  isLast: boolean;
+  pageCount?: number;
+  lastSummary?: GstInvoiceSummary;
+  lastTax?: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string };
+  gstRateHalf: number;
+}): string {
+  if (opts.isLast && opts.lastSummary) {
+    return buildGstInvoiceTotalsSection(
+      opts.lastTax || {
+        taxable: opts.lastSummary.subTotal,
+        cgst: opts.lastSummary.cgst,
+        sgst: opts.lastSummary.sgst,
+        rate: String(opts.gstRateHalf * 2),
+      },
+      opts.lastSummary,
+      opts.gstRateHalf
+    );
+  }
+
+  const page = summarizeGstInvoicePageItems(opts.pageItems);
+  const showPageTotal =
+    (opts.pageCount || 1) > 2 &&
+    Math.abs(page.pageTotal - opts.carriedForward) > 0.001;
+  const cfClass = showPageTotal ? 'totals-row grand-total' : 'totals-row';
+
+  return `
+<table>
+  <tr>
+    <td width="70%">
+      <b>Tax Summary</b><br>
+      ${formatPageTaxSummary(page)}
+    </td>
+    <td width="30%" class="totals-panel">
+      ${
+        showPageTotal
+          ? `<div class="totals-row"><span>PAGE TOTAL</span><span>${page.pageTotal.toFixed(2)}</span></div>`
+          : ''
+      }
+      <div class="${cfClass}"><span>TOTAL C/F</span><span>${opts.carriedForward.toFixed(2)}</span></div>
+    </td>
+  </tr>
+</table>`;
+}
+
+export function buildGstInvoiceHalfPageFooter(opts: {
+  pageItems: GstInvoiceLineItem[];
+  carriedForward: number;
+  isLast: boolean;
+  pageCount?: number;
+  remarks: string;
+  signatoryFor: string;
+  amountInWords: string;
+  paymentQrDataUri?: string;
+  termsHtml?: string;
+  lastSummary?: GstInvoiceSummary;
+  lastTax?: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string };
+  gstRateHalf: number;
+}): string {
+  return `
+${buildGstInvoicePageTotalsSection(opts)}
+${buildGstInvoiceFooter(
+  opts.remarks,
+  opts.amountInWords,
+  opts.signatoryFor,
+  opts.termsHtml,
+  opts.paymentQrDataUri
+)}`;
+}
+
 export function buildGstInvoiceTotalsSection(
   tax: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string },
   summary: GstInvoiceSummary,
@@ -275,7 +421,7 @@ export function buildGstInvoiceTotalsSection(
       ${cgstSgstLabel}
       ${
         summary.walletRefs
-          ? `<div style="margin-top:8px"><b>Wallet applied</b><br>${summary.walletRefs}</div>`
+          ? `<div style="margin-top:8px"><b>Wallet adjustment from credit note</b><br>${summary.walletRefs}</div>`
           : ''
       }
     </td>
@@ -335,7 +481,7 @@ export function buildGstInvoiceFooter(
       <b>Rs.</b> ${amountInWords}
     </td>${qrCell}
     <td width="40%" class="center signatory">
-      For ${signatoryFor}<br><br><br>
+      For ${signatoryFor}<br><br>
       <b>Authorised Signatory</b>
     </td>
   </tr>

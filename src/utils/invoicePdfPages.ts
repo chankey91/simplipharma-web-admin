@@ -1,18 +1,36 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { GST_INVOICE_STYLES, type GstInvoiceLineItem } from './gstInvoiceTemplate';
+import {
+  GST_INVOICE_STYLES,
+  summarizeGstInvoicePageItems,
+  type GstInvoiceLineItem,
+} from './gstInvoiceTemplate';
 
-/** Usable A4 height in mm (leave a small bottom margin so rows are not clipped). */
+/** A4 portrait; each invoice block is at most half a sheet (two halves per page). */
 const PAGE_WIDTH_MM = 210;
 const PAGE_HEIGHT_MM = 297;
-const PAGE_CONTENT_HEIGHT_MM = 270;
+const HALF_PAGE_HEIGHT_MM = PAGE_HEIGHT_MM / 2;
+const PAGE_MARGIN_TOP_MM = 6;
+const PAGE_MARGIN_SIDE_MM = 5;
+const PAGE_MARGIN_BOTTOM_MM = 4;
+const PAGE_CONTENT_HEIGHT_MM =
+  HALF_PAGE_HEIGHT_MM - PAGE_MARGIN_TOP_MM - PAGE_MARGIN_BOTTOM_MM;
 
 export type InvoicePdfPagePlan = {
   items: GstInvoiceLineItem[];
   includeFooter: boolean;
   isFirst: boolean;
+  isLast: boolean;
   pageIndex: number;
   pageCount: number;
+  pageTotal: number;
+  carriedForward: number;
+};
+
+export type InvoiceFooterBuildCtx = {
+  isLast: boolean;
+  pageTotal: number;
+  carriedForward: number;
 };
 
 function wrapInvoiceHtml(inner: string, title: string): string {
@@ -22,7 +40,14 @@ function wrapInvoiceHtml(inner: string, title: string): string {
 <meta charset="UTF-8">
 <title>${title}</title>
 <style>${GST_INVOICE_STYLES}
-  .invoice-box { box-sizing: border-box; }
+  .invoice-box {
+    box-sizing: border-box;
+    height: ${PAGE_CONTENT_HEIGHT_MM}mm;
+    min-height: ${PAGE_CONTENT_HEIGHT_MM}mm;
+    max-height: ${PAGE_CONTENT_HEIGHT_MM}mm;
+    display: flex;
+    flex-direction: column;
+  }
   .cont-banner td { font-size: 11px; vertical-align: middle; }
 </style>
 </head>
@@ -128,8 +153,8 @@ function sumHeights(heights: number[], start: number, count: number): number {
 }
 
 /**
- * Pack full item rows into pages so no row is split across a page boundary.
- * Continuation pages get a compact header; totals/footer only on the last page.
+ * Pack full item rows into half-A4 blocks so no row is split across a half.
+ * Every half includes page totals, terms, and QR; last half shows Grand Total.
  */
 export function planInvoicePages(
   items: GstInvoiceLineItem[],
@@ -137,10 +162,21 @@ export function planInvoicePages(
 ): InvoicePdfPagePlan[] {
   const maxH = maxContentHeightPx(heights.contentWidth);
   const boxPad = 20; // invoice-box padding + borders fudge
-  const pages: Array<Omit<InvoicePdfPagePlan, 'pageCount'>> = [];
+  const drafts: Array<{ items: GstInvoiceLineItem[]; isFirst: boolean; pageIndex: number }> = [];
 
   if (items.length === 0) {
-    return [{ items: [], includeFooter: true, isFirst: true, pageIndex: 0, pageCount: 1 }];
+    return [
+      {
+        items: [],
+        includeFooter: true,
+        isFirst: true,
+        isLast: true,
+        pageIndex: 0,
+        pageCount: 1,
+        pageTotal: 0,
+        carriedForward: 0,
+      },
+    ];
   }
 
   let index = 0;
@@ -148,46 +184,23 @@ export function planInvoicePages(
 
   while (index < items.length) {
     const isFirst = pageIndex === 0;
-    const headerH = isFirst ? heights.firstHeader : heights.contHeader;
-    const baseChrome = headerH + heights.thead + boxPad;
+    const headerH = heights.firstHeader;
+    const limit = maxH - headerH - heights.thead - heights.footer - boxPad;
 
     let take = 0;
     while (index + take < items.length) {
       const nextCount = take + 1;
       const rowsH = sumHeights(heights.rows, index, nextCount);
-      const remainingAfter = items.length - (index + nextCount);
-      const needsFooter = remainingAfter === 0;
-      const limit = maxH - baseChrome - (needsFooter ? heights.footer : 0);
       if (rowsH > limit) break;
       take = nextCount;
     }
 
     if (take === 0) {
-      // Extremely tall row: force one row; footer may move to following page.
       take = 1;
     }
 
-    // If this chunk ends the items list but footer does not fit, shed rows until it does
-    // (or leave at least one row and put footer on a following page).
-    let includeFooter = index + take >= items.length;
-    if (includeFooter) {
-      while (
-        take > 0 &&
-        baseChrome + sumHeights(heights.rows, index, take) + heights.footer > maxH
-      ) {
-        take -= 1;
-      }
-      if (take === 0) {
-        take = 1;
-        includeFooter = false;
-      } else {
-        includeFooter = index + take >= items.length;
-      }
-    }
-
-    pages.push({
+    drafts.push({
       items: items.slice(index, index + take),
-      includeFooter,
       isFirst,
       pageIndex,
     });
@@ -195,17 +208,26 @@ export function planInvoicePages(
     pageIndex += 1;
   }
 
-  if (pages.length === 0 || !pages[pages.length - 1].includeFooter) {
-    pages.push({
-      items: [],
+  const pageCount = drafts.length;
+  let running = 0;
+  return drafts.map((p, i) => {
+    const pageTotal = summarizeGstInvoicePageItems(p.items).pageTotal;
+    running += pageTotal;
+    return {
+      items: p.items,
       includeFooter: true,
-      isFirst: pages.length === 0,
-      pageIndex: pages.length,
-    });
-  }
+      isFirst: p.isFirst,
+      isLast: i === pageCount - 1,
+      pageIndex: p.pageIndex,
+      pageCount,
+      pageTotal,
+      carriedForward: running,
+    };
+  });
+}
 
-  const pageCount = pages.length;
-  return pages.map((p) => ({ ...p, pageCount }));
+export function formatInvoicePageLabel(pageIndex: number, pageCount: number): string {
+  return `Page ${pageIndex + 1} of ${Math.max(1, pageCount)}`;
 }
 
 export function buildContinuationHeaderHtml(opts: {
@@ -216,9 +238,9 @@ export function buildContinuationHeaderHtml(opts: {
   pageCount: number;
   partyName?: string;
 }): string {
-  const pageLabel = `Page ${opts.pageIndex + 1} of ${opts.pageCount}`;
+  const pageLabel = formatInvoicePageLabel(opts.pageIndex, opts.pageCount);
   return `
-<div data-invoice-section="header">
+<div data-invoice-section="header" class="invoice-header">
 <table class="cont-banner">
   <tr>
     <td width="55%">
@@ -248,8 +270,8 @@ async function renderHtmlToImage(
       scale,
       useCORS: true,
       logging: false,
-      width: target.scrollWidth,
-      height: target.scrollHeight,
+      width: target.offsetWidth,
+      height: target.offsetHeight,
       backgroundColor: '#ffffff',
     });
     const dataUrl = canvas.toDataURL('image/jpeg', opts?.jpegQuality ?? 0.82);
@@ -259,30 +281,60 @@ async function renderHtmlToImage(
   }
 }
 
+function drawHalfPageCutGuide(pdf: jsPDF) {
+  pdf.setDrawColor(170);
+  pdf.setLineDashPattern([1.2, 1.2], 0);
+  pdf.line(PAGE_MARGIN_SIDE_MM, HALF_PAGE_HEIGHT_MM, PAGE_WIDTH_MM - PAGE_MARGIN_SIDE_MM, HALF_PAGE_HEIGHT_MM);
+  pdf.setLineDashPattern([], 0);
+  pdf.setDrawColor(0);
+}
+
 /**
- * Build a multi-page A4 PDF where each page is a complete HTML render (no mid-row image slicing).
+ * Build an A4 PDF of half-page invoice blocks (two per sheet). Extra products
+ * overflow to the next half, then the next page. No mid-row image slicing.
  */
+function resolveFirstHeaderHtml(
+  firstHeaderHtml: string | ((page: InvoicePdfPagePlan) => string),
+  page: InvoicePdfPagePlan
+): string {
+  return typeof firstHeaderHtml === 'function' ? firstHeaderHtml(page) : firstHeaderHtml;
+}
+
 export async function buildPaginatedInvoicePdf(opts: {
   title: string;
   items: GstInvoiceLineItem[];
-  firstHeaderHtml: string;
+  firstHeaderHtml: string | ((page: InvoicePdfPagePlan) => string);
   buildContHeaderHtml: (page: InvoicePdfPagePlan) => string;
   buildItemsHtml: (pageItems: GstInvoiceLineItem[]) => string;
   footerHtml: string;
+  buildFooterHtml?: (page: InvoicePdfPagePlan, ctx: InvoiceFooterBuildCtx) => string;
   fileName?: string;
   download?: boolean;
   scale?: number;
 }): Promise<jsPDF> {
+  const measurePage: InvoicePdfPagePlan = {
+    items: opts.items.slice(0, 1),
+    includeFooter: true,
+    isFirst: true,
+    isLast: false,
+    pageIndex: 0,
+    pageCount: 2,
+    pageTotal: 0,
+    carriedForward: 0,
+  };
   const itemTableForMeasure = opts.buildItemsHtml(opts.items);
   const heights = measureInvoiceSections({
     title: opts.title,
-    firstHeaderHtml: opts.firstHeaderHtml,
+    firstHeaderHtml: resolveFirstHeaderHtml(opts.firstHeaderHtml, measurePage),
     contHeaderHtml: opts.buildContHeaderHtml({
       items: opts.items.slice(0, 1),
-      includeFooter: false,
+      includeFooter: true,
       isFirst: false,
+      isLast: false,
       pageIndex: 1,
       pageCount: 2,
+      pageTotal: 0,
+      carriedForward: 0,
     }),
     itemTableHtml: itemTableForMeasure,
     footerHtml: opts.footerHtml,
@@ -294,22 +346,39 @@ export async function buildPaginatedInvoicePdf(opts: {
 
   for (let i = 0; i < pages.length; i += 1) {
     const page = pages[i];
-    const headerHtml = page.isFirst
-      ? `<div data-invoice-section="header">${opts.firstHeaderHtml}</div>`
-      : opts.buildContHeaderHtml(page);
-    const itemsHtml = page.items.length > 0 ? opts.buildItemsHtml(page.items) : '';
-    const footerHtml = page.includeFooter
-      ? `<div data-invoice-section="footer">${opts.footerHtml}</div>`
-      : '';
-    const html = wrapInvoiceHtml(`${headerHtml}${itemsHtml}${footerHtml}`, opts.title);
+    const ctx: InvoiceFooterBuildCtx = {
+      isLast: page.isLast,
+      pageTotal: page.pageTotal,
+      carriedForward: page.carriedForward,
+    };
+    const headerHtml = `<div data-invoice-section="header" class="invoice-header">${resolveFirstHeaderHtml(opts.firstHeaderHtml, page)}</div>`;
+    const itemsHtml = `<div class="invoice-items">${
+      page.items.length > 0 ? opts.buildItemsHtml(page.items) : ''
+    }</div>`;
+    const footerInner = opts.buildFooterHtml?.(page, ctx) ?? opts.footerHtml;
+    const footerHtml = `<div data-invoice-section="footer" class="invoice-footer">${footerInner}</div>`;
+    const html = wrapInvoiceHtml(
+      `${headerHtml}${itemsHtml}<div class="invoice-spacer"></div>${footerHtml}`,
+      opts.title
+    );
     const { dataUrl, widthPx, heightPx } = await renderHtmlToImage(html, { scale: opts.scale });
-    const imgWidth = PAGE_WIDTH_MM;
+    const imgWidth = PAGE_WIDTH_MM - PAGE_MARGIN_SIDE_MM * 2;
     const imgHeight = (heightPx * imgWidth) / widthPx;
 
-    if (i > 0) pdf.addPage();
-    // Fit within A4 if measurement fudge left the page slightly tall (never crop mid-row).
-    const scale = imgHeight > PAGE_HEIGHT_MM ? PAGE_HEIGHT_MM / imgHeight : 1;
-    pdf.addImage(dataUrl, 'JPEG', 0, 0, imgWidth * scale, imgHeight * scale);
+    const halfIndex = i % 2;
+    if (i > 0 && halfIndex === 0) pdf.addPage();
+    if (halfIndex === 0) drawHalfPageCutGuide(pdf);
+
+    const maxH = PAGE_CONTENT_HEIGHT_MM;
+    const scale = imgHeight > maxH ? maxH / imgHeight : 1;
+    pdf.addImage(
+      dataUrl,
+      'JPEG',
+      PAGE_MARGIN_SIDE_MM,
+      halfIndex * HALF_PAGE_HEIGHT_MM + PAGE_MARGIN_TOP_MM,
+      imgWidth * scale,
+      Math.min(imgHeight * scale, maxH)
+    );
   }
 
   if (opts.download && opts.fileName) {
