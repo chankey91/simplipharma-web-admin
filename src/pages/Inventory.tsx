@@ -15,7 +15,7 @@ import {
   IconButton,
   Chip,
   Alert,
-  Grid,
+  Tooltip,
   MenuItem,
   FormControl,
   InputLabel,
@@ -36,10 +36,12 @@ import {
   CloudSync,
   Inventory2,
   RestartAlt,
+  Add,
 } from '@mui/icons-material';
 import { useQueryClient } from '@tanstack/react-query';
-import { searchMedicinesCatalog } from '../services/medicineSearch';
+import { findMedicineByExactName, searchMedicinesCatalog } from '../services/medicineSearch';
 import { useMedicineSearch } from '../hooks/useMedicineSearch';
+import { useCreateMedicine } from '../hooks/useInventory';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -52,6 +54,15 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { zeroAllStockChunk } from '../services/inventory';
+
+const emptyNewProduct = {
+  name: '',
+  code: '',
+  type: '',
+  packaging: '',
+  manufacturer: '',
+  gstRate: '5',
+};
 
 export const InventoryPage: React.FC = () => {
   const queryClient = useQueryClient();
@@ -82,6 +93,9 @@ export const InventoryPage: React.FC = () => {
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
   const [zeroing, setZeroing] = useState(false);
   const [zeroMessage, setZeroMessage] = useState<string | null>(null);
+  const [addProductOpen, setAddProductOpen] = useState(false);
+  const [newProduct, setNewProduct] = useState(emptyNewProduct);
+  const createMedicineMutation = useCreateMedicine();
   const jobUnsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -347,6 +361,57 @@ export const InventoryPage: React.FC = () => {
     XLSX.writeFile(wb, 'medicine_bulk_upload_template.xlsx');
   };
 
+  const closeAddProduct = () => {
+    setAddProductOpen(false);
+    setNewProduct(emptyNewProduct);
+  };
+
+  const handleAddProduct = async () => {
+    const name = newProduct.name.trim();
+    const code = newProduct.code.trim();
+    const type = newProduct.type.trim();
+    const packaging = newProduct.packaging.trim();
+    const manufacturer = newProduct.manufacturer.trim();
+    const gstRate = parseFloat(newProduct.gstRate);
+    if (!name || !code || !type || !packaging || !manufacturer || !Number.isFinite(gstRate)) {
+      await alert('Please fill all required fields', { severity: 'warning' });
+      return;
+    }
+    try {
+      const existing = await findMedicineByExactName(name);
+      if (existing) {
+        closeAddProduct();
+        const openExisting = await confirm(
+          `"${existing.name}" already exists in inventory. Open that product?`,
+          { title: 'Product exists', confirmLabel: 'Open' }
+        );
+        if (openExisting) navigate(`/inventory/${existing.id}`);
+        return;
+      }
+      const medicineId = await createMedicineMutation.mutateAsync({
+        name,
+        code,
+        category: type,
+        unit: packaging,
+        manufacturer,
+        stock: 0,
+        currentStock: 0,
+        price: 0,
+        gstRate,
+        description: `Packaging: ${packaging}`,
+      });
+      closeAddProduct();
+      await alert('Product added to inventory. Add stock from the Purchase invoices section.', {
+        severity: 'success',
+      });
+      navigate(`/inventory/${medicineId}`);
+    } catch (err: unknown) {
+      await alert(err instanceof Error ? err.message : 'Failed to add product', {
+        severity: 'error',
+      });
+    }
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -433,66 +498,97 @@ export const InventoryPage: React.FC = () => {
     return <Loading message="Loading inventory..." />;
   }
 
+  const searchHint =
+    searchTerm.trim().length === 0
+      ? `${found.toLocaleString()} in catalog`
+      : searchTerm.trim().length < 2
+        ? 'Type one more character…'
+        : searchLoading
+          ? 'Searching…'
+          : `${found.toLocaleString()} result${found === 1 ? '' : 's'}`;
+
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3} gap={2} flexWrap="wrap">
-        <Typography variant="h4">Inventory Management</Typography>
-        <Box display="flex" gap={1} flexWrap="wrap">
-          {canEditInventory && (
+      <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
+        <Typography variant="h6" sx={{ fontWeight: 600, mr: 0.5 }}>
+          Inventory
+        </Typography>
+        {expiredCount > 0 && (
+          <Chip size="small" color="error" label={`${expiredCount} expired`} />
+        )}
+        {expiringCount > 0 && (
+          <Chip size="small" color="warning" label={`${expiringCount} expiring`} />
+        )}
+        <Box sx={{ flexGrow: 1 }} />
+        {canEditInventory && (
+          <>
             <Button
+              size="small"
               variant="contained"
-              startIcon={<Inventory2 />}
+              startIcon={<Add fontSize="small" />}
+              onClick={() => setAddProductOpen(true)}
+            >
+              Add product
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<Inventory2 fontSize="small" />}
               onClick={() => navigate('/inventory/stock-update')}
             >
               Update stock
             </Button>
-          )}
-          {canZeroAllStock && (
-            <Button
-              variant="outlined"
-              color="error"
-              startIcon={<RestartAlt />}
-              onClick={() => void handleZeroAllStock()}
-              disabled={zeroing}
-            >
-              {zeroing ? 'Zeroing…' : 'Zero all stock'}
-            </Button>
-          )}
-          <Button
-            variant="outlined"
-            startIcon={<Download />}
-            onClick={handleDownloadTemplate}
-          >
-            Download Template
-          </Button>
-          {canReindexInventory && (
-          <Button
-            variant="outlined"
-            color="secondary"
-            startIcon={<CloudSync />}
-            onClick={() => void handleReindexTypesense()}
-            disabled={reindexing}
-          >
-            {reindexing ? 'Indexing…' : 'Rebuild search index'}
-          </Button>
-          )}
-          {canEditInventory && (
-          <Button
-            variant="outlined"
-            startIcon={<Upload />}
-            onClick={() => setBulkUploadOpen(true)}
-          >
-            Bulk Upload Medicines
-          </Button>
-          )}
-        </Box>
+          </>
+        )}
+        {canZeroAllStock && (
+          <Tooltip title={zeroing ? 'Zeroing…' : 'Zero all stock'}>
+            <span>
+              <IconButton
+                size="small"
+                color="error"
+                onClick={() => void handleZeroAllStock()}
+                disabled={zeroing}
+                aria-label="Zero all stock"
+              >
+                <RestartAlt fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        <Tooltip title="Download template">
+          <IconButton size="small" onClick={handleDownloadTemplate} aria-label="Download template">
+            <Download fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        {canReindexInventory && (
+          <Tooltip title={reindexing ? 'Indexing…' : 'Rebuild search index'}>
+            <span>
+              <IconButton
+                size="small"
+                color="secondary"
+                onClick={() => void handleReindexTypesense()}
+                disabled={reindexing}
+                aria-label="Rebuild search index"
+              >
+                <CloudSync fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {canEditInventory && (
+          <Tooltip title="Bulk upload medicines">
+            <IconButton size="small" onClick={() => setBulkUploadOpen(true)} aria-label="Bulk upload medicines">
+              <Upload fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       {zeroMessage && (
         <Alert
           severity={zeroMessage.startsWith('All batch') ? 'success' : zeroMessage.startsWith('Zeroing') ? 'info' : 'error'}
           onClose={zeroing ? undefined : () => setZeroMessage(null)}
-          sx={{ mb: 2 }}
+          sx={{ mb: 1 }}
         >
           {zeroMessage}
         </Alert>
@@ -502,14 +598,14 @@ export const InventoryPage: React.FC = () => {
         <Alert
           severity={reindexMessage.startsWith('Search index updated') ? 'success' : 'error'}
           onClose={() => setReindexMessage(null)}
-          sx={{ mb: 2 }}
+          sx={{ mb: 1 }}
         >
           {reindexMessage}
         </Alert>
       )}
 
       {searchError && !searchLoading && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert severity="error" sx={{ mb: 1 }}>
           Inventory search failed (Typesense). The list is empty because the catalog search
           index could not be queried — this is not a Firestore inventory wipe. Open the browser
           console for details, then click <strong>Rebuild search index</strong>. If rebuild
@@ -519,124 +615,98 @@ export const InventoryPage: React.FC = () => {
       )}
 
       {!searchError && !searchLoading && found === 0 && searchTerm.trim().length < 2 && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
+        <Alert severity="warning" sx={{ mb: 1 }}>
           Typesense returned 0 medicines. If Firestore still has medicines, click{' '}
           <strong>Rebuild search index</strong> and keep this tab open until it finishes.
         </Alert>
       )}
 
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {expiredCount > 0 && (
-          <Grid item xs={12}>
-            <Alert severity="error">{expiredCount} items have expired!</Alert>
-          </Grid>
-        )}
-        {expiringCount > 0 && (
-          <Grid item xs={12}>
-            <Alert severity="warning">{expiringCount} items expiring within 30 days.</Alert>
-          </Grid>
-        )}
-      </Grid>
-
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={6}>
-            <TextField
-              fullWidth
-              placeholder="Search by name, product ID, code, or manufacturer..."
-              value={searchTerm}
+      <Paper sx={{ px: 1.5, py: 1, mb: 1.5 }}>
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <TextField
+            size="small"
+            placeholder="Search name, product ID, code, or manufacturer…"
+            value={searchTerm}
+            onChange={(e) => {
+              const next = e.target.value;
+              setSearchTerm(next);
+              startTransition(() => setPage(1));
+            }}
+            sx={{ minWidth: 220, flex: '1 1 200px' }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search fontSize="small" />
+                </InputAdornment>
+              ),
+              endAdornment: searchLoading ? (
+                <InputAdornment position="end">
+                  <CircularProgress color="inherit" size={18} />
+                </InputAdornment>
+              ) : undefined,
+            }}
+          />
+          <FormControl size="small" sx={{ minWidth: 130 }}>
+            <InputLabel>Type</InputLabel>
+            <Select
+              value={categoryFilter}
+              label="Type"
               onChange={(e) => {
-                const next = e.target.value;
-                setSearchTerm(next);
-                startTransition(() => setPage(1));
+                setCategoryFilter(e.target.value);
+                setPage(1);
               }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search />
-                  </InputAdornment>
-                ),
-                endAdornment: searchLoading ? (
-                  <InputAdornment position="end">
-                    <CircularProgress color="inherit" size={18} />
-                  </InputAdornment>
-                ) : undefined,
+            >
+              <MenuItem value="All">All types</MenuItem>
+              {categories.map((cat) => (
+                <MenuItem key={cat} value={cat}>
+                  {cat}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 160 }}>
+            <InputLabel>Manufacturer</InputLabel>
+            <Select
+              value={manufacturerFilter}
+              label="Manufacturer"
+              onChange={(e) => {
+                setManufacturerFilter(e.target.value);
+                setPage(1);
               }}
-              helperText={
-                searchTerm.trim().length === 0
-                  ? `Browsing catalog via Typesense (${found.toLocaleString()} total)`
-                  : searchTerm.trim().length < 2
-                    ? 'Type one more character…'
-                    : searchLoading
-                      ? 'Searching…'
-                      : `${found.toLocaleString()} result${found === 1 ? '' : 's'}`
-              }
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <FormControl fullWidth>
-              <InputLabel>Type</InputLabel>
-              <Select
-                value={categoryFilter}
-                label="Type"
-                onChange={(e) => {
-                  setCategoryFilter(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <MenuItem value="All">All Types</MenuItem>
-                {categories.map((cat) => (
-                  <MenuItem key={cat} value={cat}>
-                    {cat}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <FormControl fullWidth>
-              <InputLabel>Manufacturer</InputLabel>
-              <Select
-                value={manufacturerFilter}
-                label="Manufacturer"
-                onChange={(e) => {
-                  setManufacturerFilter(e.target.value);
-                  setPage(1);
-                }}
-                MenuProps={{ PaperProps: { style: { maxHeight: 320 } } }}
-              >
-                <MenuItem value="All">All manufacturers</MenuItem>
-                {manufacturers.map((mf) => (
-                  <MenuItem key={mf} value={mf}>
-                    {mf}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <FormControl fullWidth>
-              <InputLabel>Stock Status</InputLabel>
-              <Select
-                value={stockFilter}
-                label="Stock Status"
-                onChange={(e) => {
-                  setStockFilter(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <MenuItem value="All">All Stock</MenuItem>
-                <MenuItem value="In Stock">In Stock</MenuItem>
-                <MenuItem value="Low">Low Stock</MenuItem>
-                <MenuItem value="Out">Out of Stock</MenuItem>
-              </Select>
-            </FormControl>
-          </Grid>
-        </Grid>
+              MenuProps={{ PaperProps: { style: { maxHeight: 320 } } }}
+            >
+              <MenuItem value="All">All manufacturers</MenuItem>
+              {manufacturers.map((mf) => (
+                <MenuItem key={mf} value={mf}>
+                  {mf}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 130 }}>
+            <InputLabel>Stock</InputLabel>
+            <Select
+              value={stockFilter}
+              label="Stock"
+              onChange={(e) => {
+                setStockFilter(e.target.value);
+                setPage(1);
+              }}
+            >
+              <MenuItem value="All">All stock</MenuItem>
+              <MenuItem value="In Stock">In stock</MenuItem>
+              <MenuItem value="Low">Low stock</MenuItem>
+              <MenuItem value="Out">Out of stock</MenuItem>
+            </Select>
+          </FormControl>
+          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+            {searchHint}
+          </Typography>
+        </Box>
       </Paper>
 
       <TableContainer component={Paper}>
-        <Table>
+        <Table size="small">
           <TableHead>
             <TableRow>
               <SortableTableHeadCell columnId="name" label="Medicine Details" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -739,6 +809,83 @@ export const InventoryPage: React.FC = () => {
           </Typography>
         </Box>
       )}
+
+      <Dialog
+        open={addProductOpen}
+        onClose={() => !createMedicineMutation.isPending && closeAddProduct()}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Add product</DialogTitle>
+        <DialogContent>
+          <Box display="flex" flexWrap="wrap" gap={1.5} sx={{ mt: 1 }}>
+            <TextField
+              fullWidth
+              size="small"
+              label="Medicine name"
+              required
+              value={newProduct.name}
+              onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+            />
+            <TextField
+              size="small"
+              label="HSN / item code"
+              required
+              value={newProduct.code}
+              onChange={(e) => setNewProduct({ ...newProduct, code: e.target.value })}
+              sx={{ flex: '1 1 180px' }}
+            />
+            <TextField
+              size="small"
+              label="Type"
+              required
+              placeholder="Tablet, Syrup…"
+              value={newProduct.type}
+              onChange={(e) => setNewProduct({ ...newProduct, type: e.target.value })}
+              sx={{ flex: '1 1 160px' }}
+            />
+            <TextField
+              size="small"
+              label="Packaging"
+              required
+              placeholder="e.g., 10 Tab, 100 ml"
+              value={newProduct.packaging}
+              onChange={(e) => setNewProduct({ ...newProduct, packaging: e.target.value })}
+              sx={{ flex: '1 1 180px' }}
+            />
+            <TextField
+              size="small"
+              label="Manufacturer"
+              required
+              value={newProduct.manufacturer}
+              onChange={(e) => setNewProduct({ ...newProduct, manufacturer: e.target.value })}
+              sx={{ flex: '1 1 180px' }}
+            />
+            <TextField
+              size="small"
+              label="GST rate (%)"
+              required
+              type="number"
+              value={newProduct.gstRate}
+              onChange={(e) => setNewProduct({ ...newProduct, gstRate: e.target.value })}
+              inputProps={{ min: 0, max: 100, step: 0.01 }}
+              sx={{ width: 140 }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeAddProduct} disabled={createMedicineMutation.isPending}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => void handleAddProduct()}
+            disabled={createMedicineMutation.isPending}
+          >
+            {createMedicineMutation.isPending ? 'Saving…' : 'Add product'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={bulkUploadOpen}

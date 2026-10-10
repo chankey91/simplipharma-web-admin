@@ -14,18 +14,15 @@ import {
   TableRow,
   IconButton,
   Chip,
-  Divider,
   Card,
   CardContent,
+  Link,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
   TextField,
   CircularProgress,
-  ToggleButtonGroup,
-  ToggleButton,
-  InputAdornment,
   FormControlLabel,
   Checkbox,
 } from '@mui/material';
@@ -35,11 +32,10 @@ import {
   Search,
   Delete,
   QrCode,
-  Payment,
-  AttachMoney,
   Edit,
 } from '@mui/icons-material';
-import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useUpdatePurchaseInvoicePayment, useVendorLastPurchases, useDeletePurchaseInvoice } from '../hooks/usePurchaseInvoices';
+import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useVendorLastPurchases, useDeletePurchaseInvoice } from '../hooks/usePurchaseInvoices';
+import { useVendor } from '../hooks/useVendors';
 import { format } from 'date-fns';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
@@ -61,8 +57,8 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const { invoiceId } = useParams<{ invoiceId: string }>();
   const navigate = useNavigate();
   const { data: invoice, isLoading } = usePurchaseInvoice(invoiceId || '');
+  const { data: vendor } = useVendor(invoice?.vendorId || '');
   const updateInvoiceMutation = useUpdatePurchaseInvoiceWithStock();
-  const updatePaymentMutation = useUpdatePurchaseInvoicePayment();
   const deleteInvoiceMutation = useDeletePurchaseInvoice();
   const { canWrite } = useAuth();
   const canEditPurchases = canWrite('purchases');
@@ -72,12 +68,6 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     { enabled: true }
   );
   const { alert, confirm, prompt } = useAppDialog();
-  const [paymentDialog, setPaymentDialog] = useState({
-    open: false,
-    amount: '',
-    method: 'Cash' as 'Cash' | 'Online',
-    transactionId: '',
-  });
   const [items, setItems] = useState<PurchaseInvoiceItem[]>([]);
   const [itemDialog, setItemDialog] = useState<{ open: boolean; itemIndex: number | null }>({
     open: false,
@@ -336,64 +326,131 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     recalculatedAdditionalDiscount > 0
       ? recalculatedAdditionalDiscount
       : invoice.additionalDiscount || 0;
-  const invoiceTotal = grandTotal;
   const paidAmount = invoice.paidAmount ?? 0;
-  const dueAmount = Math.max(0, invoiceTotal - paidAmount);
+  const dueAmount = Math.max(0, grandTotal - paidAmount);
+
+  const invoiceDateLabel = format(
+    invoice.invoiceDate instanceof Date ? invoice.invoiceDate : new Date(invoice.invoiceDate),
+    'dd MMM yyyy'
+  );
+  const vendorGstin = invoice.vendorGstin || vendor?.gstNumber || '';
+  const vendorPhone = vendor?.phoneNumber || '';
+  const vendorEmail = vendor?.email || '';
+  const vendorAddress = vendor?.address || '';
 
   return (
     <Box>
-      <Breadcrumbs items={[
-        { label: 'Purchase Invoices', path: '/purchases' },
-        { label: `Invoice #${invoice.invoiceNumber}` }
-      ]} />
-      <Box display="flex" alignItems="center" mb={3}>
-        <IconButton onClick={() => navigate('/purchases')} sx={{ mr: 2 }}>
-          <ArrowBack />
+      <Box display="flex" alignItems="center" mb={1} gap={1} flexWrap="wrap">
+        <IconButton size="small" onClick={() => navigate('/purchases')} aria-label="Back to purchase invoices">
+          <ArrowBack fontSize="small" />
         </IconButton>
-        <Typography variant="h4">Purchase Invoice #{invoice.invoiceNumber}</Typography>
+        <Box>
+          <Breadcrumbs
+            items={[
+              { label: 'Purchase invoices', path: '/purchases' },
+              { label: `#${invoice.invoiceNumber}` },
+            ]}
+            sx={{ mb: 0 }}
+          />
+          <Typography variant="h6" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
+            Purchase invoice #{invoice.invoiceNumber}
+          </Typography>
+        </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Button
+          size="small"
           variant="outlined"
-          startIcon={<Edit />}
+          startIcon={<Edit fontSize="small" />}
           onClick={() => navigate(`/purchases/${invoice.id}/edit`)}
-          sx={{ mr: 1 }}
         >
-          Edit Invoice
+          Edit
         </Button>
         {canEditPurchases && (
           <Button
+            size="small"
             variant="outlined"
             color="error"
-            startIcon={<Delete />}
+            startIcon={<Delete fontSize="small" />}
             onClick={() => void handleDeleteInvoice()}
             disabled={deleteInvoiceMutation.isPending}
-            sx={{ mr: 1 }}
           >
-            {deleteInvoiceMutation.isPending ? 'Deleting…' : 'Delete Bill'}
+            {deleteInvoiceMutation.isPending ? 'Deleting…' : 'Delete'}
           </Button>
         )}
-        <Button 
-          variant="outlined" 
-          startIcon={<Print />} 
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<Print fontSize="small" />}
           onClick={() => {
-            if (invoice) {
-              generatePurchaseInvoice(invoice).catch(async (err) => {
-                console.error('Error generating invoice:', err);
-                await alert('Failed to generate invoice. Please try again.', { severity: 'error' });
-              });
-            }
+            generatePurchaseInvoice(invoice).catch(async (err) => {
+              console.error('Error generating invoice:', err);
+              await alert('Failed to generate invoice. Please try again.', { severity: 'error' });
+            });
           }}
         >
-          Print Invoice
+          Print
         </Button>
       </Box>
 
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={8}>
-          <Paper sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" gutterBottom>Invoice Items</Typography>
-            <TableContainer>
-              <Table>
+      <Card sx={{ mb: 1, p: 1 }}>
+        <CardContent sx={{ p: '8px !important', '&:last-child': { pb: '8px' } }}>
+          <Box display="flex" alignItems="center" flexWrap="wrap" gap={2}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mr: 1 }}>
+              Vendor information:
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>Vendor:</strong> {invoice.vendorName || 'N/A'}
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>GSTIN:</strong> {vendorGstin || 'N/A'}
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>Vendor bill:</strong> {invoice.vendorInvoiceNumber || invoice.invoiceNumber}
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>Date:</strong> {invoiceDateLabel}
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>Contact:</strong>{' '}
+              {vendorPhone ? (
+                <Link href={`tel:${vendorPhone}`} underline="hover">
+                  {vendorPhone}
+                </Link>
+              ) : (
+                'N/A'
+              )}
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>Email:</strong> {vendorEmail || 'N/A'}
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>Address:</strong> {vendorAddress || 'N/A'}
+            </Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
+              <strong>Payment:</strong>{' '}
+              <Chip
+                size="small"
+                label={`${invoice.paymentStatus || 'Unpaid'}${invoice.paymentMethod ? ` · ${invoice.paymentMethod}` : ''}`}
+                color={
+                  invoice.paymentStatus === 'Paid'
+                    ? 'success'
+                    : invoice.paymentStatus === 'Partial'
+                      ? 'warning'
+                      : 'error'
+                }
+                sx={{ height: 20, fontSize: '0.7rem' }}
+              />
+            </Typography>
+          </Box>
+        </CardContent>
+      </Card>
+
+      <Paper sx={{ p: 1.5, mb: 1.5 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+          Invoice items
+        </Typography>
+        <TableContainer>
+          <Table size="small">
                 <TableHead>
                   <TableRow>
                     <TableCell>Medicine</TableCell>
@@ -538,151 +595,68 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
-          </Paper>
-        </Grid>
 
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" gutterBottom>Invoice Details</Typography>
-            <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Invoice Number:</Typography>
-              <Typography fontWeight="medium">{invoice.invoiceNumber}</Typography>
-            </Box>
-            <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Date:</Typography>
-              <Typography>
-                {format(invoice.invoiceDate instanceof Date ? invoice.invoiceDate : new Date(invoice.invoiceDate), 'MMM dd, yyyy')}
+            <Box
+              display="flex"
+              justifyContent="flex-end"
+              alignItems="baseline"
+              gap={2.5}
+              flexWrap="wrap"
+              sx={{ mt: 1.5, px: 0.5 }}
+            >
+              <Typography variant="caption" color="text.secondary">
+                Subtotal ₹{displaySubTotal.toFixed(2)}
+              </Typography>
+              {displayDiscount > 0 && (
+                <Typography variant="caption" color="text.secondary">
+                  Discount −₹{displayDiscount.toFixed(2)}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                Tax ₹{displayTaxAmount.toFixed(2)}
+              </Typography>
+              {displayAdditionalDiscount > 0 && (
+                <Typography variant="caption" color="text.secondary">
+                  Additional discount −₹{displayAdditionalDiscount.toFixed(2)}
+                </Typography>
+              )}
+              {Math.abs(roundoff) > 0.01 && (
+                <Typography variant="caption" color="text.secondary">
+                  Round off {roundoff > 0 ? '+' : ''}₹{roundoff.toFixed(2)}
+                </Typography>
+              )}
+              <Typography variant="body2" fontWeight={600}>
+                Total ₹{grandTotal.toFixed(2)}
               </Typography>
             </Box>
-            <Box display="flex" justifyContent="space-between" mb={2}>
-              <Typography color="textSecondary">Vendor:</Typography>
-              <Typography fontWeight="medium">{invoice.vendorName}</Typography>
-            </Box>
-            <Divider sx={{ my: 2 }} />
-            <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Subtotal:</Typography>
-              <Typography>₹{displaySubTotal.toFixed(2)}</Typography>
-            </Box>
-            {displayDiscount > 0 && (
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="textSecondary">Discount:</Typography>
-                <Typography color="error">-₹{displayDiscount.toFixed(2)}</Typography>
-              </Box>
-            )}
-            <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography color="textSecondary">Tax:</Typography>
-              <Typography>₹{displayTaxAmount.toFixed(2)}</Typography>
-            </Box>
-            {displayAdditionalDiscount > 0 && (
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="textSecondary">Additional discount:</Typography>
-                <Typography color="error">-₹{displayAdditionalDiscount.toFixed(2)}</Typography>
-              </Box>
-            )}
-            {Math.abs(roundoff) > 0.01 && (
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="textSecondary">Round Off:</Typography>
-                <Typography>{roundoff > 0 ? '+' : ''}₹{roundoff.toFixed(2)}</Typography>
-              </Box>
-            )}
-            <Divider sx={{ my: 2 }} />
-            <Box display="flex" justifyContent="space-between" mb={2}>
-              <Typography variant="h6">Total:</Typography>
-              <Typography variant="h6">₹{grandTotal.toFixed(2)}</Typography>
+
+            <Box
+              display="flex"
+              justifyContent="flex-end"
+              alignItems="center"
+              gap={1.5}
+              flexWrap="wrap"
+              sx={{ mt: 1, px: 0.5 }}
+            >
+              <Typography variant="caption" color="text.secondary">
+                Paid ₹{paidAmount.toFixed(2)}
+              </Typography>
+              <Typography variant="caption" color={dueAmount > 0 ? 'error.main' : 'success.main'} fontWeight={600}>
+                Due ₹{dueAmount.toFixed(2)}
+              </Typography>
+              {invoice.transactionId ? (
+                <Typography variant="caption" color="text.secondary">
+                  Txn {invoice.transactionId}
+                </Typography>
+              ) : null}
             </Box>
 
-            <Card sx={{ mt: 2, border: '1px solid', borderColor: 'divider', borderLeft: 4, borderLeftColor: (invoice.paymentStatus === 'Paid' ? 'success.main' : invoice.paymentStatus === 'Partial' ? 'warning.main' : 'error.main') }}>
-              <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
-                  <Typography variant="subtitle1" fontWeight="600">Payment</Typography>
-                  <Chip
-                    size="small"
-                    label={invoice.paymentStatus || 'Unpaid'}
-                    color={
-                      invoice.paymentStatus === 'Paid' ? 'success' :
-                      invoice.paymentStatus === 'Partial' ? 'warning' : 'error'
-                    }
-                  />
-                </Box>
-
-                <Box sx={{ bgcolor: 'action.hover', borderRadius: 1, p: 1.5, mb: 2 }}>
-                  <Box display="flex" justifyContent="space-between" mb={0.5}>
-                    <Typography variant="body2" color="textSecondary">Invoice Total</Typography>
-                    <Typography variant="body2" fontWeight="bold">₹{invoiceTotal.toFixed(2)}</Typography>
-                  </Box>
-                  <Box display="flex" justifyContent="space-between" mb={0.5}>
-                    <Typography variant="body2" color="textSecondary">Paid</Typography>
-                    <Typography variant="body2" color="success.main">₹{paidAmount.toFixed(2)}</Typography>
-                  </Box>
-                  <Box display="flex" justifyContent="space-between">
-                    <Typography variant="body2" color="textSecondary">Due</Typography>
-                    <Typography variant="body2" fontWeight="bold" color={dueAmount > 0 ? 'error.main' : 'success.main'}>
-                      ₹{dueAmount.toFixed(2)}
-                    </Typography>
-                  </Box>
-                  {invoice.paymentMethod && (
-                    <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
-                      Method: {invoice.paymentMethod}
-                    </Typography>
-                  )}
-                  {invoice.transactionId && (
-                    <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
-                      Txn ID: {invoice.transactionId}
-                    </Typography>
-                  )}
-                </Box>
-
-                {(invoice.paymentStatus === 'Unpaid' || !invoice.paymentStatus || invoice.paymentStatus === 'Partial') ? (
-                  <Button
-                    fullWidth
-                    variant="contained"
-                    color="primary"
-                    startIcon={<Payment />}
-                    onClick={() => {
-                      setPaymentDialog({
-                        open: true,
-                        amount: String(dueAmount > 0 ? dueAmount : invoiceTotal),
-                        method: (invoice.paymentMethod === 'Cash' || invoice.paymentMethod === 'Online'
-                          ? invoice.paymentMethod
-                          : 'Cash') as 'Cash' | 'Online',
-                        transactionId: invoice.transactionId || '',
-                      });
-                    }}
-                    disabled={updatePaymentMutation.isPending}
-                    sx={{ mb: 1 }}
-                  >
-                    Record Payment
-                  </Button>
-                ) : (
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    size="small"
-                    color="inherit"
-                    onClick={() => updatePaymentMutation.mutate({
-                      invoiceId: invoice.id,
-                      vendorId: invoice.vendorId,
-                      paymentStatus: 'Unpaid',
-                    })}
-                    disabled={updatePaymentMutation.isPending}
-                  >
-                    Mark Unpaid
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
-
-            {invoice.notes && (
-              <Card variant="outlined">
-                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                  <Typography variant="subtitle2" gutterBottom>Notes</Typography>
-                  <Typography variant="body2">{invoice.notes}</Typography>
-                </CardContent>
-              </Card>
-            )}
+            {invoice.notes ? (
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1, px: 0.5 }}>
+                Notes: {invoice.notes}
+              </Typography>
+            ) : null}
           </Paper>
-        </Grid>
-      </Grid>
 
       <Dialog
         open={itemDialog.open}
@@ -864,129 +838,6 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
             disabled={updateInvoiceMutation.isPending}
           >
             {updateInvoiceMutation.isPending ? <CircularProgress size={20} /> : 'Save Changes'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog
-        open={paymentDialog.open}
-        onClose={() => setPaymentDialog({ ...paymentDialog, open: false, transactionId: '' })}
-        maxWidth="xs"
-        fullWidth
-        PaperProps={{ sx: { borderRadius: 2 } }}
-      >
-        <DialogTitle sx={{ pb: 0 }}>Record Payment</DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 2 }}>
-            <TextField
-              fullWidth
-              label="Amount"
-              type="number"
-              value={paymentDialog.amount}
-              onChange={(e) => setPaymentDialog({ ...paymentDialog, amount: e.target.value })}
-              InputProps={{
-                startAdornment: <InputAdornment position="start">₹</InputAdornment>,
-                inputProps: { min: 0, max: dueAmount, step: 0.01 },
-              }}
-              helperText={`Due: ₹${dueAmount.toFixed(2)} · Invoice total: ₹${invoiceTotal.toFixed(2)}`}
-              sx={{ mb: 2 }}
-            />
-            <Typography variant="subtitle2" color="textSecondary" gutterBottom sx={{ mb: 1 }}>
-              Payment method
-            </Typography>
-            <ToggleButtonGroup
-              exclusive
-              fullWidth
-              value={paymentDialog.method}
-              onChange={(_, value) => {
-                if (value) setPaymentDialog({ ...paymentDialog, method: value });
-              }}
-              sx={{ mb: 1 }}
-            >
-              <ToggleButton value="Cash" sx={{ py: 1.25 }}>
-                <AttachMoney sx={{ mr: 0.5, fontSize: 18 }} /> Cash
-              </ToggleButton>
-              <ToggleButton value="Online" sx={{ py: 1.25 }}>
-                <Payment sx={{ mr: 0.5, fontSize: 18 }} /> Online
-              </ToggleButton>
-            </ToggleButtonGroup>
-            {paymentDialog.method === 'Online' && (
-              <TextField
-                fullWidth
-                label="Transaction ID"
-                placeholder="e.g. UPI ref, bank transfer ref"
-                value={paymentDialog.transactionId}
-                onChange={(e) => setPaymentDialog({ ...paymentDialog, transactionId: e.target.value })}
-                helperText="Optional - for UPI, bank transfer, or card payment reference"
-                sx={{ mb: 2 }}
-              />
-            )}
-            <Box display="flex" gap={1} mt={2}>
-              <Button
-                fullWidth
-                variant="outlined"
-                size="small"
-                onClick={() => setPaymentDialog({ ...paymentDialog, amount: String(dueAmount) })}
-              >
-                Pay full due
-              </Button>
-              <Button
-                fullWidth
-                variant="outlined"
-                size="small"
-                onClick={() =>
-                  setPaymentDialog({
-                    ...paymentDialog,
-                    amount: String(Math.min(dueAmount, invoiceTotal * 0.5)),
-                  })
-                }
-              >
-                50%
-              </Button>
-            </Box>
-          </Box>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button
-            onClick={() =>
-              setPaymentDialog({ open: false, amount: '', method: 'Cash', transactionId: '' })
-            }
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            color="primary"
-            disabled={
-              !paymentDialog.amount ||
-              parseFloat(paymentDialog.amount) <= 0 ||
-              parseFloat(paymentDialog.amount) > dueAmount + 0.01 ||
-              updatePaymentMutation.isPending
-            }
-            onClick={async () => {
-              if (!invoice) return;
-              const paymentNow = parseFloat(paymentDialog.amount) || 0;
-              const nextPaid = Math.min(invoiceTotal, paidAmount + paymentNow);
-              const isPaid = nextPaid >= invoiceTotal - 0.01;
-              try {
-                await updatePaymentMutation.mutateAsync({
-                  invoiceId: invoice.id,
-                  vendorId: invoice.vendorId,
-                  paymentStatus: isPaid ? 'Paid' : 'Partial',
-                  paymentMethod: paymentDialog.method,
-                  paidAmount: nextPaid,
-                  transactionId:
-                    paymentDialog.method === 'Online' ? paymentDialog.transactionId : undefined,
-                });
-                setPaymentDialog({ open: false, amount: '', method: 'Cash', transactionId: '' });
-                await alert('Payment recorded.', { severity: 'success' });
-              } catch (error: unknown) {
-                const message = error instanceof Error ? error.message : 'Unknown error';
-                await alert(`Failed to record payment: ${message}`, { severity: 'error' });
-              }
-            }}
-          >
-            {updatePaymentMutation.isPending ? <CircularProgress size={24} /> : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>

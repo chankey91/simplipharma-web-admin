@@ -90,6 +90,35 @@ export function istDayEndExclusiveMs(dateStr: string): number {
   return istDayStartMs(dateStr) + 24 * 60 * 60 * 1000;
 }
 
+/** Calendar widget: treat yyyy-MM-dd as a naive local Date so the picker shows that day. */
+export function naiveDateFromIstDateString(value: string): Date | null {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const d = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function istDateStringFromNaiveDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function isIstDateString(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+
+/** Inclusive last 7 IST calendar days as yyyy-MM-dd. */
+export function getDefaultNotesFilterRangeIST(now: Date = new Date()): {
+  fromDate: string;
+  toDate: string;
+} {
+  const today = getTodayDateStringIST(now);
+  const fromDate = getTodayDateStringIST(new Date(istDayStartMs(today) - 6 * 24 * 60 * 60 * 1000));
+  return { fromDate, toDate: today };
+}
+
 /** True when orderDate falls in [fromDate, toDate] inclusive (IST calendar days). */
 export function isDateInIstRange(
   orderDate: unknown,
@@ -121,6 +150,34 @@ export function formatIstDateTimeLocal(date: Date = new Date()): string {
   return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
 }
 
+/**
+ * Calendar widgets treat the stored IST wall-clock as a naive local Date
+ * so the picker shows 23:59 when the value is 23:59 IST, on any laptop TZ.
+ */
+export function naiveDateFromIstDateTimeLocal(value: string): Date | null {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!match) return null;
+  const d = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    0,
+    0
+  );
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function istDateTimeLocalFromNaiveDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const h = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  return `${y}-${m}-${d}T${h}:${min}`;
+}
+
 /** Parse datetime-local value as IST. Returns epoch ms, or null if invalid. */
 export function parseIstDateTimeLocal(value: string): number | null {
   const trimmed = value.trim();
@@ -148,17 +205,22 @@ export function getDefaultNoonToNoonRangeIST(now: Date = new Date()): {
   };
 }
 
-/** Inclusive last 7 noon-aligned IST days ending at the current 12:00–12:00 window. */
+/** End of the current IST calendar day (`yyyy-MM-ddT23:59`) for datetime-local defaults. */
+export function getEndOfTodayIstDateTime(now: Date = new Date()): string {
+  return `${getTodayDateStringIST(now)}T23:59`;
+}
+
+/** Inclusive last 7 IST calendar days, ending at the end of today. */
 export function getDefaultOrdersFilterRangeIST(now: Date = new Date()): {
   fromDateTime: string;
   toDateTime: string;
 } {
-  const current = getDefaultNoonToNoonRangeIST(now);
-  const fromMs = parseIstDateTimeLocal(current.fromDateTime);
-  if (fromMs == null) return current;
+  const today = getTodayDateStringIST(now);
+  const todayStartMs = new Date(`${today}T00:00:00+05:30`).getTime();
+  const fromDate = getTodayDateStringIST(new Date(todayStartMs - 6 * 24 * 60 * 60 * 1000));
   return {
-    fromDateTime: formatIstDateTimeLocal(new Date(fromMs - 6 * 24 * 60 * 60 * 1000)),
-    toDateTime: current.toDateTime,
+    fromDateTime: `${fromDate}T00:00`,
+    toDateTime: getEndOfTodayIstDateTime(now),
   };
 }
 

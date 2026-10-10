@@ -17,15 +17,14 @@ import {
   FormControl,
   InputLabel,
   Select,
-  Grid,
-  Card,
-  CardContent,
   Pagination,
-  Tabs,
-  Tab,
   LinearProgress,
+  Link,
+  Tooltip,
+  Collapse,
+  CircularProgress,
 } from '@mui/material';
-import { Search, Download, Receipt, ShoppingCart } from '@mui/icons-material';
+import { Search, Download, Email, Visibility, VisibilityOff } from '@mui/icons-material';
 import {
   usePurchaseInvoices,
   usePurchaseInvoicesSearch,
@@ -45,7 +44,8 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
 import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
 import { useAppDialog } from '../context/AppDialogProvider';
-import { useSearchParams } from 'react-router-dom';
+import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { Order, PurchaseInvoice } from '../types';
 
 type InvoiceTab = 'order' | 'purchase';
 type PaymentFilter = 'All' | 'Paid' | 'Unpaid' | 'Partial';
@@ -105,6 +105,132 @@ const purchaseSortField = (key: string): string => {
   }
 };
 
+function money(n: number | undefined): string {
+  return `₹${(Number(n) || 0).toFixed(2)}`;
+}
+
+const InvoiceAccordionPanel: React.FC<{
+  isOrder: boolean;
+  fullPath: string;
+  loading: boolean;
+  error?: string;
+  data?: Order | PurchaseInvoice;
+}> = ({ isOrder, fullPath, loading, error, data }) => {
+  if (loading) {
+    return (
+      <Box display="flex" alignItems="center" gap={1} py={2}>
+        <CircularProgress size={18} />
+        <Typography variant="body2" color="text.secondary">
+          Loading invoice…
+        </Typography>
+      </Box>
+    );
+  }
+  if (error) {
+    return (
+      <Typography variant="body2" color="error" sx={{ py: 2 }}>
+        {error}
+      </Typography>
+    );
+  }
+  if (!data) return null;
+
+  const order = isOrder ? (data as Order) : null;
+  const purchase = !isOrder ? (data as PurchaseInvoice) : null;
+  const lines = order
+    ? (order.medicines || []).filter((m) => (m as { lineType?: string }).lineType !== 'product_demand')
+    : purchase?.items || [];
+  return (
+    <Box sx={{ py: 1.5 }}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1} flexWrap="wrap" gap={1}>
+        <Typography variant="subtitle2">
+          {isOrder
+            ? `${order?.retailerName || order?.retailerEmail || 'Store'} · ${order?.status || ''}`
+            : `${purchase?.vendorName || 'Vendor'}${purchase?.vendorInvoiceNumber ? ` · Bill ${purchase.vendorInvoiceNumber}` : ''}`}
+        </Typography>
+        <Link component={RouterLink} to={fullPath} underline="hover" variant="body2">
+          Open full page
+        </Link>
+      </Box>
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Item</TableCell>
+            <TableCell>Batch</TableCell>
+            <TableCell align="right">Qty</TableCell>
+            <TableCell align="right">Free</TableCell>
+            <TableCell align="right">Rate</TableCell>
+            <TableCell align="right">GST</TableCell>
+            <TableCell align="right">Amount</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {lines.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={7}>
+                <Typography variant="body2" color="text.secondary">
+                  No line items
+                </Typography>
+              </TableCell>
+            </TableRow>
+          ) : order ? (
+            order.medicines
+              .filter((m) => (m as { lineType?: string }).lineType !== 'product_demand')
+              .map((m, i) => {
+                const qty = Number(m.quantity) || 0;
+                const free = Number(m.freeQuantity) || 0;
+                const rate = Number(m.price) || 0;
+                const disc = Number(m.discountPercentage) || 0;
+                const amount = qty * rate * (1 - disc / 100);
+                const batch =
+                  m.batchNumber ||
+                  (m.batchAllocations || []).map((a) => a.batchNumber).filter(Boolean).join(', ') ||
+                  '—';
+                return (
+                  <TableRow key={`${m.medicineId}-${i}`}>
+                    <TableCell>{m.name}</TableCell>
+                    <TableCell>{batch}</TableCell>
+                    <TableCell align="right">{qty}</TableCell>
+                    <TableCell align="right">{free || '—'}</TableCell>
+                    <TableCell align="right">{money(rate)}</TableCell>
+                    <TableCell align="right">{m.gstRate != null ? `${m.gstRate}%` : '—'}</TableCell>
+                    <TableCell align="right">{money(amount)}</TableCell>
+                  </TableRow>
+                );
+              })
+          ) : (
+            (purchase?.items || []).map((m, i) => (
+              <TableRow key={`${m.medicineId}-${i}`}>
+                <TableCell>{m.medicineName}</TableCell>
+                <TableCell>{m.receivedBatchNumber || m.batchNumber || '—'}</TableCell>
+                <TableCell align="right">{m.quantity}</TableCell>
+                <TableCell align="right">{m.freeQuantity || '—'}</TableCell>
+                <TableCell align="right">{money(m.purchasePrice || m.unitPrice)}</TableCell>
+                <TableCell align="right">{m.gstRate != null ? `${m.gstRate}%` : '—'}</TableCell>
+                <TableCell align="right">{money(m.totalAmount)}</TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+      <Box display="flex" justifyContent="flex-end" gap={2} mt={1} flexWrap="wrap">
+        <Typography variant="caption" color="text.secondary">
+          Subtotal {money(order?.subTotal ?? purchase?.subTotal)}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          Discount {money(order?.totalDiscount ?? purchase?.discount)}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          GST {money(order?.taxAmount ?? purchase?.taxAmount)}
+        </Typography>
+        <Typography variant="body2" fontWeight={600}>
+          Total {money(order?.totalAmount ?? purchase?.totalAmount)}
+        </Typography>
+      </Box>
+    </Box>
+  );
+};
+
 export const InvoicesPage: React.FC = () => {
   const { alert } = useAppDialog();
   const { data: stores } = useStores();
@@ -127,6 +253,10 @@ export const InvoicesPage: React.FC = () => {
     setPage(1);
   };
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailsById, setDetailsById] = useState<Record<string, Order | PurchaseInvoice>>({});
+  const [detailsLoadingId, setDetailsLoadingId] = useState<string | null>(null);
+  const [detailsErrorById, setDetailsErrorById] = useState<Record<string, string>>({});
 
   const { sortKey, sortDirection, requestSort } = useTableSort('date', 'desc');
 
@@ -312,23 +442,72 @@ export const InvoicesPage: React.FC = () => {
     setPage(1);
   };
 
-  const handleTabChange = (_: React.SyntheticEvent, value: InvoiceTab) => {
+  const handleTabChange = (value: InvoiceTab) => {
+    if (value === tab) return;
+    setExpandedId(null);
     patchInvoiceSearch({ tab: value });
+  };
+
+  useEffect(() => {
+    setExpandedId(null);
+  }, [page, debouncedTerm, statusFilter, tab]);
+
+  const invoicePath = (row: InvoiceRow) =>
+    isOrder ? `/orders/${row.id}` : `/purchases/${row.id}`;
+
+  const toggleInvoiceDetails = async (row: InvoiceRow) => {
+    if (expandedId === row.id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(row.id);
+    const cacheKey = `${tab}:${row.id}`;
+    if (detailsById[cacheKey] || detailsLoadingId === cacheKey) return;
+    setDetailsLoadingId(cacheKey);
+    try {
+      const data = isOrder ? await getOrderById(row.id) : await getPurchaseInvoiceById(row.id);
+      if (!data) throw new Error('Invoice not found');
+      setDetailsById((prev) => ({ ...prev, [cacheKey]: data }));
+      setDetailsErrorById((prev) => {
+        const next = { ...prev };
+        delete next[cacheKey];
+        return next;
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to load invoice';
+      setDetailsErrorById((prev) => ({ ...prev, [cacheKey]: message }));
+    } finally {
+      setDetailsLoadingId((current) => (current === cacheKey ? null : current));
+    }
   };
 
   const handleDownload = async (row: InvoiceRow) => {
     try {
       if (isOrder) {
         const order = await getOrderById(row.id);
-        if (order) await generateOrderInvoice(order, { emailPdfToRetailer: true });
+        if (order) await generateOrderInvoice(order);
       } else {
         const inv = await getPurchaseInvoiceById(row.id);
         if (inv) await generatePurchaseInvoice(inv);
       }
-    } catch (error: any) {
-      await alert(`Failed to download invoice: ${error?.message || 'Unknown error'}`, {
-        severity: 'error',
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await alert(`Failed to download invoice: ${message}`, { severity: 'error' });
+    }
+  };
+
+  const handleEmailRetailer = async (row: InvoiceRow) => {
+    try {
+      const order = await getOrderById(row.id);
+      if (!order) throw new Error('Order not found');
+      await generateOrderInvoice(order, {
+        emailPdfToRetailer: true,
+        downloadPdf: false,
+        awaitEmail: true,
       });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await alert(`Failed to email invoice: ${message}`, { severity: 'error' });
     }
   };
 
@@ -345,120 +524,75 @@ export const InvoicesPage: React.FC = () => {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">Invoices</Typography>
+      <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
+        <Typography variant="h6" sx={{ fontWeight: 600, mr: 0.5 }}>
+          Invoices
+        </Typography>
+        <Chip
+          size="small"
+          label={`Order ${orderInvoicedCount}`}
+          color="primary"
+          variant={isOrder ? 'filled' : 'outlined'}
+          onClick={() => handleTabChange('order')}
+          sx={{ fontWeight: isOrder ? 600 : 400 }}
+        />
+        <Chip
+          size="small"
+          label={`Purchase ${purchaseCount}`}
+          color="primary"
+          variant={!isOrder ? 'filled' : 'outlined'}
+          onClick={() => handleTabChange('purchase')}
+          sx={{ fontWeight: !isOrder ? 600 : 400 }}
+        />
+        <Typography variant="caption" color="text.secondary">
+          {totalInvoices} total
+        </Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+          ₹{Math.round(totalAmount).toLocaleString('en-IN')}
+        </Typography>
       </Box>
 
-      {/* Statistics Cards */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>
-                Total Invoices
-              </Typography>
-              <Typography variant="h4">{totalInvoices}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>
-                Purchase Invoices
-              </Typography>
-              <Typography variant="h4">{purchaseCount}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>
-                Order Invoices
-              </Typography>
-              <Typography variant="h4">{orderInvoicedCount}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>
-                Total Amount
-              </Typography>
-              <Typography variant="h4">₹{Math.round(totalAmount).toLocaleString()}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      <Tabs value={tab} onChange={handleTabChange} sx={{ mb: 2 }}>
-        <Tab
-          value="order"
-          label={
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <ShoppingCart fontSize="small" /> Order invoices
-              <Chip label={orderInvoicedCount} size="small" />
-            </Box>
-          }
-        />
-        <Tab
-          value="purchase"
-          label={
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Receipt fontSize="small" /> Purchase invoices
-              <Chip label={purchaseCount} size="small" />
-            </Box>
-          }
-        />
-      </Tabs>
-
-      {/* Filters */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={8}>
-            <TextField
-              fullWidth
-              placeholder="Search by invoice number, store name, or vendor/email..."
-              value={searchTerm}
+      <Paper sx={{ px: 1.5, py: 1, mb: 1.5 }}>
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <TextField
+            size="small"
+            placeholder="Search invoice, store, vendor, or email…"
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setPage(1);
+            }}
+            sx={{ minWidth: 220, flex: '1 1 220px' }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <FormControl size="small" sx={{ minWidth: 160 }}>
+            <InputLabel>Payment</InputLabel>
+            <Select
+              value={statusFilter}
+              label="Payment"
               onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setPage(1);
+                patchInvoiceSearch({ payment: e.target.value as PaymentFilter });
               }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search />
-                  </InputAdornment>
-                ),
-              }}
-            />
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth>
-              <InputLabel>Payment Status</InputLabel>
-              <Select
-                value={statusFilter}
-                label="Payment Status"
-                onChange={(e) => {
-                  patchInvoiceSearch({ payment: e.target.value as PaymentFilter });
-                }}
-              >
-                <MenuItem value="All">All Status</MenuItem>
-                <MenuItem value="Paid">Paid</MenuItem>
-                <MenuItem value="Unpaid">Unpaid</MenuItem>
-                <MenuItem value="Partial">Partial</MenuItem>
-              </Select>
-            </FormControl>
-          </Grid>
-        </Grid>
+            >
+              <MenuItem value="All">All status</MenuItem>
+              <MenuItem value="Paid">Paid</MenuItem>
+              <MenuItem value="Unpaid">Unpaid</MenuItem>
+              <MenuItem value="Partial">Partial</MenuItem>
+            </Select>
+          </FormControl>
+        </Box>
       </Paper>
 
-      {/* Table */}
       <TableContainer component={Paper}>
         {isBusy && <LinearProgress />}
-        <Table>
+        <Table size="small">
           <TableHead>
             <TableRow>
               <SortableTableHeadCell columnId="invoiceNumber" label="Invoice Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -482,12 +616,21 @@ export const InvoicesPage: React.FC = () => {
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((invoice) => (
-                <TableRow key={`${tab}-${invoice.id}`} hover>
+              rows.map((invoice) => {
+                const open = expandedId === invoice.id;
+                return (
+                <React.Fragment key={`${tab}-${invoice.id}`}>
+                <TableRow hover selected={open}>
                   <TableCell>
-                    <Typography variant="body2" fontWeight="medium">
+                    <Link
+                      component="button"
+                      underline="hover"
+                      variant="body2"
+                      fontWeight="medium"
+                      onClick={() => void toggleInvoiceDetails(invoice)}
+                    >
                       {invoice.invoiceNumber}
-                    </Typography>
+                    </Link>
                   </TableCell>
                   <TableCell>{format(invoice.date, 'MMM dd, yyyy')}</TableCell>
                   {isOrder ? <TableCell>{invoice.storeName}</TableCell> : null}
@@ -508,21 +651,56 @@ export const InvoicesPage: React.FC = () => {
                     />
                   </TableCell>
                   <TableCell align="center">
-                    <IconButton
-                      size="small"
-                      color="primary"
-                      onClick={() => handleDownload(invoice)}
-                      title={
-                        isOrder
-                          ? 'Download PDF; email to retailer (PDF + CSV) sends in the background.'
-                          : 'Download invoice'
-                      }
-                    >
-                      <Download />
-                    </IconButton>
+                    <Tooltip title={open ? 'Hide invoice data' : 'View invoice data'}>
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        onClick={() => void toggleInvoiceDetails(invoice)}
+                        aria-label={open ? 'Hide invoice data' : 'View invoice data'}
+                      >
+                        {open ? <VisibilityOff /> : <Visibility />}
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Download invoice PDF">
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        onClick={() => void handleDownload(invoice)}
+                        aria-label="Download invoice PDF"
+                      >
+                        <Download />
+                      </IconButton>
+                    </Tooltip>
+                    {isOrder && (
+                      <Tooltip title="Email invoice to retailer (PDF + CSV)">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => void handleEmailRetailer(invoice)}
+                          aria-label="Email invoice to retailer"
+                        >
+                          <Email />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </TableCell>
                 </TableRow>
-              ))
+                <TableRow>
+                  <TableCell colSpan={isOrder ? 7 : 6} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
+                    <Collapse in={open} timeout="auto" unmountOnExit>
+                      <InvoiceAccordionPanel
+                        isOrder={isOrder}
+                        fullPath={invoicePath(invoice)}
+                        loading={detailsLoadingId === `${tab}:${invoice.id}`}
+                        error={detailsErrorById[`${tab}:${invoice.id}`]}
+                        data={detailsById[`${tab}:${invoice.id}`]}
+                      />
+                    </Collapse>
+                  </TableCell>
+                </TableRow>
+                </React.Fragment>
+                );
+              })
             )}
           </TableBody>
         </Table>

@@ -1,4 +1,10 @@
-import { makeTypesenseSearch, makeReindexCallable, rawStr, rawNum } from './typesenseSearch';
+import {
+  makeTypesenseSearch,
+  makeReindexCallable,
+  rawStr,
+  rawNum,
+  TypesenseSearchParams,
+} from './typesenseSearch';
 
 /** Lightweight row rendered by the Credit Notes table (from the Typesense index). */
 export interface CreditNoteRow {
@@ -63,3 +69,29 @@ export const searchDebitNotesTypesense = makeTypesenseSearch<DebitNoteRow>(
 
 export const reindexCreditNotesTypesense = makeReindexCallable('adminReindexCreditNotesTypesense');
 export const reindexDebitNotesTypesense = makeReindexCallable('adminReindexDebitNotesTypesense');
+
+async function searchAllNoteIds(
+  search: (params: TypesenseSearchParams) => Promise<{ rows: { id: string }[]; found: number }>,
+  params: Omit<TypesenseSearchParams, 'page' | 'perPage'>
+): Promise<string[]> {
+  const ids: string[] = [];
+  let page = 1;
+  const perPage = 100;
+  while (page <= 50) {
+    const res = await search({ ...params, page, perPage });
+    ids.push(...res.rows.map((r) => r.id).filter(Boolean));
+    if (ids.length >= res.found || res.rows.length === 0) break;
+    page += 1;
+  }
+  return ids;
+}
+
+/** All credit-note ids matching the current Typesense query (every page). */
+export function searchAllCreditNoteIds(params: Omit<TypesenseSearchParams, 'page' | 'perPage'>) {
+  return searchAllNoteIds(searchCreditNotesTypesense, params);
+}
+
+/** All debit-note ids matching the current Typesense query (every page). */
+export function searchAllDebitNoteIds(params: Omit<TypesenseSearchParams, 'page' | 'perPage'>) {
+  return searchAllNoteIds(searchDebitNotesTypesense, params);
+}

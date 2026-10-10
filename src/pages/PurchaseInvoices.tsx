@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -18,9 +18,7 @@ import {
   FormControl,
   InputLabel,
   Select,
-  Grid,
-  Card,
-  CardContent,
+  Tooltip,
   Pagination,
   LinearProgress,
   Alert,
@@ -37,9 +35,21 @@ import {
 import {
   usePurchaseInvoices,
   usePurchaseInvoicesSearch,
+  usePurchaseInvoicesInDateRange,
+  useVendorPurchaseInvoices,
   usePurchaseInvoiceAmountTotal,
   useDeletePurchaseInvoice,
 } from '../hooks/usePurchaseInvoices';
+import { useVendors } from '../hooks/useVendors';
+import { IstDateField } from '../components/IstDateField';
+import {
+  getDefaultNotesFilterRangeIST,
+  getTodayDateStringIST,
+  isDateInIstRange,
+  isIstDateString,
+  istDayEndExclusiveMs,
+  istDayStartMs,
+} from '../utils/dateTime';
 import { reindexPurchaseInvoicesTypesense } from '../services/purchaseInvoiceSearch';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
@@ -93,6 +103,11 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [vendorId, setVendorId] = useState('');
+  const [fromDateFilter, setFromDateFilter] = useState('');
+  const [toDateFilter, setToDateFilter] = useState('');
+  const [draftFromDateFilter, setDraftFromDateFilter] = useState('');
+  const [draftToDateFilter, setDraftToDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState<number>(DEFAULT_ROWS_PER_PAGE);
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
@@ -105,6 +120,50 @@ export const PurchaseInvoicesPage: React.FC = () => {
     const t = setTimeout(() => setDebouncedTerm(searchTerm.trim()), 350);
     return () => clearTimeout(t);
   }, [searchTerm]);
+
+  const fromFilterMs =
+    fromDateFilter && isIstDateString(fromDateFilter) ? istDayStartMs(fromDateFilter) : null;
+  const toFilterMs =
+    toDateFilter && isIstDateString(toDateFilter) ? istDayEndExclusiveMs(toDateFilter) : null;
+  const dateRangeInvalid = Boolean(fromDateFilter && toDateFilter && fromDateFilter > toDateFilter);
+  const draftDateRangeInvalid = Boolean(
+    draftFromDateFilter && draftToDateFilter && draftFromDateFilter > draftToDateFilter
+  );
+  const dateDraftDirty =
+    draftFromDateFilter !== fromDateFilter || draftToDateFilter !== toDateFilter;
+  const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
+  const hasVendorFilter = Boolean(vendorId);
+  const useLocalList = typesenseDisabled || hasDateFilter || hasVendorFilter;
+
+  const applyDateRange = useCallback((from: string, to: string) => {
+    setDraftFromDateFilter(from);
+    setDraftToDateFilter(to);
+    setFromDateFilter(from);
+    setToDateFilter(to);
+    setPage(1);
+  }, []);
+
+  const commitDraftDateRange = useCallback(() => {
+    if (draftFromDateFilter === fromDateFilter && draftToDateFilter === toDateFilter) return;
+    if (draftDateRangeInvalid) return;
+    applyDateRange(draftFromDateFilter, draftToDateFilter);
+  }, [
+    applyDateRange,
+    draftDateRangeInvalid,
+    draftFromDateFilter,
+    draftToDateFilter,
+    fromDateFilter,
+    toDateFilter,
+  ]);
+
+  const { data: vendors } = useVendors();
+  const vendorOptions = useMemo(
+    () =>
+      [...(vendors ?? [])]
+        .filter((v) => v.isActive !== false)
+        .sort((a, b) => a.vendorName.localeCompare(b.vendorName)),
+    [vendors]
+  );
 
   const {
     data: searchData,
@@ -120,7 +179,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
       page,
       perPage: rowsPerPage,
     },
-    { enabled: !typesenseDisabled }
+    { enabled: !typesenseDisabled && !useLocalList }
   );
 
   useEffect(() => {
@@ -130,17 +189,40 @@ export const PurchaseInvoicesPage: React.FC = () => {
   // Total Purchases sum via Firestore aggregation (independent of Typesense).
   const { data: amountTotal } = usePurchaseInvoiceAmountTotal();
 
-  // Fallback: full-load client-side (only when Typesense unavailable).
-  const { data: invoices, isLoading: allLoading } = usePurchaseInvoices({ enabled: typesenseDisabled });
+  const { data: invoices, isLoading: allLoading } = usePurchaseInvoices({
+    enabled: typesenseDisabled && !hasDateFilter && !hasVendorFilter,
+  });
+  const invoiceRange = usePurchaseInvoicesInDateRange(fromFilterMs, toFilterMs, {
+    enabled: hasDateFilter,
+  });
+  const vendorInvoices = useVendorPurchaseInvoices(vendorId, {
+    enabled: hasVendorFilter && !hasDateFilter,
+  });
 
   const fallbackSorted = useMemo(() => {
-    if (!typesenseDisabled) return [];
+    if (!useLocalList) return [];
+    const source = hasDateFilter
+      ? invoiceRange.data
+      : hasVendorFilter
+        ? vendorInvoices.data
+        : invoices;
     const term = debouncedTerm.toLowerCase();
-    const filtered = (invoices ?? []).filter((invoice) => {
+    const filtered = (source ?? []).filter((invoice) => {
+      if (hasVendorFilter && invoice.vendorId !== vendorId) return false;
+      if (
+        !isDateInIstRange(
+          invoice.invoiceDate,
+          fromDateFilter || undefined,
+          toDateFilter || undefined
+        )
+      ) {
+        return false;
+      }
       const matchesSearch =
         !term ||
         invoice.invoiceNumber.toLowerCase().includes(term) ||
         invoice.vendorName.toLowerCase().includes(term) ||
+        (invoice.vendorInvoiceNumber || '').toLowerCase().includes(term) ||
         invoice.items.some((item) => item.medicineName.toLowerCase().includes(term));
       const matchesStatus = statusFilter === 'All' || invoice.paymentStatus === statusFilter;
       return matchesSearch && matchesStatus;
@@ -172,10 +254,24 @@ export const PurchaseInvoicesPage: React.FC = () => {
       return applyDirection(compareAsc(a.invoiceNumber, b.invoiceNumber), sortDirection);
     });
     return sorted;
-  }, [typesenseDisabled, invoices, debouncedTerm, statusFilter, sortKey, sortDirection]);
+  }, [
+    useLocalList,
+    hasDateFilter,
+    hasVendorFilter,
+    invoiceRange.data,
+    vendorInvoices.data,
+    invoices,
+    vendorId,
+    fromDateFilter,
+    toDateFilter,
+    debouncedTerm,
+    statusFilter,
+    sortKey,
+    sortDirection,
+  ]);
 
   const rows: InvoiceRow[] = useMemo(() => {
-    if (typesenseDisabled) {
+    if (useLocalList) {
       return fallbackSorted
         .slice((page - 1) * rowsPerPage, page * rowsPerPage)
         .map((inv) => ({
@@ -197,17 +293,24 @@ export const PurchaseInvoicesPage: React.FC = () => {
       totalAmount: r.totalAmount,
       paymentStatus: r.paymentStatus,
     }));
-  }, [typesenseDisabled, fallbackSorted, page, rowsPerPage, searchData]);
+  }, [useLocalList, fallbackSorted, page, rowsPerPage, searchData]);
 
-  const totalCount = typesenseDisabled ? fallbackSorted.length : searchData?.found ?? 0;
+  const totalCount = useLocalList ? fallbackSorted.length : searchData?.found ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage));
 
-  const totalInvoices = typesenseDisabled ? (invoices?.length ?? 0) : searchData?.totalAll ?? 0;
-  const paidInvoices = typesenseDisabled
-    ? (invoices ?? []).filter((i) => i.paymentStatus === 'Paid').length
+  const scopedForCounts = hasDateFilter
+    ? invoiceRange.data
+    : hasVendorFilter
+      ? vendorInvoices.data
+      : invoices;
+  const totalInvoices = useLocalList
+    ? (scopedForCounts?.length ?? 0)
+    : searchData?.totalAll ?? 0;
+  const paidInvoices = useLocalList
+    ? (scopedForCounts ?? []).filter((i) => i.paymentStatus === 'Paid').length
     : searchData?.facetCounts?.['Paid'] ?? 0;
-  const unpaidInvoices = typesenseDisabled
-    ? (invoices ?? []).filter((i) => i.paymentStatus === 'Unpaid').length
+  const unpaidInvoices = useLocalList
+    ? (scopedForCounts ?? []).filter((i) => i.paymentStatus === 'Unpaid').length
     : searchData?.facetCounts?.['Unpaid'] ?? 0;
   const totalPurchases = typesenseDisabled
     ? (invoices ?? []).reduce((sum, inv) => sum + inv.totalAmount, 0)
@@ -260,126 +363,214 @@ export const PurchaseInvoicesPage: React.FC = () => {
     }
   };
 
-  const initialLoading = typesenseDisabled ? allLoading : searchLoading || searchErrored;
+  const localLoading = hasDateFilter
+    ? invoiceRange.isLoading
+    : hasVendorFilter
+      ? vendorInvoices.isLoading
+      : allLoading;
+  const initialLoading = useLocalList ? localLoading : searchLoading || searchErrored;
   if (initialLoading) return <Loading message="Loading purchase invoices..." />;
 
-  const isBusy = !typesenseDisabled && searchFetching;
+  const isBusy =
+    (!useLocalList && searchFetching) ||
+    (hasDateFilter && invoiceRange.isFetching) ||
+    (hasVendorFilter && !hasDateFilter && vendorInvoices.isFetching);
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">Purchase Invoice Management</Typography>
-        <Box display="flex" gap={1}>
-          {canReindexPurchases && (
-          <Button
-            variant="outlined"
-            color="secondary"
-            startIcon={<CloudSync />}
-            onClick={() => void handleReindex()}
-            disabled={reindexing}
-          >
-            {reindexing ? 'Indexing…' : 'Rebuild search index'}
-          </Button>
-          )}
-          {canEditPurchases && (
-            <>
-          <Button variant="outlined" startIcon={<CameraAlt />} onClick={() => navigate('/purchases/ingest')}>
-            Ingest PDF / photo
-          </Button>
-          <Button variant="contained" startIcon={<Add />} onClick={() => navigate('/purchases/new')}>
-            Add Invoice
-          </Button>
-            </>
-          )}
-        </Box>
+      <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
+        <Typography variant="h6" sx={{ fontWeight: 600, mr: 0.5 }}>
+          Purchase invoices
+        </Typography>
+        <Chip
+          size="small"
+          label={`Paid ${paidInvoices}`}
+          color="success"
+          variant={statusFilter === 'Paid' ? 'filled' : 'outlined'}
+          onClick={() => {
+            setStatusFilter(statusFilter === 'Paid' ? 'All' : 'Paid');
+            setPage(1);
+          }}
+          sx={{ fontWeight: statusFilter === 'Paid' ? 600 : 400 }}
+        />
+        <Chip
+          size="small"
+          label={`Unpaid ${unpaidInvoices}`}
+          color="warning"
+          variant={statusFilter === 'Unpaid' ? 'filled' : 'outlined'}
+          onClick={() => {
+            setStatusFilter(statusFilter === 'Unpaid' ? 'All' : 'Unpaid');
+            setPage(1);
+          }}
+          sx={{ fontWeight: statusFilter === 'Unpaid' ? 600 : 400 }}
+        />
+        <Typography variant="caption" color="text.secondary">
+          {totalInvoices} total
+        </Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+          ₹{Math.round(totalPurchases).toLocaleString('en-IN')}
+        </Typography>
+        {canReindexPurchases && (
+          <Tooltip title={reindexing ? 'Indexing…' : 'Rebuild search index'}>
+            <span>
+              <IconButton
+                size="small"
+                color="secondary"
+                onClick={() => void handleReindex()}
+                disabled={reindexing}
+                aria-label="Rebuild search index"
+              >
+                <CloudSync fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {canEditPurchases && (
+          <>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<CameraAlt fontSize="small" />}
+              onClick={() => navigate('/purchases/ingest')}
+            >
+              Ingest
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<Add fontSize="small" />}
+              onClick={() => navigate('/purchases/new')}
+            >
+              Add invoice
+            </Button>
+          </>
+        )}
       </Box>
 
       {reindexMessage && (
         <Alert
           severity={reindexMessage.startsWith('Search index updated') ? 'success' : 'error'}
           onClose={() => setReindexMessage(null)}
-          sx={{ mb: 2 }}
+          sx={{ mb: 1 }}
         >
           {reindexMessage}
         </Alert>
       )}
 
-      {/* Statistics Cards */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>Total Invoices</Typography>
-              <Typography variant="h4">{totalInvoices}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>Total Purchases</Typography>
-              <Typography variant="h4">₹{Math.round(totalPurchases).toLocaleString()}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>Paid</Typography>
-              <Typography variant="h4" color="success.main">{paidInvoices}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="textSecondary" variant="subtitle2" gutterBottom>Unpaid</Typography>
-              <Typography variant="h4" color="warning.main">{unpaidInvoices}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Filters */}
-      <Box display="flex" gap={2} mb={2}>
-        <TextField
-          placeholder="Search invoices..."
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value);
-            setPage(1);
-          }}
-          sx={{ flexGrow: 1 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search />
-              </InputAdornment>
-            ),
-          }}
-        />
-        <FormControl sx={{ minWidth: 200 }}>
-          <InputLabel>Payment Status</InputLabel>
-          <Select
-            value={statusFilter}
-            label="Payment Status"
+      <Paper sx={{ px: 1.5, py: 1, mb: 1.5 }}>
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <TextField
+            size="small"
+            placeholder="Search invoice, vendor…"
+            value={searchTerm}
             onChange={(e) => {
-              setStatusFilter(e.target.value);
+              setSearchTerm(e.target.value);
               setPage(1);
             }}
+            sx={{ minWidth: 220, flex: '1 1 220px' }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel>Vendor</InputLabel>
+            <Select
+              value={vendorId}
+              label="Vendor"
+              onChange={(e) => {
+                setVendorId(e.target.value);
+                setPage(1);
+              }}
+              MenuProps={{ PaperProps: { style: { maxHeight: 360 } } }}
+            >
+              <MenuItem value="">All vendors</MenuItem>
+              {vendorOptions.map((v) => (
+                <MenuItem key={v.id} value={v.id}>
+                  {v.vendorName}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <IstDateField
+            label="From"
+            value={draftFromDateFilter}
+            onChange={setDraftFromDateFilter}
+            sx={{ width: { xs: '100%', sm: 160 } }}
+          />
+          <IstDateField
+            label="To"
+            value={draftToDateFilter}
+            onChange={setDraftToDateFilter}
+            sx={{ width: { xs: '100%', sm: 160 } }}
+          />
+          <Button
+            size="small"
+            variant="contained"
+            disabled={!dateDraftDirty || draftDateRangeInvalid}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={commitDraftDateRange}
           >
-            <MenuItem value="All">All Statuses</MenuItem>
-            <MenuItem value="Paid">Paid</MenuItem>
-            <MenuItem value="Unpaid">Unpaid</MenuItem>
-            <MenuItem value="Partial">Partial</MenuItem>
-          </Select>
-        </FormControl>
-      </Box>
+            OK
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const range = getDefaultNotesFilterRangeIST();
+              applyDateRange(range.fromDate, range.toDate);
+            }}
+          >
+            7 days
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const today = getTodayDateStringIST();
+              applyDateRange(today, today);
+            }}
+          >
+            Today
+          </Button>
+          {(draftFromDateFilter || draftToDateFilter || fromDateFilter || toDateFilter) && (
+            <Button
+              size="small"
+              variant="text"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => applyDateRange('', '')}
+            >
+              All dates
+            </Button>
+          )}
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>Payment</InputLabel>
+            <Select
+              value={statusFilter}
+              label="Payment"
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setPage(1);
+              }}
+            >
+              <MenuItem value="All">All status</MenuItem>
+              <MenuItem value="Paid">Paid</MenuItem>
+              <MenuItem value="Unpaid">Unpaid</MenuItem>
+              <MenuItem value="Partial">Partial</MenuItem>
+            </Select>
+          </FormControl>
+        </Box>
+      </Paper>
 
-      {/* Invoices Table */}
       <TableContainer component={Paper}>
         {isBusy && <LinearProgress />}
-        <Table>
+        <Table size="small">
           <TableHead>
             <TableRow>
               <SortableTableHeadCell columnId="invoiceNumber" label="Invoice Number" sortKey={sortKey} sortDirection={sortDirection} onRequestSort={requestSortResetPage} />
@@ -395,7 +586,11 @@ export const PurchaseInvoicesPage: React.FC = () => {
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} align="center">
-                  <Typography color="textSecondary" sx={{ py: 3 }}>No invoices found</Typography>
+                  <Typography color="textSecondary" sx={{ py: 3 }}>
+                    {debouncedTerm || hasDateFilter || hasVendorFilter || statusFilter !== 'All'
+                      ? 'No invoices match the current search'
+                      : 'No invoices found'}
+                  </Typography>
                 </TableCell>
               </TableRow>
             ) : (

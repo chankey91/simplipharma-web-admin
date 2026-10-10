@@ -18,9 +18,6 @@ import {
   FormControl,
   InputLabel,
   Select,
-  Grid,
-  Card,
-  CardContent,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -28,7 +25,6 @@ import {
   Pagination,
   LinearProgress,
   Alert,
-  Divider,
   Checkbox,
   Toolbar,
   Link,
@@ -85,6 +81,8 @@ import {
   parseIstDateTimeLocal,
 } from '../utils/dateTime';
 import { loadOrdersListView, saveOrdersListView } from '../utils/ordersListView';
+import { useSessionPrintedIds } from '../utils/sessionPrintedInvoices';
+import { IstDateTimeField } from '../components/IstDateTimeField';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_ROWS_PER_PAGE = 20;
@@ -92,11 +90,18 @@ const DEFAULT_ROWS_PER_PAGE = 20;
 function getInitialOrdersListView() {
   const saved = loadOrdersListView();
   const defaultRange = getDefaultOrdersFilterRangeIST();
+  let fromDateFilter = saved.fromDateFilter ?? defaultRange.fromDateTime;
+  const toDateFilter = defaultRange.toDateTime;
+  const fromMs = fromDateFilter ? parseIstDateTimeLocal(fromDateFilter) : null;
+  const toMs = parseIstDateTimeLocal(toDateFilter);
+  if (fromMs != null && toMs != null && fromMs >= toMs) {
+    fromDateFilter = defaultRange.fromDateTime;
+  }
   return {
     searchTerm: saved.searchTerm ?? '',
     statusFilter: saved.statusFilter ?? ('All' as const),
-    fromDateFilter: saved.fromDateFilter ?? defaultRange.fromDateTime,
-    toDateFilter: saved.toDateFilter ?? defaultRange.toDateTime,
+    fromDateFilter,
+    toDateFilter,
     page: saved.page ?? 1,
     rowsPerPage: saved.rowsPerPage ?? DEFAULT_ROWS_PER_PAGE,
     sortKey: saved.sortKey ?? 'orderDate',
@@ -158,6 +163,7 @@ export const OrdersPage: React.FC = () => {
   const canEditOrders = canWrite('orders');
   const canReindexOrders = panelRole === 'admin' || panelRole === 'operations';
   const { data: stores } = useStores();
+  const printedInvoiceIds = useSessionPrintedIds();
 
   const [viewInit] = useState(getInitialOrdersListView);
   const [searchTerm, setSearchTerm] = useState(viewInit.searchTerm);
@@ -165,6 +171,8 @@ export const OrdersPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>(viewInit.statusFilter);
   const [fromDateFilter, setFromDateFilter] = useState(viewInit.fromDateFilter);
   const [toDateFilter, setToDateFilter] = useState(viewInit.toDateFilter);
+  const [draftFromDateFilter, setDraftFromDateFilter] = useState(viewInit.fromDateFilter);
+  const [draftToDateFilter, setDraftToDateFilter] = useState(viewInit.toDateFilter);
   const [page, setPage] = useState(viewInit.page);
   const [rowsPerPage, setRowsPerPage] = useState<number>(viewInit.rowsPerPage);
   const [isExporting, setIsExporting] = useState(false);
@@ -293,6 +301,36 @@ export const OrdersPage: React.FC = () => {
       toDateFilter &&
       (fromFilterMs == null || toFilterMs == null || fromFilterMs >= toFilterMs)
   );
+  const draftFromMs = draftFromDateFilter ? parseIstDateTimeLocal(draftFromDateFilter) : null;
+  const draftToMs = draftToDateFilter ? parseIstDateTimeLocal(draftToDateFilter) : null;
+  const draftDateRangeInvalid = Boolean(
+    draftFromDateFilter &&
+      draftToDateFilter &&
+      (draftFromMs == null || draftToMs == null || draftFromMs >= draftToMs)
+  );
+  const dateDraftDirty =
+    draftFromDateFilter !== fromDateFilter || draftToDateFilter !== toDateFilter;
+
+  const applyDateRange = useCallback((from: string, to: string) => {
+    setDraftFromDateFilter(from);
+    setDraftToDateFilter(to);
+    setFromDateFilter(from);
+    setToDateFilter(to);
+    setPage(1);
+  }, []);
+
+  const commitDraftDateRange = useCallback(() => {
+    if (draftFromDateFilter === fromDateFilter && draftToDateFilter === toDateFilter) return;
+    if (draftDateRangeInvalid) return;
+    applyDateRange(draftFromDateFilter, draftToDateFilter);
+  }, [
+    applyDateRange,
+    draftDateRangeInvalid,
+    draftFromDateFilter,
+    draftToDateFilter,
+    fromDateFilter,
+    toDateFilter,
+  ]);
   const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
   /** Prefer Firestore for any date filter — Typesense can lag behind new orders. */
   const useLocalList = typesenseDisabled || hasDateFilter;
@@ -1019,191 +1057,157 @@ export const OrdersPage: React.FC = () => {
       : allFetching && !allLoading
     : searchFetching;
 
+  const statusSummary: Array<{
+    label: string;
+    status: OrderStatus | 'All';
+    count: number;
+    color: 'default' | 'warning' | 'primary' | 'info' | 'success' | 'error';
+  }> = [
+    {
+      label: 'All',
+      status: 'All',
+      count: Object.values(ordersByStatus).reduce((sum, n) => sum + n, 0),
+      color: 'default',
+    },
+    { label: 'Pending', status: 'Pending', count: ordersByStatus.Pending, color: 'warning' },
+    { label: 'Fulfillment', status: 'Order Fulfillment', count: ordersByStatus.Fulfillment, color: 'primary' },
+    { label: 'In Transit', status: 'In Transit', count: ordersByStatus.Transit, color: 'info' },
+    { label: 'Delivered', status: 'Delivered', count: ordersByStatus.Delivered, color: 'success' },
+    { label: 'Cancelled', status: 'Cancelled', count: ordersByStatus.Cancelled, color: 'error' },
+  ];
+
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">Orders Management</Typography>
-        <Box display="flex" gap={1} alignItems="center">
-          <Button
-            variant="outlined"
-            startIcon={<Refresh />}
-            onClick={handleRefresh}
-            disabled={isBusy}
-          >
-            Refresh
-          </Button>
-          {canReindexOrders && (
-            <Button
-              variant="outlined"
-              color="secondary"
-              startIcon={<CloudSync />}
-              onClick={() => void handleReindex()}
-              disabled={reindexing}
-            >
-              {reindexing ? 'Indexing…' : 'Rebuild search index'}
-            </Button>
-          )}
-        </Box>
+      <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
+        <Typography variant="h6" sx={{ fontWeight: 600, mr: 0.5 }}>
+          Orders
+        </Typography>
+        {statusSummary.map((stat) => (
+          <Chip
+            key={stat.status}
+            size="small"
+            label={`${stat.label} ${stat.count}`}
+            color={stat.color}
+            variant={statusFilter === stat.status ? 'filled' : 'outlined'}
+            onClick={() => {
+              setStatusFilter(stat.status);
+              setPage(1);
+            }}
+            sx={{ fontWeight: statusFilter === stat.status ? 600 : 400 }}
+          />
+        ))}
+        <Box sx={{ flexGrow: 1 }} />
+        <Tooltip title="Refresh list">
+          <span>
+            <IconButton size="small" onClick={handleRefresh} disabled={isBusy} aria-label="Refresh">
+              <Refresh fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {canReindexOrders && (
+          <Tooltip title={reindexing ? 'Indexing…' : 'Rebuild search index'}>
+            <span>
+              <IconButton
+                size="small"
+                color="secondary"
+                onClick={() => void handleReindex()}
+                disabled={reindexing}
+                aria-label="Rebuild search index"
+              >
+                <CloudSync fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
       </Box>
 
       {reindexMessage && (
         <Alert
           severity={reindexMessage.startsWith('Search index updated') ? 'success' : 'error'}
           onClose={() => setReindexMessage(null)}
-          sx={{ mb: 2 }}
+          sx={{ mb: 1 }}
         >
           {reindexMessage}
         </Alert>
       )}
 
-      {/* Statistics Cards */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {[
-          { label: 'Pending', count: ordersByStatus.Pending, color: 'warning.main' },
-          { label: 'Fulfillment', count: ordersByStatus.Fulfillment, color: 'primary.main' },
-          { label: 'In Transit', count: ordersByStatus.Transit, color: 'info.main' },
-          { label: 'Delivered', count: ordersByStatus.Delivered, color: 'success.main' },
-          { label: 'Cancelled', count: ordersByStatus.Cancelled, color: 'error.main' },
-        ].map((stat) => (
-          <Grid item xs={12} sm={6} md={2.4} key={stat.label}>
-            <Card>
-              <CardContent sx={{ textAlign: 'center' }}>
-                <Typography color="textSecondary" variant="subtitle2" gutterBottom>{stat.label}</Typography>
-                <Typography variant="h4" sx={{ color: stat.color }}>{stat.count}</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        ))}
-      </Grid>
-
-      {/* Filters & exports */}
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} lg={3}>
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="Search order, invoice, store, email, town, district…"
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setPage(1);
-              }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search fontSize="small" />
-                  </InputAdornment>
-                ),
-              }}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={4} lg={3}>
-            <TextField
-              fullWidth
-              size="small"
-              label="From"
-              type="datetime-local"
-              value={fromDateFilter}
-              onChange={(e) => {
-                setFromDateFilter(e.target.value);
-                setPage(1);
-              }}
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ step: 60 }}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={4} lg={3}>
-            <TextField
-              fullWidth
-              size="small"
-              label="To"
-              type="datetime-local"
-              value={toDateFilter}
-              onChange={(e) => {
-                setToDateFilter(e.target.value);
-                setPage(1);
-              }}
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ step: 60 }}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={4} lg={3}>
-            <FormControl fullWidth size="small">
-              <InputLabel>Status</InputLabel>
-              <Select
-                value={statusFilter}
-                label="Status"
-                onChange={(e) => {
-                  setStatusFilter(e.target.value as OrderStatus | 'All');
-                  setPage(1);
-                }}
-              >
-                <MenuItem value="All">All Statuses</MenuItem>
-                <MenuItem value="Pending">Pending</MenuItem>
-                <MenuItem value="Order Fulfillment">Order Fulfillment</MenuItem>
-                <MenuItem value="In Transit">In Transit</MenuItem>
-                <MenuItem value="Delivered">Delivered</MenuItem>
-                <MenuItem value="Cancelled">Cancelled</MenuItem>
-              </Select>
-            </FormControl>
-          </Grid>
-          <Grid item xs={12} sm="auto">
-            <Box display="flex" gap={0.5} alignItems="center" height="100%">
-              <Button
-                size="small"
-                variant="text"
-                onClick={() => {
-                  const range = getDefaultOrdersFilterRangeIST();
-                  setFromDateFilter(range.fromDateTime);
-                  setToDateFilter(range.toDateTime);
-                  setPage(1);
-                }}
-              >
-                Last 7 days
-              </Button>
-              <Button
-                size="small"
-                variant="text"
-                onClick={() => {
-                  const range = getDefaultNoonToNoonRangeIST();
-                  setFromDateFilter(range.fromDateTime);
-                  setToDateFilter(range.toDateTime);
-                  setPage(1);
-                }}
-              >
-                Today
-              </Button>
-              {(fromDateFilter || toDateFilter) && (
-                <Button
-                  size="small"
-                  variant="text"
-                  onClick={() => {
-                    setFromDateFilter('');
-                    setToDateFilter('');
-                    setPage(1);
-                  }}
-                >
-                  All dates
-                </Button>
-              )}
-            </Box>
-          </Grid>
-        </Grid>
-
-        {dateRangeInvalid && (
-          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
-            From must be before To.
-          </Typography>
-        )}
-
-        <Divider sx={{ my: 2 }} />
-
-        <Box display="flex" justifyContent="flex-end" flexWrap="wrap" gap={1}>
-          <Button
-            variant="outlined"
+      <Paper sx={{ px: 1.5, py: 1, mb: 1.5 }}>
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <TextField
             size="small"
-            startIcon={<Download />}
+            placeholder="Search order, invoice, store, email…"
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setPage(1);
+            }}
+            sx={{ minWidth: 220, flex: '1 1 200px' }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <IstDateTimeField
+            label="From"
+            value={draftFromDateFilter}
+            onChange={setDraftFromDateFilter}
+            sx={{ width: { xs: '100%', sm: 230 } }}
+          />
+          <IstDateTimeField
+            label="To"
+            value={draftToDateFilter}
+            onChange={setDraftToDateFilter}
+            sx={{ width: { xs: '100%', sm: 230 } }}
+          />
+          <Button
+            size="small"
+            variant="contained"
+            disabled={!dateDraftDirty || draftDateRangeInvalid}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={commitDraftDateRange}
+          >
+            OK
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const range = getDefaultOrdersFilterRangeIST();
+              applyDateRange(range.fromDateTime, range.toDateTime);
+            }}
+          >
+            7 days
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const range = getDefaultNoonToNoonRangeIST();
+              applyDateRange(range.fromDateTime, range.toDateTime);
+            }}
+          >
+            Today
+          </Button>
+          {(draftFromDateFilter || draftToDateFilter || fromDateFilter || toDateFilter) && (
+            <Button
+              size="small"
+              variant="text"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => applyDateRange('', '')}
+            >
+              All dates
+            </Button>
+          )}
+          <Box sx={{ flexGrow: 1 }} />
+          <Button
+            variant="text"
+            size="small"
+            startIcon={<Download fontSize="small" />}
             onClick={() =>
               setPendingExportDialog({
                 open: true,
@@ -1212,27 +1216,37 @@ export const OrdersPage: React.FC = () => {
             }
             disabled={isExporting || isExportingProductSummary}
           >
-            {isExporting ? 'Exporting…' : 'Export Pending Orders'}
+            {isExporting ? 'Exporting…' : 'Pending'}
           </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Download />}
-            onClick={() =>
-              setProductSummaryDialog({
-                open: true,
-                ...getDefaultNoonToNoonRangeIST(),
-              })
-            }
-            disabled={isExporting || isExportingProductSummary}
-          >
-            {isExportingProductSummary ? 'Exporting…' : 'Export Product Summary'}
-          </Button>
+          <Tooltip title="A product summary of pending orders is emailed daily at 3:33 PM IST, except Sundays and holidays.">
+            <span>
+              <Button
+                variant="text"
+                size="small"
+                startIcon={<Download fontSize="small" />}
+                onClick={() =>
+                  setProductSummaryDialog({
+                    open: true,
+                    ...getDefaultNoonToNoonRangeIST(),
+                  })
+                }
+                disabled={isExporting || isExportingProductSummary}
+              >
+                {isExportingProductSummary ? 'Exporting…' : 'Summary'}
+              </Button>
+            </span>
+          </Tooltip>
         </Box>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'right' }}>
-          A product summary of all pending orders is emailed daily at 3:33 PM IST, except Sundays and
-          holidays set under Fulfillment setup → Holidays &amp; order email.
-        </Typography>
+        {draftDateRangeInvalid && (
+          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.75 }}>
+            From must be before To.
+          </Typography>
+        )}
+        {dateDraftDirty && !draftDateRangeInvalid && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+            Finish From and To, then click OK to refresh the list.
+          </Typography>
+        )}
       </Paper>
 
       {canEditOrders && selectedIds.length > 0 && (
@@ -1417,12 +1431,22 @@ export const OrdersPage: React.FC = () => {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Chip
-                      label={order.status}
-                      color={getStatusColor(order.status) as any}
-                      size="small"
-                      sx={{ fontWeight: 'bold' }}
-                    />
+                    <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                      <Chip
+                        label={order.status}
+                        color={getStatusColor(order.status) as any}
+                        size="small"
+                        sx={{ fontWeight: 'bold' }}
+                      />
+                      {printedInvoiceIds.has(order.id) && (
+                        <Chip
+                          size="small"
+                          color="success"
+                          variant="outlined"
+                          label="Printed"
+                        />
+                      )}
+                    </Box>
                   </TableCell>
                   <TableCell align="right" onClick={(e) => e.stopPropagation()}>
                     <Tooltip title="View order">
@@ -1675,29 +1699,23 @@ export const OrdersPage: React.FC = () => {
             Choose the order date &amp; time range (IST). Defaults to one day from 12:00 to 12:00.
           </Typography>
           <Box display="flex" gap={2} flexWrap="wrap" sx={{ pt: 1 }}>
-            <TextField
+            <IstDateTimeField
               label="From"
-              type="datetime-local"
               value={pendingExportDialog.fromDateTime}
-              onChange={(e) =>
-                setPendingExportDialog((prev) => ({ ...prev, fromDateTime: e.target.value }))
+              onChange={(fromDateTime) =>
+                setPendingExportDialog((prev) => ({ ...prev, fromDateTime }))
               }
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ step: 60 }}
               disabled={isExporting}
-              sx={{ minWidth: 240 }}
+              sx={{ width: 250 }}
             />
-            <TextField
+            <IstDateTimeField
               label="To"
-              type="datetime-local"
               value={pendingExportDialog.toDateTime}
-              onChange={(e) =>
-                setPendingExportDialog((prev) => ({ ...prev, toDateTime: e.target.value }))
+              onChange={(toDateTime) =>
+                setPendingExportDialog((prev) => ({ ...prev, toDateTime }))
               }
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ step: 60 }}
               disabled={isExporting}
-              sx={{ minWidth: 240 }}
+              sx={{ width: 250 }}
             />
           </Box>
         </DialogContent>
@@ -1740,29 +1758,23 @@ export const OrdersPage: React.FC = () => {
             Scheduled auto-publish runs daily at 12:00 and 15:00 IST.
           </Typography>
           <Box display="flex" gap={2} flexWrap="wrap" sx={{ pt: 1 }}>
-            <TextField
+            <IstDateTimeField
               label="From"
-              type="datetime-local"
               value={productSummaryDialog.fromDateTime}
-              onChange={(e) =>
-                setProductSummaryDialog((prev) => ({ ...prev, fromDateTime: e.target.value }))
+              onChange={(fromDateTime) =>
+                setProductSummaryDialog((prev) => ({ ...prev, fromDateTime }))
               }
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ step: 60 }}
               disabled={isExportingProductSummary || isPublishingPurchaseList}
-              sx={{ minWidth: 240 }}
+              sx={{ width: 250 }}
             />
-            <TextField
+            <IstDateTimeField
               label="To"
-              type="datetime-local"
               value={productSummaryDialog.toDateTime}
-              onChange={(e) =>
-                setProductSummaryDialog((prev) => ({ ...prev, toDateTime: e.target.value }))
+              onChange={(toDateTime) =>
+                setProductSummaryDialog((prev) => ({ ...prev, toDateTime }))
               }
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ step: 60 }}
               disabled={isExportingProductSummary || isPublishingPurchaseList}
-              sx={{ minWidth: 240 }}
+              sx={{ width: 250 }}
             />
           </Box>
         </DialogContent>

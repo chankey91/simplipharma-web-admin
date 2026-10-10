@@ -17,6 +17,9 @@ import { calculateOrderTotalsFromLines, hasBatchAssignment } from './orderTotals
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
 import { normalizeAdditionalDiscount } from './purchaseInvoiceTotals';
 import { hasGstSnapshot } from './gstSnapshot';
+import { markOrderInvoicePrinted } from './sessionPrintedInvoices';
+import { formatTownDistrict } from './export';
+import type { PaymentRequestCreditApplication } from '../types';
 import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
 import {
   buildGstInvoiceTitleCell,
@@ -109,6 +112,8 @@ export type OrderInvoicePrepared = {
   party: {
     name: string;
     address: string;
+    town?: string;
+    district?: string;
     state: string;
     stateCode: string;
     phone: string;
@@ -118,6 +123,25 @@ export type OrderInvoicePrepared = {
   /** Order GST % used on tax summary (same as invoice template) */
   gstRatePercent: number;
 };
+
+function formatWalletCreditRefs(
+  apps: PaymentRequestCreditApplication[] | undefined,
+  walletApplied: number
+): string {
+  if (walletApplied <= 0.01) return '';
+  const lines = (apps || [])
+    .map((a) => {
+      const cn = String(a.creditNoteNumber || '').trim() || 'CN';
+      const amt = Number(a.requestedApplyAmount) || 0;
+      if (amt <= 0.01) return '';
+      return `${cn} ₹${amt.toFixed(2)}`;
+    })
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return `₹${walletApplied.toFixed(2)}`;
+  }
+  return `${lines.join('<br>')}<br>Total ₹${walletApplied.toFixed(2)}`;
+}
 
 /** True when the line has a real batch assignment and should appear on the tax invoice. */
 function isAllocatedInvoiceMedicineLine(item: Order['medicines'][number]): boolean {
@@ -402,6 +426,8 @@ async function prepareOrderInvoiceData(
   let party = {
     name: order.retailerName || order.retailerEmail || 'N/A',
     address: order.deliveryAddress || '',
+    town: '',
+    district: '',
     ...resolveInvoiceState(),
     phone: '',
     dl: '',
@@ -414,9 +440,12 @@ async function prepareOrderInvoiceData(
       const retailer = await getUserProfile(order.retailerId);
       if (retailer) {
         const buyerPrint = printBuyerStateFromDocument(order, retailer.gst);
+        const loc = (retailer.location || {}) as { town?: string; district?: string; address?: string };
         party = {
           name: retailer.shopName || retailer.displayName || retailer.email || party.name,
-          address: retailer.address || retailer.location?.address || order.deliveryAddress || party.address,
+          address: retailer.address || loc.address || order.deliveryAddress || party.address,
+          town: String(retailer.town || loc.town || '').trim(),
+          district: String(retailer.district || loc.district || '').trim(),
           ...buyerPrint,
           phone: retailer.phoneNumber || party.phone,
           dl: retailer.licenceNumber || retailer.licenceHolderName || party.dl,
@@ -458,6 +487,7 @@ async function prepareOrderInvoiceData(
   };
 
   const walletAppliedNum = Number(order.creditApplied) || 0;
+  const walletRefs = formatWalletCreditRefs(order.walletCreditApplications, walletAppliedNum);
   const paidNum = Number(order.paidAmount) || 0;
   const dueNum =
     order.dueAmount != null
@@ -476,6 +506,7 @@ async function prepareOrderInvoiceData(
     ...(walletAppliedNum > 0.01
       ? {
           walletApplied: walletAppliedNum.toFixed(2),
+          ...(walletRefs ? { walletRefs } : {}),
           amountDue: dueNum.toFixed(2),
         }
       : {}),
@@ -508,6 +539,7 @@ const buildOrderInvoiceFirstHeaderHtml = (data: OrderInvoicePrepared): string =>
     <td width="50%">
       <b>${party.name}</b><br>
       Party Address: ${party.address}<br>
+      Town / District: ${formatTownDistrict(party.town, party.district) || '—'}<br>
       ${invoiceStateHtml(party.state, party.stateCode)}
       Ph.No: ${party.phone}<br>
       Party D.L No: ${party.dl}<br>
@@ -565,6 +597,7 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ['Company GSTIN', company.gstin],
     ['Party Name', party.name],
     ['Party Address', party.address],
+    ['Town / District', formatTownDistrict(party.town, party.district)],
     ['Party GSTIN', party.gstin],
     ['Invoice No', invoiceData.no],
     ['Invoice Date', invoiceData.date],
@@ -621,6 +654,9 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ['GRAND TOTAL', summary.grandTotal],
     ...(summary.walletApplied && parseFloat(summary.walletApplied) > 0.01
       ? [['WALLET', `-${summary.walletApplied}`] as string[]]
+      : []),
+    ...(summary.walletRefs
+      ? [['Wallet credit notes', summary.walletRefs.replace(/<br>/g, '; ')]]
       : []),
     ...(summary.amountDue != null && summary.amountDue !== ''
       ? [['AMOUNT DUE', summary.amountDue] as string[]]
@@ -717,6 +753,10 @@ export const generateOrderInvoice = async (
       download: downloadPdf,
       scale: 1.5,
     });
+
+    if (downloadPdf && order.id) {
+      markOrderInvoicePrinted(order.id);
+    }
 
     if (!options?.emailPdfToRetailer) {
       return {};
