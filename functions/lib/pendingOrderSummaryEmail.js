@@ -197,7 +197,15 @@ function buildWorkbook(rows, vendorByMedicineId) {
     XLSX.utils.book_append_sheet(wb, ws, 'Product Summary');
     return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 }
+const PROD_PROJECT_ID = 'simplipharma';
+function currentProjectId() {
+    return String(process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || '').trim();
+}
 async function sendPendingOrderSummaryEmail(opts) {
+    const projectId = currentProjectId();
+    if (projectId && projectId !== PROD_PROJECT_ID) {
+        return { skipped: `not-prod:${projectId}` };
+    }
     const settings = await loadSettings();
     const today = (0, purchaseListJob_1.istDateString)();
     if (!(opts === null || opts === void 0 ? void 0 : opts.force)) {

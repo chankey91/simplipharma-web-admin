@@ -35,11 +35,14 @@ export function batchPurchaseDiscountPricePerUnit(batch?: {
 }
 
 /**
- * Order invoice DISC column: 0% or 2% extra trade discount from purchase line discount %.
+ * Order invoice DISC column from vendor (PI) discount %:
+ * < 3% → 0, 3–4.xx% → 1.5, 5%+ → 2.
  * Standard margin stays in the unit rate only.
  */
 export function orderTradeDiscountFromPurchasePct(purchaseDiscountPct: number): number {
-  return purchaseDiscountPct > 4 ? 2 : 0;
+  if (purchaseDiscountPct >= 5) return 2;
+  if (purchaseDiscountPct >= 3) return 1.5;
+  return 0;
 }
 
 /** @deprecated use {@link orderTradeDiscountFromPurchasePct} */
@@ -52,12 +55,9 @@ export function orderTradeDiscountFromStandardPct(standardDiscountPct: number): 
  */
 export function defaultOrderDiscountPctFromPurchase(
   purchaseDiscountPct: number,
-  purchaseDiscountPricePerUnit: number
+  _purchaseDiscountPricePerUnit: number
 ): number {
-  if (purchaseDiscountPct > 4 || purchaseDiscountPricePerUnit > 4) {
-    return 2;
-  }
-  return 0;
+  return orderTradeDiscountFromPurchasePct(purchaseDiscountPct);
 }
 
 /** PI / batch purchase-side "Discount %" field (not standard margin). */
@@ -80,7 +80,7 @@ export function resolvePurchaseDiscountPct(params: {
   return 0;
 }
 
-/** DISC column value (0% or 2%) from purchase discount field. */
+/** DISC column value (0% / 1.5% / 2%) from purchase discount field. */
 export function resolveOrderLineTradeDiscountPct(params: {
   batch?: SellDiscountBatch;
   medicineId?: string;
@@ -223,21 +223,26 @@ const parseDiscountPct = (value: unknown): number | undefined => {
   return n;
 };
 
-/** Order invoice Disc % — trade discount only (0% or 2%). */
+/** Order invoice Disc % — trade discount only (0% / 1.5% / 2%). */
 export function isOrderTradeDiscountPct(n: number): boolean {
-  return n === 0 || Math.abs(n - 2) < 0.001;
+  return n === 0 || Math.abs(n - 1.5) < 0.001 || Math.abs(n - 2) < 0.001;
+}
+
+function normalizeOrderTradeDiscountPct(n: number): number {
+  if (Math.abs(n - 2) < 0.001) return 2;
+  if (Math.abs(n - 1.5) < 0.001) return 1.5;
+  return 0;
 }
 
 /**
- * Saved order trade discount (0% or 2% only).
- * PI purchase Disc % (e.g. 13%) must NOT appear on the order — it maps to 0% or 2%.
- * Legacy non-trade values (e.g. 1.5%, 13%) are ignored so Disc re-derives under the current rule.
+ * Saved order trade discount (0% / 1.5% / 2% only).
+ * PI purchase Disc % (e.g. 13%) must NOT appear on the order — it maps to 0 / 1.5 / 2.
  */
 function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
   for (const value of values) {
     const n = parseDiscountPct(value);
     if (n === undefined || !isOrderTradeDiscountPct(n)) continue;
-    return Math.abs(n - 2) < 0.001 ? 2 : 0;
+    return normalizeOrderTradeDiscountPct(n);
   }
   return undefined;
 }
@@ -402,7 +407,7 @@ export function resolveOrderLineDiscountPct(params: {
     if (saved !== undefined) return saved;
   }
 
-  // Only trust saved order trade Disc of 0% or 2%. Values like PI 13% are not order Disc %.
+  // Only trust saved order trade Disc of 0 / 1.5 / 2. Values like PI 13% are not order Disc %.
   const persisted = readPersistedOrderTradeDiscount(
     params.allocationDiscount,
     params.itemDiscount
@@ -418,7 +423,7 @@ export function resolveOrderLineDiscountPct(params: {
   return orderTradeDiscountFromPurchasePct(purchaseDisc);
 }
 
-/** DISC column / invoice display — 0% or 2% trade discount, never standard margin %. */
+/** DISC column / invoice display — 0% / 1.5% / 2% trade discount, never standard margin %. */
 export function resolveOrderLineDisplayDiscountPct(params: {
   itemDiscount?: unknown;
   allocationDiscount?: unknown;

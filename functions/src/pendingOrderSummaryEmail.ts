@@ -215,9 +215,20 @@ function buildWorkbook(rows: SummaryRow[], vendorByMedicineId: Map<string, strin
   return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 }
 
+const PROD_PROJECT_ID = 'simplipharma';
+
+function currentProjectId(): string {
+  return String(process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || '').trim();
+}
+
 export async function sendPendingOrderSummaryEmail(opts?: {
   force?: boolean;
 }): Promise<{ skipped?: string; sent?: boolean; to?: string[]; rows?: number; orders?: number }> {
+  const projectId = currentProjectId();
+  if (projectId && projectId !== PROD_PROJECT_ID) {
+    return { skipped: `not-prod:${projectId}` };
+  }
+
   const settings = await loadSettings();
   const today = istDateString();
   if (!opts?.force) {
