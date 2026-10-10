@@ -47,8 +47,9 @@ import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { generatePurchaseInvoice } from '../utils/invoice';
 import {
-  normalizeAdditionalDiscount,
-  roundPurchaseInvoicePayable,
+  purchaseLineAmounts,
+  purchaseLineUnitPrice,
+  sumPurchaseInvoiceFromItems,
 } from '../utils/purchaseInvoiceTotals';
 import { PurchaseInvoiceItem } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
@@ -141,49 +142,8 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     return Number.isFinite(n) ? n : 0;
   };
 
-  const getPurchasePriceFromItem = (item: PurchaseInvoiceItem) => {
-    const mrp = item.mrp || 0;
-    const gstRate = item.gstRate || 5;
-    const standardDiscount = item.standardDiscount ?? 20;
-
-    if (mrp > 0) {
-      const afterStandardDiscount = mrp * (1 - standardDiscount / 100);
-      return afterStandardDiscount / (1 + gstRate / 100);
-    }
-
-    return item.purchasePrice || 0;
-  };
-
-  const calculateTotals = (invoiceItems: PurchaseInvoiceItem[], extraDiscount: unknown = 0) => {
-    const subTotal = invoiceItems.reduce((sum, item) => {
-      const quantity = item.quantity || 0;
-      const purchasePrice = getPurchasePriceFromItem(item);
-      return sum + purchasePrice * quantity;
-    }, 0);
-
-    const totalDiscount = invoiceItems.reduce((sum, item) => {
-      const quantity = item.quantity || 0;
-      const discountPercentage = item.discountPercentage || 0;
-      const purchasePrice = getPurchasePriceFromItem(item);
-      const totalAmount = purchasePrice * quantity;
-      return sum + (totalAmount * discountPercentage) / 100;
-    }, 0);
-
-    const amountAfterDiscount = subTotal - totalDiscount;
-    const avgGstRate = invoiceItems.length > 0
-      ? invoiceItems.reduce((sum, item) => sum + (item.gstRate || 5), 0) / invoiceItems.length
-      : 5;
-    const totalTax = (amountAfterDiscount * avgGstRate) / 100;
-    const additionalDiscount = normalizeAdditionalDiscount(extraDiscount);
-    const { roundoff, grandTotal } = roundPurchaseInvoicePayable({
-      subTotal,
-      lineDiscount: totalDiscount,
-      tax: totalTax,
-      additionalDiscount,
-    });
-
-    return { subTotal, totalDiscount, totalTax, additionalDiscount, roundoff, grandTotal };
-  };
+  const calculateTotals = (invoiceItems: PurchaseInvoiceItem[], extraDiscount: unknown = 0) =>
+    sumPurchaseInvoiceFromItems(invoiceItems, extraDiscount);
 
   const handleEditItem = (index: number) => {
     const item = items[index];
@@ -296,7 +256,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     const schemeFreeQty = schemePaidQty != null ? sfRaw : undefined;
     const expiryDate = parseDateFromMonthYearInput(currentItem.expiryDate);
 
-    const totalAmount = purchasePrice * quantity;
+    const totalAmount = purchaseLineAmounts({
+      purchasePrice,
+      quantity,
+      discountPercentage,
+      gstRate,
+    }).total;
     const receivedBatchNumber = String(currentItem.receivedBatchNumber || '').trim();
     const updatedItem: PurchaseInvoiceItem = {
       medicineId: oldItem.medicineId,
@@ -364,9 +329,6 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   if (isLoading) return <Loading message="Loading invoice..." />;
   if (!invoice) return <Typography>Invoice not found</Typography>;
 
-  // Calculate subtotal: sum of all "Total" column values (Price * Quantity)
-  // Price is calculated from MRP using item standardDiscount (fallback 20%)
-  // Use recalculated values or fall back to stored values
   const displaySubTotal = recalculatedSubTotal > 0 ? recalculatedSubTotal : invoice.subTotal;
   const displayDiscount = recalculatedDiscount > 0 ? recalculatedDiscount : (invoice.discount || 0);
   const displayTaxAmount = recalculatedTaxAmount > 0 ? recalculatedTaxAmount : invoice.taxAmount;
@@ -374,7 +336,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     recalculatedAdditionalDiscount > 0
       ? recalculatedAdditionalDiscount
       : invoice.additionalDiscount || 0;
-  const invoiceTotal = invoice.totalAmount ?? grandTotal;
+  const invoiceTotal = grandTotal;
   const paidAmount = invoice.paidAmount ?? 0;
   const dueAmount = Math.max(0, invoiceTotal - paidAmount);
 
@@ -454,10 +416,9 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 <TableBody>
                   {items.map((item, index) => {
                     const mrp = item.mrp || 0;
-                    const purchasePrice = getPurchasePriceFromItem(item);
-                    
-                    // Total = Price * Quantity (simple calculation for display)
-                    const total = purchasePrice * (item.quantity || 0);
+                    const line = purchaseLineAmounts(item);
+                    const purchasePrice = line.unitPrice || purchaseLineUnitPrice(item);
+                    const total = line.total;
                     
                     return (
                       <TableRow key={index}>

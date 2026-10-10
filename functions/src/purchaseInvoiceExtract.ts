@@ -5,6 +5,7 @@
  */
 import {
   getGeminiApiKey as resolveGeminiApiKey,
+  getGeminiApiModel as resolveGeminiApiModel,
   getGeminiLocation,
   getGeminiModel as resolveGeminiModel,
   getGeminiProject,
@@ -53,6 +54,10 @@ const BATCH_LIKE = /^[A-Za-z0-9][A-Za-z0-9./_-]{3,28}$/;
 
 function getGeminiModel(): string {
   return resolveGeminiModel();
+}
+
+function getGeminiApiModel(): string {
+  return resolveGeminiApiModel();
 }
 
 const GEMINI_PROMPT = `You extract transactional line items from Indian pharmacy / pharmaceutical wholesale purchase invoices (GST tax invoices).
@@ -379,7 +384,7 @@ async function callGeminiApiKey(parts: GeminiPart[]): Promise<{ text: string; mo
   if (!apiKey) {
     throw new Error('Gemini API key not configured');
   }
-  const model = getGeminiModel();
+  const model = getGeminiApiModel();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;

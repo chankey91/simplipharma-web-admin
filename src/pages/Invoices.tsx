@@ -45,8 +45,19 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
 import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useSearchParams } from 'react-router-dom';
 
 type InvoiceTab = 'order' | 'purchase';
+type PaymentFilter = 'All' | 'Paid' | 'Unpaid' | 'Partial';
+
+function tabFromSearch(raw: string | null): InvoiceTab {
+  return raw === 'purchase' ? 'purchase' : 'order';
+}
+
+function paymentFromSearch(raw: string | null): PaymentFilter {
+  if (raw === 'Paid' || raw === 'Unpaid' || raw === 'Partial' || raw === 'All') return raw;
+  return 'All';
+}
 
 const ROWS_PER_PAGE = 10;
 
@@ -97,11 +108,24 @@ const purchaseSortField = (key: string): string => {
 export const InvoicesPage: React.FC = () => {
   const { alert } = useAppDialog();
   const { data: stores } = useStores();
-  const [tab, setTab] = useState<InvoiceTab>('order');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = tabFromSearch(searchParams.get('tab'));
+  const statusFilter = paymentFromSearch(searchParams.get('payment'));
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid' | 'Partial'>('All');
   const [page, setPage] = useState(1);
+
+  const patchInvoiceSearch = (patch: { tab?: InvoiceTab; payment?: PaymentFilter }) => {
+    const next = new URLSearchParams(searchParams);
+    const nextTab = patch.tab ?? tab;
+    const nextPayment = patch.payment ?? statusFilter;
+    if (nextTab === 'order') next.delete('tab');
+    else next.set('tab', nextTab);
+    if (nextPayment === 'All') next.delete('payment');
+    else next.set('payment', nextPayment);
+    setSearchParams(next, { replace: true });
+    setPage(1);
+  };
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('date', 'desc');
@@ -289,8 +313,7 @@ export const InvoicesPage: React.FC = () => {
   };
 
   const handleTabChange = (_: React.SyntheticEvent, value: InvoiceTab) => {
-    setTab(value);
-    setPage(1);
+    patchInvoiceSearch({ tab: value });
   };
 
   const handleDownload = async (row: InvoiceRow) => {
@@ -419,8 +442,7 @@ export const InvoicesPage: React.FC = () => {
                 value={statusFilter}
                 label="Payment Status"
                 onChange={(e) => {
-                  setStatusFilter(e.target.value as 'All' | 'Paid' | 'Unpaid' | 'Partial');
-                  setPage(1);
+                  patchInvoiceSearch({ payment: e.target.value as PaymentFilter });
                 }}
               >
                 <MenuItem value="All">All Status</MenuItem>

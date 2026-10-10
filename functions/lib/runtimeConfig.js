@@ -6,6 +6,7 @@ exports.getTypesenseRuntimeConfig = getTypesenseRuntimeConfig;
 exports.getAppConfigValue = getAppConfigValue;
 exports.getSupportNotifyEmails = getSupportNotifyEmails;
 exports.getGeminiModel = getGeminiModel;
+exports.getGeminiApiModel = getGeminiApiModel;
 exports.getGeminiApiKey = getGeminiApiKey;
 exports.getGeminiProject = getGeminiProject;
 exports.getGeminiLocation = getGeminiLocation;
@@ -83,6 +84,12 @@ function getGeminiModel() {
     return (configValue('gemini', 'model', 'GOOGLE_GEMINI_MODEL') ||
         fromEnv('GOOGLE_GEMINI_MODEL') ||
         'gemini-2.5-flash');
+}
+/** AI Studio (API key) model — newer keys often cannot call gemini-2.5-flash. */
+function getGeminiApiModel() {
+    return (configValue('gemini', 'api_model', 'GOOGLE_GEMINI_API_MODEL') ||
+        fromEnv('GOOGLE_GEMINI_API_MODEL') ||
+        'gemini-3.6-flash');
 }
 function getGeminiApiKey() {
     return configValue('gemini', 'api_key', 'GOOGLE_GEMINI_API_KEY') || fromEnv('GOOGLE_GEMINI_API_KEY');
