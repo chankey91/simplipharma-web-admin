@@ -28,12 +28,14 @@ import {
   buildGstInvoiceFooter,
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
+  buildGstInvoiceHalfPageFooter,
   type GstInvoiceLineItem,
   type GstInvoiceSummary,
 } from './gstInvoiceTemplate';
 import {
   buildContinuationHeaderHtml,
   buildPaginatedInvoicePdf,
+  formatInvoicePageLabel,
 } from './invoicePdfPages';
 
 // Function to convert number to words
@@ -131,16 +133,18 @@ function formatWalletCreditRefs(
   if (walletApplied <= 0.01) return '';
   const lines = (apps || [])
     .map((a) => {
-      const cn = String(a.creditNoteNumber || '').trim() || 'CN';
+      const cn = String(a.creditNoteNumber || '').trim();
       const amt = Number(a.requestedApplyAmount) || 0;
       if (amt <= 0.01) return '';
-      return `${cn} ₹${amt.toFixed(2)}`;
+      return cn
+        ? `Credit note ${cn}: ₹${amt.toFixed(2)}`
+        : `Credit note: ₹${amt.toFixed(2)}`;
     })
     .filter(Boolean);
   if (lines.length === 0) {
-    return `₹${walletApplied.toFixed(2)}`;
+    return `₹${walletApplied.toFixed(2)} from wallet / credit note`;
   }
-  return `${lines.join('<br>')}<br>Total ₹${walletApplied.toFixed(2)}`;
+  return `${lines.join('<br>')}`;
 }
 
 /** True when the line has a real batch assignment and should appear on the tax invoice. */
@@ -523,9 +527,13 @@ async function prepareOrderInvoiceData(
   };
 };
 
-const buildOrderInvoiceFirstHeaderHtml = (data: OrderInvoicePrepared): string => {
+const buildOrderInvoiceFirstHeaderHtml = (
+  data: OrderInvoicePrepared,
+  paging?: { pageIndex: number; pageCount: number }
+): string => {
   const { company, party, invoiceData } = data;
   const companyState = resolveInvoiceState();
+  const pageLabel = formatInvoicePageLabel(paging?.pageIndex ?? 0, paging?.pageCount ?? 1);
   return `
 <table>
   <tr>
@@ -558,7 +566,8 @@ const buildOrderInvoiceFirstHeaderHtml = (data: OrderInvoicePrepared): string =>
     <td>
       Date: ${invoiceData.date}<br>
       Tray No: ${invoiceData.tray}<br>
-      Processed By: ${invoiceData.processedBy}
+      Processed By: ${invoiceData.processedBy}<br>
+      ${pageLabel}
     </td>
   </tr>
 </table>`;
@@ -737,7 +746,7 @@ export const generateOrderInvoice = async (
     const pdf = await buildPaginatedInvoicePdf({
       title: 'Sales GST Invoice',
       items: data.items,
-      firstHeaderHtml: buildOrderInvoiceFirstHeaderHtml(data),
+      firstHeaderHtml: (page) => buildOrderInvoiceFirstHeaderHtml(data, page),
       buildContHeaderHtml: (page) =>
         buildContinuationHeaderHtml({
           title: 'SALES GST INVOICE',
@@ -749,6 +758,22 @@ export const generateOrderInvoice = async (
         }),
       buildItemsHtml: (pageItems) => buildGstInvoiceItemTableHtml(pageItems),
       footerHtml: buildOrderInvoiceFooterBlocksHtml(data, order.dispatchNotes || ''),
+      buildFooterHtml: (page, ctx) =>
+        buildGstInvoiceHalfPageFooter({
+          pageItems: page.items,
+          carriedForward: ctx.carriedForward,
+          isLast: ctx.isLast,
+          pageCount: page.pageCount,
+          remarks: order.dispatchNotes || '',
+          signatoryFor: data.company.name,
+          amountInWords: ctx.isLast
+            ? data.summary.amountInWords
+            : `Total C/F Rs. ${ctx.carriedForward.toFixed(2)}`,
+          paymentQrDataUri: PAYMENT_QR_DATA_URI,
+          lastSummary: ctx.isLast ? data.summary : undefined,
+          lastTax: ctx.isLast ? data.tax : undefined,
+          gstRateHalf: data.gstRatePercent / 2,
+        }),
       fileName: `order-invoice-${order.id}.pdf`,
       download: downloadPdf,
       scale: 1.5,
@@ -1034,7 +1059,9 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     tray: '-'
   };
   
-  const firstHeaderHtml = `
+  const buildFirstHeaderHtml = (paging?: { pageIndex: number; pageCount: number }) => {
+    const pageLabel = formatInvoicePageLabel(paging?.pageIndex ?? 0, paging?.pageCount ?? 1);
+    return `
 <table>
   <tr>
     <td width="50%">
@@ -1063,10 +1090,12 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
       User: ${invoiceData.user}
     </td>
     <td>
-      Date: ${invoiceData.date}
+      Date: ${invoiceData.date}<br>
+      ${pageLabel}
     </td>
   </tr>
 </table>`;
+  };
 
   const footerHtml = `
 ${buildGstInvoiceTotalsSection(tax, summary, avgGstRate / 2)}
@@ -1074,10 +1103,16 @@ ${buildGstInvoiceFooter(invoice.notes || '', summary.amountInWords, party.name)}
 
   return {
     items: items as GstInvoiceLineItem[],
-    firstHeaderHtml,
+    firstHeaderHtml: buildFirstHeaderHtml(),
+    buildFirstHeaderHtml,
     footerHtml,
     invoiceData,
     partyName: party.name,
+    summary,
+    tax,
+    gstRateHalf: avgGstRate / 2,
+    remarks: invoice.notes || '',
+    signatoryFor: party.name,
   };
 };
 
@@ -1087,7 +1122,7 @@ export const generatePurchaseInvoice = async (invoice: PurchaseInvoice) => {
     await buildPaginatedInvoicePdf({
       title: 'Purchase GST Invoice',
       items: parts.items,
-      firstHeaderHtml: parts.firstHeaderHtml,
+      firstHeaderHtml: (page) => parts.buildFirstHeaderHtml(page),
       buildContHeaderHtml: (page) =>
         buildContinuationHeaderHtml({
           title: 'PURCHASE GST INVOICE',
@@ -1099,6 +1134,21 @@ export const generatePurchaseInvoice = async (invoice: PurchaseInvoice) => {
         }),
       buildItemsHtml: (pageItems) => buildGstInvoiceItemTableHtml(pageItems),
       footerHtml: parts.footerHtml,
+      buildFooterHtml: (page, ctx) =>
+        buildGstInvoiceHalfPageFooter({
+          pageItems: page.items,
+          carriedForward: ctx.carriedForward,
+          isLast: ctx.isLast,
+          pageCount: page.pageCount,
+          remarks: parts.remarks,
+          signatoryFor: parts.signatoryFor,
+          amountInWords: ctx.isLast
+            ? parts.summary.amountInWords
+            : `Total C/F Rs. ${ctx.carriedForward.toFixed(2)}`,
+          lastSummary: ctx.isLast ? parts.summary : undefined,
+          lastTax: ctx.isLast ? parts.tax : undefined,
+          gstRateHalf: parts.gstRateHalf,
+        }),
       fileName: `purchase-invoice-${invoice.invoiceNumber}.pdf`,
       download: true,
       scale: 1.5,
