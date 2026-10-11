@@ -15,6 +15,7 @@ const PAGE_MARGIN_SIDE_MM = 5;
 const PAGE_MARGIN_BOTTOM_MM = 4;
 const PAGE_CONTENT_HEIGHT_MM =
   HALF_PAGE_HEIGHT_MM - PAGE_MARGIN_TOP_MM - PAGE_MARGIN_BOTTOM_MM;
+const MAX_ROWS_PER_HALF = 12;
 
 export type InvoicePdfPagePlan = {
   items: GstInvoiceLineItem[];
@@ -33,7 +34,17 @@ export type InvoiceFooterBuildCtx = {
   carriedForward: number;
 };
 
-function wrapInvoiceHtml(inner: string, title: string): string {
+function wrapInvoiceHtml(inner: string, title: string, opts?: { fixedHeight?: boolean }): string {
+  const fixed = opts?.fixedHeight !== false;
+  const boxHeight = fixed
+    ? `
+    height: ${PAGE_CONTENT_HEIGHT_MM}mm;
+    min-height: ${PAGE_CONTENT_HEIGHT_MM}mm;
+    max-height: ${PAGE_CONTENT_HEIGHT_MM}mm;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;`
+    : 'display: block;';
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -42,11 +53,7 @@ function wrapInvoiceHtml(inner: string, title: string): string {
 <style>${GST_INVOICE_STYLES}
   .invoice-box {
     box-sizing: border-box;
-    height: ${PAGE_CONTENT_HEIGHT_MM}mm;
-    min-height: ${PAGE_CONTENT_HEIGHT_MM}mm;
-    max-height: ${PAGE_CONTENT_HEIGHT_MM}mm;
-    display: flex;
-    flex-direction: column;
+    ${boxHeight}
   }
   .cont-banner td { font-size: 11px; vertical-align: middle; }
 </style>
@@ -88,6 +95,7 @@ export type InvoiceSectionHeights = {
   thead: number;
   rows: number[];
   footer: number;
+  contFooter: number;
   contentWidth: number;
 };
 
@@ -100,6 +108,7 @@ export function measureInvoiceSections(parts: {
   contHeaderHtml: string;
   itemTableHtml: string;
   footerHtml: string;
+  contFooterHtml?: string;
   itemCount: number;
 }): InvoiceSectionHeights {
   const host = createMeasureHost();
@@ -108,10 +117,11 @@ export function measureInvoiceSections(parts: {
       host,
       wrapInvoiceHtml(
         `<div data-invoice-section="header">${parts.firstHeaderHtml}</div>${parts.itemTableHtml}`,
-        parts.title
+        parts.title,
+        { fixedHeight: false }
       )
     );
-    const contentWidth = firstBox.scrollWidth || host.scrollWidth || 794;
+    const contentWidth = firstBox.offsetWidth || host.offsetWidth || 794;
     const firstHeaderEl = firstBox.querySelector('[data-invoice-section="header"]') as HTMLElement | null;
     const table = firstBox.querySelector('table.items-table') as HTMLTableElement | null;
     const thead = table?.tHead || null;
@@ -126,19 +136,33 @@ export function measureInvoiceSections(parts: {
 
     setHostHtml(
       host,
-      wrapInvoiceHtml(`${parts.contHeaderHtml}${parts.itemTableHtml}`, parts.title)
+      wrapInvoiceHtml(`${parts.contHeaderHtml}${parts.itemTableHtml}`, parts.title, { fixedHeight: false })
     );
     const contHeaderEl = host.querySelector('[data-invoice-section="header"]') as HTMLElement | null;
-    const contHeader = contHeaderEl?.offsetHeight || Math.max(40, Math.round(firstHeader * 0.35));
+    const contHeader = contHeaderEl?.offsetHeight || firstHeader;
 
     setHostHtml(
       host,
-      wrapInvoiceHtml(`<div data-invoice-section="footer">${parts.footerHtml}</div>`, parts.title)
+      wrapInvoiceHtml(`<div data-invoice-section="footer">${parts.footerHtml}</div>`, parts.title, {
+        fixedHeight: false,
+      })
     );
     const footerEl = host.querySelector('[data-invoice-section="footer"]') as HTMLElement | null;
-    const footer = footerEl?.offsetHeight || 160;
+    const footer = footerEl?.offsetHeight || 140;
 
-    return { firstHeader, contHeader, thead: theadH, rows, footer, contentWidth };
+    let contFooter = footer;
+    if (parts.contFooterHtml) {
+      setHostHtml(
+        host,
+        wrapInvoiceHtml(`<div data-invoice-section="footer">${parts.contFooterHtml}</div>`, parts.title, {
+          fixedHeight: false,
+        })
+      );
+      const contFooterEl = host.querySelector('[data-invoice-section="footer"]') as HTMLElement | null;
+      contFooter = contFooterEl?.offsetHeight || footer;
+    }
+
+    return { firstHeader, contHeader, thead: theadH, rows, footer, contFooter, contentWidth };
   } finally {
     document.body.removeChild(host);
   }
@@ -152,63 +176,86 @@ function sumHeights(heights: number[], start: number, count: number): number {
   return total;
 }
 
-/**
- * Pack full item rows into half-A4 blocks so no row is split across a half.
- * Every half includes page totals, terms, and QR; last half shows Grand Total.
- */
-export function planInvoicePages(
-  items: GstInvoiceLineItem[],
-  heights: InvoiceSectionHeights
+function dummyPage(partial: Partial<InvoicePdfPagePlan>): InvoicePdfPagePlan {
+  return {
+    items: [],
+    includeFooter: true,
+    isFirst: true,
+    isLast: false,
+    pageIndex: 0,
+    pageCount: 9,
+    pageTotal: 0,
+    carriedForward: 0,
+    ...partial,
+  };
+}
+
+function layoutFitsHalfPage(
+  host: HTMLDivElement,
+  title: string,
+  headerInner: string,
+  itemsHtml: string,
+  footerInner: string
+): boolean {
+  setHostHtml(
+    host,
+    wrapInvoiceHtml(
+      `<div data-invoice-section="header" class="invoice-header">${headerInner}</div>
+       <div class="invoice-items">${itemsHtml}</div>
+       <div class="invoice-spacer"></div>
+       <div data-invoice-section="footer" class="invoice-footer">${footerInner}</div>`,
+      title,
+      { fixedHeight: true }
+    )
+  );
+  const box = host.querySelector('.invoice-box') as HTMLElement | null;
+  const header = host.querySelector('.invoice-header') as HTMLElement | null;
+  const itemsEl = host.querySelector('.invoice-items') as HTMLElement | null;
+  const footer = host.querySelector('.invoice-footer') as HTMLElement | null;
+  if (!box || !header || !footer) return true;
+  const used = header.offsetHeight + (itemsEl?.offsetHeight || 0) + footer.offsetHeight;
+  return used <= box.clientHeight + 2;
+}
+
+function maxItemsFittingHalfPage(
+  host: HTMLDivElement,
+  opts: {
+    title: string;
+    items: GstInvoiceLineItem[];
+    start: number;
+    remaining: number;
+    headerInner: string;
+    footerInner: string;
+    buildItemsHtml: (pageItems: GstInvoiceLineItem[]) => string;
+  }
+): number {
+  let lo = 1;
+  let hi = opts.remaining;
+  let best = 1;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const slice = opts.items.slice(opts.start, opts.start + mid);
+    const fits = layoutFitsHalfPage(
+      host,
+      opts.title,
+      opts.headerInner,
+      opts.buildItemsHtml(slice),
+      opts.footerInner
+    );
+    if (fits) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
+function annotateInvoicePages(
+  drafts: Array<{ items: GstInvoiceLineItem[]; isFirst: boolean; pageIndex: number }>
 ): InvoicePdfPagePlan[] {
-  const maxH = maxContentHeightPx(heights.contentWidth);
-  const boxPad = 20; // invoice-box padding + borders fudge
-  const drafts: Array<{ items: GstInvoiceLineItem[]; isFirst: boolean; pageIndex: number }> = [];
-
-  if (items.length === 0) {
-    return [
-      {
-        items: [],
-        includeFooter: true,
-        isFirst: true,
-        isLast: true,
-        pageIndex: 0,
-        pageCount: 1,
-        pageTotal: 0,
-        carriedForward: 0,
-      },
-    ];
-  }
-
-  let index = 0;
-  let pageIndex = 0;
-
-  while (index < items.length) {
-    const isFirst = pageIndex === 0;
-    const headerH = heights.firstHeader;
-    const limit = maxH - headerH - heights.thead - heights.footer - boxPad;
-
-    let take = 0;
-    while (index + take < items.length) {
-      const nextCount = take + 1;
-      const rowsH = sumHeights(heights.rows, index, nextCount);
-      if (rowsH > limit) break;
-      take = nextCount;
-    }
-
-    if (take === 0) {
-      take = 1;
-    }
-
-    drafts.push({
-      items: items.slice(index, index + take),
-      isFirst,
-      pageIndex,
-    });
-    index += take;
-    pageIndex += 1;
-  }
-
-  const pageCount = drafts.length;
+  const pageCount = Math.max(1, drafts.length);
   let running = 0;
   return drafts.map((p, i) => {
     const pageTotal = summarizeGstInvoicePageItems(p.items).pageTotal;
@@ -224,6 +271,126 @@ export function planInvoicePages(
       carriedForward: running,
     };
   });
+}
+
+/**
+ * Pack full item rows into half-A4 blocks so no row is split across a half.
+ * Every half includes page totals, terms, and QR; last half shows Grand Total.
+ */
+export function planInvoicePages(
+  items: GstInvoiceLineItem[],
+  heights: InvoiceSectionHeights
+): InvoicePdfPagePlan[] {
+  const maxH = maxContentHeightPx(heights.contentWidth);
+  const boxPad = 6;
+  const drafts: Array<{ items: GstInvoiceLineItem[]; isFirst: boolean; pageIndex: number }> = [];
+
+  if (items.length === 0) {
+    return annotateInvoicePages([{ items: [], isFirst: true, pageIndex: 0 }]);
+  }
+
+  let index = 0;
+  let pageIndex = 0;
+
+  while (index < items.length) {
+    const isFirst = pageIndex === 0;
+    const headerH = heights.firstHeader;
+    const chrome = headerH + heights.thead + boxPad;
+    const lastLimit = maxH - chrome - heights.footer;
+    const contLimit = maxH - chrome - (heights.contFooter || heights.footer);
+
+    let take = 0;
+    while (index + take < items.length) {
+      const nextCount = take + 1;
+      const rowsH = sumHeights(heights.rows, index, nextCount);
+      const wouldBeLast = index + nextCount >= items.length;
+      const limit = wouldBeLast ? lastLimit : contLimit;
+      if (rowsH > limit) break;
+      take = nextCount;
+    }
+
+    if (take === 0) {
+      take = 1;
+    }
+    take = Math.min(take, MAX_ROWS_PER_HALF);
+
+    drafts.push({
+      items: items.slice(index, index + take),
+      isFirst,
+      pageIndex,
+    });
+    index += take;
+    pageIndex += 1;
+  }
+
+  return annotateInvoicePages(drafts);
+}
+
+function planInvoicePagesByFit(opts: {
+  title: string;
+  items: GstInvoiceLineItem[];
+  firstHeaderHtml: string | ((page: InvoicePdfPagePlan) => string);
+  lastFooterHtml: string;
+  contFooterHtml: string;
+  buildItemsHtml: (pageItems: GstInvoiceLineItem[]) => string;
+}): InvoicePdfPagePlan[] {
+  if (opts.items.length === 0) {
+    return annotateInvoicePages([{ items: [], isFirst: true, pageIndex: 0 }]);
+  }
+
+  const host = createMeasureHost();
+  try {
+    const drafts: Array<{ items: GstInvoiceLineItem[]; isFirst: boolean; pageIndex: number }> = [];
+    let index = 0;
+    let pageIndex = 0;
+
+    while (index < opts.items.length) {
+      const remaining = opts.items.length - index;
+      const headerInner = resolveFirstHeaderHtml(
+        opts.firstHeaderHtml,
+        dummyPage({ isFirst: pageIndex === 0, pageIndex, pageCount: 9 })
+      );
+      const allRemaining = opts.items.slice(index);
+      const allFitAsLast = layoutFitsHalfPage(
+        host,
+        opts.title,
+        headerInner,
+        opts.buildItemsHtml(allRemaining),
+        opts.lastFooterHtml
+      );
+
+      let take: number;
+      if (allFitAsLast) {
+        take = remaining;
+      } else {
+        take = maxItemsFittingHalfPage(host, {
+          title: opts.title,
+          items: opts.items,
+          start: index,
+          remaining: Math.min(remaining, MAX_ROWS_PER_HALF),
+          headerInner,
+          footerInner: opts.contFooterHtml,
+          buildItemsHtml: opts.buildItemsHtml,
+        });
+        if (take >= remaining) {
+          take = Math.max(1, remaining - 1);
+        }
+      }
+      take = Math.min(take, MAX_ROWS_PER_HALF, remaining);
+
+      drafts.push({
+        items: opts.items.slice(index, index + take),
+        isFirst: pageIndex === 0,
+        pageIndex,
+      });
+      index += take;
+      pageIndex += 1;
+    }
+
+    return annotateInvoicePages(drafts);
+  } finally {
+    document.body.removeChild(host);
+  }
 }
 
 export function formatInvoicePageLabel(pageIndex: number, pageCount: number): string {
@@ -312,36 +479,27 @@ export async function buildPaginatedInvoicePdf(opts: {
   download?: boolean;
   scale?: number;
 }): Promise<jsPDF> {
-  const measurePage: InvoicePdfPagePlan = {
-    items: opts.items.slice(0, 1),
-    includeFooter: true,
-    isFirst: true,
-    isLast: false,
-    pageIndex: 0,
-    pageCount: 2,
-    pageTotal: 0,
-    carriedForward: 0,
-  };
-  const itemTableForMeasure = opts.buildItemsHtml(opts.items);
-  const heights = measureInvoiceSections({
-    title: opts.title,
-    firstHeaderHtml: resolveFirstHeaderHtml(opts.firstHeaderHtml, measurePage),
-    contHeaderHtml: opts.buildContHeaderHtml({
-      items: opts.items.slice(0, 1),
-      includeFooter: true,
-      isFirst: false,
-      isLast: false,
-      pageIndex: 1,
-      pageCount: 2,
+  const lastFooterHtml =
+    opts.buildFooterHtml?.(dummyPage({ isLast: true, pageCount: 1 }), {
+      isLast: true,
       pageTotal: 0,
       carriedForward: 0,
-    }),
-    itemTableHtml: itemTableForMeasure,
-    footerHtml: opts.footerHtml,
-    itemCount: opts.items.length,
-  });
+    }) ?? opts.footerHtml;
+  const contFooterHtml =
+    opts.buildFooterHtml?.(dummyPage({ isLast: false, pageIndex: 1 }), {
+      isLast: false,
+      pageTotal: 0,
+      carriedForward: 0,
+    }) ?? opts.footerHtml;
 
-  const pages = planInvoicePages(opts.items, heights);
+  const pages = planInvoicePagesByFit({
+    title: opts.title,
+    items: opts.items,
+    firstHeaderHtml: opts.firstHeaderHtml,
+    lastFooterHtml,
+    contFooterHtml,
+    buildItemsHtml: opts.buildItemsHtml,
+  });
   const pdf = new jsPDF('p', 'mm', 'a4');
 
   for (let i = 0; i < pages.length; i += 1) {
