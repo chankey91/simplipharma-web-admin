@@ -2,7 +2,7 @@ export const GST_INVOICE_STYLES = `
   body {
     font-family: Arial, Helvetica, sans-serif;
     font-size: 11px;
-    line-height: 1.15;
+    line-height: 1.12;
     background: #fff;
   }
   .invoice-box {
@@ -43,14 +43,14 @@ export const GST_INVOICE_STYLES = `
   }
   .items-table td,
   .items-table th {
-    padding: 3px 3px;
-    line-height: 1.25;
+    padding: 2px 2px;
+    line-height: 1.15;
     vertical-align: middle;
   }
   .items-table thead th {
     white-space: nowrap;
     font-size: 10px;
-    padding: 3px 2px;
+    padding: 2px 2px;
     font-weight: bold;
   }
   .items-table td.col-batch {
@@ -102,7 +102,7 @@ export const GST_INVOICE_STYLES = `
     gap: 12px;
   }
   .title-cell .title {
-    font-size: 16px;
+    font-size: 14px;
     font-weight: bold;
     text-align: left;
   }
@@ -126,17 +126,17 @@ export const GST_INVOICE_STYLES = `
   }
   .invoice-spacer {
     flex: 1 1 auto;
-    min-height: 4px;
+    min-height: 0;
     border-left: 1px solid #000;
     border-right: 1px solid #000;
   }
   .invoice-footer table:first-of-type tr:first-child > * {
     border-top: 1px solid #000;
   }
-  .footer-terms { font-size: 10px; line-height: 1.2; }
+  .footer-terms { font-size: 9px; line-height: 1.15; }
   .signatory { vertical-align: bottom; }
   .pay-qr { text-align: center; vertical-align: top; }
-  .pay-qr img { width: 70px; height: 70px; display: block; margin: 0 auto 2px; }
+  .pay-qr img { width: 52px; height: 52px; display: block; margin: 0 auto 1px; }
   .pay-qr .pay-qr-label { font-size: 9px; font-weight: bold; }
   @media print {
     body { margin: 0; }
@@ -476,12 +476,12 @@ export function buildGstInvoiceFooter(
   <tr>
     <td width="${termsWidth}" class="footer-terms">
       <b>Terms & Conditions</b><br>
-      ${termsHtml}<br><br>
+      ${termsHtml}<br>
       <b>Remarks:</b> ${remarks}<br>
       <b>Rs.</b> ${amountInWords}
     </td>${qrCell}
     <td width="40%" class="center signatory">
-      For ${signatoryFor}<br><br>
+      For ${signatoryFor}<br>
       <b>Authorised Signatory</b>
     </td>
   </tr>
