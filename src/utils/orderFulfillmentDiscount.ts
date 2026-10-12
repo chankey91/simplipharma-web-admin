@@ -6,6 +6,50 @@ const toNum = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+export type OrderTradeDiscountBand = {
+  /** Inclusive vendor (PI) discount %. */
+  minVendorPct: number;
+  /** Retailer Disc % given when vendor discount is at least minVendorPct. */
+  givePct: number;
+};
+
+/** Current live rule, used as admin auto-fill until they save their own bands. */
+export const DEFAULT_ORDER_TRADE_DISCOUNT_BANDS: OrderTradeDiscountBand[] = [
+  { minVendorPct: 0, givePct: 0 },
+  { minVendorPct: 3, givePct: 1.5 },
+  { minVendorPct: 5, givePct: 2 },
+];
+
+export function normalizeOrderTradeDiscountBands(
+  bands: OrderTradeDiscountBand[] | undefined | null
+): OrderTradeDiscountBand[] {
+  const byMin = new Map<number, number>();
+  for (const raw of bands || []) {
+    const minVendorPct = round2(Math.min(100, Math.max(0, toNum(raw.minVendorPct))));
+    const givePct = round2(Math.min(100, Math.max(0, toNum(raw.givePct))));
+    byMin.set(minVendorPct, givePct);
+  }
+  return [...byMin.entries()]
+    .map(([minVendorPct, givePct]) => ({ minVendorPct, givePct }))
+    .sort((a, b) => a.minVendorPct - b.minVendorPct);
+}
+
+let liveTradeDiscountBands = normalizeOrderTradeDiscountBands(DEFAULT_ORDER_TRADE_DISCOUNT_BANDS);
+
+export function getOrderTradeDiscountBands(): OrderTradeDiscountBand[] {
+  return liveTradeDiscountBands;
+}
+
+export function setOrderTradeDiscountBands(bands: OrderTradeDiscountBand[]): OrderTradeDiscountBand[] {
+  const next = normalizeOrderTradeDiscountBands(bands);
+  liveTradeDiscountBands = next.length
+    ? next
+    : normalizeOrderTradeDiscountBands(DEFAULT_ORDER_TRADE_DISCOUNT_BANDS);
+  return liveTradeDiscountBands;
+}
+
 /** Purchase invoice line "Discount %" field (trade/cash discount on purchase — not retail margin). */
 export function purchaseInvoiceItemDiscountPct(
   item: Pick<PurchaseInvoiceItem, 'discountPercentage'>
@@ -35,13 +79,19 @@ export function batchPurchaseDiscountPricePerUnit(batch?: {
 }
 
 /**
- * Order invoice DISC column from vendor (PI) discount %:
- * < 3% → 0, 3–4.xx% → 1.5, 5%+ → 2.
+ * Order invoice DISC column from vendor (PI) discount % using admin bands
+ * (default: under 3% → 0, 3–4.xx% → 1.5, 5%+ → 2).
  * Standard margin stays in the unit rate only.
  */
-export function orderTradeDiscountFromPurchasePct(purchaseDiscountPct: number): number {
-  if (purchaseDiscountPct >= 5) return 2;
-  if (purchaseDiscountPct >= 3) return 1.5;
+export function orderTradeDiscountFromPurchasePct(
+  purchaseDiscountPct: number,
+  bands?: OrderTradeDiscountBand[]
+): number {
+  const list = normalizeOrderTradeDiscountBands(bands ?? getOrderTradeDiscountBands());
+  const sorted = [...list].sort((a, b) => b.minVendorPct - a.minVendorPct);
+  for (const band of sorted) {
+    if (purchaseDiscountPct >= band.minVendorPct) return band.givePct;
+  }
   return 0;
 }
 
@@ -80,7 +130,7 @@ export function resolvePurchaseDiscountPct(params: {
   return 0;
 }
 
-/** DISC column value (0% / 1.5% / 2%) from purchase discount field. */
+/** DISC column value from purchase discount field (admin-configured bands). */
 export function resolveOrderLineTradeDiscountPct(params: {
   batch?: SellDiscountBatch;
   medicineId?: string;
@@ -223,20 +273,26 @@ const parseDiscountPct = (value: unknown): number | undefined => {
   return n;
 };
 
-/** Order invoice Disc % — trade discount only (0% / 1.5% / 2%). */
-export function isOrderTradeDiscountPct(n: number): boolean {
-  return n === 0 || Math.abs(n - 1.5) < 0.001 || Math.abs(n - 2) < 0.001;
+/** Order invoice Disc % — matches a configured give % (or 0). */
+export function isOrderTradeDiscountPct(n: number, bands?: OrderTradeDiscountBand[]): boolean {
+  if (n === 0) return true;
+  const give = normalizeOrderTradeDiscountBands(bands ?? getOrderTradeDiscountBands()).map(
+    (b) => b.givePct
+  );
+  return give.some((g) => Math.abs(g - n) < 0.001);
 }
 
-function normalizeOrderTradeDiscountPct(n: number): number {
-  if (Math.abs(n - 2) < 0.001) return 2;
-  if (Math.abs(n - 1.5) < 0.001) return 1.5;
+function normalizeOrderTradeDiscountPct(n: number, bands?: OrderTradeDiscountBand[]): number {
+  const list = normalizeOrderTradeDiscountBands(bands ?? getOrderTradeDiscountBands());
+  for (const band of list) {
+    if (Math.abs(band.givePct - n) < 0.001) return band.givePct;
+  }
   return 0;
 }
 
 /**
- * Saved order trade discount (0% / 1.5% / 2% only).
- * PI purchase Disc % (e.g. 13%) must NOT appear on the order — it maps to 0 / 1.5 / 2.
+ * Saved order trade discount (configured give % only).
+ * PI purchase Disc % (e.g. 13%) must NOT appear on the order.
  */
 function readPersistedOrderTradeDiscount(...values: unknown[]): number | undefined {
   for (const value of values) {
@@ -407,7 +463,7 @@ export function resolveOrderLineDiscountPct(params: {
     if (saved !== undefined) return saved;
   }
 
-  // Only trust saved order trade Disc of 0 / 1.5 / 2. Values like PI 13% are not order Disc %.
+  // Only trust saved Disc that matches a configured give %. PI 13% is not order Disc %.
   const persisted = readPersistedOrderTradeDiscount(
     params.allocationDiscount,
     params.itemDiscount
@@ -423,7 +479,7 @@ export function resolveOrderLineDiscountPct(params: {
   return orderTradeDiscountFromPurchasePct(purchaseDisc);
 }
 
-/** DISC column / invoice display — 0% / 1.5% / 2% trade discount, never standard margin %. */
+/** DISC column / invoice display — configured trade discount, never standard margin %. */
 export function resolveOrderLineDisplayDiscountPct(params: {
   itemDiscount?: unknown;
   allocationDiscount?: unknown;

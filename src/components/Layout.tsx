@@ -66,6 +66,7 @@ import { useFulfillmentLeaveGuard } from '../context/FulfillmentLeaveGuardContex
 import { getPanelTitle } from '../auth/permissions';
 import { AdminNotificationBell } from './AdminNotificationBell';
 import { useAdminNotifications } from '../hooks/useAdminNotifications';
+import { useOrderTradeDiscountSettings } from '../hooks/useOrderTradeDiscountSettings';
 
 const drawerWidth = 260;
 
@@ -177,6 +178,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const { guardedNavigate } = useFulfillmentLeaveGuard();
   const { notifications, unreadCount, loading: notificationsLoading, markAllSeen } =
     useAdminNotifications(panelRole);
+  useOrderTradeDiscountSettings();
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;

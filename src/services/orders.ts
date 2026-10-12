@@ -26,6 +26,7 @@ import {
   resolveOrderLineDisplayDiscountPct,
 } from '../utils/orderFulfillmentDiscount';
 import { getAllPurchaseInvoices } from './purchaseInvoices';
+import { getOrderTradeDiscountSettings } from './orderTradeDiscountSettings';
 import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
 import { calculateOrderTotalsFromLines, resolveOrderInvoiceGrandTotal } from '../utils/orderTotals';
 import { isReceivableOrder, orderOutstanding } from '../utils/storeReceivables';
@@ -1010,6 +1011,7 @@ export const fulfillOrder = async (
     reduceAllStock(),
     resolveInvoiceNumber(),
     resolvePurchaseLookup(),
+    getOrderTradeDiscountSettings().catch(() => undefined),
   ]);
 
   if (stockUpdateErrors.length > 0) {
