@@ -33,6 +33,7 @@ import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { PurchaseOfficersTab } from '../components/PurchaseOfficersTab';
 import { PendingOrderEmailHolidaysTab } from '../components/PendingOrderEmailHolidaysTab';
+import { OrderTradeDiscountBandsTab } from '../components/OrderTradeDiscountBandsTab';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -182,6 +183,7 @@ export const OperationsPage: React.FC = () => {
           <Tab label="Operators" />
           <Tab label="Purchase Officers" />
           <Tab label="Holidays & order email" />
+          <Tab label="Retailer Disc %" />
         </Tabs>
 
         <TabPanel value={tabValue} index={0}>
@@ -362,6 +364,10 @@ export const OperationsPage: React.FC = () => {
 
         <TabPanel value={tabValue} index={3}>
           <PendingOrderEmailHolidaysTab />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={4}>
+          <OrderTradeDiscountBandsTab />
         </TabPanel>
       </Paper>
     </Box>
