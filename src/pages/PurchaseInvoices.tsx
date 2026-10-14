@@ -33,6 +33,7 @@ import {
   CloudSync,
   CameraAlt,
   Delete,
+  Download,
 } from '@mui/icons-material';
 import {
   usePurchaseInvoices,
@@ -50,6 +51,8 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import type { PaymentStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
+import { exportPurchaseDiscountList } from '../utils/purchaseDiscountListExport';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_ROWS_PER_PAGE = 20;
@@ -98,6 +101,8 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+  const [minVendorDiscountPct, setMinVendorDiscountPct] = useState('');
+  const [extractingDiscountList, setExtractingDiscountList] = useState(false);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('invoiceDate', 'desc');
 
@@ -260,6 +265,34 @@ export const PurchaseInvoicesPage: React.FC = () => {
     }
   };
 
+  const handleExtractDiscountList = async () => {
+    const minPct = parseFloat(minVendorDiscountPct);
+    if (!Number.isFinite(minPct) || minPct < 0) {
+      await alert('Enter a valid minimum discount %', { severity: 'warning' });
+      return;
+    }
+    setExtractingDiscountList(true);
+    try {
+      const all = await getAllPurchaseInvoices();
+      const count = await exportPurchaseDiscountList(all, minPct);
+      if (count === 0) {
+        await alert(`No medicines found with vendor discount of ${minPct}% or more.`, {
+          severity: 'warning',
+        });
+        return;
+      }
+      await alert(`Downloaded ${count} medicine/vendor row(s) at ${minPct}%+ discount.`, {
+        severity: 'success',
+      });
+    } catch (err: unknown) {
+      await alert(err instanceof Error ? err.message : 'Failed to extract discount list', {
+        severity: 'error',
+      });
+    } finally {
+      setExtractingDiscountList(false);
+    }
+  };
+
   const initialLoading = typesenseDisabled ? allLoading : searchLoading || searchErrored;
   if (initialLoading) return <Loading message="Loading purchase invoices..." />;
 
@@ -341,7 +374,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
       </Grid>
 
       {/* Filters */}
-      <Box display="flex" gap={2} mb={2}>
+      <Box display="flex" gap={2} mb={2} flexWrap="wrap" alignItems="center">
         <TextField
           placeholder="Search invoices..."
           value={searchTerm}
@@ -374,6 +407,22 @@ export const PurchaseInvoicesPage: React.FC = () => {
             <MenuItem value="Partial">Partial</MenuItem>
           </Select>
         </FormControl>
+        <TextField
+          type="number"
+          label="Min vendor discount %"
+          value={minVendorDiscountPct}
+          onChange={(e) => setMinVendorDiscountPct(e.target.value)}
+          inputProps={{ min: 0, max: 100, step: 0.5 }}
+          sx={{ width: 200 }}
+        />
+        <Button
+          variant="outlined"
+          startIcon={<Download />}
+          disabled={extractingDiscountList}
+          onClick={() => void handleExtractDiscountList()}
+        >
+          {extractingDiscountList ? 'Extracting…' : 'Extract discount list'}
+        </Button>
       </Box>
 
       {/* Invoices Table */}
