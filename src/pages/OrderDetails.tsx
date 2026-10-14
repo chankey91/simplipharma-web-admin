@@ -1559,7 +1559,9 @@ export const OrderDetailsPage: React.FC = () => {
           action: 'unfulfill',
           title: 'Un-fulfill order',
           message:
-            'Return this order to Pending, restore stock to inventory, and allow batch/discount edits. ' +
+            (order.status === 'In Transit' || order.status === 'Delivered'
+              ? `This order is ${order.status}. Un-fulfill will pull it back from dispatch/delivery, restore stock, reverse wallet applied on this invoice, and return it to Pending. `
+              : 'Return this order to Pending, restore stock to inventory, and allow batch/discount edits. ') +
             'The invoice number and line assignments will be kept. You will need to fulfill again to deduct stock.',
         });
         break;
@@ -3179,7 +3181,10 @@ export const OrderDetailsPage: React.FC = () => {
             Recalc prices
           </Button>
         )}
-        {canEditOrders && order.status === 'Order Fulfillment' && (
+        {canEditOrders &&
+          (order.status === 'Order Fulfillment' ||
+            order.status === 'In Transit' ||
+            order.status === 'Delivered') && (
           <Button
             size="small"
             variant="outlined"

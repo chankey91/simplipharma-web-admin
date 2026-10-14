@@ -1597,9 +1597,11 @@ export async function applyWalletToUnpaidOrder(
   return { applied: wallet.applied, paymentStatus: nextStatus, remainingDue: nextDue };
 };
 
+const UNFULFILLABLE_STATUSES: OrderStatus[] = ['Order Fulfillment', 'In Transit', 'Delivered'];
+
 /**
- * Revert Order Fulfillment → Pending: restores batch stock and keeps line/batch assignments.
- * Only allowed before dispatch (not In Transit / Delivered).
+ * Revert fulfillment (including In Transit / Delivered) → Pending:
+ * restores batch stock and keeps line/batch assignments.
  */
 export const unfulfillOrder = async (
   orderId: string,
@@ -1616,9 +1618,9 @@ export const unfulfillOrder = async (
   const data = orderDoc.data();
   const status = data?.status as OrderStatus | undefined;
 
-  if (status !== 'Order Fulfillment') {
+  if (!status || !UNFULFILLABLE_STATUSES.includes(status)) {
     throw new Error(
-      'Only orders in Order Fulfillment can be un-fulfilled. Dispatched or delivered orders cannot be reversed here.'
+      'Only Order Fulfillment, In Transit, or Delivered orders can be un-fulfilled.'
     );
   }
 
@@ -1642,6 +1644,7 @@ export const unfulfillOrder = async (
     );
   }
 
+  const fromStatus = status === 'Delivered' || status === 'In Transit' ? ` (was ${status})` : '';
   await updateDoc(orderRef, {
     status: 'Pending',
     paidAmount: 0,
@@ -1652,6 +1655,14 @@ export const unfulfillOrder = async (
     creditAppliedAt: deleteField(),
     creditAppliedDate: deleteField(),
     walletCreditApplications: deleteField(),
+    gst: deleteField(),
+    dispatchDate: deleteField(),
+    dispatchedBy: deleteField(),
+    trackingNumber: deleteField(),
+    courierName: deleteField(),
+    dispatchNotes: deleteField(),
+    estimatedDeliveryDate: deleteField(),
+    deliveryConfirmation: deleteField(),
     stockRestoredOnUnfulfill: stockRestoreErrors.length === 0,
     timeline: [
       ...currentTimeline,
@@ -1659,9 +1670,10 @@ export const unfulfillOrder = async (
         'Pending',
         unfulfilledBy,
         stockRestoreErrors.length === 0
-          ? note || 'Order un-fulfilled; stock restored and order returned to Pending for edits'
+          ? note ||
+            `Order un-fulfilled${fromStatus}; stock restored and order returned to Pending for edits`
           : note ||
-            'Order un-fulfilled and returned to Pending, but some stock could not be restored'
+            `Order un-fulfilled${fromStatus} and returned to Pending, but some stock could not be restored`
       ),
     ],
   });
