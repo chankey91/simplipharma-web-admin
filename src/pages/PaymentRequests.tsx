@@ -69,10 +69,25 @@ export const PaymentRequestsPage: React.FC = () => {
   const actionPending =
     approveMutation.isPending || rejectMutation.isPending || revertMutation.isPending;
 
-  const handleApprove = async (requestId: string, resettle = false) => {
+  const handleApprove = async (request: PaymentRequest, resettle = false) => {
+    const cash = Number(request.requestedAmount ?? 0);
+    const wallet = requestedWallet(request);
+    const method = methodLabel(request.method, cash, wallet);
+    const invoice = request.invoiceNumber || request.orderId;
+    const store = request.retailerName || request.retailerEmail || request.retailerId || 'this store';
+    const ok = await confirm(
+      resettle
+        ? `Apply this approved payment to invoice ${invoice} for ${store}? Cash/online ${formatCurrency(cash)} and wallet ${formatCurrency(wallet)} will be posted to the invoice.`
+        : `Approve payment request for ${store} (invoice ${invoice})?\n\nMethod: ${method}\nCash/online: ${formatCurrency(cash)}\nWallet: ${formatCurrency(wallet)}\n\nThis posts the payment to the invoice.`,
+      {
+        title: resettle ? 'Apply payment to invoice' : 'Approve payment request',
+        confirmLabel: resettle ? 'Apply' : 'Approve',
+      }
+    );
+    if (!ok) return;
     try {
       const result = await approveMutation.mutateAsync({
-        requestId,
+        requestId: request.id,
         reviewedBy: auth.currentUser?.email || auth.currentUser?.uid || 'admin',
         resettle,
       });
@@ -320,7 +335,7 @@ export const PaymentRequestsPage: React.FC = () => {
                         <Button
                           size="small"
                           variant="contained"
-                          onClick={() => handleApprove(r.id)}
+                          onClick={() => void handleApprove(r)}
                           disabled={actionPending}
                         >
                           Approve
@@ -349,7 +364,7 @@ export const PaymentRequestsPage: React.FC = () => {
                           <Button
                             size="small"
                             variant="outlined"
-                            onClick={() => handleApprove(r.id, true)}
+                            onClick={() => void handleApprove(r, true)}
                             disabled={actionPending}
                           >
                             Apply to invoice

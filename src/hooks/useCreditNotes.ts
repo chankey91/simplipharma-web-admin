@@ -12,7 +12,7 @@ import {
   createDirectLedgerDebitNote,
 } from '../services/ledgerNotes';
 
-import { getAllDebitNotes } from '../services/debitNotes';
+import { getAllDebitNotes, getDebitNotesInRange } from '../services/debitNotes';
 import { getCreditNoteTotals, getDebitNoteTotals, NoteTotals } from '../services/dashboardAggregations';
 import {
   searchCreditNotesTypesense,
@@ -86,6 +86,32 @@ export const useCreditNotes = (options?: { enabled?: boolean }) => {
   });
 };
 
+/** Credit notes in an IST datetime window (used by the notes list date filter). */
+export const useCreditNotesInDateRange = (
+  fromMs: number | null,
+  toMs: number | null,
+  options?: { enabled?: boolean }
+) => {
+  return useQuery({
+    queryKey: ['creditNotesInRange', fromMs, toMs],
+    queryFn: () => getCreditNotesInRange(fromMs ?? 0, toMs ?? undefined),
+    enabled: options?.enabled ?? true,
+  });
+};
+
+/** Debit notes in an IST datetime window (used by the notes list date filter). */
+export const useDebitNotesInDateRange = (
+  fromMs: number | null,
+  toMs: number | null,
+  options?: { enabled?: boolean }
+) => {
+  return useQuery({
+    queryKey: ['debitNotesInRange', fromMs, toMs],
+    queryFn: () => getDebitNotesInRange(fromMs ?? 0, toMs ?? undefined),
+    enabled: options?.enabled ?? true,
+  });
+};
+
 /** Credit notes scoped to a margin-report period (avoids full collection for this/last month). */
 export const useCreditNotesInPeriod = (period: MarginPeriodFilter) => {
   const range = marginPeriodRange(period);
@@ -93,6 +119,8 @@ export const useCreditNotesInPeriod = (period: MarginPeriodFilter) => {
     queryKey: ['creditNotesInPeriod', period, range?.startMs ?? null, range?.endMs ?? null],
     queryFn: () =>
       range ? getCreditNotesInRange(range.startMs, range.endMs) : getAllCreditNotes(),
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 };
 

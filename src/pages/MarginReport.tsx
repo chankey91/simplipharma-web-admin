@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -32,14 +32,13 @@ import { Search, Visibility, TrendingUp, InfoOutlined } from '@mui/icons-materia
 import { alpha, useTheme } from '@mui/material/styles';
 import { useOrdersInPeriod } from '../hooks/useOrders';
 import { useMedicinesByIds } from '../hooks/useInventory';
-import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
 import { useCreditNotesInPeriod } from '../hooks/useCreditNotes';
 import { useExpiryReturnsInPeriod } from '../hooks/useExpiryReturns';
 import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
-import { useNavigate } from 'react-router-dom';
-import { computeOrderMarginSummary } from '../utils/orderLineMargin';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { computeOrderMarginSummary, indexMedicinesById } from '../utils/orderLineMargin';
 import { computeReturnMarginSummary } from '../utils/returnMargin';
 import { coerceToDate, dateInMarginPeriod, type MarginPeriodFilter } from '../utils/marginPeriod';
 import { useTableSort } from '../hooks/useTableSort';
@@ -48,6 +47,11 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 
 type PeriodFilter = MarginPeriodFilter;
+
+function periodFromSearch(raw: string | null): PeriodFilter {
+  if (raw === 'this_month' || raw === 'last_month' || raw === 'all') return raw;
+  return 'this_month';
+}
 
 type MarginOrderRow = {
   order: Order;
@@ -83,16 +87,28 @@ const inPeriod = (date: Date, period: PeriodFilter): boolean =>
 export const MarginReportPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('Delivered');
-  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('this_month');
+  const periodFilter = periodFromSearch(searchParams.get('period'));
+  const [page, setPage] = useState(1);
+
+  const setPeriodFilter = (period: PeriodFilter) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('period', period);
+    setSearchParams(next, { replace: true });
+  };
+
+  useEffect(() => {
+    setPage(1);
+  }, [periodFilter]);
 
   // Scope the orders query to the selected period so "this month"/"last month"
   // don't download the entire orders history.
   const { data: orders, isLoading: ordersLoading } = useOrdersInPeriod(periodFilter);
-  const { data: purchaseInvoices } = usePurchaseInvoices();
-  const { data: creditNotes } = useCreditNotesInPeriod(periodFilter);
-  const { data: expiryReturns } = useExpiryReturnsInPeriod(periodFilter);
+  const { data: creditNotes, isLoading: creditLoading } = useCreditNotesInPeriod(periodFilter);
+  const { data: expiryReturns, isLoading: expiryLoading } = useExpiryReturnsInPeriod(periodFilter);
+  const booksReady = !ordersLoading && !creditLoading && !expiryLoading;
 
   const marginMedicineIds = useMemo(() => {
     const ids = new Set<string>();
@@ -117,17 +133,16 @@ export const MarginReportPage: React.FC = () => {
   }, [orders, creditNotes, expiryReturns]);
 
   const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(
-    orders === undefined ? undefined : marginMedicineIds
+    booksReady ? marginMedicineIds : undefined
   );
+  const medicineById = useMemo(() => indexMedicinesById(medicines), [medicines]);
 
-  const [page, setPage] = useState(1);
   const [rowsPerPage] = useState(15);
   const [detailOrder, setDetailOrder] = useState<MarginOrderRow | null>(null);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('orderDate', 'desc');
 
   const marginRows = useMemo((): MarginOrderRow[] => {
-    const medList = medicines ?? [];
     const list = orders ?? [];
     const rows: MarginOrderRow[] = [];
 
@@ -138,10 +153,9 @@ export const MarginReportPage: React.FC = () => {
       if (!inPeriod(d, periodFilter)) continue;
 
       const summary = computeOrderMarginSummary(
-        medList,
+        medicineById,
         order.medicines ?? [],
-        order.taxPercentage,
-        purchaseInvoices
+        order.taxPercentage
       );
       if (summary.lines.length === 0) continue;
 
@@ -155,7 +169,7 @@ export const MarginReportPage: React.FC = () => {
       });
     }
     return rows;
-  }, [orders, medicines, purchaseInvoices, statusFilter, periodFilter]);
+  }, [orders, medicineById, statusFilter, periodFilter]);
 
   const filteredRows = useMemo(() => {
     const q = searchTerm.toLowerCase().trim();
@@ -216,11 +230,10 @@ export const MarginReportPage: React.FC = () => {
       computeReturnMarginSummary(
         creditNotes,
         expiryReturns,
-        medicines ?? [],
-        periodFilter,
-        purchaseInvoices
+        medicineById,
+        periodFilter
       ),
-    [creditNotes, expiryReturns, medicines, periodFilter, purchaseInvoices]
+    [creditNotes, expiryReturns, medicineById, periodFilter]
   );
 
   const summary = useMemo(() => {
@@ -252,7 +265,7 @@ export const MarginReportPage: React.FC = () => {
   const paginatedRows = sortedRows.slice((page - 1) * rowsPerPage, page * rowsPerPage);
   const pageCount = Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
 
-  if (ordersLoading || medicinesLoading) {
+  if (ordersLoading || creditLoading || expiryLoading || medicinesLoading) {
     return <Loading message="Loading margin report..." />;
   }
 
@@ -265,8 +278,9 @@ export const MarginReportPage: React.FC = () => {
           Margin report
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Profit per order from batch purchase cost vs invoice selling price (ex-GST, after line
+          Profit per order from batch landed cost vs invoice selling price (ex-GST, after line
           discount). Returns (order credit notes and approved expiry returns) reduce net margin below.
+          Prefer This month / Last month — All time downloads the full order history.
         </Typography>
       </Box>
 
@@ -449,7 +463,6 @@ export const MarginReportPage: React.FC = () => {
                 value={periodFilter}
                 onChange={(e) => {
                   setPeriodFilter(e.target.value as PeriodFilter);
-                  setPage(1);
                 }}
               >
                 <MenuItem value="this_month">This month</MenuItem>
@@ -713,10 +726,9 @@ export const MarginReportPage: React.FC = () => {
                 </TableHead>
                 <TableBody>
                   {computeOrderMarginSummary(
-                    medicines ?? [],
+                    medicineById,
                     detailOrder.order.medicines ?? [],
-                    detailOrder.order.taxPercentage,
-                    purchaseInvoices
+                    detailOrder.order.taxPercentage
                   ).lines.map((line, idx) => (
                     <TableRow key={`${line.medicineId}-${idx}`}>
                       <TableCell>{line.name || '—'}</TableCell>

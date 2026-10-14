@@ -1,5 +1,5 @@
 import React from 'react';
-import { Breadcrumbs as MuiBreadcrumbs, Link, Typography } from '@mui/material';
+import { Breadcrumbs as MuiBreadcrumbs, Link, Typography, SxProps, Theme } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 
 interface BreadcrumbItem {
@@ -7,13 +7,13 @@ interface BreadcrumbItem {
   path?: string;
 }
 
-export const Breadcrumbs: React.FC<{ items: BreadcrumbItem[] }> = ({ items }) => {
+export const Breadcrumbs: React.FC<{ items: BreadcrumbItem[]; sx?: SxProps<Theme> }> = ({ items, sx }) => {
   const navigate = useNavigate();
 
   const breadcrumbItems = items;
 
   return (
-    <MuiBreadcrumbs aria-label="breadcrumb" sx={{ mb: 2 }}>
+    <MuiBreadcrumbs aria-label="breadcrumb" sx={{ mb: 2, ...sx }}>
       {breadcrumbItems.map((item, index) => {
         const isLast = index === breadcrumbItems.length - 1;
         

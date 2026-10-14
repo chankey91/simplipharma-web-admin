@@ -5,7 +5,7 @@
 import type { CreditNote, CreditNoteLine, PurchaseInvoice } from '../types';
 import type { ExpiryReturnRequest } from '../services/expiryReturns';
 import { buildPurchaseLandedCostLookup, type PurchaseLandedCostLookup } from './purchaseInvoiceLandedCost';
-import { effectiveBatchUnitCost } from './orderLineMargin';
+import { effectiveBatchUnitCost, resolveMedicine } from './orderLineMargin';
 import { dateInMarginPeriod, coerceToDate, type MarginPeriodFilter } from './marginPeriod';
 
 const toNum = (v: unknown): number => {
@@ -48,12 +48,12 @@ function lineCogsReversalExGst(
   medicineId: string | undefined,
   batchNumber: string | undefined,
   quantity: number,
-  medicines: any[],
+  medicines: any[] | Map<string, any>,
   purchaseLookup?: PurchaseLandedCostLookup
 ): number {
   const qty = toNum(quantity);
   if (qty <= 0 || !medicineId || !batchNumber) return 0;
-  const med = medicines.find((m) => m.id === medicineId);
+  const med = resolveMedicine(medicines, medicineId);
   const batch = med?.stockBatches?.find((b: any) => b.batchNumber === batchNumber);
   const unitCost = effectiveBatchUnitCost(batch, {
     medicineId,
@@ -65,7 +65,7 @@ function lineCogsReversalExGst(
 
 function creditNoteLinesToMarginRows(
   note: CreditNote,
-  medicines: any[],
+  medicines: any[] | Map<string, any>,
   purchaseLookup?: PurchaseLandedCostLookup
 ): ReturnMarginLine[] {
   const date = coerceToDate(note.creditNoteDate ?? note.createdAt);
@@ -98,13 +98,13 @@ function creditNoteLinesToMarginRows(
 
 function expiryReturnToMarginRows(
   req: ExpiryReturnRequest,
-  medicines: any[],
+  medicines: any[] | Map<string, any>,
   purchaseLookup?: PurchaseLandedCostLookup
 ): ReturnMarginLine[] {
   const date = coerceToDate(req.approvedAt ?? req.paidAt ?? req.createdAt);
   const retailerLabel = req.retailerName || req.retailerEmail;
   return (req.items || []).map((item) => {
-    const med = medicines.find((m) => m.id === item.medicineId);
+    const med = resolveMedicine(medicines, item.medicineId);
     const gstRate = toNum(med?.gstRate) || 5;
     const refund = toNum(item.refundAmount) || toNum(item.unitRefundPrice) * toNum(item.quantity);
     const sales = refundExGst(refund, gstRate);
@@ -136,14 +136,16 @@ const EXPIRY_RETURN_MARGIN_STATUSES = new Set(['approved', 'paid']);
 export function computeReturnMarginSummary(
   creditNotes: CreditNote[] | undefined,
   expiryReturns: ExpiryReturnRequest[] | undefined,
-  medicines: any[],
+  medicines: any[] | Map<string, any>,
   period: MarginPeriodFilter,
-  purchaseInvoices?: PurchaseInvoice[]
+  purchaseInvoicesOrLookup?: PurchaseInvoice[] | PurchaseLandedCostLookup
 ): ReturnMarginSummary {
   const purchaseLookup =
-    purchaseInvoices && purchaseInvoices.length > 0
-      ? buildPurchaseLandedCostLookup(purchaseInvoices)
-      : undefined;
+    purchaseInvoicesOrLookup instanceof Map
+      ? purchaseInvoicesOrLookup
+      : purchaseInvoicesOrLookup && purchaseInvoicesOrLookup.length > 0
+        ? buildPurchaseLandedCostLookup(purchaseInvoicesOrLookup)
+        : undefined;
 
   const lines: ReturnMarginLine[] = [];
   const orderReturnIds = new Set<string>();

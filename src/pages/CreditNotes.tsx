@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -15,8 +15,6 @@ import {
   Pagination,
   Button,
   Alert,
-  Tabs,
-  Tab,
   Chip,
   LinearProgress,
   Tooltip,
@@ -28,6 +26,8 @@ import {
   useDebitNotes,
   useCreditNotesSearch,
   useDebitNotesSearch,
+  useCreditNotesInDateRange,
+  useDebitNotesInDateRange,
   useBackfillCreditNotes,
 } from '../hooks/useCreditNotes';
 import { getCreditNoteById } from '../services/creditNotes';
@@ -35,12 +35,22 @@ import { getDebitNoteById } from '../services/debitNotes';
 import {
   reindexCreditNotesTypesense,
   reindexDebitNotesTypesense,
+  searchAllCreditNoteIds,
+  searchAllDebitNoteIds,
 } from '../services/creditNoteSearch';
 import { Loading } from '../components/Loading';
-import { Breadcrumbs } from '../components/Breadcrumbs';
-import { generateCreditNotePdf } from '../utils/creditNote';
-import { generateDebitNotePdf } from '../utils/debitNote';
+import { IstDateField } from '../components/IstDateField';
+import { generateCreditNotePdf, generateCreditNotePdfBlob } from '../utils/creditNote';
+import { generateDebitNotePdf, generateDebitNotePdfBlob } from '../utils/debitNote';
 import { shareCreditNoteOnWhatsApp, shareDebitNoteOnWhatsApp } from '../utils/noteWhatsApp';
+import {
+  getDefaultNotesFilterRangeIST,
+  getTodayDateStringIST,
+  isDateInIstRange,
+  isIstDateString,
+  istDayEndExclusiveMs,
+  istDayStartMs,
+} from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
@@ -52,8 +62,24 @@ import { useInvalidateRetailerWallet } from '../hooks/useRetailerWallet';
 type NoteTab = 'credit' | 'debit';
 
 const ROWS_PER_PAGE = 10;
+const MAX_BULK_NOTE_PDFS = 40;
 
 const formatAmount = (n: number) => `₹${(n || 0).toLocaleString('en-IN')}`;
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** Normalized row for the notes table (works for both credit and debit). */
 interface NoteRow {
@@ -87,9 +113,14 @@ export const CreditNotesPage: React.FC = () => {
   const [tab, setTab] = useState<NoteTab>('credit');
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
+  const [fromDateFilter, setFromDateFilter] = useState('');
+  const [toDateFilter, setToDateFilter] = useState('');
+  const [draftFromDateFilter, setDraftFromDateFilter] = useState('');
+  const [draftToDateFilter, setDraftToDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [sharingId, setSharingId] = useState<string | null>(null);
+  const [bulkDownloading, setBulkDownloading] = useState(false);
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [createLedgerOpen, setCreateLedgerOpen] = useState(false);
@@ -106,6 +137,44 @@ export const CreditNotesPage: React.FC = () => {
     return () => clearTimeout(t);
   }, [searchTerm]);
 
+  const fromFilterMs = fromDateFilter && isIstDateString(fromDateFilter)
+    ? istDayStartMs(fromDateFilter)
+    : null;
+  const toFilterMs = toDateFilter && isIstDateString(toDateFilter)
+    ? istDayEndExclusiveMs(toDateFilter)
+    : null;
+  const dateRangeInvalid = Boolean(
+    fromDateFilter && toDateFilter && fromDateFilter > toDateFilter
+  );
+  const draftDateRangeInvalid = Boolean(
+    draftFromDateFilter && draftToDateFilter && draftFromDateFilter > draftToDateFilter
+  );
+  const dateDraftDirty =
+    draftFromDateFilter !== fromDateFilter || draftToDateFilter !== toDateFilter;
+  const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
+  const useLocalList = typesenseDisabled || hasDateFilter;
+
+  const applyDateRange = useCallback((from: string, to: string) => {
+    setDraftFromDateFilter(from);
+    setDraftToDateFilter(to);
+    setFromDateFilter(from);
+    setToDateFilter(to);
+    setPage(1);
+  }, []);
+
+  const commitDraftDateRange = useCallback(() => {
+    if (draftFromDateFilter === fromDateFilter && draftToDateFilter === toDateFilter) return;
+    if (draftDateRangeInvalid) return;
+    applyDateRange(draftFromDateFilter, draftToDateFilter);
+  }, [
+    applyDateRange,
+    draftDateRangeInvalid,
+    draftFromDateFilter,
+    draftToDateFilter,
+    fromDateFilter,
+    toDateFilter,
+  ]);
+
   const creditSearch = useCreditNotesSearch(
     {
       query: debouncedTerm,
@@ -114,7 +183,7 @@ export const CreditNotesPage: React.FC = () => {
       page,
       perPage: ROWS_PER_PAGE,
     },
-    { enabled: !typesenseDisabled }
+    { enabled: !typesenseDisabled && !hasDateFilter }
   );
   const debitSearch = useDebitNotesSearch(
     {
@@ -124,32 +193,49 @@ export const CreditNotesPage: React.FC = () => {
       page,
       perPage: ROWS_PER_PAGE,
     },
-    { enabled: !typesenseDisabled }
+    { enabled: !typesenseDisabled && !hasDateFilter }
   );
 
   useEffect(() => {
     if (creditSearch.isError || debitSearch.isError) setTypesenseDisabled(true);
   }, [creditSearch.isError, debitSearch.isError]);
 
-  // Fallback: full-load client-side (only when Typesense unavailable).
+  // Full-load client-side when Typesense is unavailable and no date window is set.
   const {
     data: creditNotes,
     isLoading: creditLoading,
     error: creditError,
     refetch: refetchCreditAll,
-  } = useCreditNotes({ enabled: typesenseDisabled });
+  } = useCreditNotes({ enabled: typesenseDisabled && !hasDateFilter });
   const {
     data: debitNotes,
     isLoading: debitLoading,
     error: debitError,
     refetch: refetchDebitAll,
-  } = useDebitNotes({ enabled: typesenseDisabled });
+  } = useDebitNotes({ enabled: typesenseDisabled && !hasDateFilter });
+
+  const creditRange = useCreditNotesInDateRange(fromFilterMs, toFilterMs, {
+    enabled: hasDateFilter,
+  });
+  const debitRange = useDebitNotesInDateRange(fromFilterMs, toFilterMs, {
+    enabled: hasDateFilter,
+  });
 
   const fallbackCreditRows = useMemo(() => {
-    if (!typesenseDisabled) return [];
+    if (!useLocalList) return [];
     const term = debouncedTerm.toLowerCase();
-    const list = (creditNotes || []).filter(
-      (n) =>
+    const source = hasDateFilter ? creditRange.data : creditNotes;
+    const list = (source || []).filter((n) => {
+      if (
+        !isDateInIstRange(
+          n.creditNoteDate ?? n.createdAt,
+          fromDateFilter || undefined,
+          toDateFilter || undefined
+        )
+      ) {
+        return false;
+      }
+      return (
         !term ||
         n.creditNoteNumber.toLowerCase().includes(term) ||
         (n.retailerName || '').toLowerCase().includes(term) ||
@@ -157,7 +243,8 @@ export const CreditNotesPage: React.FC = () => {
         (n.originalInvoiceNumber || '').toLowerCase().includes(term) ||
         (n.orderId || '').toLowerCase().includes(term) ||
         (n.reason || '').toLowerCase().includes(term)
-    );
+      );
+    });
     const sorted = [...list];
     sorted.sort((a, b) => {
       switch (sortKey) {
@@ -187,13 +274,33 @@ export const CreditNotesPage: React.FC = () => {
       }
     });
     return sorted;
-  }, [typesenseDisabled, creditNotes, debouncedTerm, sortKey, sortDirection]);
+  }, [
+    useLocalList,
+    hasDateFilter,
+    creditRange.data,
+    creditNotes,
+    debouncedTerm,
+    fromDateFilter,
+    toDateFilter,
+    sortKey,
+    sortDirection,
+  ]);
 
   const fallbackDebitRows = useMemo(() => {
-    if (!typesenseDisabled) return [];
+    if (!useLocalList) return [];
     const term = debouncedTerm.toLowerCase();
-    const list = (debitNotes || []).filter(
-      (n) =>
+    const source = hasDateFilter ? debitRange.data : debitNotes;
+    const list = (source || []).filter((n) => {
+      if (
+        !isDateInIstRange(
+          n.debitNoteDate ?? n.createdAt,
+          fromDateFilter || undefined,
+          toDateFilter || undefined
+        )
+      ) {
+        return false;
+      }
+      return (
         !term ||
         n.debitNoteNumber.toLowerCase().includes(term) ||
         (n.retailerName || '').toLowerCase().includes(term) ||
@@ -201,7 +308,8 @@ export const CreditNotesPage: React.FC = () => {
         (n.originalInvoiceNumber || '').toLowerCase().includes(term) ||
         (n.reason || '').toLowerCase().includes(term) ||
         (n.orderId || '').toLowerCase().includes(term)
-    );
+      );
+    });
     const sorted = [...list];
     sorted.sort((a, b) => {
       switch (sortKey) {
@@ -231,13 +339,23 @@ export const CreditNotesPage: React.FC = () => {
       }
     });
     return sorted;
-  }, [typesenseDisabled, debitNotes, debouncedTerm, sortKey, sortDirection]);
+  }, [
+    useLocalList,
+    hasDateFilter,
+    debitRange.data,
+    debitNotes,
+    debouncedTerm,
+    fromDateFilter,
+    toDateFilter,
+    sortKey,
+    sortDirection,
+  ]);
 
   const isCredit = tab === 'credit';
 
   // Normalized rows + totals for the active tab.
   const rows: NoteRow[] = useMemo(() => {
-    if (typesenseDisabled) {
+    if (useLocalList) {
       const src = isCredit ? fallbackCreditRows : fallbackDebitRows;
       return src.slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE).map((n: any) => ({
         id: n.id,
@@ -272,25 +390,34 @@ export const CreditNotesPage: React.FC = () => {
       reason: n.reason || n.sourceType || '',
       totalAmount: n.totalAmount,
     }));
-  }, [typesenseDisabled, isCredit, fallbackCreditRows, fallbackDebitRows, page, creditSearch.data, debitSearch.data]);
+  }, [useLocalList, isCredit, fallbackCreditRows, fallbackDebitRows, page, creditSearch.data, debitSearch.data]);
 
-  const activeTotal = typesenseDisabled
+  const activeTotal = useLocalList
     ? (isCredit ? fallbackCreditRows.length : fallbackDebitRows.length)
     : (isCredit ? creditSearch.data?.found ?? 0 : debitSearch.data?.found ?? 0);
   const totalPages = Math.max(1, Math.ceil(activeTotal / ROWS_PER_PAGE));
 
   const creditCount = typesenseDisabled
-    ? (creditNotes?.length ?? 0)
-    : creditSearch.data?.totalAll ?? 0;
+    ? (creditNotes?.length ?? creditRange.data?.length ?? 0)
+    : creditSearch.data?.totalAll ?? creditRange.data?.length ?? 0;
   const debitCount = typesenseDisabled
-    ? (debitNotes?.length ?? 0)
-    : debitSearch.data?.totalAll ?? 0;
+    ? (debitNotes?.length ?? debitRange.data?.length ?? 0)
+    : debitSearch.data?.totalAll ?? debitRange.data?.length ?? 0;
 
-  const isLoading = typesenseDisabled
-    ? (isCredit ? creditLoading : debitLoading)
+  const isLoading = useLocalList
+    ? hasDateFilter
+      ? (isCredit ? creditRange.isLoading : debitRange.isLoading)
+      : (isCredit ? creditLoading : debitLoading)
     : (isCredit ? creditSearch.isLoading : debitSearch.isLoading);
-  const isBusy = !typesenseDisabled && (isCredit ? creditSearch.isFetching : debitSearch.isFetching);
-  const loadError = typesenseDisabled ? (isCredit ? creditError : debitError) : null;
+  const isBusy =
+    bulkDownloading ||
+    (!useLocalList && (isCredit ? creditSearch.isFetching : debitSearch.isFetching)) ||
+    (hasDateFilter && (isCredit ? creditRange.isFetching : debitRange.isFetching));
+  const loadError = useLocalList
+    ? hasDateFilter
+      ? (isCredit ? creditRange.error : debitRange.error)
+      : (isCredit ? creditError : debitError)
+    : null;
 
   const handleDownload = async (id: string) => {
     setDownloadingId(id);
@@ -307,6 +434,91 @@ export const CreditNotesPage: React.FC = () => {
       await alert('Failed to generate PDF', { severity: 'error' });
     } finally {
       setDownloadingId(null);
+    }
+  };
+
+  const handleDownloadMatching = async () => {
+    if (bulkDownloading) return;
+    setBulkDownloading(true);
+    try {
+      let ids: string[] = [];
+      if (useLocalList) {
+        ids = (isCredit ? fallbackCreditRows : fallbackDebitRows).map((n: { id: string }) => n.id);
+      } else if (isCredit) {
+        ids = await searchAllCreditNoteIds({
+          query: debouncedTerm,
+          sortField: mapSortField(sortKey, true),
+          sortOrder: sortDirection,
+        });
+      } else {
+        ids = await searchAllDebitNoteIds({
+          query: debouncedTerm,
+          sortField: mapSortField(sortKey, false),
+          sortOrder: sortDirection,
+        });
+      }
+
+      if (ids.length === 0) {
+        await alert(`No ${isCredit ? 'credit' : 'debit'} notes match the current search.`, {
+          severity: 'info',
+        });
+        return;
+      }
+
+      const limited = ids.length > MAX_BULK_NOTE_PDFS;
+      const toDownload = limited ? ids.slice(0, MAX_BULK_NOTE_PDFS) : ids;
+      const ok = await confirm(
+        limited
+          ? `${ids.length} notes match. Download the first ${MAX_BULK_NOTE_PDFS}?`
+          : `Download ${toDownload.length} ${isCredit ? 'credit' : 'debit'} note PDF${
+              toDownload.length === 1 ? '' : 's'
+            } matching the current search?`,
+        { title: 'Download matching notes', confirmLabel: 'Download' }
+      );
+      if (!ok) return;
+
+      let okCount = 0;
+      let failCount = 0;
+      for (const id of toDownload) {
+        try {
+          if (isCredit) {
+            const note = await getCreditNoteById(id);
+            if (!note) {
+              failCount += 1;
+              continue;
+            }
+            const { blob, fileName } = await generateCreditNotePdfBlob(note);
+            downloadBlob(blob, fileName);
+          } else {
+            const note = await getDebitNoteById(id);
+            if (!note) {
+              failCount += 1;
+              continue;
+            }
+            const { blob, fileName } = await generateDebitNotePdfBlob(note);
+            downloadBlob(blob, fileName);
+          }
+          okCount += 1;
+          await delay(350);
+        } catch (err) {
+          console.error('Bulk note PDF failed', id, err);
+          failCount += 1;
+        }
+      }
+
+      await alert(
+        failCount
+          ? `Downloaded ${okCount} note${okCount === 1 ? '' : 's'}. ${failCount} failed.`
+          : `Downloaded ${okCount} note PDF${okCount === 1 ? '' : 's'}.`,
+        { severity: failCount ? 'warning' : 'success' }
+      );
+    } catch (err) {
+      await alert(
+        `Failed to download notes: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        { severity: 'error' }
+      );
+    } finally {
+      setBulkDownloading(false);
     }
   };
 
@@ -371,7 +583,8 @@ export const CreditNotesPage: React.FC = () => {
     }
   };
 
-  const handleTabChange = (_: React.SyntheticEvent, value: NoteTab) => {
+  const handleTabChange = (value: NoteTab) => {
+    if (value === tab) return;
     setTab(value);
     setPage(1);
     setSearchTerm('');
@@ -379,13 +592,16 @@ export const CreditNotesPage: React.FC = () => {
   };
 
   const handleRefresh = () => {
-    if (typesenseDisabled) {
-      if (isCredit) refetchCreditAll();
-      else refetchDebitAll();
+    if (hasDateFilter) {
+      if (isCredit) void creditRange.refetch();
+      else void debitRange.refetch();
+    } else if (typesenseDisabled) {
+      if (isCredit) void refetchCreditAll();
+      else void refetchDebitAll();
     } else if (isCredit) {
-      creditSearch.refetch();
+      void creditSearch.refetch();
     } else {
-      debitSearch.refetch();
+      void debitSearch.refetch();
     }
   };
 
@@ -431,131 +647,179 @@ export const CreditNotesPage: React.FC = () => {
   };
 
   const searchErrored = creditSearch.isError || debitSearch.isError;
-  if (!typesenseDisabled && (searchErrored || (creditSearch.isLoading && debitSearch.isLoading))) {
+  if (!useLocalList && (searchErrored || (creditSearch.isLoading && debitSearch.isLoading))) {
     // Keep the loader up while we transition to the client-side fallback.
     return <Loading message="Loading credit & debit notes..." />;
   }
-  if (typesenseDisabled && creditLoading && debitLoading) {
+  if (useLocalList && hasDateFilter && creditRange.isLoading && debitRange.isLoading) {
+    return <Loading message="Loading credit & debit notes..." />;
+  }
+  if (useLocalList && !hasDateFilter && creditLoading && debitLoading) {
     return <Loading message="Loading credit & debit notes..." />;
   }
 
   return (
     <Box>
-      <Breadcrumbs items={[{ label: 'Credit & debit notes' }]} />
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 2,
-          gap: 2,
-          flexWrap: 'wrap',
-        }}
-      >
-        <Box>
-          <Typography variant="h4" fontWeight={700}>
-            Credit & debit notes
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Credit notes from returns and direct ledger adjustments; debit notes for store ledger charges
-          </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button
-            startIcon={<Add />}
-            variant="contained"
-            onClick={() => setCreateLedgerOpen(true)}
-          >
-            {isCredit ? 'Create ledger credit note' : 'Create ledger debit note'}
-          </Button>
-          {isCredit && (
-            <Button
-              startIcon={<Build />}
-              variant="outlined"
-              onClick={handleBackfillOldCreditNotes}
-              disabled={backfillMutation.isPending}
+      <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
+        <Typography variant="h6" sx={{ fontWeight: 600, mr: 0.5 }}>
+          Credit & debit notes
+        </Typography>
+        <Chip
+          size="small"
+          label={`Credit ${creditCount}`}
+          color="primary"
+          variant={isCredit ? 'filled' : 'outlined'}
+          onClick={() => handleTabChange('credit')}
+          sx={{ fontWeight: isCredit ? 600 : 400 }}
+        />
+        <Chip
+          size="small"
+          label={`Debit ${debitCount}`}
+          color="primary"
+          variant={!isCredit ? 'filled' : 'outlined'}
+          onClick={() => handleTabChange('debit')}
+          sx={{ fontWeight: !isCredit ? 600 : 400 }}
+        />
+        <Box sx={{ flexGrow: 1 }} />
+        <Button
+          size="small"
+          startIcon={<Add fontSize="small" />}
+          variant="contained"
+          onClick={() => setCreateLedgerOpen(true)}
+        >
+          {isCredit ? 'Create credit note' : 'Create debit note'}
+        </Button>
+        {isCredit && (
+          <Tooltip title={backfillMutation.isPending ? 'Repairing…' : 'Repair batch/MRP on older notes'}>
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => void handleBackfillOldCreditNotes()}
+                disabled={backfillMutation.isPending}
+                aria-label="Repair batch/MRP"
+              >
+                <Build fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        <Tooltip title={reindexing ? 'Indexing…' : 'Rebuild search index'}>
+          <span>
+            <IconButton
+              size="small"
+              color="secondary"
+              onClick={() => void handleReindex()}
+              disabled={reindexing}
+              aria-label="Rebuild search index"
             >
-              {backfillMutation.isPending ? 'Repairing…' : 'Repair batch/MRP'}
-            </Button>
-          )}
-          <Button
-            startIcon={<CloudSync />}
-            variant="outlined"
-            color="secondary"
-            onClick={() => void handleReindex()}
-            disabled={reindexing}
-          >
-            {reindexing ? 'Indexing…' : 'Rebuild search index'}
-          </Button>
-          <Button startIcon={<Refresh />} variant="outlined" onClick={handleRefresh}>
-            Refresh
-          </Button>
-        </Box>
+              <CloudSync fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Refresh list">
+          <span>
+            <IconButton size="small" onClick={handleRefresh} aria-label="Refresh">
+              <Refresh fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
       </Box>
 
-      <Tabs value={tab} onChange={handleTabChange} sx={{ mb: 2 }}>
-        <Tab
-          value="credit"
-          label={
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              Credit notes
-              <Chip label={creditCount} size="small" />
-            </Box>
-          }
-        />
-        <Tab
-          value="debit"
-          label={
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              Debit notes
-              <Chip label={debitCount} size="small" />
-            </Box>
-          }
-        />
-      </Tabs>
-
-      {isCredit ? (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          Return credit notes are created when order returns are approved. Use{' '}
-          <strong>Create ledger credit note</strong> to add wallet credit directly (also on store ledger).
-          Void unused ledger notes if they were posted in error. Use &quot;Repair batch/MRP&quot; once to
-          fix older return notes missing batch/MRP on lines.
-        </Alert>
-      ) : (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          Use <strong>Create ledger debit note</strong> to post a charge to the retailer&apos;s wallet and store
-          ledger (no approval request). Void unused ledger debit notes if they were posted in error.
-        </Alert>
-      )}
-
       {loadError ? (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert severity="error" sx={{ mb: 1 }}>
           Failed to load {isCredit ? 'credit' : 'debit'} notes
         </Alert>
       ) : null}
 
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <TextField
-          fullWidth
-          size="small"
-          placeholder={
-            isCredit
-              ? 'Search credit note no., retailer, invoice, order...'
-              : 'Search debit note no., retailer, invoice, reason...'
-          }
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value);
-            setPage(1);
-          }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search />
-              </InputAdornment>
-            ),
-          }}
-        />
+      <Paper sx={{ px: 1.5, py: 1, mb: 1.5 }}>
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <TextField
+            size="small"
+            placeholder={
+              isCredit
+                ? 'Search note no., retailer, invoice, order…'
+                : 'Search note no., retailer, invoice, reason…'
+            }
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setPage(1);
+            }}
+            sx={{ minWidth: 200, flex: '1 1 180px' }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <IstDateField
+            label="From"
+            value={draftFromDateFilter}
+            onChange={setDraftFromDateFilter}
+            sx={{ width: { xs: '100%', sm: 160 } }}
+          />
+          <IstDateField
+            label="To"
+            value={draftToDateFilter}
+            onChange={setDraftToDateFilter}
+            sx={{ width: { xs: '100%', sm: 160 } }}
+          />
+          <Button
+            size="small"
+            variant="contained"
+            disabled={!dateDraftDirty || draftDateRangeInvalid}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={commitDraftDateRange}
+          >
+            OK
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const range = getDefaultNotesFilterRangeIST();
+              applyDateRange(range.fromDate, range.toDate);
+            }}
+          >
+            7 days
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const today = getTodayDateStringIST();
+              applyDateRange(today, today);
+            }}
+          >
+            Today
+          </Button>
+          {(draftFromDateFilter || draftToDateFilter || fromDateFilter || toDateFilter) && (
+            <Button
+              size="small"
+              variant="text"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => applyDateRange('', '')}
+            >
+              All dates
+            </Button>
+          )}
+          <Box sx={{ flexGrow: 1 }} />
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<Download fontSize="small" />}
+            disabled={bulkDownloading || isLoading || activeTotal === 0}
+            onClick={() => void handleDownloadMatching()}
+          >
+            {bulkDownloading
+              ? 'Downloading…'
+              : `Download${activeTotal > 0 ? ` (${activeTotal})` : ''}`}
+          </Button>
+        </Box>
       </Paper>
 
       {isLoading ? (
@@ -611,7 +875,11 @@ export const CreditNotesPage: React.FC = () => {
                 <TableRow>
                   <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
                     <Typography color="text.secondary">
-                      {isCredit ? 'No credit notes yet' : 'No debit notes yet'}
+                      {debouncedTerm || hasDateFilter
+                        ? `No ${isCredit ? 'credit' : 'debit'} notes match the current search`
+                        : isCredit
+                          ? 'No credit notes yet'
+                          : 'No debit notes yet'}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -638,7 +906,11 @@ export const CreditNotesPage: React.FC = () => {
                           <IconButton
                             size="small"
                             onClick={() => void handleDownload(note.id)}
-                            disabled={downloadingId === note.id || sharingId === note.id}
+                            disabled={
+                              bulkDownloading ||
+                              downloadingId === note.id ||
+                              sharingId === note.id
+                            }
                             aria-label={`Download ${isCredit ? 'credit' : 'debit'} note PDF`}
                           >
                             <Download />
@@ -651,7 +923,11 @@ export const CreditNotesPage: React.FC = () => {
                             size="small"
                             color="success"
                             onClick={() => void handleWhatsApp(note.id)}
-                            disabled={downloadingId === note.id || sharingId === note.id}
+                            disabled={
+                              bulkDownloading ||
+                              downloadingId === note.id ||
+                              sharingId === note.id
+                            }
                             aria-label={`Send ${isCredit ? 'credit' : 'debit'} note on WhatsApp`}
                           >
                             <WhatsApp />

@@ -138,6 +138,8 @@ export const useOrdersInPeriod = (period: 'this_month' | 'last_month' | 'all') =
   return useQuery({
     queryKey: ['ordersInPeriod', period, range?.startMs ?? null, range?.endMs ?? null],
     queryFn: () => (range ? getOrdersInRange(range.startMs, range.endMs) : getAllOrders()),
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 };
 

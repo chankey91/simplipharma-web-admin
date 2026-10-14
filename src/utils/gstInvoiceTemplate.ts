@@ -2,36 +2,39 @@ export const GST_INVOICE_STYLES = `
   body {
     font-family: Arial, Helvetica, sans-serif;
     font-size: 11px;
-    line-height: 1.15;
+    line-height: 1.12;
     background: #fff;
   }
   .invoice-box {
     width: 100%;
     max-width: 1000px;
     margin: auto;
-    border: 1px solid #000;
-    padding: 8px;
+    border: none;
+    padding: 2px;
+    box-sizing: border-box;
   }
   table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     table-layout: fixed;
+    margin: 0;
+    border: none;
   }
   td, th {
-    border: 1px solid #000;
-    padding: 1px 3px;
+    border: none;
+    border-right: 1px solid #000;
+    border-bottom: 1px solid #000;
+    padding: 2px 4px;
     vertical-align: top;
     word-wrap: break-word;
   }
-  table tbody tr td {
-    border-top: none;
-    border-bottom: none;
+  tr > *:first-child {
+    border-left: 1px solid #000;
   }
-  table tbody tr:first-child td {
+  .invoice-box > table:first-child tr:first-child > *,
+  .invoice-box [data-invoice-section="header"] table:first-of-type tr:first-child > * {
     border-top: 1px solid #000;
-  }
-  table tbody tr:last-child td {
-    border-bottom: 1px solid #000;
   }
   .ellipsis-cell {
     white-space: nowrap;
@@ -40,8 +43,8 @@ export const GST_INVOICE_STYLES = `
   }
   .items-table td,
   .items-table th {
-    padding: 1px 2px;
-    line-height: 1.2;
+    padding: 2px 2px;
+    line-height: 1.15;
     vertical-align: middle;
   }
   .items-table thead th {
@@ -50,15 +53,11 @@ export const GST_INVOICE_STYLES = `
     padding: 2px 2px;
     font-weight: bold;
   }
-  .items-table tbody tr td {
-    border-top: none;
-    border-bottom: none;
-  }
-  .items-table tbody tr:first-child td {
-    border-top: 1px solid #000;
-  }
-  .items-table tbody tr:last-child td {
-    border-bottom: 1px solid #000;
+  .items-table td.col-batch {
+    white-space: normal;
+    overflow: visible;
+    word-break: break-word;
+    line-height: 1.25;
   }
   .nowrap-cell {
     white-space: nowrap;
@@ -103,7 +102,7 @@ export const GST_INVOICE_STYLES = `
     gap: 12px;
   }
   .title-cell .title {
-    font-size: 16px;
+    font-size: 14px;
     font-weight: bold;
     text-align: left;
   }
@@ -119,10 +118,25 @@ export const GST_INVOICE_STYLES = `
     text-decoration: line-through;
     color: #666;
   }
-  .footer-terms { font-size: 10px; line-height: 1.2; }
+  .invoice-header,
+  .invoice-items,
+  .invoice-footer {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+  .invoice-spacer {
+    flex: 1 1 auto;
+    min-height: 0;
+    border-left: 1px solid #000;
+    border-right: 1px solid #000;
+  }
+  .invoice-footer table:first-of-type tr:first-child > * {
+    border-top: 1px solid #000;
+  }
+  .footer-terms { font-size: 9px; line-height: 1.15; }
   .signatory { vertical-align: bottom; }
   .pay-qr { text-align: center; vertical-align: top; }
-  .pay-qr img { width: 90px; height: 90px; display: block; margin: 0 auto 2px; }
+  .pay-qr img { width: 52px; height: 52px; display: block; margin: 0 auto 1px; }
   .pay-qr .pay-qr-label { font-size: 9px; font-weight: bold; }
   @media print {
     body { margin: 0; }
@@ -191,6 +205,8 @@ export type GstInvoiceSummary = {
   additionalDiscount?: string;
   /** Wallet (credit notes) applied as payment — GST grand total is unchanged. */
   walletApplied?: string;
+  /** Credit-note numbers consumed for the wallet amount, shown under tax summary. */
+  walletRefs?: string;
   amountDue?: string;
 };
 
@@ -203,7 +219,7 @@ export function buildGstInvoiceItemsHtml(items: GstInvoiceLineItem[]): string {
       <td class="col-left">${item.name}</td>
       <td class="col-center ellipsis-cell">${item.pack}</td>
       <td class="col-center">${item.hsn}</td>
-      <td class="col-center ellipsis-cell">${item.batch}</td>
+      <td class="col-center col-batch">${item.batch}</td>
       <td class="col-center">${item.exp}</td>
       <td class="col-center nowrap-cell">${item.qty}</td>
       <td class="col-center nowrap-cell">${item.free}</td>
@@ -224,10 +240,10 @@ export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): strin
   <thead>
     <tr>
       <th class="col-center" style="width:3%">SN</th>
-      <th class="col-left" style="width:26%">PRODUCT NAME</th>
+      <th class="col-left" style="width:24%">PRODUCT NAME</th>
       <th class="col-center" style="width:6%">PACK</th>
       <th class="col-center" style="width:6%">HSN</th>
-      <th class="col-center" style="width:7%">BATCH</th>
+      <th class="col-center" style="width:9%">BATCH</th>
       <th class="col-center" style="width:5%">EXP</th>
       <th class="col-center" style="width:4%">QTY</th>
       <th class="col-center" style="width:5%">FREE</th>
@@ -243,6 +259,136 @@ export function buildGstInvoiceItemTableHtml(items: GstInvoiceLineItem[]): strin
     ${buildGstInvoiceItemsHtml(items)}
   </tbody>
 </table>`;
+}
+
+export function parseInvoiceLineGstPercent(gst: string): number {
+  const n = parseFloat(String(gst || '').replace('%', ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function summarizeGstInvoicePageItems(items: GstInvoiceLineItem[]): {
+  subTotal: number;
+  discount: number;
+  gst: number;
+  cgst: number;
+  sgst: number;
+  pageTotal: number;
+  byRate: Map<number, { taxable: number; gst: number }>;
+} {
+  const byRate = new Map<number, { taxable: number; gst: number }>();
+  let subTotal = 0;
+  let discount = 0;
+  let gst = 0;
+  for (const item of items) {
+    const amount = parseFloat(item.amount) || 0;
+    const discPct = parseFloat(item.disc) || 0;
+    const gstPct = parseInvoiceLineGstPercent(item.gst);
+    const discAmt = amount * discPct / 100;
+    const taxable = Math.max(0, amount - discAmt);
+    const gstAmt = taxable * gstPct / 100;
+    subTotal += amount;
+    discount += discAmt;
+    gst += gstAmt;
+    const bucket = byRate.get(gstPct) || { taxable: 0, gst: 0 };
+    bucket.taxable += taxable;
+    bucket.gst += gstAmt;
+    byRate.set(gstPct, bucket);
+  }
+  return {
+    subTotal,
+    discount,
+    gst,
+    cgst: gst / 2,
+    sgst: gst / 2,
+    pageTotal: subTotal - discount + gst,
+    byRate,
+  };
+}
+
+function formatPageTaxSummary(page: ReturnType<typeof summarizeGstInvoicePageItems>): string {
+  const rates = [...page.byRate.keys()].sort((a, b) => a - b);
+  if (rates.length === 0) {
+    return 'Amt: 0.00 | CGST: 0.00 | SGST: 0.00';
+  }
+  return rates
+    .map((rate) => {
+      const bucket = page.byRate.get(rate)!;
+      const half = rate / 2;
+      return `Amt ${rate.toFixed(0)}%: ${bucket.taxable.toFixed(2)} | CGST ${half.toFixed(1)}%: ${(bucket.gst / 2).toFixed(2)} | SGST ${half.toFixed(1)}%: ${(bucket.gst / 2).toFixed(2)}`;
+    })
+    .join('<br>');
+}
+
+export function buildGstInvoicePageTotalsSection(opts: {
+  pageItems: GstInvoiceLineItem[];
+  carriedForward: number;
+  isLast: boolean;
+  pageCount?: number;
+  lastSummary?: GstInvoiceSummary;
+  lastTax?: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string };
+  gstRateHalf: number;
+}): string {
+  if (opts.isLast && opts.lastSummary) {
+    return buildGstInvoiceTotalsSection(
+      opts.lastTax || {
+        taxable: opts.lastSummary.subTotal,
+        cgst: opts.lastSummary.cgst,
+        sgst: opts.lastSummary.sgst,
+        rate: String(opts.gstRateHalf * 2),
+      },
+      opts.lastSummary,
+      opts.gstRateHalf
+    );
+  }
+
+  const page = summarizeGstInvoicePageItems(opts.pageItems);
+  const showPageTotal =
+    (opts.pageCount || 1) > 2 &&
+    Math.abs(page.pageTotal - opts.carriedForward) > 0.001;
+  const cfClass = showPageTotal ? 'totals-row grand-total' : 'totals-row';
+
+  return `
+<table>
+  <tr>
+    <td width="70%">
+      <b>Tax Summary</b><br>
+      ${formatPageTaxSummary(page)}
+    </td>
+    <td width="30%" class="totals-panel">
+      ${
+        showPageTotal
+          ? `<div class="totals-row"><span>PAGE TOTAL</span><span>${page.pageTotal.toFixed(2)}</span></div>`
+          : ''
+      }
+      <div class="${cfClass}"><span>TOTAL C/F</span><span>${opts.carriedForward.toFixed(2)}</span></div>
+    </td>
+  </tr>
+</table>`;
+}
+
+export function buildGstInvoiceHalfPageFooter(opts: {
+  pageItems: GstInvoiceLineItem[];
+  carriedForward: number;
+  isLast: boolean;
+  pageCount?: number;
+  remarks: string;
+  signatoryFor: string;
+  amountInWords: string;
+  paymentQrDataUri?: string;
+  termsHtml?: string;
+  lastSummary?: GstInvoiceSummary;
+  lastTax?: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string };
+  gstRateHalf: number;
+}): string {
+  return `
+${buildGstInvoicePageTotalsSection(opts)}
+${buildGstInvoiceFooter(
+  opts.remarks,
+  opts.amountInWords,
+  opts.signatoryFor,
+  opts.termsHtml,
+  opts.paymentQrDataUri
+)}`;
 }
 
 export function buildGstInvoiceTotalsSection(
@@ -273,6 +419,11 @@ export function buildGstInvoiceTotalsSection(
       <b>Tax Summary</b><br>
       ${amtLine} |
       ${cgstSgstLabel}
+      ${
+        summary.walletRefs
+          ? `<div style="margin-top:8px"><b>Wallet adjustment from credit note</b><br>${summary.walletRefs}</div>`
+          : ''
+      }
     </td>
     <td width="30%" class="totals-panel">
       <div class="totals-row"><span>SUB TOTAL</span><span>${summary.subTotal}</span></div>
@@ -325,12 +476,12 @@ export function buildGstInvoiceFooter(
   <tr>
     <td width="${termsWidth}" class="footer-terms">
       <b>Terms & Conditions</b><br>
-      ${termsHtml}<br><br>
+      ${termsHtml}<br>
       <b>Remarks:</b> ${remarks}<br>
       <b>Rs.</b> ${amountInWords}
     </td>${qrCell}
     <td width="40%" class="center signatory">
-      For ${signatoryFor}<br><br><br>
+      For ${signatoryFor}<br>
       <b>Authorised Signatory</b>
     </td>
   </tr>

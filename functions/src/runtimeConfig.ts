@@ -107,6 +107,15 @@ export function getGeminiModel(): string {
   );
 }
 
+/** AI Studio (API key) model — newer keys often cannot call gemini-2.5-flash. */
+export function getGeminiApiModel(): string {
+  return (
+    configValue('gemini', 'api_model', 'GOOGLE_GEMINI_API_MODEL') ||
+    fromEnv('GOOGLE_GEMINI_API_MODEL') ||
+    'gemini-3.6-flash'
+  );
+}
+
 export function getGeminiApiKey(): string | undefined {
   return configValue('gemini', 'api_key', 'GOOGLE_GEMINI_API_KEY') || fromEnv('GOOGLE_GEMINI_API_KEY');
 }

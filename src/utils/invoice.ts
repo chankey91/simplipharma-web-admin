@@ -17,6 +17,9 @@ import { calculateOrderTotalsFromLines, hasBatchAssignment } from './orderTotals
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
 import { normalizeAdditionalDiscount } from './purchaseInvoiceTotals';
 import { hasGstSnapshot } from './gstSnapshot';
+import { markOrderInvoicePrinted } from './sessionPrintedInvoices';
+import { formatTownDistrict } from './export';
+import type { PaymentRequestCreditApplication } from '../types';
 import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
 import {
   buildGstInvoiceTitleCell,
@@ -25,12 +28,14 @@ import {
   buildGstInvoiceFooter,
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
+  buildGstInvoiceHalfPageFooter,
   type GstInvoiceLineItem,
   type GstInvoiceSummary,
 } from './gstInvoiceTemplate';
 import {
   buildContinuationHeaderHtml,
   buildPaginatedInvoicePdf,
+  formatInvoicePageLabel,
 } from './invoicePdfPages';
 
 // Function to convert number to words
@@ -109,6 +114,8 @@ export type OrderInvoicePrepared = {
   party: {
     name: string;
     address: string;
+    town?: string;
+    district?: string;
     state: string;
     stateCode: string;
     phone: string;
@@ -118,6 +125,27 @@ export type OrderInvoicePrepared = {
   /** Order GST % used on tax summary (same as invoice template) */
   gstRatePercent: number;
 };
+
+function formatWalletCreditRefs(
+  apps: PaymentRequestCreditApplication[] | undefined,
+  walletApplied: number
+): string {
+  if (walletApplied <= 0.01) return '';
+  const lines = (apps || [])
+    .map((a) => {
+      const cn = String(a.creditNoteNumber || '').trim();
+      const amt = Number(a.requestedApplyAmount) || 0;
+      if (amt <= 0.01) return '';
+      return cn
+        ? `Credit note ${cn}: ₹${amt.toFixed(2)}`
+        : `Credit note: ₹${amt.toFixed(2)}`;
+    })
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return `₹${walletApplied.toFixed(2)} from wallet / credit note`;
+  }
+  return `${lines.join('<br>')}`;
+}
 
 /** True when the line has a real batch assignment and should appear on the tax invoice. */
 function isAllocatedInvoiceMedicineLine(item: Order['medicines'][number]): boolean {
@@ -402,6 +430,8 @@ async function prepareOrderInvoiceData(
   let party = {
     name: order.retailerName || order.retailerEmail || 'N/A',
     address: order.deliveryAddress || '',
+    town: '',
+    district: '',
     ...resolveInvoiceState(),
     phone: '',
     dl: '',
@@ -414,9 +444,12 @@ async function prepareOrderInvoiceData(
       const retailer = await getUserProfile(order.retailerId);
       if (retailer) {
         const buyerPrint = printBuyerStateFromDocument(order, retailer.gst);
+        const loc = (retailer.location || {}) as { town?: string; district?: string; address?: string };
         party = {
           name: retailer.shopName || retailer.displayName || retailer.email || party.name,
-          address: retailer.address || retailer.location?.address || order.deliveryAddress || party.address,
+          address: retailer.address || loc.address || order.deliveryAddress || party.address,
+          town: String(retailer.town || loc.town || '').trim(),
+          district: String(retailer.district || loc.district || '').trim(),
           ...buyerPrint,
           phone: retailer.phoneNumber || party.phone,
           dl: retailer.licenceNumber || retailer.licenceHolderName || party.dl,
@@ -458,6 +491,7 @@ async function prepareOrderInvoiceData(
   };
 
   const walletAppliedNum = Number(order.creditApplied) || 0;
+  const walletRefs = formatWalletCreditRefs(order.walletCreditApplications, walletAppliedNum);
   const paidNum = Number(order.paidAmount) || 0;
   const dueNum =
     order.dueAmount != null
@@ -476,6 +510,7 @@ async function prepareOrderInvoiceData(
     ...(walletAppliedNum > 0.01
       ? {
           walletApplied: walletAppliedNum.toFixed(2),
+          ...(walletRefs ? { walletRefs } : {}),
           amountDue: dueNum.toFixed(2),
         }
       : {}),
@@ -492,9 +527,13 @@ async function prepareOrderInvoiceData(
   };
 };
 
-const buildOrderInvoiceFirstHeaderHtml = (data: OrderInvoicePrepared): string => {
+const buildOrderInvoiceFirstHeaderHtml = (
+  data: OrderInvoicePrepared,
+  paging?: { pageIndex: number; pageCount: number }
+): string => {
   const { company, party, invoiceData } = data;
   const companyState = resolveInvoiceState();
+  const pageLabel = formatInvoicePageLabel(paging?.pageIndex ?? 0, paging?.pageCount ?? 1);
   return `
 <table>
   <tr>
@@ -508,6 +547,7 @@ const buildOrderInvoiceFirstHeaderHtml = (data: OrderInvoicePrepared): string =>
     <td width="50%">
       <b>${party.name}</b><br>
       Party Address: ${party.address}<br>
+      Town / District: ${formatTownDistrict(party.town, party.district) || '—'}<br>
       ${invoiceStateHtml(party.state, party.stateCode)}
       Ph.No: ${party.phone}<br>
       Party D.L No: ${party.dl}<br>
@@ -526,7 +566,8 @@ const buildOrderInvoiceFirstHeaderHtml = (data: OrderInvoicePrepared): string =>
     <td>
       Date: ${invoiceData.date}<br>
       Tray No: ${invoiceData.tray}<br>
-      Processed By: ${invoiceData.processedBy}
+      Processed By: ${invoiceData.processedBy}<br>
+      ${pageLabel}
     </td>
   </tr>
 </table>`;
@@ -565,6 +606,7 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ['Company GSTIN', company.gstin],
     ['Party Name', party.name],
     ['Party Address', party.address],
+    ['Town / District', formatTownDistrict(party.town, party.district)],
     ['Party GSTIN', party.gstin],
     ['Invoice No', invoiceData.no],
     ['Invoice Date', invoiceData.date],
@@ -621,6 +663,9 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ['GRAND TOTAL', summary.grandTotal],
     ...(summary.walletApplied && parseFloat(summary.walletApplied) > 0.01
       ? [['WALLET', `-${summary.walletApplied}`] as string[]]
+      : []),
+    ...(summary.walletRefs
+      ? [['Wallet credit notes', summary.walletRefs.replace(/<br>/g, '; ')]]
       : []),
     ...(summary.amountDue != null && summary.amountDue !== ''
       ? [['AMOUNT DUE', summary.amountDue] as string[]]
@@ -701,7 +746,7 @@ export const generateOrderInvoice = async (
     const pdf = await buildPaginatedInvoicePdf({
       title: 'Sales GST Invoice',
       items: data.items,
-      firstHeaderHtml: buildOrderInvoiceFirstHeaderHtml(data),
+      firstHeaderHtml: (page) => buildOrderInvoiceFirstHeaderHtml(data, page),
       buildContHeaderHtml: (page) =>
         buildContinuationHeaderHtml({
           title: 'SALES GST INVOICE',
@@ -713,10 +758,30 @@ export const generateOrderInvoice = async (
         }),
       buildItemsHtml: (pageItems) => buildGstInvoiceItemTableHtml(pageItems),
       footerHtml: buildOrderInvoiceFooterBlocksHtml(data, order.dispatchNotes || ''),
+      buildFooterHtml: (page, ctx) =>
+        buildGstInvoiceHalfPageFooter({
+          pageItems: page.items,
+          carriedForward: ctx.carriedForward,
+          isLast: ctx.isLast,
+          pageCount: page.pageCount,
+          remarks: order.dispatchNotes || '',
+          signatoryFor: data.company.name,
+          amountInWords: ctx.isLast
+            ? data.summary.amountInWords
+            : `Total C/F Rs. ${ctx.carriedForward.toFixed(2)}`,
+          paymentQrDataUri: PAYMENT_QR_DATA_URI,
+          lastSummary: ctx.isLast ? data.summary : undefined,
+          lastTax: ctx.isLast ? data.tax : undefined,
+          gstRateHalf: data.gstRatePercent / 2,
+        }),
       fileName: `order-invoice-${order.id}.pdf`,
       download: downloadPdf,
       scale: 1.5,
     });
+
+    if (downloadPdf && order.id) {
+      markOrderInvoicePrinted(order.id);
+    }
 
     if (!options?.emailPdfToRetailer) {
       return {};
@@ -853,19 +918,8 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     const totalQty = quantity + freeQuantity;
     const mrp = item.mrp || 0;
     const discountPercentage = item.discountPercentage || 0;
-    const standardDiscount = (item as any).standardDiscount ?? 20;
     const gstRate = item.gstRate || 5;
-    
-    // Calculate price from MRP: apply item standard discount (fallback 20%), then remove inclusive GST.
-    let price = 0;
-    if (mrp > 0) {
-      const afterDiscount = mrp * (1 - standardDiscount / 100);
-      price = afterDiscount / (1 + gstRate / 100); // Remove inclusive GST
-    } else {
-      price = item.purchasePrice || 0;
-    }
-    
-    // Total Amount = Price * Quantity (this is what's shown in the "Total" column)
+    const price = item.purchasePrice || 0;
     const totalAmount = price * quantity;
     
     // Discount = Total Amount * discountPercentage / 100
@@ -1005,7 +1059,9 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
     tray: '-'
   };
   
-  const firstHeaderHtml = `
+  const buildFirstHeaderHtml = (paging?: { pageIndex: number; pageCount: number }) => {
+    const pageLabel = formatInvoicePageLabel(paging?.pageIndex ?? 0, paging?.pageCount ?? 1);
+    return `
 <table>
   <tr>
     <td width="50%">
@@ -1034,10 +1090,12 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
       User: ${invoiceData.user}
     </td>
     <td>
-      Date: ${invoiceData.date}
+      Date: ${invoiceData.date}<br>
+      ${pageLabel}
     </td>
   </tr>
 </table>`;
+  };
 
   const footerHtml = `
 ${buildGstInvoiceTotalsSection(tax, summary, avgGstRate / 2)}
@@ -1045,10 +1103,16 @@ ${buildGstInvoiceFooter(invoice.notes || '', summary.amountInWords, party.name)}
 
   return {
     items: items as GstInvoiceLineItem[],
-    firstHeaderHtml,
+    firstHeaderHtml: buildFirstHeaderHtml(),
+    buildFirstHeaderHtml,
     footerHtml,
     invoiceData,
     partyName: party.name,
+    summary,
+    tax,
+    gstRateHalf: avgGstRate / 2,
+    remarks: invoice.notes || '',
+    signatoryFor: party.name,
   };
 };
 
@@ -1058,7 +1122,7 @@ export const generatePurchaseInvoice = async (invoice: PurchaseInvoice) => {
     await buildPaginatedInvoicePdf({
       title: 'Purchase GST Invoice',
       items: parts.items,
-      firstHeaderHtml: parts.firstHeaderHtml,
+      firstHeaderHtml: (page) => parts.buildFirstHeaderHtml(page),
       buildContHeaderHtml: (page) =>
         buildContinuationHeaderHtml({
           title: 'PURCHASE GST INVOICE',
@@ -1070,6 +1134,21 @@ export const generatePurchaseInvoice = async (invoice: PurchaseInvoice) => {
         }),
       buildItemsHtml: (pageItems) => buildGstInvoiceItemTableHtml(pageItems),
       footerHtml: parts.footerHtml,
+      buildFooterHtml: (page, ctx) =>
+        buildGstInvoiceHalfPageFooter({
+          pageItems: page.items,
+          carriedForward: ctx.carriedForward,
+          isLast: ctx.isLast,
+          pageCount: page.pageCount,
+          remarks: parts.remarks,
+          signatoryFor: parts.signatoryFor,
+          amountInWords: ctx.isLast
+            ? parts.summary.amountInWords
+            : `Total C/F Rs. ${ctx.carriedForward.toFixed(2)}`,
+          lastSummary: ctx.isLast ? parts.summary : undefined,
+          lastTax: ctx.isLast ? parts.tax : undefined,
+          gstRateHalf: parts.gstRateHalf,
+        }),
       fileName: `purchase-invoice-${invoice.invoiceNumber}.pdf`,
       download: true,
       scale: 1.5,
