@@ -46,6 +46,7 @@ import {
   MergeType,
   OpenInNew,
   Refresh,
+  Undo,
 } from '@mui/icons-material';
 import {
   useOrders,
@@ -56,7 +57,7 @@ import {
 } from '../hooks/useOrders';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
-import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered } from '../services/orders';
+import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered, unfulfillOrder } from '../services/orders';
 import { generateOrderInvoice } from '../utils/invoice';
 import {
   extractOrderShortfallsFromOrders,
@@ -105,7 +106,10 @@ function getInitialOrdersListView() {
 }
 
 const isBulkSelectableStatus = (status: OrderStatus) =>
-  status === 'Pending' || status === 'Order Fulfillment' || status === 'In Transit';
+  status === 'Pending' ||
+  status === 'Order Fulfillment' ||
+  status === 'In Transit' ||
+  status === 'Delivered';
 
 /** Normalized row shape rendered by the table, sourced from either Typesense or the fallback full list. */
 interface OrderRow {
@@ -153,7 +157,7 @@ export const OrdersPage: React.FC = () => {
   const mergePendingMutation = useMergePendingOrders();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { alert } = useAppDialog();
+  const { alert, confirm } = useAppDialog();
   const { canWrite, panelRole } = useAuth();
   const canEditOrders = canWrite('orders');
   const canReindexOrders = panelRole === 'admin' || panelRole === 'operations';
@@ -584,6 +588,16 @@ export const OrdersPage: React.FC = () => {
     () => selectedIds.filter((id) => selectedById[id]?.status === 'In Transit'),
     [selectedIds, selectedById]
   );
+  const selectedUnfulfillIds = useMemo(
+    () =>
+      selectedIds.filter((id) => {
+        const status = selectedById[id]?.status;
+        return (
+          status === 'Order Fulfillment' || status === 'In Transit' || status === 'Delivered'
+        );
+      }),
+    [selectedIds, selectedById]
+  );
   const selectedPendingIds = useMemo(
     () => selectedIds.filter((id) => selectedById[id]?.status === 'Pending'),
     [selectedIds, selectedById]
@@ -816,6 +830,48 @@ export const OrdersPage: React.FC = () => {
       await alert(parts.join('\n\n'), {
         severity: errors.length > 0 || emailErrors.length > 0 ? 'warning' : 'success',
       });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkUnfulfill = async () => {
+    const user = auth.currentUser;
+    if (!user || selectedUnfulfillIds.length === 0) return;
+    const ok = await confirm(
+      `Un-fulfill ${selectedUnfulfillIds.length} order(s)? They will return to Pending, stock will be restored, and wallet applied on those invoices will be reversed. You will need to fulfill again.`,
+      { destructive: true }
+    );
+    if (!ok) return;
+    setBulkBusy(true);
+    const errors: string[] = [];
+    let restoredWarn = 0;
+    try {
+      for (const orderId of selectedUnfulfillIds) {
+        try {
+          const res = await unfulfillOrder(orderId, user.uid);
+          if (res.stockRestoreErrors.length > 0) restoredWarn += 1;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`${formatOrderNumberForDisplay(orderId)}: ${msg}`);
+        }
+      }
+      await refreshListsAfterBulk();
+      if (errors.length > 0) {
+        await alert(
+          `Un-fulfilled ${selectedUnfulfillIds.length - errors.length} order(s). Failed:\n${errors.slice(0, 5).join('\n')}`,
+          { severity: 'warning' }
+        );
+      } else if (restoredWarn > 0) {
+        await alert(
+          `Un-fulfilled ${selectedUnfulfillIds.length} order(s). ${restoredWarn} had stock restore issues — check the order and Restore deducted stock if needed.`,
+          { severity: 'warning' }
+        );
+      } else {
+        await alert(`Un-fulfilled ${selectedUnfulfillIds.length} order(s). They are back in Pending.`, {
+          severity: 'success',
+        });
+      }
     } finally {
       setBulkBusy(false);
     }
@@ -1252,6 +1308,9 @@ export const OrdersPage: React.FC = () => {
                 ? ` · ${selectedFulfillmentIds.length} fulfillment`
                 : ''}
               {selectedTransitIds.length > 0 ? ` · ${selectedTransitIds.length} in transit` : ''}
+              {selectedUnfulfillIds.length > 0
+                ? ` · ${selectedUnfulfillIds.length} can un-fulfill`
+                : ''}
             </Typography>
             <Button
               size="small"
@@ -1288,6 +1347,16 @@ export const OrdersPage: React.FC = () => {
               onClick={() => setBulkDeliverDialog({ open: true })}
             >
               Mark Delivered ({selectedTransitIds.length})
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<Undo />}
+              disabled={bulkBusy || selectedUnfulfillIds.length === 0}
+              onClick={() => void handleBulkUnfulfill()}
+            >
+              Un-fulfill ({selectedUnfulfillIds.length})
             </Button>
             <Button
               size="small"
