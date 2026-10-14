@@ -31,6 +31,7 @@ import {
   CloudSync,
   CameraAlt,
   Delete,
+  Download,
 } from '@mui/icons-material';
 import {
   usePurchaseInvoices,
@@ -60,6 +61,8 @@ import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import type { PaymentStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
+import { exportPurchaseDiscountList } from '../utils/purchaseDiscountListExport';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_ROWS_PER_PAGE = 20;
@@ -113,6 +116,8 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+  const [minVendorDiscountPct, setMinVendorDiscountPct] = useState('');
+  const [extractingDiscountList, setExtractingDiscountList] = useState(false);
 
   const { sortKey, sortDirection, requestSort } = useTableSort('invoiceDate', 'desc');
 
@@ -363,12 +368,38 @@ export const PurchaseInvoicesPage: React.FC = () => {
     }
   };
 
-  const localLoading = hasDateFilter
-    ? invoiceRange.isLoading
-    : hasVendorFilter
-      ? vendorInvoices.isLoading
-      : allLoading;
-  const initialLoading = useLocalList ? localLoading : searchLoading || searchErrored;
+  const handleExtractDiscountList = async () => {
+    const minPct = parseFloat(minVendorDiscountPct);
+    if (!Number.isFinite(minPct) || minPct < 0) {
+      await alert('Enter a valid minimum discount %', { severity: 'warning' });
+      return;
+    }
+    setExtractingDiscountList(true);
+    try {
+      const scoped =
+        hasDateFilter || hasVendorFilter
+          ? (hasDateFilter ? invoiceRange.data : vendorInvoices.data) ?? []
+          : await getAllPurchaseInvoices();
+      const count = await exportPurchaseDiscountList(scoped, minPct);
+      if (count === 0) {
+        await alert(`No medicines found with vendor discount of ${minPct}% or more.`, {
+          severity: 'warning',
+        });
+        return;
+      }
+      await alert(`Downloaded ${count} medicine/vendor row(s) at ${minPct}%+ discount.`, {
+        severity: 'success',
+      });
+    } catch (err: unknown) {
+      await alert(err instanceof Error ? err.message : 'Failed to extract discount list', {
+        severity: 'error',
+      });
+    } finally {
+      setExtractingDiscountList(false);
+    }
+  };
+
+  const initialLoading = typesenseDisabled ? allLoading : searchLoading || searchErrored;
   if (initialLoading) return <Loading message="Loading purchase invoices..." />;
 
   const isBusy =
@@ -458,115 +489,131 @@ export const PurchaseInvoicesPage: React.FC = () => {
         </Alert>
       )}
 
-      <Paper sx={{ px: 1.5, py: 1, mb: 1.5 }}>
-        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
-          <TextField
-            size="small"
-            placeholder="Search invoice, vendor…"
-            value={searchTerm}
+      <Box display="flex" gap={1} mb={2} flexWrap="wrap" alignItems="center">
+        <TextField
+          size="small"
+          placeholder="Search invoices..."
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value);
+            setPage(1);
+          }}
+          sx={{ minWidth: 200, flex: '1 1 180px' }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <Search fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+        />
+        <FormControl size="small" sx={{ minWidth: 160 }}>
+          <InputLabel>Payment Status</InputLabel>
+          <Select
+            value={statusFilter}
+            label="Payment Status"
             onChange={(e) => {
-              setSearchTerm(e.target.value);
+              setStatusFilter(e.target.value);
               setPage(1);
             }}
-            sx={{ minWidth: 220, flex: '1 1 220px' }}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <Search fontSize="small" />
-                </InputAdornment>
-              ),
-            }}
-          />
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel>Vendor</InputLabel>
-            <Select
-              value={vendorId}
-              label="Vendor"
-              onChange={(e) => {
-                setVendorId(e.target.value);
-                setPage(1);
-              }}
-              MenuProps={{ PaperProps: { style: { maxHeight: 360 } } }}
-            >
-              <MenuItem value="">All vendors</MenuItem>
-              {vendorOptions.map((v) => (
-                <MenuItem key={v.id} value={v.id}>
-                  {v.vendorName}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <IstDateField
-            label="From"
-            value={draftFromDateFilter}
-            onChange={setDraftFromDateFilter}
-            sx={{ width: { xs: '100%', sm: 160 } }}
-          />
-          <IstDateField
-            label="To"
-            value={draftToDateFilter}
-            onChange={setDraftToDateFilter}
-            sx={{ width: { xs: '100%', sm: 160 } }}
-          />
-          <Button
-            size="small"
-            variant="contained"
-            disabled={!dateDraftDirty || draftDateRangeInvalid}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={commitDraftDateRange}
           >
-            OK
-          </Button>
+            <MenuItem value="All">All Statuses</MenuItem>
+            <MenuItem value="Paid">Paid</MenuItem>
+            <MenuItem value="Unpaid">Unpaid</MenuItem>
+            <MenuItem value="Partial">Partial</MenuItem>
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 180 }}>
+          <InputLabel>Vendor</InputLabel>
+          <Select
+            value={vendorId}
+            label="Vendor"
+            onChange={(e) => {
+              setVendorId(e.target.value);
+              setPage(1);
+            }}
+            MenuProps={{ PaperProps: { style: { maxHeight: 360 } } }}
+          >
+            <MenuItem value="">All vendors</MenuItem>
+            {vendorOptions.map((v) => (
+              <MenuItem key={v.id} value={v.id}>
+                {v.vendorName}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <IstDateField
+          label="From"
+          value={draftFromDateFilter}
+          onChange={setDraftFromDateFilter}
+          sx={{ width: { xs: '100%', sm: 160 } }}
+        />
+        <IstDateField
+          label="To"
+          value={draftToDateFilter}
+          onChange={setDraftToDateFilter}
+          sx={{ width: { xs: '100%', sm: 160 } }}
+        />
+        <Button
+          size="small"
+          variant="contained"
+          disabled={!dateDraftDirty || draftDateRangeInvalid}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={commitDraftDateRange}
+        >
+          OK
+        </Button>
+        <Button
+          size="small"
+          variant="text"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const range = getDefaultNotesFilterRangeIST();
+            applyDateRange(range.fromDate, range.toDate);
+          }}
+        >
+          7 days
+        </Button>
+        <Button
+          size="small"
+          variant="text"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const today = getTodayDateStringIST();
+            applyDateRange(today, today);
+          }}
+        >
+          Today
+        </Button>
+        {(draftFromDateFilter || draftToDateFilter || fromDateFilter || toDateFilter) && (
           <Button
             size="small"
             variant="text"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const range = getDefaultNotesFilterRangeIST();
-              applyDateRange(range.fromDate, range.toDate);
-            }}
+            onClick={() => applyDateRange('', '')}
           >
-            7 days
+            All dates
           </Button>
-          <Button
-            size="small"
-            variant="text"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const today = getTodayDateStringIST();
-              applyDateRange(today, today);
-            }}
-          >
-            Today
-          </Button>
-          {(draftFromDateFilter || draftToDateFilter || fromDateFilter || toDateFilter) && (
-            <Button
-              size="small"
-              variant="text"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => applyDateRange('', '')}
-            >
-              All dates
-            </Button>
-          )}
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel>Payment</InputLabel>
-            <Select
-              value={statusFilter}
-              label="Payment"
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-            >
-              <MenuItem value="All">All status</MenuItem>
-              <MenuItem value="Paid">Paid</MenuItem>
-              <MenuItem value="Unpaid">Unpaid</MenuItem>
-              <MenuItem value="Partial">Partial</MenuItem>
-            </Select>
-          </FormControl>
-        </Box>
-      </Paper>
+        )}
+        <TextField
+          size="small"
+          type="number"
+          label="Min vendor discount %"
+          value={minVendorDiscountPct}
+          onChange={(e) => setMinVendorDiscountPct(e.target.value)}
+          inputProps={{ min: 0, max: 100, step: 0.5 }}
+          sx={{ width: 180 }}
+        />
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<Download fontSize="small" />}
+          disabled={extractingDiscountList}
+          onClick={() => void handleExtractDiscountList()}
+        >
+          {extractingDiscountList ? 'Extracting…' : 'Extract discount list'}
+        </Button>
+      </Box>
 
       <TableContainer component={Paper}>
         {isBusy && <LinearProgress />}
