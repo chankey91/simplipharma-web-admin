@@ -204,6 +204,177 @@ export function isCancelledNote(note: { status?: string } | null | undefined): b
   return String(note?.status || '').toLowerCase() === 'cancelled';
 }
 
+function isReturnLinkedCredit(data: Record<string, unknown>): boolean {
+  const type = String(data.type || '');
+  return (
+    type === 'order_return' ||
+    type === 'expiry_return' ||
+    String(data.orderReturnRequestId || '').trim() !== '' ||
+    String(data.expiryReturnRequestId || '').trim() !== ''
+  );
+}
+
+function asNoteDate(value: unknown): Date {
+  if (value instanceof Date) return value;
+  if (value && typeof value === 'object' && 'toDate' in value) {
+    return (value as { toDate: () => Date }).toDate();
+  }
+  const d = new Date(value as string | number);
+  return Number.isFinite(d.getTime()) ? d : new Date();
+}
+
+export type LedgerNoteEditSnapshot = {
+  id: string;
+  kind: 'credit' | 'debit';
+  documentNumber: string;
+  noteDate: Date;
+  totalAmount: number;
+  amountUsed: number;
+  reason: string;
+  originalInvoiceNumber: string;
+  taxPercentage: LedgerNoteGstRate;
+  returnLinked: boolean;
+};
+
+export async function getLedgerNote(
+  kind: 'credit' | 'debit',
+  noteId: string
+): Promise<LedgerNoteEditSnapshot | null> {
+  const id = noteId.trim();
+  if (!id) return null;
+  const col = kind === 'credit' ? 'credit_notes' : 'debit_notes';
+  const snap = await getDoc(doc(db, col, id));
+  if (!snap.exists()) return null;
+  const data = snap.data() as Record<string, unknown>;
+  if (isCancelledNote(data)) return null;
+  const taxRaw = Number(data.taxPercentage);
+  const taxPercentage = (LEDGER_NOTE_GST_RATES.includes(taxRaw as LedgerNoteGstRate)
+    ? taxRaw
+    : 5) as LedgerNoteGstRate;
+  return {
+    id,
+    kind,
+    documentNumber:
+      kind === 'credit'
+        ? String(data.creditNoteNumber || id)
+        : String(data.debitNoteNumber || id),
+    noteDate: asNoteDate(kind === 'credit' ? data.creditNoteDate : data.debitNoteDate),
+    totalAmount: round2(Number(data.totalAmount) || 0),
+    amountUsed: kind === 'credit' ? round2(Number(data.amountUsed) || 0) : 0,
+    reason: String(data.reason || ''),
+    originalInvoiceNumber: String(data.originalInvoiceNumber || ''),
+    taxPercentage,
+    returnLinked: kind === 'credit' ? isReturnLinkedCredit(data) : false,
+  };
+}
+
+export type UpdateLedgerNoteInput = {
+  totalAmount?: number;
+  noteDate?: Date;
+  reason?: string;
+  originalInvoiceNumber?: string;
+  taxPercentage?: LedgerNoteGstRate;
+};
+
+export async function updateLedgerNote(
+  kind: 'credit' | 'debit',
+  noteId: string,
+  input: UpdateLedgerNoteInput
+): Promise<{ id: string; documentNumber: string }> {
+  const id = noteId.trim();
+  if (!id) throw new Error('Note id is required');
+  const col = kind === 'credit' ? 'credit_notes' : 'debit_notes';
+  const ref = doc(db, col, id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error('Note not found');
+  const data = snap.data() as Record<string, unknown>;
+  if (isCancelledNote(data)) throw new Error('This note is already voided');
+
+  const existingDate = asNoteDate(kind === 'credit' ? data.creditNoteDate : data.debitNoteDate);
+  const nextDate = input.noteDate || existingDate;
+  await assertDocumentDateWritable(existingDate);
+  await assertDocumentDateWritable(nextDate);
+
+  const existingTotal = round2(Number(data.totalAmount) || 0);
+  const nextTotal =
+    input.totalAmount != null ? round2(Number(input.totalAmount)) : existingTotal;
+  if (!Number.isFinite(nextTotal) || nextTotal <= 0) {
+    throw new Error('Enter a valid amount greater than zero');
+  }
+
+  const existingTax = Number(data.taxPercentage);
+  const nextTax = (input.taxPercentage ??
+    (LEDGER_NOTE_GST_RATES.includes(existingTax as LedgerNoteGstRate) ? existingTax : 5)) as LedgerNoteGstRate;
+  if (!LEDGER_NOTE_GST_RATES.includes(nextTax)) {
+    throw new Error('Select GST 5% or 18%');
+  }
+
+  const nextReason = (input.reason ?? String(data.reason || '')).trim();
+  if (!nextReason) throw new Error('Reason is required');
+
+  if (kind === 'credit') {
+    if (isReturnLinkedCredit(data) && Math.abs(nextTotal - existingTotal) > 0.009) {
+      throw new Error('Return credit notes cannot change amount. Reverse the return instead.');
+    }
+    const used = round2(Number(data.amountUsed) || 0);
+    if (used > nextTotal + 0.009) {
+      throw new Error(
+        `Amount cannot be below ₹${used.toFixed(2)} already applied to invoices.`
+      );
+    }
+  } else {
+    const source = String(data.sourceType || '');
+    if (source && source !== 'ledger_adjustment' && source !== 'manual' && Math.abs(nextTotal - existingTotal) > 0.009) {
+      throw new Error('Only ledger debit notes can change amount here.');
+    }
+  }
+
+  const { subTotal, taxAmount } = splitTaxInclusive(nextTotal, nextTax);
+  const items = [buildLedgerLine(nextReason, subTotal, nextTotal, nextTax)];
+  const originalInvoiceNumber = optionalTrimmed(
+    input.originalInvoiceNumber ?? String(data.originalInvoiceNumber || '')
+  );
+  const retailerGstin = data.retailerGstin ? String(data.retailerGstin) : undefined;
+  const retailerName = data.retailerName ? String(data.retailerName) : undefined;
+  const documentNumber =
+    kind === 'credit'
+      ? String(data.creditNoteNumber || id)
+      : String(data.debitNoteNumber || id);
+
+  await updateDoc(
+    ref,
+    stripUndefinedDeep({
+      ...(kind === 'credit'
+        ? { creditNoteDate: Timestamp.fromDate(nextDate), amount: nextTotal }
+        : { debitNoteDate: Timestamp.fromDate(nextDate) }),
+      reason: nextReason,
+      originalInvoiceNumber: originalInvoiceNumber || null,
+      items,
+      subTotal,
+      taxAmount,
+      totalAmount: nextTotal,
+      taxPercentage: nextTax,
+      updatedAt: serverTimestamp(),
+      updatedBy: auth.currentUser?.uid || undefined,
+      gst: await createOutwardGstSnapshot({
+        taxAmount,
+        taxableValue: subTotal,
+        totalAmount: nextTotal,
+        buyerGstin: retailerGstin,
+        buyerLegalName: retailerName,
+        documentKind: kind === 'credit' ? 'credit_note' : 'debit_note',
+        invoiceDate: nextDate,
+        lines: gstLinesFromNoteItems(items, subTotal, taxAmount),
+      }).catch((error) => {
+        console.warn('GST snapshot skipped on ledger note update:', error);
+        return undefined;
+      }),
+    })
+  );
+  invalidateGstPeriodBooksCache();
+  return { id, documentNumber };
+}
+
 /**
  * Void an unused ledger credit/debit note. Does not delete the document.
  * Used credit notes (wallet already applied to invoices) cannot be voided.

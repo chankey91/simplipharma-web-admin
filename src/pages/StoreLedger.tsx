@@ -17,9 +17,12 @@ import {
   Select,
   MenuItem,
   Alert,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
-import { Download, PictureAsPdf, Search, WhatsApp } from '@mui/icons-material';
+import { Delete, Download, Edit, OpenInNew, PictureAsPdf, Search, WhatsApp } from '@mui/icons-material';
 import { format } from 'date-fns';
+import { useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
 import { useRetailerLedgerData } from '../hooks/useOrders';
 import { Loading } from '../components/Loading';
@@ -27,6 +30,7 @@ import {
   buildStoreLedger,
   defaultStoreLedgerDateRange,
   formatLedgerAmount,
+  type StoreLedgerEntry,
   type StoreLedgerResult,
 } from '../utils/storeLedger';
 import {
@@ -35,6 +39,10 @@ import {
   shareStoreLedgerPdfOnWhatsApp,
 } from '../utils/storeLedgerExport';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useAuth } from '../context/AuthContext';
+import { deleteOrderLedgerPayment } from '../services/orders';
+import { voidLedgerNote } from '../services/ledgerNotes';
+import { EditStoreLedgerEntryDialog } from '../components/EditStoreLedgerEntryDialog';
 
 const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
 
@@ -43,7 +51,11 @@ const formatCurrency = (n: number) =>
 
 export const StoreLedgerPage: React.FC = () => {
   const { data: stores, isLoading: storesLoading } = useStores();
-  const { alert } = useAppDialog();
+  const { alert, confirm } = useAppDialog();
+  const { canWrite } = useAuth();
+  const queryClient = useQueryClient();
+  const canEditEntries =
+    canWrite('accounts') || canWrite('orders') || canWrite('receivables');
 
   const defaults = useMemo(() => defaultStoreLedgerDateRange(), []);
   const [retailerId, setRetailerId] = useState('');
@@ -54,6 +66,8 @@ export const StoreLedgerPage: React.FC = () => {
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
   const [sharingWhatsApp, setSharingWhatsApp] = useState(false);
+  const [editEntry, setEditEntry] = useState<StoreLedgerEntry | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
   const { data: ledgerData, isLoading: ledgerLoading, isFetching, refetch } = useRetailerLedgerData(
     retailerId,
@@ -160,6 +174,71 @@ export const StoreLedgerPage: React.FC = () => {
     }
   };
 
+  const handleOpenOrder = (row: StoreLedgerEntry) => {
+    if (!row.orderId) return;
+    window.open(`/orders/${row.orderId}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const refreshLedger = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['retailerLedgerData'] }),
+      queryClient.invalidateQueries({ queryKey: ['creditNotes'] }),
+      queryClient.invalidateQueries({ queryKey: ['debitNotes'] }),
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] }),
+      queryClient.invalidateQueries({ queryKey: ['orders'] }),
+      queryClient.invalidateQueries({ queryKey: ['ordersSearch'] }),
+    ]);
+    await refetch();
+  };
+
+  const handleEntrySaved = async () => {
+    setEditEntry(null);
+    await refreshLedger();
+  };
+
+  const rowKey = (row: StoreLedgerEntry) =>
+    `${row.sourceKind || row.vchType}-${row.orderId || ''}-${row.paymentId || row.noteId || row.vchNo}`;
+
+  const handleDeleteEntry = async (row: StoreLedgerEntry) => {
+    const amount = row.debit || row.credit;
+    const amountLabel = formatCurrency(amount);
+    const message =
+      row.sourceKind === 'payment'
+        ? `Delete this ${row.walletLocked ? 'wallet ' : ''}payment of ${amountLabel}? Invoice paid / due will update${
+            row.walletLocked ? ', and unused wallet will be restored' : ''
+          }.`
+        : row.sourceKind === 'credit_note'
+          ? `Delete this credit note of ${amountLabel}? It is removed from wallet and ledger (kept as cancelled).`
+          : `Delete this debit note of ${amountLabel}? It is removed from wallet and ledger (kept as cancelled).`;
+    const ok = await confirm(message, {
+      title: 'Delete ledger row',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    const key = rowKey(row);
+    setDeletingKey(key);
+    try {
+      if (row.sourceKind === 'payment' && row.orderId && row.paymentId) {
+        await deleteOrderLedgerPayment(row.orderId, row.paymentId);
+      } else if (row.sourceKind === 'credit_note' && row.noteId) {
+        await voidLedgerNote('credit', row.noteId);
+      } else if (row.sourceKind === 'debit_note' && row.noteId) {
+        await voidLedgerNote('debit', row.noteId);
+      } else {
+        throw new Error('This line cannot be deleted');
+      }
+      if (editEntry && rowKey(editEntry) === key) setEditEntry(null);
+      await refreshLedger();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      await alert(`Failed to delete row: ${msg}`, { severity: 'error' });
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
   if (storesLoading) {
     return <Loading message="Loading medical stores..." />;
   }
@@ -172,7 +251,9 @@ export const StoreLedgerPage: React.FC = () => {
         </Typography>
         <Typography variant="body2" color="text.secondary">
           Select a medical store and date range to generate a debit/credit receivables ledger
-          (sales, receipts, credit notes, and debit notes). Download as PDF or Excel.
+          (sales, receipts, credit notes, and debit notes). Open a sales order in a new tab, or
+          edit / delete a payment, credit note, or debit note — related invoice, wallet, and GST
+          values stay in sync.
         </Typography>
       </Box>
 
@@ -346,6 +427,7 @@ export const StoreLedgerPage: React.FC = () => {
                     <TableCell align="right">Debit</TableCell>
                     <TableCell align="right">Credit</TableCell>
                     <TableCell align="right">Balance</TableCell>
+                    <TableCell align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -372,6 +454,48 @@ export const StoreLedgerPage: React.FC = () => {
                         {row.credit ? formatLedgerAmount(row.credit) : ''}
                       </TableCell>
                       <TableCell align="right">{formatLedgerAmount(row.balance)}</TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        {row.sourceKind === 'sales' && row.orderId ? (
+                          <Tooltip title="Open order details">
+                            <IconButton
+                              size="small"
+                              aria-label="Open order details"
+                              onClick={() => handleOpenOrder(row)}
+                            >
+                              <OpenInNew fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        ) : null}
+                        {canEditEntries &&
+                        (row.sourceKind === 'payment' ||
+                          row.sourceKind === 'credit_note' ||
+                          row.sourceKind === 'debit_note') ? (
+                          <>
+                            <Tooltip title="Edit entry">
+                              <IconButton
+                                size="small"
+                                aria-label="Edit ledger entry"
+                                onClick={() => setEditEntry(row)}
+                              >
+                                <Edit fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Delete row">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  color="error"
+                                  aria-label="Delete ledger row"
+                                  disabled={deletingKey === rowKey(row)}
+                                  onClick={() => void handleDeleteEntry(row)}
+                                >
+                                  <Delete fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </>
+                        ) : null}
+                      </TableCell>
                     </TableRow>
                   ))}
                   <TableRow sx={{ bgcolor: 'grey.100' }}>
@@ -391,11 +515,19 @@ export const StoreLedgerPage: React.FC = () => {
                     <TableCell align="right">
                       {formatLedgerAmount(ledger.closingBalance)}
                     </TableCell>
+                    <TableCell />
                   </TableRow>
                 </TableBody>
               </Table>
             </TableContainer>
           )}
+
+          <EditStoreLedgerEntryDialog
+            open={Boolean(editEntry)}
+            entry={editEntry}
+            onClose={() => setEditEntry(null)}
+            onSaved={() => void handleEntrySaved()}
+          />
         </>
       )}
     </Box>
