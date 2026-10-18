@@ -15,6 +15,8 @@ export type StoreLedgerVchType =
   | 'Debit Note'
   | 'Opening';
 
+export type StoreLedgerSourceKind = 'sales' | 'payment' | 'credit_note' | 'debit_note';
+
 export type StoreLedgerEntry = {
   date: Date;
   particulars: string;
@@ -25,6 +27,11 @@ export type StoreLedgerEntry = {
   credit: number;
   balance: number;
   isSummary?: boolean;
+  sourceKind?: StoreLedgerSourceKind;
+  orderId?: string;
+  paymentId?: string;
+  noteId?: string;
+  walletLocked?: boolean;
 };
 
 export type StoreLedgerResult = {
@@ -161,6 +168,8 @@ export function buildStoreLedger(
         vchNo: invoiceRef,
         debit: total,
         credit: 0,
+        sourceKind: 'sales',
+        orderId: order.id,
       });
     }
 
@@ -181,6 +190,10 @@ export function buildStoreLedger(
           vchNo: resolvePaymentVchNo(pay, order),
           debit: 0,
           credit: amt,
+          sourceKind: 'payment',
+          orderId: order.id,
+          paymentId: pay.id || `legacy-${order.id}`,
+          walletLocked: isWalletPayment(pay.paymentMethod) || pay.settlementKind === 'wallet',
         });
       }
     }
@@ -204,6 +217,8 @@ export function buildStoreLedger(
         vchNo: ref,
         debit: total,
         credit: 0,
+        sourceKind: 'debit_note',
+        noteId: note.id,
       });
     }
   }
@@ -232,6 +247,8 @@ export function buildStoreLedger(
         vchNo: ref,
         debit: 0,
         credit: unused,
+        sourceKind: 'credit_note',
+        noteId: note.id,
       });
     }
   }
