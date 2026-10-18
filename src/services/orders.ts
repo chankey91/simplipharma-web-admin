@@ -1,6 +1,6 @@
-import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where, writeBatch, getUserProfile } from './firebase';
+import { collection, getDocs, doc, updateDoc, query, orderBy, limit, Timestamp, db, getDoc, where, writeBatch, getUserProfile, addDoc } from './firebase';
 import { deleteField } from 'firebase/firestore';
-import { Order, OrderStatus, OrderTimelineEvent, OrderMedicine, Medicine, PurchaseInvoice, Payment, PaymentRequestCreditApplication } from '../types';
+import { Order, OrderStatus, OrderTimelineEvent, OrderMedicine, Medicine, PurchaseInvoice, Payment, PaymentMethod, PaymentRequestCreditApplication } from '../types';
 import {
   reduceStockBatchesFromMedicine,
   restoreStockToBatch,
@@ -1871,3 +1871,331 @@ export const updatePaymentStatus = async (
 
   await updateDoc(orderRef, updateData);
 };
+
+const EDITABLE_PAYMENT_METHODS: PaymentMethod[] = [
+  'Cash',
+  'Online',
+  'Card',
+  'UPI',
+  'Bank Transfer',
+  'Cheque',
+];
+
+function isWalletLedgerPayment(pay: Pick<Payment, 'paymentMethod' | 'settlementKind'>): boolean {
+  const method = String(pay.paymentMethod || '').toUpperCase();
+  return pay.settlementKind === 'wallet' || method.includes('WALLET') || method.includes('CREDIT NOTE');
+}
+
+function paymentStatusFromPaid(paid: number, invoiceTotal: number): 'Paid' | 'Partial' | 'Unpaid' {
+  const due = roundMoney2(Math.max(0, invoiceTotal - paid));
+  if (due <= 0.01) return 'Paid';
+  if (paid > 0.01) return 'Partial';
+  return 'Unpaid';
+}
+
+export type OrderLedgerPaymentSnapshot = {
+  order: Order;
+  payment: Payment;
+  source: 'subcollection' | 'array' | 'legacy';
+  remitted: boolean;
+  linkedRequestId?: string;
+};
+
+export async function getOrderLedgerPayment(
+  orderId: string,
+  paymentId: string
+): Promise<OrderLedgerPaymentSnapshot | null> {
+  const order = await getOrderById(orderId);
+  if (!order) return null;
+
+  const subPayments = await getOrderPayments(orderId);
+  const fromSub = subPayments.find((p) => p.id === paymentId);
+  if (fromSub) {
+    return {
+      order,
+      payment: fromSub,
+      source: 'subcollection',
+      remitted: fromSub.remittanceStatus === 'remitted',
+      linkedRequestId: fromSub.paymentRequestId,
+    };
+  }
+
+  const arrayPayments = Array.isArray(order.payments) ? order.payments : [];
+  const fromArray = arrayPayments.find((p) => p.id === paymentId);
+  if (fromArray) {
+    return {
+      order,
+      payment: { ...fromArray, orderId },
+      source: 'array',
+      remitted: fromArray.remittanceStatus === 'remitted',
+      linkedRequestId: fromArray.paymentRequestId,
+    };
+  }
+
+  if (paymentId === `legacy-${order.id}` || paymentId.startsWith('legacy-')) {
+    const paid = roundMoney2(Number(order.paidAmount) || 0);
+    if (paid <= 0.01) return null;
+    return {
+      order,
+      payment: {
+        id: paymentId,
+        orderId,
+        amount: paid,
+        paymentDate: order.orderDate,
+        paymentMethod: order.paymentMethod || 'Cash',
+        transactionId: order.transactionId,
+      },
+      source: 'legacy',
+      remitted: false,
+    };
+  }
+
+  return null;
+}
+
+export type UpdateOrderLedgerPaymentInput = {
+  orderId: string;
+  paymentId: string;
+  amount?: number;
+  paymentDate?: Date;
+  paymentMethod?: PaymentMethod;
+  transactionId?: string;
+};
+
+/**
+ * Edit a store-ledger payment and keep order paid/due/status plus linked payment request in sync.
+ * Wallet / remitted amounts stay locked; date can still change.
+ */
+export async function updateOrderLedgerPayment(
+  input: UpdateOrderLedgerPaymentInput
+): Promise<{ orderId: string; paymentId: string }> {
+  const orderId = input.orderId.trim();
+  const paymentId = input.paymentId.trim();
+  if (!orderId || !paymentId) throw new Error('Payment reference is required');
+
+  const snap = await getOrderLedgerPayment(orderId, paymentId);
+  if (!snap) throw new Error('Payment not found');
+
+  const existing = snap.payment;
+  const walletLocked = isWalletLedgerPayment(existing);
+  const nextAmount =
+    input.amount != null ? roundMoney2(Number(input.amount)) : roundMoney2(Number(existing.amount) || 0);
+  if (!Number.isFinite(nextAmount) || nextAmount <= 0) {
+    throw new Error('Enter a valid amount greater than zero');
+  }
+
+  if (walletLocked && Math.abs(nextAmount - roundMoney2(Number(existing.amount) || 0)) > 0.009) {
+    throw new Error('Wallet receipts cannot change amount. Un-fulfill or reverse the wallet apply instead.');
+  }
+  if (walletLocked && input.paymentMethod && input.paymentMethod !== existing.paymentMethod) {
+    throw new Error('Wallet receipts cannot change payment method.');
+  }
+  if (snap.remitted && Math.abs(nextAmount - roundMoney2(Number(existing.amount) || 0)) > 0.009) {
+    throw new Error('This cash is already remitted. Amount cannot be changed.');
+  }
+
+  const nextMethod = walletLocked
+    ? existing.paymentMethod
+    : input.paymentMethod || existing.paymentMethod || 'Cash';
+  if (!walletLocked && !EDITABLE_PAYMENT_METHODS.includes(nextMethod)) {
+    throw new Error('Choose Cash, Online, UPI, Card, Bank Transfer, or Cheque.');
+  }
+
+  const existingDate =
+    existing.paymentDate instanceof Date
+      ? existing.paymentDate
+      : existing.paymentDate?.toDate?.() || new Date();
+  const nextDate = input.paymentDate || existingDate;
+  const nextTxn = optionalPaymentTxn(input.transactionId ?? existing.transactionId);
+
+  const paymentPatch = stripUndefinedDeep({
+    amount: nextAmount,
+    paymentDate: Timestamp.fromDate(nextDate),
+    paymentMethod: nextMethod,
+    transactionId: nextTxn || null,
+    updatedAt: Timestamp.now(),
+  });
+
+  let savedPaymentId = existing.id;
+  if (snap.source === 'subcollection') {
+    await updateDoc(doc(db, 'orders', orderId, 'payments', existing.id), paymentPatch);
+    if (Array.isArray(snap.order.payments) && snap.order.payments.some((p) => p.id === existing.id)) {
+      await updateDoc(doc(db, 'orders', orderId), {
+        payments: snap.order.payments.map((p) =>
+          p.id === existing.id
+            ? { ...p, amount: nextAmount, paymentDate: nextDate, paymentMethod: nextMethod, transactionId: nextTxn }
+            : p
+        ),
+      });
+    }
+  } else if (snap.source === 'array') {
+    const nextArray = (snap.order.payments || []).map((p) =>
+      p.id === existing.id
+        ? { ...p, amount: nextAmount, paymentDate: nextDate, paymentMethod: nextMethod, transactionId: nextTxn }
+        : p
+    );
+    await updateDoc(doc(db, 'orders', orderId), { payments: nextArray });
+  } else {
+    const created = await addDoc(collection(db, 'orders', orderId, 'payments'), {
+      orderId,
+      ...paymentPatch,
+      createdAt: Timestamp.now(),
+      notes: 'Converted from ledger paid amount',
+    });
+    savedPaymentId = created.id;
+  }
+
+  const subAfter = await getOrderPayments(orderId);
+  const paidFrom =
+    subAfter.length > 0
+      ? subAfter
+      : snap.source === 'array'
+        ? (snap.order.payments || []).map((p) =>
+            p.id === existing.id ? { ...p, amount: nextAmount } : p
+          )
+        : [{ amount: nextAmount } as Payment];
+  const nextPaid = roundMoney2(
+    paidFrom.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+  );
+  const invoiceTotal = roundMoney2(resolveOrderInvoiceGrandTotal(snap.order));
+  const nextDue = roundMoney2(Math.max(0, invoiceTotal - nextPaid));
+  const nextStatus = paymentStatusFromPaid(nextPaid, invoiceTotal);
+  const lastNonWallet = [...paidFrom].reverse().find((p) => !isWalletLedgerPayment(p));
+
+  await updateDoc(
+    doc(db, 'orders', orderId),
+    stripUndefinedDeep({
+      paidAmount: nextPaid,
+      dueAmount: nextDue,
+      paymentStatus: nextStatus,
+      paymentMethod: lastNonWallet?.paymentMethod || nextMethod,
+      transactionId: nextTxn || lastNonWallet?.transactionId || null,
+    })
+  );
+
+  const requestId = snap.linkedRequestId?.trim();
+  if (requestId && !walletLocked) {
+    const reqRef = doc(db, 'payment_requests', requestId);
+    const reqSnap = await getDoc(reqRef);
+    if (reqSnap.exists()) {
+      await updateDoc(
+        reqRef,
+        stripUndefinedDeep({
+          approvedAmount: nextAmount,
+          requestedAmount: nextAmount,
+          ...(nextTxn ? { transactionId: nextTxn } : {}),
+          updatedAt: Timestamp.now(),
+        })
+      );
+    }
+  }
+
+  return { orderId, paymentId: savedPaymentId };
+}
+
+function optionalPaymentTxn(value: string | undefined): string | undefined {
+  const t = value?.trim();
+  return t ? t : undefined;
+}
+
+/**
+ * Remove a store-ledger payment and keep invoice paid/due/status, wallet, and
+ * linked payment request in sync. Remitted cash cannot be deleted.
+ */
+export async function deleteOrderLedgerPayment(
+  orderId: string,
+  paymentId: string
+): Promise<{ orderId: string; paymentId: string }> {
+  const oid = orderId.trim();
+  const pid = paymentId.trim();
+  if (!oid || !pid) throw new Error('Payment reference is required');
+
+  const snap = await getOrderLedgerPayment(oid, pid);
+  if (!snap) throw new Error('Payment not found');
+  if (snap.remitted) {
+    throw new Error('This cash is already remitted and cannot be deleted.');
+  }
+
+  const requestId = snap.linkedRequestId?.trim();
+  if (requestId) {
+    const { revertPaymentRequest } = await import('./paymentRequests');
+    const { auth } = await import('./firebase');
+    try {
+      await revertPaymentRequest(requestId, {
+        reviewedBy: auth.currentUser?.uid || 'admin',
+        revertReason: 'Deleted from store ledger',
+      });
+      return { orderId: oid, paymentId: pid };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!/only approved payment requests/i.test(msg)) throw error;
+    }
+  }
+
+  const existing = snap.payment;
+  const deletedAmount = roundMoney2(Number(existing.amount) || 0);
+  const walletLocked = isWalletLedgerPayment(existing);
+
+  if (walletLocked) {
+    const apps = Array.isArray(existing.creditApplications) ? existing.creditApplications : [];
+    const { rollbackWalletApplications } = await import('./applyOrderWallet');
+    await rollbackWalletApplications(apps);
+  }
+
+  if (snap.source === 'subcollection') {
+    await updateDoc(doc(db, 'orders', oid, 'payments', existing.id), {
+      amount: 0,
+      reversedAt: Timestamp.now(),
+      notes: `${String(existing.notes || 'Payment')} (deleted from store ledger)`,
+    });
+    if (Array.isArray(snap.order.payments) && snap.order.payments.some((p) => p.id === existing.id)) {
+      await updateDoc(doc(db, 'orders', oid), {
+        payments: snap.order.payments.filter((p) => p.id !== existing.id),
+      });
+    }
+  } else if (snap.source === 'array') {
+    await updateDoc(doc(db, 'orders', oid), {
+      payments: (snap.order.payments || []).filter((p) => p.id !== existing.id),
+    });
+  }
+
+  const subAfter = await getOrderPayments(oid);
+  const remaining =
+    subAfter.length > 0
+      ? subAfter
+      : snap.source === 'array'
+        ? (snap.order.payments || []).filter((p) => p.id !== existing.id)
+        : [];
+  const nextPaid = roundMoney2(
+    remaining.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+  );
+  const invoiceTotal = roundMoney2(resolveOrderInvoiceGrandTotal(snap.order));
+  const nextDue = roundMoney2(Math.max(0, invoiceTotal - nextPaid));
+  const nextStatus = paymentStatusFromPaid(nextPaid, invoiceTotal);
+  const lastNonWallet = [...remaining].reverse().find((p) => !isWalletLedgerPayment(p));
+  const existingCredit = roundMoney2(Number(snap.order.creditApplied) || 0);
+  const nextCredit = walletLocked
+    ? roundMoney2(Math.max(0, existingCredit - deletedAmount))
+    : existingCredit;
+  const remainingApps = Array.isArray(snap.order.walletCreditApplications)
+    ? snap.order.walletCreditApplications.filter((app) => {
+        const used = existing.creditApplications || [];
+        return !used.some((rev) => rev.creditNoteId === app.creditNoteId);
+      })
+    : [];
+
+  await updateDoc(
+    doc(db, 'orders', oid),
+    stripUndefinedDeep({
+      paidAmount: nextPaid,
+      dueAmount: nextDue,
+      paymentStatus: nextStatus,
+      paymentMethod: lastNonWallet?.paymentMethod || (nextPaid > 0.01 ? snap.order.paymentMethod : null),
+      transactionId: lastNonWallet?.transactionId || null,
+      creditApplied: nextCredit,
+      walletCreditApplications: remainingApps,
+    })
+  );
+
+  return { orderId: oid, paymentId: pid };
+}
