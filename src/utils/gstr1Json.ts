@@ -3,8 +3,11 @@ import { isValidGstinFormat, normalizeGstin, normalizeStateCode } from './gstin'
 import { b2clThreshold, roundGst } from './gstTaxEngine';
 import { formatGstinDate, gstFilingGrain, gstinFilingPeriod, indianGstPeriod } from './gstPeriod';
 
+/** Must match the GST portal Returns Offline Tool (currently V3.2.4). */
+const GSTR1_JSON_VERSION = 'GST3.2.4';
 const DEFAULT_HSN = '300490';
 const RATE_SLABS = [0, 0.1, 0.25, 1, 1.5, 3, 5, 7.5, 12, 18, 28];
+const HSN_DESC_MAX = 30;
 
 type HsnBucket = 'B2B' | 'B2C';
 
@@ -141,11 +144,21 @@ function portalItmDet(det: GstnItemDet): GstnItemDet {
   };
 }
 
+function gstnHsnText(raw: string, fallback: string): string {
+  const cleaned = String(raw || '')
+    .replace(/[^A-Za-z0-9 \-/]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, HSN_DESC_MAX);
+  return cleaned || fallback.slice(0, HSN_DESC_MAX);
+}
+
 function hsnUserDesc(hsn: string): string {
   return hsn.startsWith('30') ? 'Medicaments' : 'Goods';
 }
 
 function toPortalHsnRow(row: HsnAggRow, num: number): Record<string, unknown> {
+  const desc = gstnHsnText(hsnUserDesc(row.hsn_sc), 'Goods');
   return {
     num,
     hsn_sc: row.hsn_sc,
@@ -154,8 +167,8 @@ function toPortalHsnRow(row: HsnAggRow, num: number): Record<string, unknown> {
     camt: row.camt,
     samt: row.samt,
     csamt: row.csamt,
-    desc: '',
-    user_desc: hsnUserDesc(row.hsn_sc),
+    desc,
+    user_desc: desc,
     uqc: row.uqc,
     qty: row.qty,
     rt: row.rt,
@@ -679,8 +692,10 @@ export function buildGstr1Payload(input: {
     .map((row, index) => toPortalHsnRow(row, index + 1));
   const hsnCount = hsn_b2b.length + hsn_b2c.length;
 
-  // GST portal Prepare Offline JSON: gstin + fp + tables only (no version/hash/filing_typ).
+  // Upload envelope matches Returns Offline Tool V3.2.4. Portal *downloads* omit these keys.
   const payload: Record<string, unknown> = {
+    version: GSTR1_JSON_VERSION,
+    hash: 'hash',
     gstin,
     fp,
   };
@@ -699,7 +714,12 @@ export function buildGstr1Payload(input: {
   if (cdnur.length) payload.cdnur = cdnur;
   if (b2baArr.length) payload.b2ba = b2baArr;
   if (cdnraArr.length) payload.cdnra = cdnraArr;
-  if (hsnCount) payload.hsn = { hsn_b2b, hsn_b2c };
+  if (hsnCount) {
+    const hsn: Record<string, unknown> = {};
+    if (hsn_b2b.length) hsn.hsn_b2b = hsn_b2b;
+    if (hsn_b2c.length) hsn.hsn_b2c = hsn_b2c;
+    payload.hsn = hsn;
+  }
 
   if (mode === 'original') {
     const docDet = [
