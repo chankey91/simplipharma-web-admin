@@ -136,7 +136,7 @@ export function downloadGstSlabExcel(report: GstSlabReport): void {
       'Total',
     ],
   ];
-  const body = report.rows.map((row) => [
+  const body: Array<Array<string | number>> = report.rows.map((row) => [
     row.rt,
     row.invoices,
     row.creditNotes,
