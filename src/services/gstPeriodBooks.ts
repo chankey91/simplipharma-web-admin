@@ -4,7 +4,7 @@ import { getDebitNotesInRange } from './debitNotes';
 import { getPurchaseInvoicesInRange } from './purchaseInvoices';
 import { getPurchaseReturnsInRange } from './purchaseReturns';
 import { getCompanyGstSettings } from './gstSettings';
-import { gstPeriodBounds, indianGstPeriod } from '../utils/gstPeriod';
+import { gstFilingGrain, gstPeriodBounds, indianGstPeriod } from '../utils/gstPeriod';
 import type { CompanyGstSettings } from '../types/gst';
 import type { CreditNote, DebitNote, Order, PurchaseInvoice, PurchaseReturn } from '../types';
 
@@ -28,7 +28,8 @@ export function invalidateGstPeriodBooksCache(date?: Date) {
     booksMemo.clear();
     return;
   }
-  booksMemo.delete(indianGstPeriod(date).periodId);
+  booksMemo.delete(indianGstPeriod(date, 'quarter').periodId);
+  booksMemo.delete(indianGstPeriod(date, 'month').periodId);
 }
 
 export function gstDocTime(value: unknown): number {
@@ -46,13 +47,14 @@ export function gstDocDate(value: unknown): Date {
 }
 
 export async function loadGstPeriodBooks(date = new Date()): Promise<GstPeriodBooks> {
-  const key = indianGstPeriod(date).periodId;
+  const settings = await getCompanyGstSettings();
+  const grain = gstFilingGrain(settings.filingFrequency);
+  const key = indianGstPeriod(date, grain).periodId;
   const hit = booksMemo.get(key);
   if (hit && Date.now() - hit.at < BOOKS_TTL_MS) return hit.value;
 
-  const { startMs, endMsExclusive } = gstPeriodBounds(date);
-  const [settings, orders, creditNotes, debitNotes, purchases, purchaseReturns] = await Promise.all([
-    getCompanyGstSettings(),
+  const { startMs, endMsExclusive } = gstPeriodBounds(date, grain);
+  const [orders, creditNotes, debitNotes, purchases, purchaseReturns] = await Promise.all([
     getOrdersInRange(startMs, endMsExclusive),
     getCreditNotesInRange(startMs, endMsExclusive),
     getDebitNotesInRange(startMs, endMsExclusive),

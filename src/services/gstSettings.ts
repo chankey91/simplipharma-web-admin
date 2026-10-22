@@ -1,5 +1,6 @@
 import { doc, getDoc, setDoc, serverTimestamp, db, auth } from './firebase';
 import type { CompanyGstSettings, GstFilingFrequency } from '../types/gst';
+import { gstFilingGrain, type GstFilingGrain } from '../utils/gstPeriod';
 import { COMPANY_INVOICE_DETAILS, DEFAULT_INVOICE_STATE, DEFAULT_INVOICE_STATE_CODE } from '../utils/invoicePartyDefaults';
 import { gstinStateCode, gstStateName, isValidGstinFormat, normalizeGstin, normalizeStateCode } from '../utils/gstin';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
@@ -21,7 +22,7 @@ export function defaultCompanyGstSettings(): CompanyGstSettings {
     phone: COMPANY_INVOICE_DETAILS.phone,
     email: COMPANY_INVOICE_DETAILS.email,
     dl: COMPANY_INVOICE_DETAILS.dl,
-    filingFrequency: 'monthly',
+    filingFrequency: 'qrmp',
     einvoiceEnabled: false,
     fyStartMonth: 4,
   };
@@ -45,7 +46,7 @@ function parseSettings(id: string, data: Record<string, unknown>): CompanyGstSet
     phone: data.phone ? String(data.phone) : defaults.phone,
     email: data.email ? String(data.email) : defaults.email,
     dl: data.dl ? String(data.dl) : defaults.dl,
-    filingFrequency: (data.filingFrequency as GstFilingFrequency) || 'monthly',
+    filingFrequency: 'qrmp',
     einvoiceEnabled: data.einvoiceEnabled === true,
     fyStartMonth: Number(data.fyStartMonth) || 4,
     updatedAt: data.updatedAt,
@@ -78,7 +79,7 @@ export async function saveCompanyGstSettings(
     phone: input.phone?.trim() || undefined,
     email: input.email?.trim() || undefined,
     dl: input.dl?.trim() || undefined,
-    filingFrequency: input.filingFrequency || 'monthly',
+    filingFrequency: input.filingFrequency || 'qrmp',
     einvoiceEnabled: input.einvoiceEnabled === true,
     fyStartMonth: input.fyStartMonth || 4,
     updatedAt: serverTimestamp(),
@@ -86,4 +87,9 @@ export async function saveCompanyGstSettings(
   });
   await setDoc(doc(db, COLLECTION, COMPANY_GST_SETTINGS_ID), payload, { merge: true });
   return parseSettings(COMPANY_GST_SETTINGS_ID, payload as Record<string, unknown>);
+}
+
+export async function companyGstFilingGrain(): Promise<GstFilingGrain> {
+  const settings = await getCompanyGstSettings();
+  return gstFilingGrain(settings.filingFrequency);
 }

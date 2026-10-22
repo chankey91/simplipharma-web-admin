@@ -90,9 +90,9 @@ export const GstGstr1Page: React.FC = () => {
         GSTR-1 JSON — {meta.label}
       </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Offline GSTN file (version GST3.2.1) with B2B/B2CL/B2CS/CDNR/CDNUR, HSN, and document
+        Offline GST portal file with B2B/B2CL/B2CS/CDNR/CDNUR, HSN (B2B/B2C), and document
         series. Mixed GST rates on one invoice emit one itm per rate. It does not file the return.
-        Confirm the file in the GST portal offline tool before upload.
+        Confirm the file in GST portal → Returns → GSTR-1 → Prepare Offline before upload.
       </Alert>
       {exportQuery.error ? (
         <Alert severity="error">
