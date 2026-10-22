@@ -1,5 +1,7 @@
 import type { GstDocumentSnapshot } from '../types/gst';
 import { buildGstr1Payload, gstr1ItemDets, GSTR1_MAX_BYTES, gstr1PayloadSize } from './gstr1Json';
+import { buildGstr1ExcelWorkbook } from './gstr1Excel';
+import * as XLSX from 'xlsx';
 
 const SELLER = '23AABCU9603R1ZX';
 const BUYER = '27AAPFU0939F1ZV';
@@ -121,6 +123,27 @@ export function gstr1GoldenErrors(): string[] {
   if (!result.summary.errors.length && result.summary.b2b !== 1) {
     errors.push(`expected 1 B2B invoice, got ${result.summary.b2b}`);
   }
+
+  const excel = buildGstr1ExcelWorkbook(result);
+  if (!excel.SheetNames.includes('b2b,sez,de') || !excel.SheetNames.includes('hsn(b2b)')) {
+    errors.push('Excel workbook is missing GST Offline Tool V2.2 sheet names');
+  }
+  const b2bSheet = XLSX.utils.sheet_to_json(excel.Sheets['b2b,sez,de'], {
+    header: 1,
+    defval: '',
+    raw: true,
+  }) as unknown[][];
+  if (b2bSheet[3]?.[0] !== 'GSTIN/UIN of Recipient') {
+    errors.push(`Excel B2B header mismatch: ${String(b2bSheet[3]?.[0])}`);
+  }
+  const excelRates = b2bSheet.slice(4).map((row) => Number(row[10]));
+  if (!excelRates.includes(5) || !excelRates.includes(12)) {
+    errors.push(`Excel B2B rates should be product GST 5 and 12, got ${excelRates.join(',')}`);
+  }
+  if (String(b2bSheet[4]?.[3] || '') !== '15-Apr-2026') {
+    errors.push(`Excel invoice date must be DD-MMM-YYYY, got ${String(b2bSheet[4]?.[3])}`);
+  }
+
   errors.push(...result.summary.errors);
   return errors;
 }
