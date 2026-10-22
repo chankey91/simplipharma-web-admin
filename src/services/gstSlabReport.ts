@@ -1,11 +1,12 @@
 import { gstFilingGrain, gstinFilingPeriod, indianGstPeriod } from '../utils/gstPeriod';
-import { buildGstSlabRows, totalGstSlabRow, type GstSlabReport } from '../utils/gstSlabReport';
+import { buildGstSlabLines, buildGstSlabRows, totalGstSlabRow, type GstSlabReport } from '../utils/gstSlabReport';
 import { loadGstOutwardDocuments } from './gstGstr1';
 
 export async function buildGstSlabReport(date = new Date()): Promise<GstSlabReport> {
   const { books, documents, skippedNoSnapshot } = await loadGstOutwardDocuments(date);
   const grain = gstFilingGrain(books.settings.filingFrequency);
   const rows = buildGstSlabRows(documents);
+  const lines = buildGstSlabLines(documents);
   const invoiceCount = documents.filter((doc) => doc.kind === 'invoice').length;
   const totals = totalGstSlabRow(rows);
   totals.invoices = invoiceCount;
@@ -19,6 +20,7 @@ export async function buildGstSlabReport(date = new Date()): Promise<GstSlabRepo
     documentCount: documents.length,
     invoiceCount,
     rows,
+    lines,
     totals,
   };
 }
