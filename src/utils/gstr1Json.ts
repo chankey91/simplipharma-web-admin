@@ -1,5 +1,5 @@
 import type { GstDocumentSnapshot, GstFiledFingerprint, GstInvoiceType } from '../types/gst';
-import { isValidGstinFormat, normalizeGstin, normalizeStateCode } from './gstin';
+import { gstinStateCode, isValidGstinFormat, normalizeGstin, normalizeStateCode } from './gstin';
 import { b2clThreshold, roundGst } from './gstTaxEngine';
 import { formatGstinDate, gstFilingGrain, gstinFilingPeriod, indianGstPeriod } from './gstPeriod';
 
@@ -367,10 +367,12 @@ function invoiceTypeOf(doc: Gstr1SourceDocument): GstInvoiceType {
   return doc.gst.invoiceType;
 }
 
-function cdnurTyp(doc: Gstr1SourceDocument): 'B2CL' | 'B2CS' {
-  if (doc.gst.supplyType === 'inter' && roundGst(doc.totalAmount) >= b2clThreshold(doc.date)) {
-    return 'B2CL';
-  }
+function cdnurTyp(doc: Gstr1SourceDocument, sellerGstin: string): 'B2CL' | 'B2CS' {
+  const supplier =
+    normalizeStateCode(doc.gst.supplierStateCode) || gstinStateCode(sellerGstin) || '';
+  const pos = posCode(doc.gst.placeOfSupplyStateCode);
+  const inter = Boolean(supplier && pos && supplier !== pos);
+  if (inter && roundGst(doc.totalAmount) >= b2clThreshold(doc.date)) return 'B2CL';
   return 'B2CS';
 }
 
@@ -733,7 +735,7 @@ export function buildGstr1Payload(input: {
       warnings.push(`${nt_num} is CDNUR — amendment JSON does not include unregistered notes.`);
       continue;
     }
-    const urTyp = cdnurTyp(doc);
+    const urTyp = cdnurTyp(doc, gstin);
     cdnur.push({
       typ: urTyp,
       ntty,

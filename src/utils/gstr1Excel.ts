@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { gstStateName, normalizeStateCode } from './gstin';
+import { gstinStateCode, gstStateName, isValidGstinFormat, normalizeStateCode } from './gstin';
 import { roundGst } from './gstTaxEngine';
 import type { Gstr1ExportResult } from './gstr1Json';
 
@@ -144,15 +144,35 @@ function num(value: unknown): number {
   return roundGst(Number(value) || 0);
 }
 
+const EXCEL_DATE = /^(\d{2})-([A-Z][a-z]{2})-(\d{4})$/;
+
 /** GST Excel dates must be text DD-MMM-YYYY, e.g. 24-May-2017. */
 export function gstr1ExcelDate(idt: string): string {
-  const parts = String(idt || '').trim().split(/[-/]/);
-  if (parts.length !== 3) return String(idt || '');
-  if (parts[1].length === 3) return `${parts[0].padStart(2, '0')}-${parts[1]}-${parts[2]}`;
-  const day = parts[0].padStart(2, '0');
-  const month = MONTHS[Number(parts[1]) - 1];
-  if (!month) return String(idt || '');
-  return `${day}-${month}-${parts[2]}`;
+  const raw = String(idt || '').trim();
+  if (!raw) return '';
+  const mmm = raw.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (mmm) {
+    const mon = `${mmm[2][0].toUpperCase()}${mmm[2].slice(1).toLowerCase()}`;
+    return `${mmm[1].padStart(2, '0')}-${mon}-${mmm[3]}`;
+  }
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const month = MONTHS[Number(iso[2]) - 1];
+    return month ? `${iso[3]}-${month}-${iso[1]}` : '';
+  }
+  const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (!dmy) return '';
+  const month = MONTHS[Number(dmy[2]) - 1];
+  return month ? `${dmy[1].padStart(2, '0')}-${month}-${dmy[3]}` : '';
+}
+
+function isExcelDate(value: string): boolean {
+  return EXCEL_DATE.test(value);
+}
+
+function isDocNumber(value: string): boolean {
+  const raw = String(value || '').trim();
+  return Boolean(raw) && raw !== '0' && raw.length <= 16 && /^[A-Za-z0-9/-]+$/.test(raw);
 }
 
 export function gstr1ExcelPos(code: string | undefined): string {
@@ -181,6 +201,27 @@ function partyMap(result: Gstr1ExportResult): Map<string, string> {
   return map;
 }
 
+function cdnurUrType(typ: string, posLabel: string, supplierState: string): 'B2CL' | 'B2CS' {
+  const pos = normalizeStateCode(posLabel);
+  if (pos && supplierState && pos === supplierState) return 'B2CS';
+  return typ === 'B2CL' ? 'B2CL' : 'B2CS';
+}
+
+function keepImportLine(input: {
+  number: string;
+  date: string;
+  value: number;
+  pos: string;
+  txval: number;
+  gstin?: string;
+  requireGstin?: boolean;
+}): boolean {
+  if (!isDocNumber(input.number) || !isExcelDate(input.date)) return false;
+  if (input.value <= 0 || input.txval <= 0 || !input.pos) return false;
+  if (input.requireGstin && !isValidGstinFormat(input.gstin)) return false;
+  return true;
+}
+
 function invoiceRows(
   groups: unknown,
   parties: Map<string, string>,
@@ -204,12 +245,29 @@ function invoiceRows(
       const itms = inv.itms?.length ? inv.itms : [{ itm_det: { rt: 0, txval: 0, csamt: 0 } }];
       for (const itm of itms) {
         const det = itm.itm_det || {};
+        const txval = num(det.txval);
+        if (
+          !keepImportLine({
+            number: inum,
+            date: idt,
+            value: val,
+            pos,
+            txval,
+            gstin: ctin,
+            requireGstin: true,
+          })
+        ) {
+          continue;
+        }
         if (amended) {
+          const oinum = String(inv.oinum || inum);
+          const oidt = gstr1ExcelDate(String(inv.oidt || inv.idt || ''));
+          if (!isDocNumber(oinum) || !isExcelDate(oidt)) continue;
           rows.push([
             ctin,
             name,
-            String(inv.oinum || inum),
-            gstr1ExcelDate(String(inv.oidt || inv.idt || '')),
+            oinum,
+            oidt,
             inum,
             idt,
             val,
@@ -219,7 +277,7 @@ function invoiceRows(
             type,
             '',
             num(det.rt),
-            num(det.txval),
+            txval,
             num(det.csamt),
           ]);
         } else {
@@ -235,7 +293,7 @@ function invoiceRows(
             type,
             '',
             num(det.rt),
-            num(det.txval),
+            txval,
             num(det.csamt),
           ]);
         }
@@ -245,7 +303,7 @@ function invoiceRows(
   return rows;
 }
 
-function b2clRows(groups: unknown, amended = false): AoA {
+function b2clRows(groups: unknown, supplierState: string, amended = false): AoA {
   if (!Array.isArray(groups)) return [];
   const rows: AoA = [];
   for (const group of groups) {
@@ -257,25 +315,31 @@ function b2clRows(groups: unknown, amended = false): AoA {
       const idt = gstr1ExcelDate(String(inv.idt || ''));
       const val = num(inv.val);
       const pos = gstr1ExcelPos(String(inv.pos || groupPos));
+      if (supplierState && normalizeStateCode(pos) === supplierState) continue;
       const itms = inv.itms?.length ? inv.itms : [{ itm_det: { rt: 0, txval: 0, csamt: 0 } }];
       for (const itm of itms) {
         const det = itm.itm_det || {};
+        const txval = num(det.txval);
+        if (!keepImportLine({ number: inum, date: idt, value: val, pos, txval })) continue;
         if (amended) {
+          const oinum = String(inv.oinum || inum);
+          const oidt = gstr1ExcelDate(String(inv.oidt || inv.idt || ''));
+          if (!isDocNumber(oinum) || !isExcelDate(oidt)) continue;
           rows.push([
-            String(inv.oinum || inum),
-            gstr1ExcelDate(String(inv.oidt || inv.idt || '')),
+            oinum,
+            oidt,
             pos,
             inum,
             idt,
             val,
             '',
             num(det.rt),
-            num(det.txval),
+            txval,
             num(det.csamt),
             '',
           ]);
         } else {
-          rows.push([inum, idt, val, pos, '', num(det.rt), num(det.txval), num(det.csamt), '']);
+          rows.push([inum, idt, val, pos, '', num(det.rt), txval, num(det.csamt), '']);
         }
       }
     }
@@ -285,18 +349,23 @@ function b2clRows(groups: unknown, amended = false): AoA {
 
 function b2csRows(rows: unknown): AoA {
   if (!Array.isArray(rows)) return [];
-  return rows.map((raw) => {
+  const out: AoA = [];
+  for (const raw of rows) {
     const row = asRecord(raw);
-    return [
+    const txval = num(row.txval);
+    const pos = gstr1ExcelPos(String(row.pos || ''));
+    if (txval <= 0 || !pos) continue;
+    out.push([
       String(row.typ || 'OE'),
-      gstr1ExcelPos(String(row.pos || '')),
+      pos,
       '',
       num(row.rt),
-      num(row.txval),
+      txval,
       num(row.csamt),
       '',
-    ];
-  });
+    ]);
+  }
+  return out;
 }
 
 function cdnrRows(groups: unknown, parties: Map<string, string>, amended = false): AoA {
@@ -318,12 +387,29 @@ function cdnrRows(groups: unknown, parties: Map<string, string>, amended = false
       const itms = note.itms?.length ? note.itms : [{ itm_det: { rt: 0, txval: 0, csamt: 0 } }];
       for (const itm of itms) {
         const det = itm.itm_det || {};
+        const txval = num(det.txval);
+        if (
+          !keepImportLine({
+            number: ntNum,
+            date: ntDt,
+            value: val,
+            pos,
+            txval,
+            gstin: ctin,
+            requireGstin: true,
+          })
+        ) {
+          continue;
+        }
         if (amended) {
+          const ontNum = String(note.ont_num || ntNum);
+          const ontDt = gstr1ExcelDate(String(note.ont_dt || note.nt_dt || ''));
+          if (!isDocNumber(ontNum) || !isExcelDate(ontDt)) continue;
           rows.push([
             ctin,
             name,
-            String(note.ont_num || ntNum),
-            gstr1ExcelDate(String(note.ont_dt || note.nt_dt || '')),
+            ontNum,
+            ontDt,
             ntNum,
             ntDt,
             ntty,
@@ -333,7 +419,7 @@ function cdnrRows(groups: unknown, parties: Map<string, string>, amended = false
             val,
             '',
             num(det.rt),
-            num(det.txval),
+            txval,
             num(det.csamt),
           ]);
         } else {
@@ -349,7 +435,7 @@ function cdnrRows(groups: unknown, parties: Map<string, string>, amended = false
             val,
             '',
             num(det.rt),
-            num(det.txval),
+            txval,
             num(det.csamt),
           ]);
         }
@@ -359,7 +445,7 @@ function cdnrRows(groups: unknown, parties: Map<string, string>, amended = false
   return rows;
 }
 
-function cdnurRows(notes: unknown, amended = false): AoA {
+function cdnurRows(notes: unknown, supplierState: string, amended = false): AoA {
   if (!Array.isArray(notes)) return [];
   const rows: AoA = [];
   for (const raw of notes as NoteRow[]) {
@@ -368,15 +454,21 @@ function cdnurRows(notes: unknown, amended = false): AoA {
     const ntty = raw.ntty === 'D' ? 'D' : 'C';
     const pos = gstr1ExcelPos(String(raw.pos || ''));
     const val = num(raw.val);
-    const ur = String(raw.typ || 'B2CL');
+    const ur = cdnurUrType(String(raw.typ || ''), pos, supplierState);
+    if (ur === 'B2CL' && supplierState && normalizeStateCode(pos) === supplierState) continue;
     const itms = raw.itms?.length ? raw.itms : [{ itm_det: { rt: 0, txval: 0, csamt: 0 } }];
     for (const itm of itms) {
       const det = itm.itm_det || {};
+      const txval = num(det.txval);
+      if (!keepImportLine({ number: ntNum, date: ntDt, value: val, pos, txval })) continue;
       if (amended) {
+        const ontNum = String(raw.ont_num || ntNum);
+        const ontDt = gstr1ExcelDate(String(raw.ont_dt || raw.nt_dt || ''));
+        if (!isDocNumber(ontNum) || !isExcelDate(ontDt)) continue;
         rows.push([
           ur,
-          String(raw.ont_num || ntNum),
-          gstr1ExcelDate(String(raw.ont_dt || raw.nt_dt || '')),
+          ontNum,
+          ontDt,
           ntNum,
           ntDt,
           ntty,
@@ -384,11 +476,11 @@ function cdnurRows(notes: unknown, amended = false): AoA {
           val,
           '',
           num(det.rt),
-          num(det.txval),
+          txval,
           num(det.csamt),
         ]);
       } else {
-        rows.push([ur, ntNum, ntDt, ntty, pos, val, '', num(det.rt), num(det.txval), num(det.csamt)]);
+        rows.push([ur, ntNum, ntDt, ntty, pos, val, '', num(det.rt), txval, num(det.csamt)]);
       }
     }
   }
@@ -397,22 +489,39 @@ function cdnurRows(notes: unknown, amended = false): AoA {
 
 function hsnRows(rows: unknown): AoA {
   if (!Array.isArray(rows)) return [];
-  const out: AoA = [];
+  const merged = new Map<string, Cell[]>();
   for (const raw of rows as HsnRow[]) {
+    const hsn = String(raw.hsn_sc || '').replace(/\D/g, '').slice(0, 8);
+    if (hsn.length < 4) continue;
     const txval = num(raw.txval);
     const iamt = num(raw.iamt);
     const camt = num(raw.camt);
     const samt = num(raw.samt);
     const csamt = num(raw.csamt);
-    if (txval < 0 || iamt < 0 || camt < 0 || samt < 0) continue;
+    const qty = num(raw.qty);
+    if (txval <= 0 || iamt < 0 || camt < 0 || samt < 0 || qty < 0) continue;
+    const rt = num(raw.rt);
+    const uqc = uqcLabel(raw.uqc);
     const tax = roundGst(iamt + camt + samt + csamt);
-    out.push([
-      String(raw.hsn_sc || ''),
+    const key = `${hsn}|${uqc}|${rt}`;
+    const existing = merged.get(key);
+    if (existing) {
+      existing[3] = num(existing[3]) + qty;
+      existing[4] = num(existing[4]) + txval + tax;
+      existing[6] = num(existing[6]) + txval;
+      existing[7] = num(existing[7]) + iamt;
+      existing[8] = num(existing[8]) + camt;
+      existing[9] = num(existing[9]) + samt;
+      existing[10] = num(existing[10]) + csamt;
+      continue;
+    }
+    merged.set(key, [
+      hsn,
       String(raw.user_desc || raw.desc || 'Goods').slice(0, 30),
-      uqcLabel(raw.uqc),
-      num(raw.qty),
+      uqc,
+      qty,
       roundGst(txval + tax),
-      num(raw.rt),
+      rt,
       txval,
       iamt,
       camt,
@@ -420,7 +529,19 @@ function hsnRows(rows: unknown): AoA {
       csamt,
     ]);
   }
-  return out;
+  return [...merged.values()].map((row) => [
+    row[0],
+    row[1],
+    row[2],
+    num(row[3]),
+    num(row[4]),
+    num(row[5]),
+    num(row[6]),
+    num(row[7]),
+    num(row[8]),
+    num(row[9]),
+    num(row[10]),
+  ]);
 }
 
 function docsRows(docIssue: unknown): AoA {
@@ -1144,25 +1265,45 @@ const SHEETS: SheetDef[] = [
   },
 ];
 
-function forceTextColumns(ws: XLSX.WorkSheet, cols: number[]): void {
-  const ref = ws['!ref'];
-  if (!ref) return;
-  const range = XLSX.utils.decode_range(ref);
-  for (let r = 4; r <= range.e.r; r++) {
-    for (const c of cols) {
-      const addr = XLSX.utils.encode_cell({ r, c });
-      const cell = ws[addr] as XLSX.CellObject | undefined;
-      if (!cell || cell.v == null || cell.v === '') continue;
-      cell.t = 's';
-      cell.v = String(cell.v);
-      delete cell.w;
-    }
-  }
-}
+const COL_KINDS: Record<string, Array<'s' | 'n'>> = {
+  'b2b,sez,de': ['s', 's', 's', 's', 'n', 's', 's', 's', 's', 's', 'n', 'n', 'n'],
+  b2ba: ['s', 's', 's', 's', 's', 's', 'n', 's', 's', 's', 's', 's', 'n', 'n', 'n'],
+  b2cl: ['s', 's', 'n', 's', 's', 'n', 'n', 'n', 's'],
+  b2cla: ['s', 's', 's', 's', 's', 'n', 's', 'n', 'n', 'n', 's'],
+  b2cs: ['s', 's', 's', 'n', 'n', 'n', 's'],
+  cdnr: ['s', 's', 's', 's', 's', 's', 's', 's', 'n', 's', 'n', 'n', 'n'],
+  cdnra: ['s', 's', 's', 's', 's', 's', 's', 's', 's', 's', 'n', 's', 'n', 'n', 'n'],
+  cdnur: ['s', 's', 's', 's', 's', 'n', 's', 'n', 'n', 'n'],
+  cdnura: ['s', 's', 's', 's', 's', 's', 's', 'n', 's', 'n', 'n', 'n'],
+  'hsn(b2b)': ['s', 's', 's', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n'],
+  'hsn(b2c)': ['s', 's', 's', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n'],
+  docs: ['s', 's', 's', 'n', 'n'],
+};
 
 function makeSheet(def: SheetDef, data: AoA): XLSX.WorkSheet {
-  const aoa = [...def.header.map((row) => sparseRow(row, def.last)), ...data];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const header = def.header.map((row) => sparseRow(row, def.last));
+  const ws = XLSX.utils.aoa_to_sheet(header);
+  const kinds = COL_KINDS[def.name];
+  const lastCol = colIndex(def.last);
+  data.forEach((row, index) => {
+    const r = 4 + index;
+    row.forEach((value, c) => {
+      if (c > lastCol || value === '' || value == null) return;
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const kind = kinds?.[c] || (typeof value === 'number' ? 'n' : 's');
+      if (kind === 'n') {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return;
+        ws[addr] = { t: 'n', v: n };
+        return;
+      }
+      ws[addr] = { t: 's', v: String(value) };
+    });
+  });
+  ws['!ref'] = XLSX.utils.encode_range({
+    s: { r: 0, c: 0 },
+    e: { r: Math.max(3, 3 + data.length), c: lastCol },
+  });
   ws['!cols'] = sparseRow({ A: 22 }, def.last).map(() => ({ wch: 18 }));
   return ws;
 }
@@ -1170,17 +1311,18 @@ function makeSheet(def: SheetDef, data: AoA): XLSX.WorkSheet {
 export function buildGstr1ExcelWorkbook(result: Gstr1ExportResult): XLSX.WorkBook {
   const payload = result.payload;
   const parties = partyMap(result);
+  const supplierState = gstinStateCode(result.summary.gstin) || '';
   const hsn = asRecord(payload.hsn);
   const data: Record<string, AoA> = {
     'b2b,sez,de': invoiceRows(payload.b2b, parties),
     b2ba: invoiceRows(payload.b2ba, parties, true),
-    b2cl: b2clRows(payload.b2cl),
-    b2cla: b2clRows(payload.b2cla, true),
+    b2cl: b2clRows(payload.b2cl, supplierState),
+    b2cla: b2clRows(payload.b2cla, supplierState, true),
     b2cs: b2csRows(payload.b2cs),
     cdnr: cdnrRows(payload.cdnr, parties),
     cdnra: cdnrRows(payload.cdnra, parties, true),
-    cdnur: cdnurRows(payload.cdnur),
-    cdnura: cdnurRows(payload.cdnura, true),
+    cdnur: cdnurRows(payload.cdnur, supplierState),
+    cdnura: cdnurRows(payload.cdnura, supplierState, true),
     'hsn(b2b)': hsnRows(hsn.hsn_b2b),
     'hsn(b2c)': hsnRows(hsn.hsn_b2c),
     docs: docsRows(payload.doc_issue),
@@ -1192,19 +1334,12 @@ export function buildGstr1ExcelWorkbook(result: Gstr1ExportResult): XLSX.WorkBoo
     ['GSTN Returns Offline Tool Excel workbook template V2.2'],
     [`GSTIN ${result.summary.gstin}`, `fp ${result.summary.fp}`, result.summary.periodLabel],
     ['Import this file in GST Offline Tool → Import Excel. Do not rename sheets or column headers.'],
-    ['Dates are DD-MMM-YYYY. GST % is the product rate. Empty sections are left blank on purpose.'],
+    ['Dates are DD-MMM-YYYY text. Intra-state unregistered notes use CDNUR UR Type B2CS, not B2CL.'],
   ]);
   XLSX.utils.book_append_sheet(wb, help, 'Help Instruction');
 
   for (const def of SHEETS) {
-    const ws = makeSheet(def, data[def.name] || []);
-    if (def.name === 'b2b,sez,de' || def.name === 'b2ba') forceTextColumns(ws, [0, 2, 3, 4, 5]);
-    if (def.name === 'b2cl') forceTextColumns(ws, [0, 1]);
-    if (def.name === 'cdnr' || def.name === 'cdnra') forceTextColumns(ws, [0, 2, 3, 4, 5]);
-    if (def.name === 'cdnur' || def.name === 'cdnura') forceTextColumns(ws, [1, 2]);
-    if (def.name === 'docs') forceTextColumns(ws, [1, 2]);
-    if (def.name === 'hsn(b2b)' || def.name === 'hsn(b2c)') forceTextColumns(ws, [0]);
-    XLSX.utils.book_append_sheet(wb, ws, def.name);
+    XLSX.utils.book_append_sheet(wb, makeSheet(def, data[def.name] || []), def.name);
   }
   return wb;
 }
@@ -1215,7 +1350,10 @@ export function gstr1ExcelFilename(result: Gstr1ExportResult): string {
 }
 
 export function downloadGstr1Excel(result: Gstr1ExportResult): void {
-  XLSX.writeFile(buildGstr1ExcelWorkbook(result), gstr1ExcelFilename(result));
+  XLSX.writeFile(buildGstr1ExcelWorkbook(result), gstr1ExcelFilename(result), {
+    bookSST: true,
+    cellDates: false,
+  });
 }
 
 export function gstr1ExcelSheetNames(): string[] {

@@ -143,6 +143,47 @@ export function gstr1GoldenErrors(): string[] {
   if (String(b2bSheet[4]?.[3] || '') !== '15-Apr-2026') {
     errors.push(`Excel invoice date must be DD-MMM-YYYY, got ${String(b2bSheet[4]?.[3])}`);
   }
+  const intraNote = buildGstr1Payload({
+    gstin: SELLER,
+    filingFrequency: 'monthly',
+    skippedNoSnapshot: 0,
+    date: new Date('2026-04-15T06:30:00+05:30'),
+    documents: [
+      {
+        collection: 'credit_notes',
+        documentId: 'cn-ur-1',
+        kind: 'credit_note',
+        number: 'SPC202604001',
+        date: new Date('2026-04-15T06:30:00+05:30'),
+        totalAmount: 525,
+        gst: {
+          ...gst,
+          buyerGstin: '',
+          invoiceType: 'CDNUR',
+          supplierStateCode: '23',
+          placeOfSupplyStateCode: '23',
+          supplyType: 'intra',
+          taxableValue: 500,
+          cgst: 12.5,
+          sgst: 12.5,
+          igst: 0,
+          lines: [{ hsn: '300490', gstRate: 5, qty: 10, taxableValue: 500, taxAmount: 25 }],
+        },
+        hsnParts: [{ hsn: '300490', qty: 10, net: 500, gstRate: 5 }],
+      },
+    ],
+  });
+  const cdnurExcel = XLSX.utils.sheet_to_json(buildGstr1ExcelWorkbook(intraNote).Sheets.cdnur, {
+    header: 1,
+    defval: '',
+    raw: true,
+  }) as unknown[][];
+  if (cdnurExcel[4]?.[0] !== 'B2CS') {
+    errors.push(`intra-state CDNUR must use UR Type B2CS, got ${String(cdnurExcel[4]?.[0])}`);
+  }
+  if (String(cdnurExcel[4]?.[2] || '') !== '15-Apr-2026') {
+    errors.push(`CDNUR date must be DD-MMM-YYYY, got ${String(cdnurExcel[4]?.[2])}`);
+  }
 
   errors.push(...result.summary.errors);
   return errors;
