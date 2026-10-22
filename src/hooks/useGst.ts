@@ -6,6 +6,7 @@ import {
 import { loadGstHealthReport } from '../services/gstExceptions';
 import { applyGstBackfill, previewGstBackfill, patchPartyGstin } from '../services/gstBackfill';
 import { buildGstr1Export } from '../services/gstGstr1';
+import { buildGstSlabReport } from '../services/gstSlabReport';
 import { buildGstr3bExport } from '../services/gstGstr3b';
 import { buildEinvoiceExport } from '../services/gstEinvoice';
 import { loadGstItcBooks, reconcileGstr2b } from '../services/gstItc';
@@ -68,6 +69,7 @@ export function useApplyGstBackfill(date: Date) {
       void queryClient.invalidateQueries({ queryKey: ['gstr3bExport'] });
       void queryClient.invalidateQueries({ queryKey: ['gstPeriodBooks'] });
       void queryClient.invalidateQueries({ queryKey: ['gstItcBooks'] });
+      void queryClient.invalidateQueries({ queryKey: ['gstSlabReport'] });
     },
   });
 }
@@ -79,6 +81,13 @@ export function usePatchPartyGstin() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['gstHealthReport'] });
     },
+  });
+}
+
+export function useGstSlabReport(date: Date) {
+  return useQuery({
+    queryKey: ['gstSlabReport', periodKey(date)],
+    queryFn: () => buildGstSlabReport(date),
   });
 }
 

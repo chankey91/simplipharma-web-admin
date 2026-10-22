@@ -17,6 +17,7 @@ import type { GstPeriodStatus } from '../../types/gst';
 
 const TABS = [
   { label: 'Overview', path: '/gst', badgeKey: 'legacy' as const },
+  { label: 'Sales by GST', path: '/gst/slab-sales', badgeKey: 'none' as const },
   { label: 'GSTR-1', path: '/gst/gstr-1', badgeKey: 'gstr1' as const },
   { label: 'GSTR-3B', path: '/gst/gstr-3b', badgeKey: 'none' as const },
   { label: 'ITC / GSTR-2B', path: '/gst/itc', badgeKey: 'itc' as const },

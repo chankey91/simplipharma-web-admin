@@ -35,11 +35,8 @@ function noteHsnParts(items: CreditNoteLine[] | undefined): Gstr1HsnPart[] {
   }));
 }
 
-export async function buildGstr1Export(
-  date = new Date(),
-  mode: 'original' | 'amendment' = 'original'
-): Promise<Gstr1ExportResult> {
-  const [books, period] = await Promise.all([loadGstPeriodBooks(date), getGstPeriod(date)]);
+export async function loadGstOutwardDocuments(date = new Date()) {
+  const books = await loadGstPeriodBooks(date);
   const documents: Gstr1SourceDocument[] = [];
   let skippedNoSnapshot = 0;
 
@@ -98,6 +95,18 @@ export async function buildGstr1Export(
       originalInvoiceNumber: note.originalInvoiceNumber,
     });
   }
+
+  return { books, documents, skippedNoSnapshot };
+}
+
+export async function buildGstr1Export(
+  date = new Date(),
+  mode: 'original' | 'amendment' = 'original'
+): Promise<Gstr1ExportResult> {
+  const [{ books, documents, skippedNoSnapshot }, period] = await Promise.all([
+    loadGstOutwardDocuments(date),
+    getGstPeriod(date),
+  ]);
 
   return attachGstr1Integrity(
     buildGstr1Payload({
