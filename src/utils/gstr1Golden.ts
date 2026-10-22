@@ -69,13 +69,18 @@ export function gstr1GoldenErrors(): string[] {
   if (itms.length !== 2) errors.push(`payload B2B itms length ${itms.length} != 2`);
   if (b2b?.[0]?.ctin !== BUYER) errors.push(`expected buyer GSTIN ${BUYER}`);
 
-  if (result.payload.version || result.payload.hash || result.payload.filing_typ) {
-    errors.push('portal GSTR-1 JSON must not include version, hash, or filing_typ');
+  if (result.payload.version !== 'GST3.2.4') {
+    errors.push(`expected version GST3.2.4, got ${String(result.payload.version)}`);
   }
+  if (result.payload.hash !== 'hash') errors.push('expected hash placeholder "hash"');
+  if (result.payload.filing_typ) errors.push('upload JSON must not include filing_typ');
   const hsn = result.payload.hsn as
     | { hsn_b2b?: Array<{ hsn_sc: string; rt: number; user_desc?: string }>; hsn_b2c?: unknown[]; data?: unknown }
     | undefined;
   if (hsn?.data) errors.push('HSN must use hsn_b2b/hsn_b2c, not hsn.data');
+  if (Array.isArray(hsn?.hsn_b2c) && hsn.hsn_b2c.length === 0) {
+    errors.push('empty hsn_b2c arrays are rejected by GSTN 3.2.4');
+  }
   const hsnRows = hsn?.hsn_b2b || [];
   if (hsnRows.length < 2) errors.push(`expected at least 2 HSN B2B rows, got ${hsnRows.length}`);
   if (!hsnRows.every((row) => row.user_desc)) errors.push('HSN rows need user_desc for the GST portal');
