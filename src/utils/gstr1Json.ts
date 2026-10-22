@@ -3,8 +3,6 @@ import { isValidGstinFormat, normalizeGstin, normalizeStateCode } from './gstin'
 import { b2clThreshold, roundGst } from './gstTaxEngine';
 import { formatGstinDate, gstFilingGrain, gstinFilingPeriod, indianGstPeriod } from './gstPeriod';
 
-/** Must match the GST portal Returns Offline Tool (currently V3.2.4). */
-const GSTR1_JSON_VERSION = 'GST3.2.4';
 const DEFAULT_HSN = '300490';
 const RATE_SLABS = [0, 0.1, 0.25, 1, 1.5, 3, 5, 7.5, 12, 18, 28];
 const HSN_DESC_MAX = 30;
@@ -132,16 +130,19 @@ function itemDet(gst: GstDocumentSnapshot): GstnItemDet {
   };
 }
 
-/** Portal GSTR-1 item order: txval, rt, then tax amounts. */
-function portalItmDet(det: GstnItemDet): GstnItemDet {
-  return {
+/** GSTN Save schema 4.1: B2CL / CDNUR items cannot carry camt/samt, even as 0. */
+function portalItmDet(det: GstnItemDet, cgstSgst = true): Record<string, unknown> {
+  const out: Record<string, unknown> = {
     txval: det.txval,
     rt: det.rt,
     iamt: det.iamt,
-    camt: det.camt,
-    samt: det.samt,
     csamt: det.csamt,
   };
+  if (cgstSgst) {
+    out.camt = det.camt;
+    out.samt = det.samt;
+  }
+  return out;
 }
 
 function gstnHsnText(raw: string, fallback: string): string {
@@ -540,7 +541,8 @@ export function buildGstr1Payload(input: {
     const dets = gstr1ItemDets(doc.gst);
     const pos = posCode(doc.gst.placeOfSupplyStateCode);
     const val = roundGst(doc.totalAmount);
-    const itms = dets.map((det, index) => ({ num: index + 1, itm_det: portalItmDet(det) }));
+    const itms = dets.map((det, index) => ({ num: index + 1, itm_det: portalItmDet(det, true) }));
+    const itmsIgst = dets.map((det, index) => ({ num: index + 1, itm_det: portalItmDet(det, false) }));
     const isAmendment = include === 'amendment';
     if (isAmendment) amendmentCount += 1;
 
@@ -571,7 +573,7 @@ export function buildGstr1Payload(input: {
         continue;
       }
       if (type === 'B2CL') {
-        const b2clInv: Record<string, unknown> = { inum, idt, val, itms };
+        const b2clInv: Record<string, unknown> = { inum, idt, val, itms: itmsIgst };
         if (isAmendment) {
           b2clInv.oinum = inum;
           b2clInv.oidt = idt;
@@ -637,9 +639,6 @@ export function buildGstr1Payload(input: {
       inv_typ: 'R',
       itms,
     };
-    if (doc.originalInvoiceNumber) {
-      note.inum = sanitizeDocNumber(doc.originalInvoiceNumber, warnings, 'Original invoice');
-    }
     if (isAmendment) {
       note.ont_num = nt_num;
       note.ont_dt = nt_dt;
@@ -660,14 +659,15 @@ export function buildGstr1Payload(input: {
       warnings.push(`${nt_num} is CDNUR — amendment JSON does not include unregistered notes.`);
       continue;
     }
+    const urTyp = cdnurTyp(doc);
     cdnur.push({
-      typ: cdnurTyp(doc),
+      typ: urTyp,
       ntty,
       nt_num,
       nt_dt,
       pos,
       val,
-      itms,
+      itms: urTyp === 'B2CL' ? itmsIgst : itms,
     });
     allocateHsn(doc, ntty === 'C' ? -1 : 1, hsnRows);
   }
@@ -692,12 +692,15 @@ export function buildGstr1Payload(input: {
     .map((row, index) => toPortalHsnRow(row, index + 1));
   const hsnCount = hsn_b2b.length + hsn_b2c.length;
 
-  // Upload envelope matches Returns Offline Tool V3.2.4. Portal *downloads* omit these keys.
+  const cur_gt = roundGst(
+    docs.filter((doc) => doc.kind === 'invoice').reduce((sum, doc) => sum + (Number(doc.totalAmount) || 0), 0)
+  );
+  // GSTN Save GSTR-1 schema 4.1: gstin, fp, gt, cur_gt. version/hash/filing_typ are extra and fail upload.
   const payload: Record<string, unknown> = {
-    version: GSTR1_JSON_VERSION,
-    hash: 'hash',
     gstin,
     fp,
+    gt: 0,
+    cur_gt,
   };
 
   const b2bArr = [...b2b.values()].map(({ ctin, inv }) => ({ ctin, inv }));
