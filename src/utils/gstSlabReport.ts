@@ -102,6 +102,12 @@ function rateOfLine(gstRate: number | undefined, taxAmount: number, taxableValue
   return gstRate && gstRate > 0 ? snapGstRate(gstRate, 100) : snapGstRate(taxAmount, taxableValue);
 }
 
+function nearestSlab(rt: number, rates: number[]): number {
+  if (!rates.length) return rt;
+  if (rates.includes(rt)) return rt;
+  return rates.reduce((best, rate) => (Math.abs(rate - rt) < Math.abs(best - rt) ? rate : best));
+}
+
 export function buildGstSlabRows(documents: Gstr1SourceDocument[]): GstSlabRow[] {
   const map = new Map<number, GstSlabRow>();
   for (const doc of documents) {
@@ -136,26 +142,24 @@ export function buildGstSlabRows(documents: Gstr1SourceDocument[]): GstSlabRow[]
 export function buildGstSlabLines(documents: Gstr1SourceDocument[]): GstSlabLineDetail[] {
   const lines: GstSlabLineDetail[] = [];
   for (const doc of documents) {
+    const dets = gstr1ItemDets(doc.gst);
+    const slabRates = dets.map((det) => det.rt);
     const sign = doc.kind === 'credit_note' ? -1 : 1;
     const inter = doc.gst.supplyType === 'inter';
     const party = doc.gst.buyerLegalName || doc.gst.buyerGstin || '—';
     const date = formatGstinDate(doc.date);
-    const products = doc.productLines?.length
-      ? doc.productLines
-      : [
-          {
-            productName: '—',
-            hsn: '',
-            qty: 0,
-            gstRate: undefined,
-            taxableValue: doc.gst.taxableValue,
-            taxAmount: (doc.gst.cgst || 0) + (doc.gst.sgst || 0) + (doc.gst.igst || 0) + (doc.gst.cess || 0),
-          },
-        ];
-    for (const product of products) {
-      const rt = rateOfLine(product.gstRate, product.taxAmount, product.taxableValue);
-      const taxable = roundGst(sign * product.taxableValue);
-      const split = splitLineTax(sign * product.taxAmount, inter);
+    const products = doc.productLines || [];
+
+    const pushLine = (
+      rt: number,
+      productName: string,
+      hsn: string,
+      qty: number,
+      taxableValue: number,
+      taxAmount: number
+    ) => {
+      const taxable = roundGst(sign * taxableValue);
+      const split = splitLineTax(sign * taxAmount, inter);
       const tax = roundGst(split.iamt + split.camt + split.samt);
       lines.push({
         rt,
@@ -164,9 +168,9 @@ export function buildGstSlabLines(documents: Gstr1SourceDocument[]): GstSlabLine
         date,
         party,
         invoiceType: doc.gst.invoiceType,
-        productName: product.productName,
-        hsn: product.hsn,
-        qty: roundGst(sign * product.qty),
+        productName,
+        hsn,
+        qty: roundGst(sign * qty),
         taxable,
         cgst: split.camt,
         sgst: split.samt,
@@ -174,6 +178,25 @@ export function buildGstSlabLines(documents: Gstr1SourceDocument[]): GstSlabLine
         tax,
         total: roundGst(taxable + tax),
       });
+    };
+
+    if (products.length) {
+      for (const product of products) {
+        const productRt = rateOfLine(product.gstRate, product.taxAmount, product.taxableValue);
+        const rt = nearestSlab(productRt, slabRates);
+        pushLine(rt, product.productName, product.hsn, product.qty, product.taxableValue, product.taxAmount);
+      }
+    } else {
+      for (const det of dets) {
+        pushLine(
+          det.rt,
+          '—',
+          '',
+          0,
+          det.txval,
+          det.iamt + det.camt + det.samt + det.csamt
+        );
+      }
     }
   }
   return lines.sort((a, b) => a.rt - b.rt || a.date.localeCompare(b.date) || a.number.localeCompare(b.number));
