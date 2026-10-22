@@ -31,6 +31,15 @@ export interface Gstr1HsnPart {
   gstRate?: number;
 }
 
+export interface Gstr1ProductLine {
+  productName: string;
+  hsn: string;
+  qty: number;
+  gstRate?: number;
+  taxableValue: number;
+  taxAmount: number;
+}
+
 export interface Gstr1SourceDocument {
   collection: string;
   documentId: string;
@@ -40,6 +49,7 @@ export interface Gstr1SourceDocument {
   totalAmount: number;
   gst: GstDocumentSnapshot;
   hsnParts: Gstr1HsnPart[];
+  productLines?: Gstr1ProductLine[];
   originalInvoiceNumber?: string;
 }
 
