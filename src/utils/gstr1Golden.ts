@@ -100,14 +100,20 @@ export function gstr1GoldenErrors(): string[] {
         date: new Date('2026-04-15T06:30:00+05:30'),
         totalAmount: 1610,
         gst: { ...gst, lines: undefined },
-        hsnParts: [{ hsn: '300490', qty: 1, net: 1500 }],
+        hsnParts: [{ hsn: '300490', qty: 1, net: 1500, gstRate: 5 }],
       },
     ],
   });
   const legacyItms =
-    (headerOnly.payload.b2b as Array<{ inv?: Array<{ itms?: unknown[] }> }>)?.[0]?.inv?.[0]?.itms || [];
+    (headerOnly.payload.b2b as Array<{ inv?: Array<{ itms?: Array<{ itm_det?: { rt?: number } }> }> }>)?.[0]
+      ?.inv?.[0]?.itms || [];
   if (legacyItms.length !== 1) {
     errors.push(`legacy header snapshot should emit 1 itm, got ${legacyItms.length}`);
+  }
+  if (legacyItms[0]?.itm_det?.rt !== 5) {
+    errors.push(
+      `product GST 5% must not be inferred from tax/taxable (got ${legacyItms[0]?.itm_det?.rt})`
+    );
   }
 
   const { byteLength } = gstr1PayloadSize(result.payload);

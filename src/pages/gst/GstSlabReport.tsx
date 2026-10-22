@@ -108,9 +108,9 @@ export const GstSlabReportPage: React.FC = () => {
         Sales by GST slab — {meta.label}
       </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Taxable sales in this quarter, split by GST rate. Click a GST % row for invoice number,
-        product, and amounts. Download Excel for the summary plus a line sheet. Credit notes reduce
-        the slab; debit notes add.
+        Taxable sales in this quarter, grouped by each product’s GST %. Discount does not change the
+        slab. Click a GST % row for invoice number, product, and amounts. Download Excel for the
+        summary plus a line sheet. Credit notes reduce the slab; debit notes add.
       </Alert>
       {reportQuery.error ? (
         <Alert severity="error">

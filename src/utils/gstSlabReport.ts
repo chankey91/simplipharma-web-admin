@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import { istDateStampCompact } from './dateTime';
 import { formatGstinDate } from './gstPeriod';
 import { roundGst } from './gstTaxEngine';
-import { gstr1ItemDets, snapGstRate, type Gstr1SourceDocument } from './gstr1Json';
+import { gstr1ItemDets, gstRateOf, type Gstr1SourceDocument } from './gstr1Json';
 
 export interface GstSlabRow {
   rt: number;
@@ -98,20 +98,10 @@ function splitLineTax(tax: number, inter: boolean): { iamt: number; camt: number
   return { iamt: 0, camt, samt: roundGst(amount - camt) };
 }
 
-function rateOfLine(gstRate: number | undefined, taxAmount: number, taxableValue: number): number {
-  return gstRate && gstRate > 0 ? snapGstRate(gstRate, 100) : snapGstRate(taxAmount, taxableValue);
-}
-
-function nearestSlab(rt: number, rates: number[]): number {
-  if (!rates.length) return rt;
-  if (rates.includes(rt)) return rt;
-  return rates.reduce((best, rate) => (Math.abs(rate - rt) < Math.abs(best - rt) ? rate : best));
-}
-
 export function buildGstSlabRows(documents: Gstr1SourceDocument[]): GstSlabRow[] {
   const map = new Map<number, GstSlabRow>();
   for (const doc of documents) {
-    const dets = gstr1ItemDets(doc.gst);
+    const dets = gstr1ItemDets(doc.gst, doc.hsnParts);
     const sign = doc.kind === 'credit_note' ? -1 : 1;
     const b2b = isB2b(doc);
     const seen = new Set<number>();
@@ -142,8 +132,7 @@ export function buildGstSlabRows(documents: Gstr1SourceDocument[]): GstSlabRow[]
 export function buildGstSlabLines(documents: Gstr1SourceDocument[]): GstSlabLineDetail[] {
   const lines: GstSlabLineDetail[] = [];
   for (const doc of documents) {
-    const dets = gstr1ItemDets(doc.gst);
-    const slabRates = dets.map((det) => det.rt);
+    const dets = gstr1ItemDets(doc.gst, doc.hsnParts);
     const sign = doc.kind === 'credit_note' ? -1 : 1;
     const inter = doc.gst.supplyType === 'inter';
     const party = doc.gst.buyerLegalName || doc.gst.buyerGstin || '—';
@@ -181,9 +170,15 @@ export function buildGstSlabLines(documents: Gstr1SourceDocument[]): GstSlabLine
     };
 
     if (products.length) {
-      for (const product of products) {
-        const productRt = rateOfLine(product.gstRate, product.taxAmount, product.taxableValue);
-        const rt = nearestSlab(productRt, slabRates);
+      for (let i = 0; i < products.length; i++) {
+        const product = products[i];
+        const partRate = doc.hsnParts[i]?.gstRate;
+        const rt = gstRateOf(
+          Number(product.gstRate) > 0 ? product.gstRate : partRate,
+          product.taxAmount,
+          product.taxableValue,
+          doc.hsnParts
+        );
         pushLine(rt, product.productName, product.hsn, product.qty, product.taxableValue, product.taxAmount);
       }
     } else {
