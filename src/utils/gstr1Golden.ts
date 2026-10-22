@@ -69,11 +69,12 @@ export function gstr1GoldenErrors(): string[] {
   if (itms.length !== 2) errors.push(`payload B2B itms length ${itms.length} != 2`);
   if (b2b?.[0]?.ctin !== BUYER) errors.push(`expected buyer GSTIN ${BUYER}`);
 
-  if (result.payload.version !== 'GST3.2.4') {
-    errors.push(`expected version GST3.2.4, got ${String(result.payload.version)}`);
+  if (result.payload.version || result.payload.hash || result.payload.filing_typ) {
+    errors.push('GSTN Save schema 4.1 must not include version, hash, or filing_typ');
   }
-  if (result.payload.hash !== 'hash') errors.push('expected hash placeholder "hash"');
-  if (result.payload.filing_typ) errors.push('upload JSON must not include filing_typ');
+  if (typeof result.payload.gt !== 'number' || typeof result.payload.cur_gt !== 'number') {
+    errors.push('gt and cur_gt must be numbers');
+  }
   const hsn = result.payload.hsn as
     | { hsn_b2b?: Array<{ hsn_sc: string; rt: number; user_desc?: string }>; hsn_b2c?: unknown[]; data?: unknown }
     | undefined;
