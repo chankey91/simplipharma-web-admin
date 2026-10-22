@@ -112,11 +112,9 @@ function posCode(raw?: string | null): string {
   return normalizeStateCode(raw) || '23';
 }
 
-export function snapGstRate(taxAmount: number, taxableValue: number): number {
-  const tax = roundGst(taxAmount);
-  const taxable = roundGst(taxableValue);
-  if (taxable <= 0 || tax <= 0) return 0;
-  const raw = (tax / taxable) * 100;
+export function snapGstPercent(percent: number): number {
+  const raw = Number(percent) || 0;
+  if (raw <= 0) return 0;
   let best = RATE_SLABS[0];
   let bestDiff = Math.abs(raw - best);
   for (const slab of RATE_SLABS) {
@@ -127,6 +125,49 @@ export function snapGstRate(taxAmount: number, taxableValue: number): number {
     }
   }
   return best;
+}
+
+/** Infer a slab from tax ÷ taxable. Avoid this when the product GST % is known. */
+export function snapGstRate(taxAmount: number, taxableValue: number): number {
+  const tax = roundGst(taxAmount);
+  const taxable = roundGst(taxableValue);
+  if (taxable <= 0 || tax <= 0) return 0;
+  return snapGstPercent((tax / taxable) * 100);
+}
+
+/** Product GST % first. Only infer from amounts when the line has no rate. */
+export function gstRateOf(
+  gstRate?: number,
+  taxAmount = 0,
+  taxableValue = 0,
+  hsnParts?: Gstr1HsnPart[]
+): number {
+  if (Number(gstRate) > 0) return snapGstPercent(Number(gstRate));
+  const stated = (hsnParts || [])
+    .map((part) => Number(part.gstRate) || 0)
+    .filter((rate) => rate > 0)
+    .map(snapGstPercent);
+  if (stated.length) {
+    const unique = [...new Set(stated)];
+    if (unique.length === 1) return unique[0];
+  }
+  return snapGstRate(taxAmount, taxableValue);
+}
+
+function gstRateForLine(
+  lineRate: number | undefined,
+  taxAmount: number,
+  taxableValue: number,
+  hsnParts: Gstr1HsnPart[],
+  index: number
+): number {
+  const partRate = hsnParts[index]?.gstRate;
+  return gstRateOf(
+    Number(lineRate) > 0 ? lineRate : partRate,
+    taxAmount,
+    taxableValue,
+    hsnParts
+  );
 }
 
 function itemDet(gst: GstDocumentSnapshot): GstnItemDet {
@@ -237,21 +278,10 @@ function scaleItemDets(items: GstnItemDet[], gst: GstDocumentSnapshot): GstnItem
   return scaled;
 }
 
-/** One GSTR-1 itm per GST rate. Legacy snapshots without lines stay a single header itm. */
-export function gstr1ItemDets(gst: GstDocumentSnapshot): GstnItemDet[] {
-  const lines = gst.lines;
-  if (!lines?.length) return [itemDet(gst)];
-  const groups = new Map<number, { txval: number; tax: number }>();
-  for (const line of lines) {
-    const rt =
-      line.gstRate > 0
-        ? snapGstRate(line.gstRate, 100)
-        : snapGstRate(line.taxAmount, line.taxableValue);
-    const existing = groups.get(rt) || { txval: 0, tax: 0 };
-    existing.txval += Number(line.taxableValue) || 0;
-    existing.tax += Number(line.taxAmount) || 0;
-    groups.set(rt, existing);
-  }
+function detsFromRateGroups(
+  groups: Map<number, { txval: number; tax: number }>,
+  gst: GstDocumentSnapshot
+): GstnItemDet[] {
   const dets = [...groups.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([rt, row]) => ({
@@ -260,6 +290,39 @@ export function gstr1ItemDets(gst: GstDocumentSnapshot): GstnItemDet[] {
       ...splitLineTax(row.tax, gst),
     }));
   return scaleItemDets(dets, gst);
+}
+
+/** One GSTR-1 itm per product GST rate. Do not infer the slab from discounted tax ÷ taxable. */
+export function gstr1ItemDets(gst: GstDocumentSnapshot, hsnParts: Gstr1HsnPart[] = []): GstnItemDet[] {
+  const lines = gst.lines;
+  if (lines?.length) {
+    const groups = new Map<number, { txval: number; tax: number }>();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const rt = gstRateForLine(line.gstRate, line.taxAmount, line.taxableValue, hsnParts, i);
+      const existing = groups.get(rt) || { txval: 0, tax: 0 };
+      existing.txval += Number(line.taxableValue) || 0;
+      existing.tax += Number(line.taxAmount) || 0;
+      groups.set(rt, existing);
+    }
+    return detsFromRateGroups(groups, gst);
+  }
+
+  if (hsnParts.some((part) => Number(part.gstRate) > 0)) {
+    const groups = new Map<number, { txval: number; tax: number }>();
+    const fallback = gstRateOf(undefined, 0, 0, hsnParts);
+    for (const part of hsnParts) {
+      const rt = Number(part.gstRate) > 0 ? snapGstPercent(Number(part.gstRate)) : fallback;
+      const txval = Math.max(0, Number(part.net) || 0);
+      const existing = groups.get(rt) || { txval: 0, tax: 0 };
+      existing.txval += txval;
+      existing.tax += txval * (rt / 100);
+      groups.set(rt, existing);
+    }
+    return detsFromRateGroups(groups, gst);
+  }
+
+  return [itemDet(gst)];
 }
 
 export function gstr1PayloadSize(payload: unknown): { json: string; byteLength: number } {
@@ -377,12 +440,10 @@ function allocateHsn(doc: Gstr1SourceDocument, sign: 1 | -1, rows: Map<string, H
     invoiceTypeOf(doc) === 'B2B' || invoiceTypeOf(doc) === 'CDNR' ? 'B2B' : 'B2C';
 
   if (lines?.length) {
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const hsn = String(line.hsn || DEFAULT_HSN).replace(/\D/g, '').slice(0, 8) || DEFAULT_HSN;
-      const rt =
-        line.gstRate > 0
-          ? snapGstRate(line.gstRate, 100)
-          : snapGstRate(line.taxAmount, line.taxableValue);
+      const rt = gstRateForLine(line.gstRate, line.taxAmount, line.taxableValue, doc.hsnParts, i);
       const split = splitLineTax(Number(line.taxAmount) || 0, doc.gst);
       const key = hsnKey(hsn, rt, bucket);
       const existing = rows.get(key) || emptyHsnRow(hsn, rt, bucket);
@@ -406,7 +467,10 @@ function allocateHsn(doc: Gstr1SourceDocument, sign: 1 | -1, rows: Map<string, H
   parts.forEach((part, index) => {
     const hsn = String(part.hsn || DEFAULT_HSN).replace(/\D/g, '').slice(0, 8) || DEFAULT_HSN;
     const share = netTotal > 0 ? Math.max(0, part.net) / netTotal : index === 0 ? 1 : 0;
-    const rt = part.gstRate && part.gstRate > 0 ? snapGstRate(part.gstRate, 100) : det.rt;
+    const rt =
+      part.gstRate && part.gstRate > 0
+        ? snapGstPercent(part.gstRate)
+        : gstRateOf(undefined, 0, 0, doc.hsnParts) || det.rt;
     const key = hsnKey(hsn, rt, bucket);
     const existing = rows.get(key) || emptyHsnRow(hsn, rt, bucket);
     existing.qty = roundGst(existing.qty + sign * (Number(part.qty) || 0));
@@ -521,7 +585,7 @@ export function buildGstr1Payload(input: {
   );
   const fingerprints = docs.map(fingerprintOf);
   const register: Gstr1RegisterRow[] = docs.map((doc) => {
-    const dets = gstr1ItemDets(doc.gst);
+    const dets = gstr1ItemDets(doc.gst, doc.hsnParts);
     return {
       number: doc.number,
       date: formatGstinDate(doc.date),
@@ -548,7 +612,7 @@ export function buildGstr1Payload(input: {
     const include = shouldInclude(doc);
     if (!include) continue;
     const type = invoiceTypeOf(doc);
-    const dets = gstr1ItemDets(doc.gst);
+    const dets = gstr1ItemDets(doc.gst, doc.hsnParts);
     const pos = posCode(doc.gst.placeOfSupplyStateCode);
     const val = roundGst(doc.totalAmount);
     const itms = dets.map((det, index) => ({ num: index + 1, itm_det: portalItmDet(det, true) }));
