@@ -1,6 +1,7 @@
 import { doc, getDoc, setDoc, serverTimestamp, db, auth } from './firebase';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
 import { indianGstPeriod, periodIsLocked } from '../utils/gstPeriod';
+import { companyGstFilingGrain } from './gstSettings';
 import { compactGstFingerprint, expandGstFingerprints } from '../utils/gstFingerprint';
 import type { GstFiledFingerprint, GstPeriod, GstPeriodStatus } from '../types/gst';
 
@@ -38,8 +39,8 @@ function parsePeriod(id: string, data: Record<string, unknown>, fallback: GstPer
   };
 }
 
-export function defaultGstPeriod(date = new Date()): GstPeriod {
-  const meta = indianGstPeriod(date);
+export function defaultGstPeriod(date = new Date(), grain: 'month' | 'quarter' = 'quarter'): GstPeriod {
+  const meta = indianGstPeriod(date, grain);
   return {
     id: meta.periodId,
     fy: meta.fy,
@@ -50,7 +51,8 @@ export function defaultGstPeriod(date = new Date()): GstPeriod {
 }
 
 export async function getGstPeriod(date = new Date()): Promise<GstPeriod> {
-  const fallback = defaultGstPeriod(date);
+  const grain = await companyGstFilingGrain();
+  const fallback = defaultGstPeriod(date, grain);
   const snap = await getDoc(doc(db, COLLECTION, fallback.id));
   if (!snap.exists()) return fallback;
   return parsePeriod(snap.id, snap.data() as Record<string, unknown>, fallback);
@@ -60,7 +62,7 @@ export async function assertPeriodOpenForWrite(date = new Date()): Promise<GstPe
   const period = await getGstPeriod(date);
   if (periodIsLocked(period.status)) {
     throw new Error(
-      `${indianGstPeriod(date).label} is ${period.status.replace(/_/g, ' ')}. Reopen the period to backfill.`
+      `${indianGstPeriod(date, 'quarter').label} is ${period.status.replace(/_/g, ' ')}. Reopen the period to backfill.`
     );
   }
   return period;
@@ -71,7 +73,7 @@ export async function assertDocumentDateWritable(documentDate: unknown): Promise
   const period = await getGstPeriod(date);
   if (periodIsLocked(period.status)) {
     throw new Error(
-      `${indianGstPeriod(date).label} is ${period.status.replace(/_/g, ' ')}. Reopen the period to create or fulfill documents dated in this month.`
+      `${indianGstPeriod(date, 'quarter').label} is ${period.status.replace(/_/g, ' ')}. Reopen the period to create or fulfill documents dated in this period.`
     );
   }
   return period;

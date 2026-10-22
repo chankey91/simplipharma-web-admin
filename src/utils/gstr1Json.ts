@@ -1,11 +1,25 @@
 import type { GstDocumentSnapshot, GstFiledFingerprint, GstInvoiceType } from '../types/gst';
 import { isValidGstinFormat, normalizeGstin, normalizeStateCode } from './gstin';
 import { b2clThreshold, roundGst } from './gstTaxEngine';
-import { formatGstinDate, gstinFilingPeriod, indianGstPeriod } from './gstPeriod';
+import { formatGstinDate, gstFilingGrain, gstinFilingPeriod, indianGstPeriod } from './gstPeriod';
 
-const GSTR1_JSON_VERSION = 'GST3.2.1';
 const DEFAULT_HSN = '300490';
 const RATE_SLABS = [0, 0.1, 0.25, 1, 1.5, 3, 5, 7.5, 12, 18, 28];
+
+type HsnBucket = 'B2B' | 'B2C';
+
+interface HsnAggRow {
+  bucket: HsnBucket;
+  hsn_sc: string;
+  uqc: string;
+  qty: number;
+  rt: number;
+  txval: number;
+  iamt: number;
+  camt: number;
+  samt: number;
+  csamt: number;
+}
 
 export const GSTR1_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -106,12 +120,45 @@ export function snapGstRate(taxAmount: number, taxableValue: number): number {
 
 function itemDet(gst: GstDocumentSnapshot): GstnItemDet {
   return {
-    rt: snapGstRate(gst.cgst + gst.sgst + gst.igst + (gst.cess || 0), gst.taxableValue),
     txval: roundGst(gst.taxableValue),
+    rt: snapGstRate(gst.cgst + gst.sgst + gst.igst + (gst.cess || 0), gst.taxableValue),
     iamt: roundGst(gst.igst),
     camt: roundGst(gst.cgst),
     samt: roundGst(gst.sgst),
     csamt: roundGst(gst.cess || 0),
+  };
+}
+
+/** Portal GSTR-1 item order: txval, rt, then tax amounts. */
+function portalItmDet(det: GstnItemDet): GstnItemDet {
+  return {
+    txval: det.txval,
+    rt: det.rt,
+    iamt: det.iamt,
+    camt: det.camt,
+    samt: det.samt,
+    csamt: det.csamt,
+  };
+}
+
+function hsnUserDesc(hsn: string): string {
+  return hsn.startsWith('30') ? 'Medicaments' : 'Goods';
+}
+
+function toPortalHsnRow(row: HsnAggRow, num: number): Record<string, unknown> {
+  return {
+    num,
+    hsn_sc: row.hsn_sc,
+    txval: row.txval,
+    iamt: row.iamt,
+    camt: row.camt,
+    samt: row.samt,
+    csamt: row.csamt,
+    desc: '',
+    user_desc: hsnUserDesc(row.hsn_sc),
+    uqc: row.uqc,
+    qty: row.qty,
+    rt: row.rt,
   };
 }
 
@@ -281,30 +328,28 @@ function pushGrouped(
   buckets.set(key, { ...seed, [field]: [row] });
 }
 
-function hsnKey(hsn: string, rt: number, bucket: 'B2B' | 'B2C'): string {
+function hsnKey(hsn: string, rt: number, bucket: HsnBucket): string {
   return `${bucket}|${hsn}|${rt}|NOS`;
 }
 
-function allocateHsn(
-  doc: Gstr1SourceDocument,
-  sign: 1 | -1,
-  rows: Map<
-    string,
-    {
-      hsn_sc: string;
-      uqc: string;
-      qty: number;
-      rt: number;
-      txval: number;
-      iamt: number;
-      camt: number;
-      samt: number;
-      csamt: number;
-    }
-  >
-) {
+function emptyHsnRow(hsn: string, rt: number, bucket: HsnBucket): HsnAggRow {
+  return {
+    bucket,
+    hsn_sc: hsn,
+    uqc: 'NOS',
+    qty: 0,
+    rt,
+    txval: 0,
+    iamt: 0,
+    camt: 0,
+    samt: 0,
+    csamt: 0,
+  };
+}
+
+function allocateHsn(doc: Gstr1SourceDocument, sign: 1 | -1, rows: Map<string, HsnAggRow>) {
   const lines = doc.gst.lines;
-  const bucket: 'B2B' | 'B2C' =
+  const bucket: HsnBucket =
     invoiceTypeOf(doc) === 'B2B' || invoiceTypeOf(doc) === 'CDNR' ? 'B2B' : 'B2C';
 
   if (lines?.length) {
@@ -316,17 +361,7 @@ function allocateHsn(
           : snapGstRate(line.taxAmount, line.taxableValue);
       const split = splitLineTax(Number(line.taxAmount) || 0, doc.gst);
       const key = hsnKey(hsn, rt, bucket);
-      const existing = rows.get(key) || {
-        hsn_sc: hsn,
-        uqc: 'NOS',
-        qty: 0,
-        rt,
-        txval: 0,
-        iamt: 0,
-        camt: 0,
-        samt: 0,
-        csamt: 0,
-      };
+      const existing = rows.get(key) || emptyHsnRow(hsn, rt, bucket);
       existing.qty = roundGst(existing.qty + sign * (Number(line.qty) || 0));
       existing.txval = roundGst(existing.txval + sign * (Number(line.taxableValue) || 0));
       existing.iamt = roundGst(existing.iamt + sign * split.iamt);
@@ -349,17 +384,7 @@ function allocateHsn(
     const share = netTotal > 0 ? Math.max(0, part.net) / netTotal : index === 0 ? 1 : 0;
     const rt = part.gstRate && part.gstRate > 0 ? snapGstRate(part.gstRate, 100) : det.rt;
     const key = hsnKey(hsn, rt, bucket);
-    const existing = rows.get(key) || {
-      hsn_sc: hsn,
-      uqc: 'NOS',
-      qty: 0,
-      rt,
-      txval: 0,
-      iamt: 0,
-      camt: 0,
-      samt: 0,
-      csamt: 0,
-    };
+    const existing = rows.get(key) || emptyHsnRow(hsn, rt, bucket);
     existing.qty = roundGst(existing.qty + sign * (Number(part.qty) || 0));
     existing.txval = roundGst(existing.txval + sign * det.txval * share);
     existing.iamt = roundGst(existing.iamt + sign * det.iamt * share);
@@ -385,12 +410,12 @@ function seriesEntries(numbers: Gstr1IssuedDoc[], docNum: number): Record<string
     doc_num: docNum,
     docs: [
       {
-        num: 1,
+        cancel,
         from: sorted[0].number,
+        net_issue: totnum - cancel,
+        num: 1,
         to: sorted[sorted.length - 1].number,
         totnum,
-        cancel,
-        net_issue: totnum - cancel,
       },
     ],
   };
@@ -450,8 +475,9 @@ export function buildGstr1Payload(input: {
     throw new Error('Company GSTIN is not a valid 15-character GSTIN. Save GST settings first.');
   }
 
-  const fp = gstinFilingPeriod(date);
-  const period = indianGstPeriod(date);
+  const grain = gstFilingGrain(input.filingFrequency);
+  const fp = gstinFilingPeriod(date, grain);
+  const period = indianGstPeriod(date, grain);
   const mode = input.mode || 'original';
   const previous = new Map(
     (input.previousFingerprints || []).map((row) => [`${row.collection}:${row.documentId}`, row])
@@ -464,20 +490,7 @@ export function buildGstr1Payload(input: {
   const b2ba = new Map<string, { ctin?: string; inv?: Record<string, unknown>[] }>();
   const cdnra = new Map<string, { ctin?: string; nt?: Record<string, unknown>[] }>();
   const cdnur: Record<string, unknown>[] = [];
-  const hsnRows = new Map<
-    string,
-    {
-      hsn_sc: string;
-      uqc: string;
-      qty: number;
-      rt: number;
-      txval: number;
-      iamt: number;
-      camt: number;
-      samt: number;
-      csamt: number;
-    }
-  >();
+  const hsnRows = new Map<string, HsnAggRow>();
 
   const docs = [...input.documents].sort(
     (a, b) => a.date.getTime() - b.date.getTime() || a.number.localeCompare(b.number)
@@ -514,7 +527,7 @@ export function buildGstr1Payload(input: {
     const dets = gstr1ItemDets(doc.gst);
     const pos = posCode(doc.gst.placeOfSupplyStateCode);
     const val = roundGst(doc.totalAmount);
-    const itms = dets.map((itm_det, index) => ({ num: index + 1, itm_det }));
+    const itms = dets.map((det, index) => ({ num: index + 1, itm_det: portalItmDet(det) }));
     const isAmendment = include === 'amendment';
     if (isAmendment) amendmentCount += 1;
 
@@ -655,31 +668,21 @@ export function buildGstr1Payload(input: {
     warnings.unshift('No invoices changed since the locked GSTR-1 export.');
   }
 
-  const hsnData = [...hsnRows.values()]
-    .filter((row) => row.txval !== 0 || row.iamt !== 0 || row.camt !== 0 || row.samt !== 0)
-    .map((row, index) => {
-      const out: Record<string, unknown> = {
-        num: index + 1,
-        hsn_sc: row.hsn_sc,
-        uqc: row.uqc,
-        qty: row.qty,
-        rt: row.rt,
-        txval: row.txval,
-        iamt: row.iamt,
-        camt: row.camt,
-        samt: row.samt,
-        csamt: row.csamt,
-      };
-      if (row.hsn_sc.startsWith('3004')) out.desc = 'Medicaments';
-      return out;
-    });
+  const hsnFiltered = [...hsnRows.values()].filter(
+    (row) => row.txval !== 0 || row.iamt !== 0 || row.camt !== 0 || row.samt !== 0
+  );
+  const hsn_b2b = hsnFiltered
+    .filter((row) => row.bucket === 'B2B')
+    .map((row, index) => toPortalHsnRow(row, index + 1));
+  const hsn_b2c = hsnFiltered
+    .filter((row) => row.bucket === 'B2C')
+    .map((row, index) => toPortalHsnRow(row, index + 1));
+  const hsnCount = hsn_b2b.length + hsn_b2c.length;
 
+  // GST portal Prepare Offline JSON: gstin + fp + tables only (no version/hash/filing_typ).
   const payload: Record<string, unknown> = {
     gstin,
     fp,
-    version: GSTR1_JSON_VERSION,
-    hash: 'hash',
-    filing_typ: input.filingFrequency === 'qrmp' ? 'Q' : 'M',
   };
 
   const b2bArr = [...b2b.values()].map(({ ctin, inv }) => ({ ctin, inv }));
@@ -696,7 +699,7 @@ export function buildGstr1Payload(input: {
   if (cdnur.length) payload.cdnur = cdnur;
   if (b2baArr.length) payload.b2ba = b2baArr;
   if (cdnraArr.length) payload.cdnra = cdnraArr;
-  if (hsnData.length) payload.hsn = { data: hsnData };
+  if (hsnCount) payload.hsn = { hsn_b2b, hsn_b2c };
 
   if (mode === 'original') {
     const docDet = [
@@ -718,7 +721,7 @@ export function buildGstr1Payload(input: {
 
   const suffix = mode === 'amendment' ? '_A' : '';
   return {
-    filename: `returns_${fp}_GSTR1${suffix}_${gstin}.json`,
+    filename: `${gstin}_GSTR1_${fp}${suffix}.json`,
     payload,
     fingerprints,
     register,
@@ -735,7 +738,7 @@ export function buildGstr1Payload(input: {
       cdnur: cdnur.length,
       b2ba: b2baArr.reduce((n, row) => n + (row.inv?.length || 0), 0),
       cdnra: cdnraArr.reduce((n, row) => n + (row.nt?.length || 0), 0),
-      hsn: hsnData.length,
+      hsn: hsnCount,
       documentCount: docs.length,
       skippedNoSnapshot: input.skippedNoSnapshot,
       warnings,
@@ -745,10 +748,7 @@ export function buildGstr1Payload(input: {
 }
 
 export function downloadGstr1Json(result: Gstr1ExportResult): void {
-  const pretty = JSON.stringify(result.payload, null, 2);
-  const compact = JSON.stringify(result.payload);
-  const body =
-    new TextEncoder().encode(pretty).length > GSTR1_MAX_BYTES ? compact : pretty;
+  const body = JSON.stringify(result.payload);
   const blob = new Blob([body], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

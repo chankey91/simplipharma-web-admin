@@ -38,7 +38,7 @@ export const GstSettingsPage: React.FC = () => {
     phone: '',
     email: '',
     dl: '',
-    filingFrequency: 'monthly' as GstFilingFrequency,
+    filingFrequency: 'qrmp' as GstFilingFrequency,
     einvoiceEnabled: false,
     fyStartMonth: 4,
   });
@@ -211,10 +211,10 @@ export const GstSettingsPage: React.FC = () => {
               onChange={(e) =>
                 setForm({ ...form, filingFrequency: e.target.value as GstFilingFrequency })
               }
+              helperText="GSTR-1 and GSTR-3B are prepared for the full quarter (Apr–Jun, Jul–Sep, Oct–Dec, Jan–Mar). GSTN ret_period is the last month of that quarter."
               disabled={!writable}
             >
-              <MenuItem value="monthly">Monthly</MenuItem>
-              <MenuItem value="qrmp">QRMP (quarterly)</MenuItem>
+              <MenuItem value="qrmp">Quarterly (QRMP)</MenuItem>
             </TextField>
           </Grid>
           <Grid item xs={12}>
