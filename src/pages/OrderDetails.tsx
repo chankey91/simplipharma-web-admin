@@ -1880,7 +1880,7 @@ export const OrderDetailsPage: React.FC = () => {
             gstRate
           );
           newMedicines[scanningItemIndex].discountPercentage = discountPct;
-          newMedicines[scanningItemIndex].discountManuallySet = false;
+          newMedicines[scanningItemIndex].discountManuallySet = item.discountManuallySet === true;
           const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
             item,
             medicine,
@@ -1988,7 +1988,7 @@ export const OrderDetailsPage: React.FC = () => {
               gstRate
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
-            newMedicines[itemIndex].discountManuallySet = false;
+            newMedicines[itemIndex].discountManuallySet = item.discountManuallySet === true;
             const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
               item,
               medicine,
@@ -2057,7 +2057,7 @@ export const OrderDetailsPage: React.FC = () => {
               gstRate
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
-            newMedicines[itemIndex].discountManuallySet = false;
+            newMedicines[itemIndex].discountManuallySet = item.discountManuallySet === true;
             const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
               item,
               medicine,
@@ -2284,7 +2284,7 @@ export const OrderDetailsPage: React.FC = () => {
           scannedQRCode: '',
           freeQuantity: 0,
           quantity: item.originalQuantity || item.quantity || requiredQuantity,
-          discountManuallySet: false,
+          discountManuallySet: item.discountManuallySet === true,
           nonReturnable: undefined,
           qtyAdjustedNeedsBatch: true,
         };
@@ -2402,7 +2402,7 @@ export const OrderDetailsPage: React.FC = () => {
         item.discountPercentage,
         a.discountPercentage,
         actualBatch,
-        false,
+        item.discountManuallySet === true,
         gstRate
       );
 
@@ -2454,7 +2454,7 @@ export const OrderDetailsPage: React.FC = () => {
         price: validAllocations.length === 1 ? (processedAllocations[0].purchasePrice || 0) : 0,
         mrp: validAllocations.length === 1 ? validAllocations[0].mrp : undefined,
         gstRate: defaultGstRate,
-        discountManuallySet: false,
+        discountManuallySet: item.discountManuallySet === true,
         verified: true,
         qtyAdjustedNeedsBatch: undefined,
       },
@@ -2661,7 +2661,7 @@ export const OrderDetailsPage: React.FC = () => {
       verified: false,
       scannedQRCode: '',
       batchExpiryDate: undefined,
-      discountManuallySet: false,
+      discountManuallySet: item.discountManuallySet === true,
       nonReturnable: undefined,
       qtyAdjustedNeedsBatch: true,
     };
