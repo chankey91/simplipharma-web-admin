@@ -756,7 +756,7 @@ export const InventoryPage: React.FC = () => {
                   <TableCell>{medicine.manufacturer}</TableCell>
                   <TableCell align="right">
                     <Chip
-                      label={`${medicine.gstRate || 5}%`}
+                      label={`${medicine.gstRate ?? 5}%`}
                       size="small"
                       color="primary"
                       variant="outlined"
