@@ -163,6 +163,11 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    match /offers/{offerId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdminOrOperations();
+    }
+
     // Current retailer Android APK (welcome email + in-app update check).
     match /app_releases/{releaseId} {
       allow read: if signedIn();

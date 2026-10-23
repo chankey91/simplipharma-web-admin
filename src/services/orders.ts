@@ -1185,6 +1185,10 @@ export const fulfillOrder = async (
         if (line.notes?.trim()) {
           batchItem.notes = line.notes.trim();
         }
+        if ((line as { appliedOfferId?: string }).appliedOfferId) {
+          batchItem.appliedOfferId = (line as { appliedOfferId?: string }).appliedOfferId;
+          batchItem.appliedOfferTitle = (line as { appliedOfferTitle?: string }).appliedOfferTitle;
+        }
         applyOrderSchemeFieldsToTarget(line, batchItem);
 
         // Final cleanup: Remove any undefined or null values
@@ -1332,6 +1336,10 @@ export const fulfillOrder = async (
       }
       if (line.notes?.trim()) {
         cleanItem.notes = line.notes.trim();
+      }
+      if ((line as { appliedOfferId?: string }).appliedOfferId) {
+        cleanItem.appliedOfferId = (line as { appliedOfferId?: string }).appliedOfferId;
+        cleanItem.appliedOfferTitle = (line as { appliedOfferTitle?: string }).appliedOfferTitle;
       }
       applyOrderSchemeFieldsToTarget(line, cleanItem);
       
