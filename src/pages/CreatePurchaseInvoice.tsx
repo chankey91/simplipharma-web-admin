@@ -42,7 +42,7 @@ import {
   Edit,
 } from '@mui/icons-material';
 import { useVendors } from '../hooks/useVendors';
-import { useCreateMedicine, useMedicine } from '../hooks/useInventory';
+import { useCreateMedicine, useMedicine, useUpdateMedicine } from '../hooks/useInventory';
 import { useCreatePurchaseInvoice, usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
@@ -78,6 +78,7 @@ import {
   normalizeAdditionalDiscount,
   roundPurchaseInvoicePayable,
 } from '../utils/purchaseInvoiceTotals';
+import { parseOptionalGstRate, resolveGstRate } from '../utils/gstRate';
 import {
   clearLocalFormDraft,
   readLocalFormDraft,
@@ -138,6 +139,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   const { canWrite } = useAuth();
   const canEditPurchases = canWrite('purchases');
   const createMedicineMutation = useCreateMedicine();
+  const updateMedicineMutation = useUpdateMedicine();
   const createInvoiceMutation = useCreatePurchaseInvoice();
   const updateInvoiceMutation = useUpdatePurchaseInvoiceWithStock();
   const { alert, confirm, prompt } = useAppDialog();
@@ -556,8 +558,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const getCurrentItemGstRate = () => {
-    const selectedMed = lookupMedicine(currentItem.medicineId);
-    return selectedMed?.gstRate || parseNumber(currentItem.gstRate) || 5;
+    const entered = parseOptionalGstRate(currentItem.gstRate);
+    if (entered !== undefined) return entered;
+    return resolveGstRate(lookupMedicine(currentItem.medicineId)?.gstRate);
   };
 
   const calculatePurchasePriceFromMrpAndDiscount = (
@@ -637,7 +640,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     if (!batch) return;
 
     const medicine = lookupMedicine(currentItem.medicineId);
-    const gstRate = medicine?.gstRate || 5;
+    const gstRate = resolveGstRate(medicine?.gstRate);
     const mrp = batch.mrp && batch.mrp > 0 ? batch.mrp : 0;
     let purchasePrice =
       batch.purchasePrice && batch.purchasePrice > 0 ? batch.purchasePrice : 0;
@@ -712,7 +715,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
-      gstRate: selectedMedicine.gstRate || 5, // Get GST rate from medicine master data
+      gstRate: resolveGstRate(selectedMedicine.gstRate),
       standardDiscount: '20',
       discountPercentage: '',
       nonReturnable: priorNrNrx.nonReturnable,
@@ -793,9 +796,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       schemePaidQty != null ? Math.floor(sfRaw) : undefined;
     const purchasePrice = priceNum;
     const mrp = currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp || '0'))) : 0;
-    // Get GST rate from medicine master data (from selectedMedicine)
-    const selectedMed = lookupMedicine(medicineId);
-    const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
+    const gstRate = getCurrentItemGstRate();
     const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
     
     const enteredStandardDiscount = parseNumber(currentItem.standardDiscount);
@@ -849,7 +850,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       unitPrice: purchasePrice,
       purchasePrice,
       mrp: currentItem.mrp ? (typeof currentItem.mrp === 'number' ? currentItem.mrp : parseFloat(String(currentItem.mrp))) : undefined,
-      gstRate: gstRate > 0 ? gstRate : undefined,
+      gstRate,
       standardDiscount: Number.isFinite(standardDiscount) ? standardDiscount : undefined,
       discountPercentage: discountPercentage > 0 ? discountPercentage : undefined,
       totalAmount,
@@ -867,6 +868,22 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       }
       return [...prev, newItem];
     });
+
+    if (medicineId) {
+      try {
+        await updateMedicineMutation.mutateAsync({
+          medicineId,
+          updates: { gstRate },
+        });
+        const existing = lookupMedicine(medicineId);
+        if (existing) rememberMedicine({ ...existing, gstRate });
+        if (selectedMedicine?.id === medicineId) {
+          setSelectedMedicine({ ...selectedMedicine, gstRate });
+        }
+      } catch (error) {
+        console.warn('Failed to update medicine GST on master', error);
+      }
+    }
 
     setItemDialog({ open: false, itemIndex: null });
     setSelectedMedicine(null);
@@ -886,7 +903,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       unitPrice: '',
       purchasePrice: '',
       mrp: '',
-      gstRate: selectedMedicine?.gstRate || 5, // Reset to medicine's GST rate
+      gstRate: '',
       standardDiscount: '20',
       discountPercentage: '',
       nonReturnable: false,
@@ -898,7 +915,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     const item = items[index];
     if (!item) return;
     setExpiryDateError('');
-    const gstRate = item.gstRate || 5;
+    const gstRate = resolveGstRate(item.gstRate, resolveGstRate(lookupMedicine(item.medicineId)?.gstRate));
     const purchasePrice = Number(item.purchasePrice) || 0;
     const mrp = Number(item.mrp) || 0;
     setCurrentItem({
@@ -973,7 +990,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const handleAddMedicine = async () => {
-    if (!newMedicineData.name || !newMedicineData.code || !newMedicineData.type || !newMedicineData.packaging || !newMedicineData.manufacturer || !newMedicineData.gstRate) {
+    const newMedicineGstRate = parseOptionalGstRate(newMedicineData.gstRate);
+    if (!newMedicineData.name || !newMedicineData.code || !newMedicineData.type || !newMedicineData.packaging || !newMedicineData.manufacturer || newMedicineGstRate === undefined) {
       await alert('Please fill all required fields', { severity: 'warning' });
       return;
     }
@@ -1000,7 +1018,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         stock: 0,
         currentStock: 0,
         price: 0,
-        gstRate: newMedicineData.gstRate ? parseFloat(newMedicineData.gstRate) : 5,
+        gstRate: newMedicineGstRate,
         description: `Packaging: ${newMedicineData.packaging}`,
       });
 
@@ -1013,7 +1031,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         unit: newMedicineData.packaging,
         stock: 0,
         price: 0,
-        gstRate: newMedicineData.gstRate ? parseFloat(newMedicineData.gstRate) : 5,
+        gstRate: newMedicineGstRate,
       } as Medicine;
 
       rememberMedicine(newMedicine);
@@ -1770,15 +1788,31 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 fullWidth
                 label="GST Rate (%)"
                 type="number"
-                value={(() => {
-                  // Get GST rate from medicine master data
-                  const selectedMed = lookupMedicine(currentItem.medicineId);
-                  return selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
-                })()}
-                InputProps={{ 
-                  readOnly: true
+                value={currentItem.gstRate ?? ''}
+                onChange={(e) => {
+                  const gstValue = e.target.value;
+                  const gstRate = parseOptionalGstRate(gstValue) ?? 0;
+                  const mrp = parseNumber(currentItem.mrp);
+                  const standardDiscount =
+                    currentItem.standardDiscount === '' || currentItem.standardDiscount === undefined
+                      ? 20
+                      : parseNumber(currentItem.standardDiscount);
+                  const purchasePrice = calculatePurchasePriceFromMrpAndDiscount(
+                    mrp,
+                    gstRate,
+                    standardDiscount
+                  );
+                  setCurrentItem({
+                    ...currentItem,
+                    gstRate: gstValue,
+                    ...(mrp > 0 && {
+                      purchasePrice: purchasePrice.toFixed(2),
+                      unitPrice: purchasePrice.toFixed(2),
+                    }),
+                  });
                 }}
-                helperText="From medicine master data"
+                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                helperText="Saved on this line and on the medicine in inventory"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -1848,9 +1882,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 value={(() => {
                   const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : parseFloat(String(currentItem.quantity || '0'));
                   const price = typeof currentItem.purchasePrice === 'number' ? currentItem.purchasePrice : parseFloat(String(currentItem.purchasePrice || '0'));
-                  // Get GST rate from medicine master data
-                  const selectedMed = lookupMedicine(currentItem.medicineId);
-                  const gstRate = selectedMed?.gstRate || (currentItem.gstRate ? (typeof currentItem.gstRate === 'number' ? currentItem.gstRate : parseFloat(String(currentItem.gstRate || '0'))) : 5);
+                  const gstRate = getCurrentItemGstRate();
                   const discountPercentage = currentItem.discountPercentage ? (typeof currentItem.discountPercentage === 'number' ? currentItem.discountPercentage : parseFloat(String(currentItem.discountPercentage || '0'))) : 0;
                   
                   // Formula: Purchase Price - Discount + GST

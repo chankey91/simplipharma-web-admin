@@ -21,6 +21,7 @@ import { nestedFirestoreTimestamp } from '../utils/firestoreTimestamps';
 import { Medicine, StockBatch } from '../types';
 import { standardDiscountFromStockBatch } from '../utils/orderFulfillmentDiscount';
 import { allocateSpsProductId } from '../utils/spsProductId';
+import { resolveGstRate } from '../utils/gstRate';
 
 /** Top-level collection for on-hand lots (transactional). Master stays on `medicines`. */
 export const MEDICINE_BATCHES_COLLECTION = 'medicineBatches';
@@ -285,10 +286,7 @@ function parseOptionalNumber(value: unknown): number | undefined {
 }
 
 function parseGstRate(data: any): number {
-  if (data?.gstRate !== undefined && data?.gstRate !== null) {
-    return typeof data.gstRate === 'number' ? data.gstRate : parseFloat(String(data.gstRate)) || 5;
-  }
-  return 5;
+  return resolveGstRate(data?.gstRate);
 }
 
 function masterFromDoc(
