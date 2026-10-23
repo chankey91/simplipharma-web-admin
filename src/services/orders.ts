@@ -1188,6 +1188,10 @@ export const fulfillOrder = async (
         if ((line as { appliedOfferId?: string }).appliedOfferId) {
           batchItem.appliedOfferId = (line as { appliedOfferId?: string }).appliedOfferId;
           batchItem.appliedOfferTitle = (line as { appliedOfferTitle?: string }).appliedOfferTitle;
+          batchItem.nonReturnable = true;
+        }
+        if ((line as { nonReturnable?: boolean }).nonReturnable === true) {
+          batchItem.nonReturnable = true;
         }
         applyOrderSchemeFieldsToTarget(line, batchItem);
 
@@ -1340,6 +1344,10 @@ export const fulfillOrder = async (
       if ((line as { appliedOfferId?: string }).appliedOfferId) {
         cleanItem.appliedOfferId = (line as { appliedOfferId?: string }).appliedOfferId;
         cleanItem.appliedOfferTitle = (line as { appliedOfferTitle?: string }).appliedOfferTitle;
+        cleanItem.nonReturnable = true;
+      }
+      if ((line as { nonReturnable?: boolean }).nonReturnable === true) {
+        cleanItem.nonReturnable = true;
       }
       applyOrderSchemeFieldsToTarget(line, cleanItem);
       
