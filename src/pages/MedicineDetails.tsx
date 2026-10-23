@@ -36,7 +36,7 @@ import {
 } from '@mui/icons-material';
 import { useAddStockBatch, useUpdateMedicine, useMedicine } from '../hooks/useInventory';
 import { format } from 'date-fns';
-import { getTodayDateStringIST } from '../utils/dateTime';
+import { coerceToDate, formatDateIST, getTodayDateStringIST } from '../utils/dateTime';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
@@ -44,7 +44,6 @@ import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
-import { coerceToDate } from '../utils/dateTime';
 import { useAppDialog } from '../context/AppDialogProvider';
 
 export const MedicineDetailsPage: React.FC = () => {
@@ -391,6 +390,19 @@ export const MedicineDetailsPage: React.FC = () => {
               <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">GST Rate</Typography>
                 <Typography variant="body1" fontWeight="medium">{medicine.gstRate || 5}%</Typography>
+              </Box>
+              <Box mb={2}>
+                <Typography variant="caption" color="textSecondary">Last Purchase Price</Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {medicine.lastPurchasePrice != null && medicine.lastPurchasePrice > 0
+                    ? `₹${medicine.lastPurchasePrice.toFixed(2)}`
+                    : 'N/A'}
+                </Typography>
+                {medicine.lastPurchasePriceAt ? (
+                  <Typography variant="caption" color="textSecondary">
+                    {formatDateIST(medicine.lastPurchasePriceAt)}
+                  </Typography>
+                ) : null}
               </Box>
               <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">Composition</Typography>
