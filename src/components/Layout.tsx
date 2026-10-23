@@ -55,6 +55,7 @@ import {
   ReportProblem,
   ReceiptLong,
   CardGiftcard,
+  LocalOffer,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -144,6 +145,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Marketing',
     items: [
       { text: 'Banners', icon: <Campaign />, path: '/banners' },
+      { text: 'Retailer offers', icon: <LocalOffer />, path: '/offers' },
       { text: 'Home feed', icon: <Stars />, path: '/home-feed' },
       { text: 'Retailer app', icon: <Android />, path: '/retailer-app' },
     ],

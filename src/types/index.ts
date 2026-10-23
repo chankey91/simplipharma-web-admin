@@ -117,6 +117,8 @@ export interface OrderMedicine {
   orderSchemeFreeQty?: number;
   /** User edited scheme on this order (override batch default). */
   orderSchemeManuallySet?: boolean;
+  appliedOfferId?: string;
+  appliedOfferTitle?: string;
   gstRate?: number; // GST rate for the item
   /** HSN copied from medicine master at fulfill — not backfilled on old invoices. */
   hsn?: string;
@@ -164,6 +166,7 @@ export interface Order {
   retailerEmail?: string;
   retailerName?: string;
   medicines: OrderMedicine[];
+  appliedOffers?: Array<{ id: string; title: string; type: string }>;
   subTotal: number;
   /** Sum of line trade discounts (Rate×Qty × Disc%). */
   totalDiscount?: number;
