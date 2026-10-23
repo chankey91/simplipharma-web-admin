@@ -25,6 +25,7 @@ export type OfferInput = {
   paidQty?: number;
   freeQty?: number;
   discountPct?: number;
+  minQty?: number;
   startsAt?: Date | null;
   endsAt?: Date | null;
 };
@@ -60,6 +61,7 @@ function mapOffer(id: string, data: Record<string, unknown>): RetailerOffer {
     paidQty: data.paidQty != null ? Number(data.paidQty) : undefined,
     freeQty: data.freeQty != null ? Number(data.freeQty) : undefined,
     discountPct: data.discountPct != null ? Number(data.discountPct) : undefined,
+    minQty: data.minQty != null ? Number(data.minQty) : undefined,
     startsAt: asDate(data.startsAt),
     endsAt: asDate(data.endsAt),
   };
@@ -89,6 +91,7 @@ function toWritePayload(input: OfferInput) {
     paidQty: input.type === 'buy_get_free' ? input.paidQty : null,
     freeQty: input.type === 'buy_get_free' ? input.freeQty : null,
     discountPct: input.type === 'buy_get_free' ? null : input.discountPct,
+    minQty: input.type === 'buy_get_free' ? null : input.minQty,
     startsAt: input.startsAt ? Timestamp.fromDate(input.startsAt) : null,
     endsAt: input.endsAt ? Timestamp.fromDate(input.endsAt) : null,
   });
@@ -114,6 +117,7 @@ export async function updateOffer(offerId: string, input: Partial<OfferInput>): 
     paidQty: input.paidQty,
     freeQty: input.freeQty,
     discountPct: input.discountPct,
+    minQty: input.minQty,
     startsAt: input.startsAt,
     endsAt: input.endsAt,
   });
