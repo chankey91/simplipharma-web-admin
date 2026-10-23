@@ -6,11 +6,18 @@ import { useGstPeriodParam } from '../../hooks/useGstPeriod';
 import { useGstHealthReport, useGstPeriodRecord, useMarkGstPeriodStatus } from '../../hooks/useGst';
 import { useAuth } from '../../context/AuthContext';
 import { useAppDialog } from '../../context/AppDialogProvider';
-import { gstPeriodParam, periodIsLocked } from '../../utils/gstPeriod';
+import {
+  GST_QUARTER_LABELS,
+  gstPeriodParam,
+  gstQuarterOfMonth,
+  gstQuarterStartForFy,
+  periodIsLocked,
+} from '../../utils/gstPeriod';
 import type { GstPeriodStatus } from '../../types/gst';
 
 const TABS = [
   { label: 'Overview', path: '/gst', badgeKey: 'legacy' as const },
+  { label: 'Sales by GST', path: '/gst/slab-sales', badgeKey: 'none' as const },
   { label: 'GSTR-1', path: '/gst/gstr-1', badgeKey: 'gstr1' as const },
   { label: 'GSTR-3B', path: '/gst/gstr-3b', badgeKey: 'none' as const },
   { label: 'ITC / GSTR-2B', path: '/gst/itc', badgeKey: 'itc' as const },
@@ -18,6 +25,7 @@ const TABS = [
 ];
 
 const YEARS = Array.from({ length: 8 }, (_, i) => new Date().getFullYear() - 4 + i);
+const FY_STARTS = Array.from({ length: 8 }, (_, i) => new Date().getFullYear() - 5 + i);
 const MONTHS = [
   'January',
   'February',
@@ -45,7 +53,7 @@ export const GstWorkspace: React.FC<{ children: React.ReactNode }> = ({ children
   const navigate = useNavigate();
   const { canWrite } = useAuth();
   const { alert, confirm, prompt } = useAppDialog();
-  const { year, month, date, meta, setPeriod } = useGstPeriodParam();
+  const { year, month, date, meta, setPeriod, grain } = useGstPeriodParam();
   const periodQuery = useGstPeriodRecord(date);
   const healthQuery = useGstHealthReport(date);
   const markStatus = useMarkGstPeriodStatus(date);
@@ -116,34 +124,79 @@ export const GstWorkspace: React.FC<{ children: React.ReactNode }> = ({ children
           <Typography variant="h6" sx={{ mr: 1 }}>
             {meta.label}
           </Typography>
-          <TextField
-            select
-            size="small"
-            label="Month"
-            value={month}
-            onChange={(e) => setPeriod(year, Number(e.target.value))}
-            sx={{ minWidth: 140 }}
-          >
-            {MONTHS.map((label, idx) => (
-              <MenuItem key={label} value={idx + 1}>
-                {label}
-              </MenuItem>
-            ))}
-          </TextField>
-          <TextField
-            select
-            size="small"
-            label="Year"
-            value={year}
-            onChange={(e) => setPeriod(Number(e.target.value), month)}
-            sx={{ minWidth: 100 }}
-          >
-            {YEARS.map((y) => (
-              <MenuItem key={y} value={y}>
-                {y}
-              </MenuItem>
-            ))}
-          </TextField>
+          {grain === 'quarter' ? (
+            <>
+              <TextField
+                select
+                size="small"
+                label="Quarter"
+                value={gstQuarterOfMonth(month)}
+                onChange={(e) => {
+                  const fyStart = month >= 4 ? year : year - 1;
+                  const start = gstQuarterStartForFy(fyStart, Number(e.target.value) as 1 | 2 | 3 | 4);
+                  setPeriod(start.year, start.month);
+                }}
+                sx={{ minWidth: 160 }}
+              >
+                {([1, 2, 3, 4] as const).map((q) => (
+                  <MenuItem key={q} value={q}>
+                    Q{q} {GST_QUARTER_LABELS[q]}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                select
+                size="small"
+                label="Financial year"
+                value={month >= 4 ? year : year - 1}
+                onChange={(e) => {
+                  const start = gstQuarterStartForFy(
+                    Number(e.target.value),
+                    gstQuarterOfMonth(month)
+                  );
+                  setPeriod(start.year, start.month);
+                }}
+                sx={{ minWidth: 130 }}
+              >
+                {FY_STARTS.map((y) => (
+                  <MenuItem key={y} value={y}>
+                    {y}-{String(y + 1).slice(-2)}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </>
+          ) : (
+            <>
+              <TextField
+                select
+                size="small"
+                label="Month"
+                value={month}
+                onChange={(e) => setPeriod(year, Number(e.target.value))}
+                sx={{ minWidth: 140 }}
+              >
+                {MONTHS.map((label, idx) => (
+                  <MenuItem key={label} value={idx + 1}>
+                    {label}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                select
+                size="small"
+                label="Year"
+                value={year}
+                onChange={(e) => setPeriod(Number(e.target.value), month)}
+                sx={{ minWidth: 100 }}
+              >
+                {YEARS.map((y) => (
+                  <MenuItem key={y} value={y}>
+                    {y}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </>
+          )}
           <Chip size="small" label={status.replace(/_/g, ' ')} color={statusColor(status)} />
           {periodQuery.data?.gstr1Arn ? (
             <Typography variant="caption" color="text.secondary">

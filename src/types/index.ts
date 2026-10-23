@@ -28,6 +28,15 @@ export interface Medicine {
   costPrice?: number;
   mrp?: number;
   purchasePrice?: number;
+  /**
+   * Ex-GST unit rate from the newest purchase invoice for this product.
+   * This is the rate shown to the retailer as Last Purchase Price.
+   */
+  lastPurchasePrice?: number;
+  /** Invoice date of the purchase that set `lastPurchasePrice`. */
+  lastPurchasePriceAt?: Date | any;
+  /** `purchaseInvoices` document id that set `lastPurchasePrice`. */
+  lastPurchaseInvoiceId?: string;
   salesPrice?: number;
   salesSchemeDeal?: number;
   salesSchemeFree?: number;

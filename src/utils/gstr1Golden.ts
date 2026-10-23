@@ -1,5 +1,7 @@
 import type { GstDocumentSnapshot } from '../types/gst';
 import { buildGstr1Payload, gstr1ItemDets, GSTR1_MAX_BYTES, gstr1PayloadSize } from './gstr1Json';
+import { buildGstr1ExcelWorkbook } from './gstr1Excel';
+import * as XLSX from 'xlsx';
 
 const SELLER = '23AABCU9603R1ZX';
 const BUYER = '27AAPFU0939F1ZV';
@@ -69,8 +71,22 @@ export function gstr1GoldenErrors(): string[] {
   if (itms.length !== 2) errors.push(`payload B2B itms length ${itms.length} != 2`);
   if (b2b?.[0]?.ctin !== BUYER) errors.push(`expected buyer GSTIN ${BUYER}`);
 
-  const hsn = (result.payload.hsn as { data?: Array<{ hsn_sc: string; rt: number }> } | undefined)?.data || [];
-  if (hsn.length < 2) errors.push(`expected at least 2 HSN rows, got ${hsn.length}`);
+  if (result.payload.version || result.payload.hash || result.payload.filing_typ) {
+    errors.push('GSTN Save schema 4.1 must not include version, hash, or filing_typ');
+  }
+  if (typeof result.payload.gt !== 'number' || typeof result.payload.cur_gt !== 'number') {
+    errors.push('gt and cur_gt must be numbers');
+  }
+  const hsn = result.payload.hsn as
+    | { hsn_b2b?: Array<{ hsn_sc: string; rt: number; user_desc?: string }>; hsn_b2c?: unknown[]; data?: unknown }
+    | undefined;
+  if (hsn?.data) errors.push('HSN must use hsn_b2b/hsn_b2c, not hsn.data');
+  if (Array.isArray(hsn?.hsn_b2c) && hsn.hsn_b2c.length === 0) {
+    errors.push('empty hsn_b2c arrays are rejected by GSTN 3.2.4');
+  }
+  const hsnRows = hsn?.hsn_b2b || [];
+  if (hsnRows.length < 2) errors.push(`expected at least 2 HSN B2B rows, got ${hsnRows.length}`);
+  if (!hsnRows.every((row) => row.user_desc)) errors.push('HSN rows need user_desc for the GST portal');
 
   const headerOnly = buildGstr1Payload({
     gstin: SELLER,
@@ -86,14 +102,20 @@ export function gstr1GoldenErrors(): string[] {
         date: new Date('2026-04-15T06:30:00+05:30'),
         totalAmount: 1610,
         gst: { ...gst, lines: undefined },
-        hsnParts: [{ hsn: '300490', qty: 1, net: 1500 }],
+        hsnParts: [{ hsn: '300490', qty: 1, net: 1500, gstRate: 5 }],
       },
     ],
   });
   const legacyItms =
-    (headerOnly.payload.b2b as Array<{ inv?: Array<{ itms?: unknown[] }> }>)?.[0]?.inv?.[0]?.itms || [];
+    (headerOnly.payload.b2b as Array<{ inv?: Array<{ itms?: Array<{ itm_det?: { rt?: number } }> }> }>)?.[0]
+      ?.inv?.[0]?.itms || [];
   if (legacyItms.length !== 1) {
     errors.push(`legacy header snapshot should emit 1 itm, got ${legacyItms.length}`);
+  }
+  if (legacyItms[0]?.itm_det?.rt !== 5) {
+    errors.push(
+      `product GST 5% must not be inferred from tax/taxable (got ${legacyItms[0]?.itm_det?.rt})`
+    );
   }
 
   const { byteLength } = gstr1PayloadSize(result.payload);
@@ -101,6 +123,68 @@ export function gstr1GoldenErrors(): string[] {
   if (!result.summary.errors.length && result.summary.b2b !== 1) {
     errors.push(`expected 1 B2B invoice, got ${result.summary.b2b}`);
   }
+
+  const excel = buildGstr1ExcelWorkbook(result);
+  if (!excel.SheetNames.includes('b2b,sez,de') || !excel.SheetNames.includes('hsn(b2b)')) {
+    errors.push('Excel workbook is missing GST Offline Tool V2.2 sheet names');
+  }
+  const b2bSheet = XLSX.utils.sheet_to_json(excel.Sheets['b2b,sez,de'], {
+    header: 1,
+    defval: '',
+    raw: true,
+  }) as unknown[][];
+  if (b2bSheet[3]?.[0] !== 'GSTIN/UIN of Recipient') {
+    errors.push(`Excel B2B header mismatch: ${String(b2bSheet[3]?.[0])}`);
+  }
+  const excelRates = b2bSheet.slice(4).map((row) => Number(row[10]));
+  if (!excelRates.includes(5) || !excelRates.includes(12)) {
+    errors.push(`Excel B2B rates should be product GST 5 and 12, got ${excelRates.join(',')}`);
+  }
+  if (String(b2bSheet[4]?.[3] || '') !== '15-Apr-2026') {
+    errors.push(`Excel invoice date must be DD-MMM-YYYY, got ${String(b2bSheet[4]?.[3])}`);
+  }
+  const intraNote = buildGstr1Payload({
+    gstin: SELLER,
+    filingFrequency: 'monthly',
+    skippedNoSnapshot: 0,
+    date: new Date('2026-04-15T06:30:00+05:30'),
+    documents: [
+      {
+        collection: 'credit_notes',
+        documentId: 'cn-ur-1',
+        kind: 'credit_note',
+        number: 'SPC202604001',
+        date: new Date('2026-04-15T06:30:00+05:30'),
+        totalAmount: 525,
+        gst: {
+          ...gst,
+          buyerGstin: '',
+          invoiceType: 'CDNUR',
+          supplierStateCode: '23',
+          placeOfSupplyStateCode: '23',
+          supplyType: 'intra',
+          taxableValue: 500,
+          cgst: 12.5,
+          sgst: 12.5,
+          igst: 0,
+          lines: [{ hsn: '300490', gstRate: 5, qty: 10, taxableValue: 500, taxAmount: 25 }],
+        },
+        hsnParts: [{ hsn: '300490', qty: 10, net: 500, gstRate: 5 }],
+      },
+    ],
+  });
+  const cdnurExcel = XLSX.utils.sheet_to_json(buildGstr1ExcelWorkbook(intraNote).Sheets.cdnur, {
+    header: 1,
+    defval: '',
+    raw: true,
+  }) as unknown[][];
+  if (cdnurExcel[4]?.[0] !== 'B2CS') {
+    errors.push(`intra-state CDNUR must use UR Type B2CS, got ${String(cdnurExcel[4]?.[0])}`);
+  }
+  if (String(cdnurExcel[4]?.[2] || '') !== '15-Apr-2026') {
+    errors.push(`CDNUR date must be DD-MMM-YYYY, got ${String(cdnurExcel[4]?.[2])}`);
+  }
+
   errors.push(...result.summary.errors);
   return errors;
 }

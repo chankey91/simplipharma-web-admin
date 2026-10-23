@@ -278,6 +278,12 @@ export function computeBatchAggregates(batches: StockBatch[]): {
   return { stock, nearestExpiry, activeBatchCount };
 }
 
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = typeof value === 'number' ? value : parseFloat(String(value));
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function parseGstRate(data: any): number {
   if (data?.gstRate !== undefined && data?.gstRate !== null) {
     return typeof data.gstRate === 'number' ? data.gstRate : parseFloat(String(data.gstRate)) || 5;
@@ -321,6 +327,11 @@ function masterFromDoc(
       normalizeFirestoreDate(data.expiryDate),
     activeBatchCount: fromBatches?.activeBatchCount ?? data.activeBatchCount ?? batches?.length,
     price: data.price || data.mrp || 0,
+    lastPurchasePrice: parseOptionalNumber(data.lastPurchasePrice),
+    lastPurchasePriceAt: normalizeFirestoreDate(data.lastPurchasePriceAt),
+    lastPurchaseInvoiceId: data.lastPurchaseInvoiceId
+      ? String(data.lastPurchaseInvoiceId)
+      : undefined,
     stockBatches: batches,
     gstRate,
     description: data.description != null ? String(data.description) : undefined,

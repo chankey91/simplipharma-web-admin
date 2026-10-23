@@ -176,7 +176,7 @@ export const GstDashboardPage: React.FC = () => {
                 {settings?.legalName}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                {settings?.state} ({settings?.stateCode}) · {settings?.filingFrequency}
+                {settings?.state} ({settings?.stateCode}) · quarterly (QRMP)
               </Typography>
             </CardContent>
           </Card>
@@ -185,7 +185,7 @@ export const GstDashboardPage: React.FC = () => {
           <Card>
             <CardContent>
               <Typography variant="overline" color="text.secondary">
-                This month — invoiced orders
+                This quarter — invoiced orders
               </Typography>
               <Typography variant="h6">{report?.invoicedThisPeriod ?? 0}</Typography>
               <Typography variant="body2" color="text.secondary">
@@ -220,7 +220,7 @@ export const GstDashboardPage: React.FC = () => {
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Use Action to edit the store/vendor, open inventory, or backfill issued documents for this
-          month.
+          period.
         </Typography>
         <TableContainer>
           <Table size="small">
@@ -320,7 +320,7 @@ export const GstDashboardPage: React.FC = () => {
                   </Table>
                 </TableContainer>
               ) : (
-                <Typography color="text.secondary">Nothing to backfill in this month.</Typography>
+                <Typography color="text.secondary">Nothing to backfill in this quarter.</Typography>
               )}
             </>
           )}

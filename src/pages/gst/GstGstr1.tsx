@@ -19,6 +19,7 @@ import { useGstr1Export, useGstPeriodRecord, useLockGstPeriod } from '../../hook
 import { useAuth } from '../../context/AuthContext';
 import { useAppDialog } from '../../context/AppDialogProvider';
 import { downloadGstr1Json } from '../../utils/gstr1Json';
+import { downloadGstr1Excel } from '../../utils/gstr1Excel';
 import { buildGstr1Export } from '../../services/gstGstr1';
 import { gstr1GoldenErrors } from '../../utils/gstr1Golden';
 
@@ -38,18 +39,24 @@ export const GstGstr1Page: React.FC = () => {
     if (errors.length) console.error('[GSTR-1 golden]', errors);
   }, []);
 
+  const loadExport = async (mode: 'original' | 'amendment') => {
+    const result = mode === 'original' ? exportQuery.data : await buildGstr1Export(date, 'amendment');
+    if (!result) return null;
+    if (result.summary.errors.length) {
+      await alert(result.summary.errors.join('\n'), { severity: 'error' });
+      return null;
+    }
+    if (mode === 'original' && !result.summary.documentCount) {
+      await alert('Nothing to export. Backfill this period first.', { severity: 'warning' });
+      return null;
+    }
+    return result;
+  };
+
   const handleDownload = async (mode: 'original' | 'amendment') => {
     try {
-      const result = mode === 'original' ? exportQuery.data : await buildGstr1Export(date, 'amendment');
+      const result = await loadExport(mode);
       if (!result) return;
-      if (result.summary.errors.length) {
-        await alert(result.summary.errors.join('\n'), { severity: 'error' });
-        return;
-      }
-      if (mode === 'original' && !result.summary.documentCount) {
-        await alert('Nothing to export. Backfill this period first.', { severity: 'warning' });
-        return;
-      }
       downloadGstr1Json(result);
       if (mode === 'original' && writable) {
         const ok = await confirm(
@@ -73,6 +80,20 @@ export const GstGstr1Page: React.FC = () => {
     }
   };
 
+  const handleExcelDownload = async () => {
+    try {
+      const result = await loadExport('original');
+      if (!result) return;
+      downloadGstr1Excel(result);
+      await alert(
+        `Downloaded ${result.summary.gstin}_GSTR1_${result.summary.fp}.xlsx. Open GST Offline Tool → Import Excel, then generate JSON from the tool.`,
+        { severity: 'success' }
+      );
+    } catch (err) {
+      await alert(err instanceof Error ? err.message : 'Excel download failed', { severity: 'error' });
+    }
+  };
+
   if (exportQuery.isLoading) {
     return (
       <GstWorkspace>
@@ -90,9 +111,9 @@ export const GstGstr1Page: React.FC = () => {
         GSTR-1 JSON — {meta.label}
       </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Offline GSTN file (version GST3.2.1) with B2B/B2CL/B2CS/CDNR/CDNUR, HSN, and document
-        series. Mixed GST rates on one invoice emit one itm per rate. It does not file the return.
-        Confirm the file in the GST portal offline tool before upload.
+        JSON is GSTN Save GSTR-1 schema 4.1. Excel matches GST Offline Tool workbook V2.2
+        (b2b,sez,de, HSN B2B/B2C, CDNR, docs). Each rate is the product GST %, not tax ÷ taxable
+        after discount. Import the Excel in GST Offline Tool if portal JSON upload is rejected.
       </Alert>
       {exportQuery.error ? (
         <Alert severity="error">
@@ -139,6 +160,14 @@ export const GstGstr1Page: React.FC = () => {
                 disabled={!summary || Boolean(summary.errors.length)}
               >
                 Download GSTR-1 JSON
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<FileDownload />}
+                onClick={() => void handleExcelDownload()}
+                disabled={!summary || Boolean(summary.errors.length)}
+              >
+                Download GSTR-1 Excel
               </Button>
               <Button
                 variant="outlined"

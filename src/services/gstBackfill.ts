@@ -5,7 +5,7 @@ import { getDebitNotesInRange } from './debitNotes';
 import { getPurchaseInvoicesInRange } from './purchaseInvoices';
 import { getAllVendors } from './vendors';
 import { getAllStores } from './stores';
-import { getCompanyGstSettings } from './gstSettings';
+import { companyGstFilingGrain, getCompanyGstSettings } from './gstSettings';
 import { assertPeriodOpenForWrite } from './gstPeriods';
 import { invalidateGstPeriodBooksCache } from './gstPeriodBooks';
 import { gstPeriodBounds, indianGstPeriod } from '../utils/gstPeriod';
@@ -43,7 +43,8 @@ function taxableFrom(doc: { subTotal?: number; totalDiscount?: number; discount?
 }
 
 async function loadLegacyDocuments(date = new Date()) {
-  const { startMs, endMsExclusive } = gstPeriodBounds(date);
+  const grain = await companyGstFilingGrain();
+  const { startMs, endMsExclusive } = gstPeriodBounds(date, grain);
   const [orders, creditNotes, debitNotes, purchases, vendors, stores, settings] = await Promise.all([
     getOrdersInRange(startMs, endMsExclusive),
     getCreditNotesInRange(startMs, endMsExclusive),

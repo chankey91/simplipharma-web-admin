@@ -87,7 +87,7 @@ export async function loadGstHealthReport(date = new Date()): Promise<GstHealthR
       kind: 'legacy_invoice',
       documentType: 'order',
       documentId: 'period',
-      message: `${legacyInvoicesThisPeriod} sales invoice(s), ${legacyCreditNotesThisPeriod} credit note(s), ${legacyDebitNotesThisPeriod} debit note(s), ${legacyPurchaseInvoicesThisPeriod} purchase invoice(s) this month have no GST snapshot. Amounts will not change.`,
+      message: `${legacyInvoicesThisPeriod} sales invoice(s), ${legacyCreditNotesThisPeriod} credit note(s), ${legacyDebitNotesThisPeriod} debit note(s), ${legacyPurchaseInvoicesThisPeriod} purchase invoice(s) this quarter have no GST snapshot. Amounts will not change.`,
       actionLabel: 'Preview & backfill',
       actionKind: 'backfill',
     });
