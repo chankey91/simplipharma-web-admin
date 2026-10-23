@@ -54,6 +54,7 @@ import {
 import { reindexPurchaseInvoicesTypesense } from '../services/purchaseInvoiceSearch';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Loading } from '../components/Loading';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -62,6 +63,7 @@ import type { PaymentStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
+import { backfillLastPurchasePrices } from '../services/lastPurchasePrice';
 import { exportPurchaseDiscountList } from '../utils/purchaseDiscountListExport';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
@@ -97,6 +99,7 @@ const sortKeyToField = (key: string): string => {
 
 export const PurchaseInvoicesPage: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { canWrite, panelRole } = useAuth();
   const canEditPurchases = canWrite('purchases');
   const canReindexPurchases = panelRole === 'admin' || panelRole === 'operations';
@@ -116,6 +119,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+  const [fillingLastPrices, setFillingLastPrices] = useState(false);
   const [minVendorDiscountPct, setMinVendorDiscountPct] = useState('');
   const [extractingDiscountList, setExtractingDiscountList] = useState(false);
 
@@ -346,6 +350,33 @@ export const PurchaseInvoicesPage: React.FC = () => {
     }
   };
 
+  const handleFillLastPurchasePrices = async () => {
+    const ok = await confirm(
+      'Set Last Purchase Price on every product from its newest purchase bill? Products that were never purchased stay unchanged.',
+      { title: 'Fill last purchase prices' }
+    );
+    if (!ok) return;
+    setFillingLastPrices(true);
+    setReindexMessage(null);
+    try {
+      const result = await backfillLastPurchasePrices();
+      await queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      await queryClient.invalidateQueries({ queryKey: ['medicine'] });
+      const missing =
+        result.medicinesMissing > 0
+          ? ` ${result.medicinesMissing} bill lines pointed at products that no longer exist.`
+          : '';
+      setReindexMessage(
+        `Last purchase price set on ${result.medicinesUpdated} products (${result.invoicesScanned} purchase bills scanned).${missing}`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setReindexMessage(`Last purchase price fill failed: ${msg}.`);
+    } finally {
+      setFillingLastPrices(false);
+    }
+  };
+
   const handleDeleteInvoice = async (invoice: InvoiceRow) => {
     const ok = await confirm(
       `Delete purchase bill #${invoice.invoiceNumber}? Stock added from this bill will be removed from inventory. Units already sold cannot be fully reverted. This cannot be undone.`,
@@ -443,6 +474,16 @@ export const PurchaseInvoicesPage: React.FC = () => {
           ₹{Math.round(totalPurchases).toLocaleString('en-IN')}
         </Typography>
         {canReindexPurchases && (
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={fillingLastPrices || reindexing}
+            onClick={() => void handleFillLastPurchasePrices()}
+          >
+            {fillingLastPrices ? 'Filling prices…' : 'Fill last prices'}
+          </Button>
+        )}
+        {canReindexPurchases && (
           <Tooltip title={reindexing ? 'Indexing…' : 'Rebuild search index'}>
             <span>
               <IconButton
@@ -481,7 +522,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
 
       {reindexMessage && (
         <Alert
-          severity={reindexMessage.startsWith('Search index updated') ? 'success' : 'error'}
+          severity={reindexMessage.includes('failed') ? 'error' : 'success'}
           onClose={() => setReindexMessage(null)}
           sx={{ mb: 1 }}
         >

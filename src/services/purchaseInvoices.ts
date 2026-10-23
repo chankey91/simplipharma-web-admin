@@ -10,6 +10,10 @@ import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 import { createInwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromPurchaseItems } from '../utils/gstLineSnapshot';
+import {
+  refreshLastPurchasePricesAfterInvoiceDeleted,
+  syncLastPurchasePricesForInvoice,
+} from './lastPurchasePrice';
 
 function mapVendorPayments(raw: unknown): VendorInvoicePayment[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -509,6 +513,16 @@ export const createPurchaseInvoice = async (
     }
   }
 
+  try {
+    await syncLastPurchasePricesForInvoice({
+      invoiceId: invoiceRef.id,
+      invoiceDate: invoiceData.invoiceDate,
+      items: invoiceData.items,
+    });
+  } catch (error) {
+    console.error('Failed to store last purchase price on products:', error);
+  }
+
   onProgress?.({
     phase: 'done',
     current: invoiceData.items.length,
@@ -903,6 +917,18 @@ export const updatePurchaseInvoiceWithStock = async (
     onProgress
   );
 
+  try {
+    await syncLastPurchasePricesForInvoice({
+      invoiceId,
+      invoiceDate,
+      items: invoiceData.items,
+      previousItems: existing.items || [],
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    stockSyncErrors.push(`Last purchase price was not updated on the product: ${msg}`);
+  }
+
   onProgress?.({
     phase: 'done',
     current: invoiceData.items.length,
@@ -931,6 +957,14 @@ export const deletePurchaseInvoice = async (
   );
 
   await deleteDoc(doc(db, 'purchaseInvoices', invoiceId));
+
+  try {
+    await refreshLastPurchasePricesAfterInvoiceDeleted(invoiceId, existing.items || []);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    stockSyncErrors.push(`Last purchase price was not restored on the product: ${msg}`);
+  }
+
   return { stockSyncErrors };
 };
 
