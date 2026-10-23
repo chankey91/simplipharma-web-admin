@@ -389,7 +389,7 @@ export const MedicineDetailsPage: React.FC = () => {
               </Box>
               <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">GST Rate</Typography>
-                <Typography variant="body1" fontWeight="medium">{medicine.gstRate || 5}%</Typography>
+                <Typography variant="body1" fontWeight="medium">{medicine.gstRate ?? 5}%</Typography>
               </Box>
               <Box mb={2}>
                 <Typography variant="caption" color="textSecondary">Last Purchase Price</Typography>
@@ -514,7 +514,7 @@ export const MedicineDetailsPage: React.FC = () => {
                       const purchasePrice = batch.purchasePrice || 0;
                       
                       // Get GST rate from medicine
-                      const gstRate = medicine.gstRate || 5;
+                      const gstRate = medicine.gstRate ?? 5;
                       
                       // Get discount percentage - handle all cases similar to MRP
                       let discountPercentageValue: number | null = null;
@@ -738,7 +738,15 @@ export const MedicineDetailsPage: React.FC = () => {
                 type="number"
                 required
                 value={editData.gstRate}
-                onChange={(e) => setEditData({ ...editData, gstRate: parseFloat(e.target.value) || 5 })}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '' || raw === '-') {
+                    setEditData({ ...editData, gstRate: 0 });
+                    return;
+                  }
+                  const n = parseFloat(raw);
+                  if (Number.isFinite(n)) setEditData({ ...editData, gstRate: n });
+                }}
                 inputProps={{ min: 0, max: 100, step: 0.01 }}
               />
             </Grid>
