@@ -12,9 +12,16 @@ export type RetailerOffer = {
   paidQty?: number;
   freeQty?: number;
   discountPct?: number;
+  /** Combo / % discount: each listed medicine must reach this qty. Missing or <1 → 1. */
+  minQty?: number;
   startsAt?: Date | null;
   endsAt?: Date | null;
 };
+
+export function offerMinQty(offer: Pick<RetailerOffer, 'minQty'>): number {
+  const n = Math.floor(Number(offer.minQty));
+  return n > 0 ? n : 1;
+}
 
 export type AppliedOfferRef = {
   id: string;
@@ -62,17 +69,21 @@ export function isOfferLive(offer: Pick<RetailerOffer, 'isActive' | 'startsAt' |
   return true;
 }
 
-export function formatOfferBadge(offer: Pick<RetailerOffer, 'type' | 'title' | 'paidQty' | 'freeQty' | 'discountPct'>): string {
+export function formatOfferBadge(
+  offer: Pick<RetailerOffer, 'type' | 'title' | 'paidQty' | 'freeQty' | 'discountPct' | 'minQty'>
+): string {
   if (offer.type === 'buy_get_free' && (offer.paidQty || 0) > 0 && (offer.freeQty || 0) > 0) {
     return `${Math.floor(offer.paidQty!)}+${Math.floor(offer.freeQty!)}`;
   }
-  if (offer.type === 'percent_discount' && (offer.discountPct || 0) > 0) {
-    return `${Number(offer.discountPct)}% off`;
+  const min = offerMinQty(offer);
+  const pct = Number(offer.discountPct) || 0;
+  if (offer.type === 'percent_discount' && pct > 0) {
+    return min > 1 ? `Buy ${min}+ · ${pct}% off` : `${pct}% off`;
   }
-  if (offer.type === 'combo' && (offer.discountPct || 0) > 0) {
-    return `Combo ${Number(offer.discountPct)}% off`;
+  if (offer.type === 'combo' && pct > 0) {
+    return min > 1 ? `Combo: buy ${min}+ of each · ${pct}% off` : `Combo ${pct}% off`;
   }
-  if (offer.type === 'combo') return 'Combo';
+  if (offer.type === 'combo') return min > 1 ? `Combo: buy ${min}+ of each` : 'Combo';
   return offer.title;
 }
 
@@ -88,7 +99,8 @@ function offerValue(offer: RetailerOffer): number {
 
 function comboQualified(offer: RetailerOffer, qtyById: Map<string, number>): boolean {
   if (offer.type !== 'combo' || offer.medicineIds.length < 2) return false;
-  return offer.medicineIds.every((id) => (qtyById.get(id) || 0) >= 1);
+  const min = offerMinQty(offer);
+  return offer.medicineIds.every((id) => (qtyById.get(id) || 0) >= min);
 }
 
 export function matchOffersToCart(
@@ -136,6 +148,8 @@ export function matchOffersToCart(
         const free = Number(offer.freeQty) || 0;
         if (paid <= 0 || free <= 0) continue;
       } else if ((Number(offer.discountPct) || 0) <= 0) {
+        continue;
+      } else if ((qtyById.get(medicineId) || 0) < offerMinQty(offer)) {
         continue;
       }
       const value = offerValue(offer);

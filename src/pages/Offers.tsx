@@ -61,6 +61,7 @@ type FormState = {
   paidQty: string;
   freeQty: string;
   discountPct: string;
+  minQty: string;
   startsAt: string;
   endsAt: string;
   medicineIds: string[];
@@ -75,6 +76,7 @@ const emptyForm = (sortOrder: number): FormState => ({
   paidQty: '',
   freeQty: '',
   discountPct: '',
+  minQty: '1',
   startsAt: '',
   endsAt: '',
   medicineIds: [],
@@ -133,6 +135,7 @@ export const OffersPage: React.FC = () => {
       paidQty: offer.paidQty != null ? String(offer.paidQty) : '',
       freeQty: offer.freeQty != null ? String(offer.freeQty) : '',
       discountPct: offer.discountPct != null ? String(offer.discountPct) : '',
+      minQty: offer.minQty != null ? String(offer.minQty) : '1',
       startsAt: toInputDate(offer.startsAt),
       endsAt: toInputDate(offer.endsAt),
       medicineIds: [...offer.medicineIds],
@@ -153,6 +156,8 @@ export const OffersPage: React.FC = () => {
     } else {
       const pct = Number(form.discountPct);
       if (!(pct > 0) || pct > 100) return 'Enter a discount between 0 and 100';
+      const minQty = Math.floor(Number(form.minQty));
+      if (!(minQty > 0)) return 'Enter a minimum quantity of at least 1';
     }
     return null;
   };
@@ -178,6 +183,7 @@ export const OffersPage: React.FC = () => {
       paidQty: form.type === 'buy_get_free' ? Math.floor(Number(form.paidQty)) : undefined,
       freeQty: form.type === 'buy_get_free' ? Math.floor(Number(form.freeQty)) : undefined,
       discountPct: form.type === 'buy_get_free' ? undefined : Number(form.discountPct),
+      minQty: form.type === 'buy_get_free' ? undefined : Math.floor(Number(form.minQty)),
       startsAt: starts,
       endsAt: ends,
     };
@@ -353,14 +359,29 @@ export const OffersPage: React.FC = () => {
                 />
               </Box>
             ) : (
-              <TextField
-                label="Discount %"
-                type="number"
-                size="small"
-                value={form.discountPct}
-                onChange={(e) => setForm({ ...form, discountPct: e.target.value })}
-                inputProps={{ min: 0.01, max: 100, step: '0.01' }}
-              />
+              <Box display="flex" gap={2}>
+                <TextField
+                  label="Discount %"
+                  type="number"
+                  size="small"
+                  value={form.discountPct}
+                  onChange={(e) => setForm({ ...form, discountPct: e.target.value })}
+                  inputProps={{ min: 0.01, max: 100, step: '0.01' }}
+                />
+                <TextField
+                  label="Min qty"
+                  type="number"
+                  size="small"
+                  value={form.minQty}
+                  onChange={(e) => setForm({ ...form, minQty: e.target.value })}
+                  inputProps={{ min: 1 }}
+                  helperText={
+                    form.type === 'combo'
+                      ? 'Each combo medicine must reach this qty'
+                      : 'Offer applies from this qty'
+                  }
+                />
+              </Box>
             )}
             <Autocomplete
               options={searchHits.filter((m) => !form.medicineIds.includes(m.id))}
