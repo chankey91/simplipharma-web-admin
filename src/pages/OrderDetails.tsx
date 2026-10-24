@@ -207,6 +207,11 @@ const toPersistedOrderMedicine = (line: any): OrderMedicine => {
     out.discountPercentage = toNumber(line.discountPercentage);
   }
   if (line.discountManuallySet === true) out.discountManuallySet = true;
+  if (line.appliedOfferId) {
+    out.appliedOfferId = String(line.appliedOfferId);
+    if (line.appliedOfferTitle) out.appliedOfferTitle = String(line.appliedOfferTitle);
+    out.nonReturnable = true;
+  }
   if (line.orderSchemeApplied === false) out.orderSchemeApplied = false;
   else if (line.orderSchemeApplied === true) out.orderSchemeApplied = true;
   if (line.orderSchemeManuallySet === true) out.orderSchemeManuallySet = true;
@@ -1904,9 +1909,16 @@ export const OrderDetailsPage: React.FC = () => {
               params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
             schemeFreeQty:
               params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
-            ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+            ...(foundBatch.nonReturnable === true ||
+            item.nonReturnable === true ||
+            item.appliedOfferId
+              ? { nonReturnable: true as const }
+              : {}),
             ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
           }];
+          if (item.appliedOfferId || item.nonReturnable === true) {
+            newMedicines[scanningItemIndex].nonReturnable = true;
+          }
           newMedicines[scanningItemIndex].freeQuantity = lineSplit.freeQty;
         }
         markFulfillmentDirty();
@@ -2012,9 +2024,16 @@ export const OrderDetailsPage: React.FC = () => {
                 params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
               schemeFreeQty:
                 params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
-              ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+              ...(foundBatch.nonReturnable === true ||
+              item.nonReturnable === true ||
+              item.appliedOfferId
+                ? { nonReturnable: true as const }
+                : {}),
               ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
+            if (item.appliedOfferId || item.nonReturnable === true) {
+              newMedicines[itemIndex].nonReturnable = true;
+            }
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
         } else if (selectedBatch && medicine.stockBatches) {
@@ -2081,9 +2100,16 @@ export const OrderDetailsPage: React.FC = () => {
                 params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
               schemeFreeQty:
                 params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
-              ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+              ...(batch.nonReturnable === true ||
+              item.nonReturnable === true ||
+              item.appliedOfferId
+                ? { nonReturnable: true as const }
+                : {}),
               ...(batch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
+            if (item.appliedOfferId || item.nonReturnable === true) {
+              newMedicines[itemIndex].nonReturnable = true;
+            }
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
         } else {
@@ -2427,7 +2453,9 @@ export const OrderDetailsPage: React.FC = () => {
           schemeParams.apply && schemeParams.schemePaidQty ? schemeParams.schemePaidQty : undefined,
         schemeFreeQty:
           schemeParams.apply && schemeParams.schemeFreeQty ? schemeParams.schemeFreeQty : undefined,
-        ...((actualBatch as { nonReturnable?: boolean } | undefined)?.nonReturnable === true
+        ...((actualBatch as { nonReturnable?: boolean } | undefined)?.nonReturnable === true ||
+        item.nonReturnable === true ||
+        item.appliedOfferId
           ? { nonReturnable: true as const }
           : {}),
         ...((actualBatch as { nrxDrug?: boolean } | undefined)?.nrxDrug === true

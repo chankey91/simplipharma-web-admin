@@ -19,7 +19,7 @@ import { useGstr1Export, useGstPeriodRecord, useLockGstPeriod } from '../../hook
 import { useAuth } from '../../context/AuthContext';
 import { useAppDialog } from '../../context/AppDialogProvider';
 import { downloadGstr1Json } from '../../utils/gstr1Json';
-import { downloadGstr1Excel } from '../../utils/gstr1Excel';
+import { downloadGstr1Excel, gstr1ExcelWarnings } from '../../utils/gstr1Excel';
 import { buildGstr1Export } from '../../services/gstGstr1';
 import { gstr1GoldenErrors } from '../../utils/gstr1Golden';
 
@@ -85,9 +85,13 @@ export const GstGstr1Page: React.FC = () => {
       const result = await loadExport('original');
       if (!result) return;
       downloadGstr1Excel(result);
+      const excelNotes = gstr1ExcelWarnings(result);
       await alert(
-        `Downloaded ${result.summary.gstin}_GSTR1_${result.summary.fp}.xlsx. Open GST Offline Tool → Import Excel, then generate JSON from the tool.`,
-        { severity: 'success' }
+        [
+          `Downloaded ${result.summary.gstin}_GSTR1_${result.summary.fp}.xlsx. Open GST Offline Tool → Import Excel, then generate JSON from the tool.`,
+          ...excelNotes,
+        ].join('\n\n'),
+        { severity: excelNotes.length ? 'warning' : 'success' }
       );
     } catch (err) {
       await alert(err instanceof Error ? err.message : 'Excel download failed', { severity: 'error' });
@@ -111,9 +115,9 @@ export const GstGstr1Page: React.FC = () => {
         GSTR-1 JSON — {meta.label}
       </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
-        JSON is GSTN Save GSTR-1 schema 4.1. Excel matches GST Offline Tool workbook V2.2
-        (b2b,sez,de, HSN B2B/B2C, CDNR, docs). Each rate is the product GST %, not tax ÷ taxable
-        after discount. Import the Excel in GST Offline Tool if portal JSON upload is rejected.
+        JSON is GSTN Save GSTR-1 schema 4.1. Excel matches GST Offline Tool workbook V2.2.
+        CDNUR Excel only includes inter-state B2CL notes — intra-state unregistered notes stay in
+        the JSON (the tool rejects UR Type B2CS). Rates are the product GST %.
       </Alert>
       {exportQuery.error ? (
         <Alert severity="error">

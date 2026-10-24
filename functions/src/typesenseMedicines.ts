@@ -79,6 +79,8 @@ const COLLECTION_FIELDS_BASE = [
   { name: 'nearestExpiry', type: 'int64' as const, optional: true, sort: true },
   { name: 'unit', type: 'string' as const, optional: true },
   { name: 'gstRate', type: 'float' as const, optional: true },
+  /** Ex-GST rate from the newest purchase bill. Stored for retailer cards. */
+  { name: 'lastPurchasePrice', type: 'float' as const, optional: true },
   /** Stored for retailer cards; not searchable. */
   { name: 'imageUrl', type: 'string' as const, optional: true, index: false },
 ];
@@ -92,6 +94,7 @@ const OPTIONAL_SCHEMA_FIELDS = COLLECTION_FIELDS_BASE.filter((f) =>
     'nearestExpiry',
     'unit',
     'gstRate',
+    'lastPurchasePrice',
     'imageUrl',
   ].includes(f.name)
 );
@@ -125,6 +128,13 @@ async function ensureCollection(client: TypesenseClient): Promise<void> {
     });
   }
   await ensureCollectionPromise;
+}
+
+function optionalPositiveFloat(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = typeof value === 'number' ? value : parseFloat(String(value));
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
 }
 
 function toEpochMs(value: unknown): number {
@@ -186,6 +196,8 @@ function firestoreDataToTypesenseDoc(
     unit: data.unit != null ? String(data.unit) : '',
     gstRate,
   };
+  const lastPurchasePrice = optionalPositiveFloat(data.lastPurchasePrice);
+  if (lastPurchasePrice != null) doc.lastPurchasePrice = lastPurchasePrice;
   if (searchBlob) doc.search_blob = searchBlob;
   const imageUrl = typeof data.imageUrl === 'string' ? data.imageUrl.trim() : '';
   if (imageUrl) doc.imageUrl = imageUrl;
@@ -333,6 +345,7 @@ async function parseMedicineLiteFromSnap(
     description: data.description,
     imageUrl: data.imageUrl,
     gstRate: data.gstRate,
+    lastPurchasePrice: optionalPositiveFloat(data.lastPurchasePrice),
     salesSchemeDeal: data.salesSchemeDeal,
     salesSchemeFree: data.salesSchemeFree,
     purchaseSchemeDeal: data.purchaseSchemeDeal,
@@ -387,6 +400,7 @@ function medicinesFromTypesenseHitsOnly(
     const gstRaw = d.gstRate;
     const gstRate =
       typeof gstRaw === 'number' ? gstRaw : parseFloat(String(gstRaw ?? 5)) || 5;
+    const lastPurchasePrice = optionalPositiveFloat(d.lastPurchasePrice);
     const unitRaw = d.unit;
     const productIdRaw = d.productId;
     const imageRaw = d.imageUrl;
@@ -406,6 +420,7 @@ function medicinesFromTypesenseHitsOnly(
       nearestExpiry,
       unit: unitRaw != null && String(unitRaw).trim() !== '' ? String(unitRaw) : undefined,
       gstRate,
+      ...(lastPurchasePrice != null ? { lastPurchasePrice } : {}),
       imageUrl:
         imageRaw != null && String(imageRaw).trim() !== '' ? String(imageRaw).trim() : undefined,
     });
