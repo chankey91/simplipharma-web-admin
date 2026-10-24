@@ -59,7 +59,6 @@ import {
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
-import { OfflineBanner } from './OfflineBanner';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { brandColors } from '../theme/brand';
 import { useAuth } from '../context/AuthContext';
@@ -385,7 +384,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         }}
       >
         <Toolbar />
-        <OfflineBanner />
         {children}
       </Box>
 
