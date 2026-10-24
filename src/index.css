@@ -22,3 +22,9 @@ code {
   min-height: 100vh;
 }
 
+/* While the weak-signal popup is up, page loading bars stay hidden. */
+body[data-connection-paused] #root .MuiLinearProgress-root,
+body[data-connection-paused] #root .MuiCircularProgress-root {
+  display: none !important;
+}
+
