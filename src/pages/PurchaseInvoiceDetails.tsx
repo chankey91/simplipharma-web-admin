@@ -50,7 +50,8 @@ import {
 import { PurchaseInvoiceItem } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useAuth } from '../context/AuthContext';
-import { setStockBatchNonReturnable, setStockBatchNrxDrug } from '../services/inventory';
+import { setStockBatchNonReturnable, setStockBatchNrxDrug, updateMedicine } from '../services/inventory';
+import { parseOptionalGstRate } from '../utils/gstRate';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 
 export const PurchaseInvoiceDetailsPage: React.FC = () => {
@@ -235,7 +236,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     const mrp = currentItem.mrp ? parseNumber(currentItem.mrp) : undefined;
     const standardDiscount = currentItem.standardDiscount ? parseNumber(currentItem.standardDiscount) : undefined;
     const purchasePrice = parseNumber(currentItem.purchasePrice);
-    const gstRate = currentItem.gstRate ? parseNumber(currentItem.gstRate) : undefined;
+    const gstRate = parseOptionalGstRate(currentItem.gstRate);
     const discountPercentage = currentItem.discountPercentage
       ? parseNumber(currentItem.discountPercentage)
       : undefined;
@@ -280,6 +281,13 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
 
     try {
       await persistItems(updatedItems);
+      if (updatedItem.medicineId && gstRate !== undefined) {
+        try {
+          await updateMedicine(updatedItem.medicineId, { gstRate });
+        } catch (e) {
+          console.warn('Failed to update medicine GST on master', e);
+        }
+      }
       const stockBatch = purchaseItemStockBatchNumber(updatedItem);
       if (updatedItem.medicineId && stockBatch) {
         try {
@@ -758,6 +766,8 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 type="number"
                 value={currentItem.gstRate}
                 onChange={(e) => setCurrentItem({ ...currentItem, gstRate: e.target.value })}
+                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                helperText="Also updates GST on the medicine in inventory"
               />
             </Grid>
             <Grid item xs={12} sm={6}>

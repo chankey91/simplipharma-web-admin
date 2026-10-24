@@ -207,6 +207,11 @@ const toPersistedOrderMedicine = (line: any): OrderMedicine => {
     out.discountPercentage = toNumber(line.discountPercentage);
   }
   if (line.discountManuallySet === true) out.discountManuallySet = true;
+  if (line.appliedOfferId) {
+    out.appliedOfferId = String(line.appliedOfferId);
+    if (line.appliedOfferTitle) out.appliedOfferTitle = String(line.appliedOfferTitle);
+    out.nonReturnable = true;
+  }
   if (line.orderSchemeApplied === false) out.orderSchemeApplied = false;
   else if (line.orderSchemeApplied === true) out.orderSchemeApplied = true;
   if (line.orderSchemeManuallySet === true) out.orderSchemeManuallySet = true;
@@ -1880,7 +1885,7 @@ export const OrderDetailsPage: React.FC = () => {
             gstRate
           );
           newMedicines[scanningItemIndex].discountPercentage = discountPct;
-          newMedicines[scanningItemIndex].discountManuallySet = false;
+          newMedicines[scanningItemIndex].discountManuallySet = item.discountManuallySet === true;
           const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
             item,
             medicine,
@@ -1904,9 +1909,16 @@ export const OrderDetailsPage: React.FC = () => {
               params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
             schemeFreeQty:
               params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
-            ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+            ...(foundBatch.nonReturnable === true ||
+            item.nonReturnable === true ||
+            item.appliedOfferId
+              ? { nonReturnable: true as const }
+              : {}),
             ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
           }];
+          if (item.appliedOfferId || item.nonReturnable === true) {
+            newMedicines[scanningItemIndex].nonReturnable = true;
+          }
           newMedicines[scanningItemIndex].freeQuantity = lineSplit.freeQty;
         }
         markFulfillmentDirty();
@@ -1988,7 +2000,7 @@ export const OrderDetailsPage: React.FC = () => {
               gstRate
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
-            newMedicines[itemIndex].discountManuallySet = false;
+            newMedicines[itemIndex].discountManuallySet = item.discountManuallySet === true;
             const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
               item,
               medicine,
@@ -2012,9 +2024,16 @@ export const OrderDetailsPage: React.FC = () => {
                 params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
               schemeFreeQty:
                 params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
-              ...(foundBatch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+              ...(foundBatch.nonReturnable === true ||
+              item.nonReturnable === true ||
+              item.appliedOfferId
+                ? { nonReturnable: true as const }
+                : {}),
               ...(foundBatch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
+            if (item.appliedOfferId || item.nonReturnable === true) {
+              newMedicines[itemIndex].nonReturnable = true;
+            }
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
         } else if (selectedBatch && medicine.stockBatches) {
@@ -2057,7 +2076,7 @@ export const OrderDetailsPage: React.FC = () => {
               gstRate
             );
             newMedicines[itemIndex].discountPercentage = discountPct;
-            newMedicines[itemIndex].discountManuallySet = false;
+            newMedicines[itemIndex].discountManuallySet = item.discountManuallySet === true;
             const { workingItem, params, lineSplit } = applyOrderSchemeSplitForPhysical(
               item,
               medicine,
@@ -2081,9 +2100,16 @@ export const OrderDetailsPage: React.FC = () => {
                 params.apply && params.schemePaidQty ? params.schemePaidQty : undefined,
               schemeFreeQty:
                 params.apply && params.schemeFreeQty ? params.schemeFreeQty : undefined,
-              ...(batch.nonReturnable === true ? { nonReturnable: true as const } : {}),
+              ...(batch.nonReturnable === true ||
+              item.nonReturnable === true ||
+              item.appliedOfferId
+                ? { nonReturnable: true as const }
+                : {}),
               ...(batch.nrxDrug === true ? { nrxDrug: true as const } : {}),
             }];
+            if (item.appliedOfferId || item.nonReturnable === true) {
+              newMedicines[itemIndex].nonReturnable = true;
+            }
             newMedicines[itemIndex].freeQuantity = lineSplit.freeQty;
           }
         } else {
@@ -2284,7 +2310,7 @@ export const OrderDetailsPage: React.FC = () => {
           scannedQRCode: '',
           freeQuantity: 0,
           quantity: item.originalQuantity || item.quantity || requiredQuantity,
-          discountManuallySet: false,
+          discountManuallySet: item.discountManuallySet === true,
           nonReturnable: undefined,
           qtyAdjustedNeedsBatch: true,
         };
@@ -2402,7 +2428,7 @@ export const OrderDetailsPage: React.FC = () => {
         item.discountPercentage,
         a.discountPercentage,
         actualBatch,
-        false,
+        item.discountManuallySet === true,
         gstRate
       );
 
@@ -2427,7 +2453,9 @@ export const OrderDetailsPage: React.FC = () => {
           schemeParams.apply && schemeParams.schemePaidQty ? schemeParams.schemePaidQty : undefined,
         schemeFreeQty:
           schemeParams.apply && schemeParams.schemeFreeQty ? schemeParams.schemeFreeQty : undefined,
-        ...((actualBatch as { nonReturnable?: boolean } | undefined)?.nonReturnable === true
+        ...((actualBatch as { nonReturnable?: boolean } | undefined)?.nonReturnable === true ||
+        item.nonReturnable === true ||
+        item.appliedOfferId
           ? { nonReturnable: true as const }
           : {}),
         ...((actualBatch as { nrxDrug?: boolean } | undefined)?.nrxDrug === true
@@ -2454,7 +2482,7 @@ export const OrderDetailsPage: React.FC = () => {
         price: validAllocations.length === 1 ? (processedAllocations[0].purchasePrice || 0) : 0,
         mrp: validAllocations.length === 1 ? validAllocations[0].mrp : undefined,
         gstRate: defaultGstRate,
-        discountManuallySet: false,
+        discountManuallySet: item.discountManuallySet === true,
         verified: true,
         qtyAdjustedNeedsBatch: undefined,
       },
@@ -2661,7 +2689,7 @@ export const OrderDetailsPage: React.FC = () => {
       verified: false,
       scannedQRCode: '',
       batchExpiryDate: undefined,
-      discountManuallySet: false,
+      discountManuallySet: item.discountManuallySet === true,
       nonReturnable: undefined,
       qtyAdjustedNeedsBatch: true,
     };

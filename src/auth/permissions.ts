@@ -65,6 +65,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/retailer-incentives', label: 'Retailer incentives' },
   { path: '/medicine-demand', label: 'Top sellers' },
   { path: '/banners', label: 'Banners' },
+  { path: '/offers', label: 'Retailer offers' },
   { path: '/home-feed', label: 'Home feed' },
   { path: '/retailer-app', label: 'Retailer app' },
   { path: '/operations', label: 'Fulfillment setup' },
@@ -96,6 +97,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/credit-notes',
     '/medicine-demand',
     '/support',
+    '/offers',
   ],
   office: [
     '/stores',

@@ -25,6 +25,7 @@ import { StockUpdatePage } from './pages/StockUpdate';
 import { MedicineDetailsPage } from './pages/MedicineDetails';
 import { InvoicesPage } from './pages/Invoices';
 import { BannersPage } from './pages/Banners';
+import { OffersPage } from './pages/Offers';
 import { SalesOfficersPage } from './pages/SalesOfficers';
 import { AreaManagersPage } from './pages/AreaManagers';
 import { SoVisitsPage } from './pages/SoVisits';
@@ -149,6 +150,7 @@ const router = createBrowserRouter([
   { path: '/invoices', element: withLayout(<InvoicesPage />) },
   { path: '/credit-notes', element: withLayout(<CreditNotesPage />) },
   { path: '/banners', element: withLayout(<BannersPage />) },
+  { path: '/offers', element: withLayout(<OffersPage />) },
   { path: '/home-feed', element: withLayout(<HomeFeedPage />) },
   { path: '/retailer-app', element: withLayout(<RetailerAppPage />) },
   { path: '/sales-officers', element: withLayout(<SalesOfficersPage />) },
