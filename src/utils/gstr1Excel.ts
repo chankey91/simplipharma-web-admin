@@ -194,8 +194,8 @@ function uqcLabel(raw: string | undefined): string {
 }
 
 function normalizeHsn(raw: string | undefined): string {
-  const digits = String(raw || '').replace(/\D/g, '').slice(0, 8);
-  if (digits.length >= 6) return digits;
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length >= 6) return digits.slice(0, 6);
   if (digits === '3004') return '300490';
   return digits;
 }
@@ -253,6 +253,8 @@ function invoiceRows(
       for (const itm of itms) {
         const det = itm.itm_det || {};
         const txval = num(det.txval);
+        const rt = num(det.rt);
+        if (rt <= 0) continue;
         if (
           !keepImportLine({
             number: inum,
@@ -283,7 +285,7 @@ function invoiceRows(
             '',
             type,
             '',
-            num(det.rt),
+            rt,
             txval,
             num(det.csamt),
           ]);
@@ -299,7 +301,7 @@ function invoiceRows(
             '',
             type,
             '',
-            num(det.rt),
+            rt,
             txval,
             num(det.csamt),
           ]);
@@ -327,6 +329,7 @@ function b2clRows(groups: unknown, supplierState: string, amended = false): AoA 
       for (const itm of itms) {
         const det = itm.itm_det || {};
         const txval = num(det.txval);
+        if (num(det.rt) <= 0) continue;
         if (!keepImportLine({ number: inum, date: idt, value: val, pos, txval })) continue;
         if (amended) {
           const oinum = String(inv.oinum || inum);
@@ -361,12 +364,13 @@ function b2csRows(rows: unknown): AoA {
     const row = asRecord(raw);
     const txval = num(row.txval);
     const pos = gstr1ExcelPos(String(row.pos || ''));
-    if (txval <= 0 || !pos) continue;
+    const rt = num(row.rt);
+    if (txval <= 0 || !pos || rt <= 0) continue;
     out.push([
       String(row.typ || 'OE'),
       pos,
       '',
-      num(row.rt),
+      rt,
       txval,
       num(row.csamt),
       '',
@@ -395,6 +399,7 @@ function cdnrRows(groups: unknown, parties: Map<string, string>, amended = false
       for (const itm of itms) {
         const det = itm.itm_det || {};
         const txval = num(det.txval);
+        if (num(det.rt) <= 0) continue;
         if (
           !keepImportLine({
             number: ntNum,
@@ -504,14 +509,18 @@ function hsnRows(rows: unknown): AoA {
     const hsn = normalizeHsn(raw.hsn_sc);
     if (hsn.length < 6) continue;
     const txval = num(raw.txval);
-    const iamt = num(raw.iamt);
-    const camt = num(raw.camt);
-    const samt = num(raw.samt);
+    let iamt = num(raw.iamt);
+    let camt = num(raw.camt);
+    let samt = num(raw.samt);
     const csamt = num(raw.csamt);
-    const qty = num(raw.qty);
-    if (txval <= 0 || iamt < 0 || camt < 0 || samt < 0 || qty < 0) continue;
     const rt = num(raw.rt);
-    if (rt === 0 && iamt + camt + samt + csamt > 0) continue;
+    if (rt <= 0 || txval <= 0 || iamt < 0 || camt < 0 || samt < 0) continue;
+    if (iamt + camt + samt === 0) {
+      const computed = roundGst(txval * (rt / 100));
+      camt = roundGst(computed / 2);
+      samt = roundGst(computed - camt);
+    }
+    const qty = Math.max(1, Math.round(num(raw.qty)));
     const uqc = uqcLabel(raw.uqc);
     const tax = roundGst(iamt + camt + samt + csamt);
     const key = `${hsn}|${uqc}|${rt}`;
@@ -553,6 +562,71 @@ function hsnRows(rows: unknown): AoA {
     num(row[9]),
     num(row[10]),
   ]);
+}
+
+function addNil(
+  buckets: Record<string, number>,
+  pos: string,
+  supplierState: string,
+  registered: boolean,
+  txval: number
+) {
+  if (txval <= 0) return;
+  const inter = Boolean(supplierState && normalizeStateCode(pos) && normalizeStateCode(pos) !== supplierState);
+  const key = inter
+    ? registered
+      ? 'interReg'
+      : 'interUnreg'
+    : registered
+      ? 'intraReg'
+      : 'intraUnreg';
+  buckets[key] = roundGst((buckets[key] || 0) + txval);
+}
+
+function collectNilRated(payload: Record<string, unknown>, supplierState: string): AoA {
+  const buckets: Record<string, number> = {
+    interReg: 0,
+    intraReg: 0,
+    interUnreg: 0,
+    intraUnreg: 0,
+  };
+  const takeItms = (itms: unknown, pos: string, registered: boolean) => {
+    if (!Array.isArray(itms)) return;
+    for (const itm of itms as Array<{ itm_det?: ItmDet }>) {
+      const det = itm.itm_det || {};
+      if (num(det.rt) > 0) continue;
+      addNil(buckets, pos, supplierState, registered, num(det.txval));
+    }
+  };
+  if (Array.isArray(payload.b2b)) {
+    for (const group of payload.b2b as Array<{ ctin?: string; inv?: InvRow[] }>) {
+      for (const inv of group.inv || []) {
+        takeItms(inv.itms, gstr1ExcelPos(String(inv.pos || '')), true);
+      }
+    }
+  }
+  if (Array.isArray(payload.b2cs)) {
+    for (const row of payload.b2cs as Array<{ pos?: string; rt?: number; txval?: number }>) {
+      if (num(row.rt) > 0) continue;
+      addNil(buckets, gstr1ExcelPos(String(row.pos || '')), supplierState, false, num(row.txval));
+    }
+  }
+  if (Array.isArray(payload.cdnr)) {
+    for (const group of payload.cdnr as Array<{ nt?: NoteRow[] }>) {
+      for (const note of group.nt || []) {
+        takeItms(note.itms, gstr1ExcelPos(String(note.pos || '')), true);
+      }
+    }
+  }
+  const lines: Array<[string, string]> = [
+    ['Inter-State supplies to registered persons', 'interReg'],
+    ['Intra-State supplies to registered persons', 'intraReg'],
+    ['Inter-State supplies to unregistered persons', 'interUnreg'],
+    ['Intra-State supplies to unregistered persons', 'intraUnreg'],
+  ];
+  return lines
+    .filter(([, key]) => buckets[key] > 0)
+    .map(([label, key]) => [label, buckets[key], '', '']);
 }
 
 function docsRows(docIssue: unknown): AoA {
@@ -1289,6 +1363,7 @@ const COL_KINDS: Record<string, Array<'s' | 'n'>> = {
   'hsn(b2b)': ['s', 's', 's', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n'],
   'hsn(b2c)': ['s', 's', 's', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n'],
   docs: ['s', 's', 's', 'n', 'n'],
+  exemp: ['s', 'n', 'n', 'n'],
 };
 
 function makeSheet(def: SheetDef, data: AoA): XLSX.WorkSheet {
@@ -1342,6 +1417,7 @@ export function buildGstr1ExcelWorkbook(result: Gstr1ExportResult): XLSX.WorkBoo
     cdnura: cdnurRows(payload.cdnura, supplierState, true),
     'hsn(b2b)': hsnRows(hsn.hsn_b2b),
     'hsn(b2c)': hsnRows(hsn.hsn_b2c),
+    exemp: collectNilRated(payload, supplierState),
     docs: docsRows(payload.doc_issue),
   };
 
