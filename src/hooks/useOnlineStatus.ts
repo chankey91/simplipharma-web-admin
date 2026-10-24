@@ -2,24 +2,31 @@ import { useEffect, useState } from 'react';
 
 export type ConnectionStatus = 'online' | 'weak' | 'offline';
 
-const PROBE_URLS = [
-  'https://firestore.googleapis.com/',
-  'https://www.gstatic.com/generate_204',
-];
+/** Public connectivity check. Not a Firestore read. */
+const PROBE_URL = 'https://www.gstatic.com/generate_204';
 
-/** Abort a probe that has not finished. */
+/** Round-trip at or above this is a weak signal sample. */
+const WEAK_RTT_MS = 1500;
+/** Download speed below this (and above 0) is a weak signal sample. */
+const WEAK_DOWNLINK_MBPS = 0.4;
+/** A check slower than this confirms a weak signal when the browser has no signal API. */
+const WEAK_PROBE_MS = 2500;
+/** A check faster than this means a stale "weak" reading can be cleared. */
+const HEALTHY_PROBE_MS = 1500;
 const PROBE_TIMEOUT_MS = 5000;
-/** A finished probe slower than this is treated as a weak sample. */
-const WEAK_LATENCY_MS = 2500;
-/** Slow or failed samples required before pausing the panel. */
-const SAMPLES_BEFORE_BLOCK = 2;
-const CHECK_ONLINE_MS = 12000;
-const CHECK_SUSPECT_MS = 4000;
+/** Weak samples required before the popup opens. */
+const SAMPLES_BEFORE_POPUP = 2;
+/** Fast samples required before a stale weak reading is ignored. */
+const FAST_SAMPLES_TO_CLEAR = 2;
+const CHECK_HEALTHY_MS = 12000;
+const CHECK_WEAK_MS = 2000;
 
-type ProbeResult = 'ok' | 'slow' | 'down' | 'cancelled';
+type ProbeResult = { kind: 'ok'; elapsed: number } | { kind: 'down' } | { kind: 'cancelled' };
+type SignalReading = 'weak' | 'ok' | 'unknown';
 
 interface NetworkInformation extends EventTarget {
   effectiveType?: string;
+  rtt?: number;
   downlink?: number;
 }
 
@@ -29,72 +36,42 @@ function networkConnection(): NetworkInformation | null {
   return nav.connection ?? null;
 }
 
-function browserOffline(): boolean {
-  return typeof navigator !== 'undefined' && navigator.onLine === false;
-}
-
-/** Browser-reported 2G / very low throughput. Fast enough to pause immediately. */
-function browserHardWeak(): boolean {
+/** Browser signal reading. `unknown` when this browser does not expose it. */
+function readSignal(): SignalReading {
   const connection = networkConnection();
-  if (!connection) return false;
-  if (connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g') return true;
-  return (
+  if (!connection) return 'unknown';
+  if (connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g') return 'weak';
+  if (typeof connection.rtt === 'number' && connection.rtt >= WEAK_RTT_MS) return 'weak';
+  if (
     typeof connection.downlink === 'number' &&
     connection.downlink > 0 &&
-    connection.downlink < 0.3
-  );
+    connection.downlink < WEAK_DOWNLINK_MBPS
+  ) {
+    return 'weak';
+  }
+  return 'ok';
 }
 
 async function probeOnce(parent: AbortSignal): Promise<ProbeResult> {
-  if (parent.aborted || browserOffline()) return parent.aborted ? 'cancelled' : 'down';
+  if (parent.aborted) return { kind: 'cancelled' };
 
-  const started = performance.now();
   const timeout = new AbortController();
   const onParentAbort = () => timeout.abort();
   parent.addEventListener('abort', onParentAbort);
   const timer = window.setTimeout(() => timeout.abort(), PROBE_TIMEOUT_MS);
+  const started = performance.now();
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      let pending = PROBE_URLS.length;
-      let settled = false;
-      const finish = (ok: boolean) => {
-        if (settled) return;
-        if (ok) {
-          settled = true;
-          resolve();
-          return;
-        }
-        pending -= 1;
-        if (pending === 0) {
-          settled = true;
-          reject(new Error('unreachable'));
-        }
-      };
-      timeout.signal.addEventListener('abort', () => {
-        if (settled) return;
-        settled = true;
-        reject(new Error('timeout'));
-      });
-      for (const url of PROBE_URLS) {
-        fetch(url, {
-          method: 'GET',
-          mode: 'no-cors',
-          cache: 'no-store',
-          signal: timeout.signal,
-        }).then(
-          () => finish(true),
-          () => finish(false)
-        );
-      }
+    await fetch(`${PROBE_URL}?t=${Date.now()}`, {
+      method: 'GET',
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal: timeout.signal,
     });
-
-    const elapsed = performance.now() - started;
-    if (elapsed >= WEAK_LATENCY_MS) return 'slow';
-    return 'ok';
+    return { kind: 'ok', elapsed: performance.now() - started };
   } catch {
-    if (parent.aborted) return 'cancelled';
-    return 'down';
+    if (parent.aborted) return { kind: 'cancelled' };
+    return { kind: 'down' };
   } finally {
     window.clearTimeout(timer);
     parent.removeEventListener('abort', onParentAbort);
@@ -103,24 +80,22 @@ async function probeOnce(parent: AbortSignal): Promise<ProbeResult> {
 }
 
 /**
- * Online, weak, or offline for the whole panel.
- * Offline is immediate. Weak needs two slow or failed checks so one blip does not pause the screen.
- * A single fast check clears the pause so the same screen can continue.
+ * Popup only when the signal itself is too weak.
+ * A normal link, and a failed request on a normal link, leave the panel usable.
+ * A fast check clears a stale weak reading so the popup does not stay up.
  */
 export function useConnectionStatus(): ConnectionStatus {
-  const [status, setStatus] = useState<ConnectionStatus>(() =>
-    browserOffline() ? 'offline' : 'online'
-  );
+  const [status, setStatus] = useState<ConnectionStatus>('online');
 
   useEffect(() => {
     let cancelled = false;
     let timer = 0;
     let running = false;
     let queued = false;
-    let slowStreak = 0;
-    let failStreak = 0;
-    let current: ConnectionStatus = browserOffline() ? 'offline' : 'online';
-    const lifetime = new AbortController();
+    let weakStreak = 0;
+    let fastStreak = 0;
+    let current: ConnectionStatus = 'online';
+    let attempt = new AbortController();
 
     const publish = (next: ConnectionStatus) => {
       if (cancelled || next === current) return;
@@ -129,44 +104,35 @@ export function useConnectionStatus(): ConnectionStatus {
     };
 
     const apply = (result: ProbeResult) => {
-      if (cancelled || result === 'cancelled') return;
+      if (cancelled || result.kind === 'cancelled') return;
 
-      if (browserOffline()) {
-        slowStreak = 0;
-        failStreak = 0;
-        publish('offline');
+      const signal = readSignal();
+      const fast = result.kind === 'ok' && result.elapsed < HEALTHY_PROBE_MS;
+      const slow =
+        result.kind === 'down' || (result.kind === 'ok' && result.elapsed >= WEAK_PROBE_MS);
+
+      if (signal === 'ok' || fast) {
+        weakStreak = 0;
+        if (signal === 'ok') {
+          fastStreak = 0;
+          publish('online');
+          return;
+        }
+        fastStreak += 1;
+        if (fastStreak >= FAST_SAMPLES_TO_CLEAR) publish('online');
         return;
       }
 
-      if (browserHardWeak()) {
-        slowStreak = 0;
-        failStreak = 0;
-        publish('weak');
-        return;
+      fastStreak = 0;
+      if (signal === 'weak' || slow) {
+        weakStreak += 1;
+        if (weakStreak >= SAMPLES_BEFORE_POPUP) publish('weak');
       }
-
-      if (result === 'down') {
-        failStreak += 1;
-        slowStreak = 0;
-        if (failStreak >= SAMPLES_BEFORE_BLOCK) publish('weak');
-        return;
-      }
-
-      if (result === 'slow') {
-        slowStreak += 1;
-        failStreak = 0;
-        if (slowStreak >= SAMPLES_BEFORE_BLOCK) publish('weak');
-        return;
-      }
-
-      slowStreak = 0;
-      failStreak = 0;
-      publish('online');
     };
 
     const delayForNextCheck = () => {
-      if (current !== 'online' || failStreak > 0 || slowStreak > 0) return CHECK_SUSPECT_MS;
-      return CHECK_ONLINE_MS;
+      const signalHealthy = readSignal() === 'ok' || fastStreak >= FAST_SAMPLES_TO_CLEAR;
+      return current === 'online' && signalHealthy ? CHECK_HEALTHY_MS : CHECK_WEAK_MS;
     };
 
     const run = async () => {
@@ -176,14 +142,16 @@ export function useConnectionStatus(): ConnectionStatus {
         return;
       }
       running = true;
+      const signal = attempt.signal;
       try {
-        if (browserOffline()) {
-          apply('down');
+        if (document.hidden) return;
+        if (readSignal() === 'ok') {
+          weakStreak = 0;
+          fastStreak = 0;
+          publish('online');
           return;
         }
-        if (document.hidden) return;
-        if (browserHardWeak()) publish('weak');
-        apply(await probeOnce(lifetime.signal));
+        apply(await probeOnce(signal));
       } finally {
         running = false;
         if (cancelled) return;
@@ -204,26 +172,19 @@ export function useConnectionStatus(): ConnectionStatus {
       void run();
     };
 
-    const onOffline = () => {
-      slowStreak = 0;
-      failStreak = 0;
-      publish('offline');
-      kick();
-    };
-
     const connection = networkConnection();
-    window.addEventListener('offline', onOffline);
     window.addEventListener('online', kick);
+    window.addEventListener('offline', kick);
     document.addEventListener('visibilitychange', kick);
     connection?.addEventListener('change', kick);
     kick();
 
     return () => {
       cancelled = true;
-      lifetime.abort();
+      attempt.abort();
       window.clearTimeout(timer);
-      window.removeEventListener('offline', onOffline);
       window.removeEventListener('online', kick);
+      window.removeEventListener('offline', kick);
       document.removeEventListener('visibilitychange', kick);
       connection?.removeEventListener('change', kick);
     };
