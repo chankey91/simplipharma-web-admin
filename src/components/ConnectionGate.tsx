@@ -1,18 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Box, CircularProgress, Paper, Snackbar, Typography } from '@mui/material';
+import { Box, Paper, Snackbar, Typography } from '@mui/material';
 import { WifiOff } from '@mui/icons-material';
-import { onlineManager } from '@tanstack/react-query';
+import { onlineManager, useQueryClient } from '@tanstack/react-query';
 import { useConnectionStatus } from '../hooks/useOnlineStatus';
 
 const GATE_ID = 'connection-gate';
 
 /**
- * Pauses the whole panel when the connection is weak or gone.
+ * Pauses the whole panel only when the signal is too weak.
  * The screen underneath stays mounted, so the user continues in place when the connection returns.
  */
 export const ConnectionGate: React.FC = () => {
   const status = useConnectionStatus();
+  const queryClient = useQueryClient();
   const blocked = status !== 'online';
   const wasBlocked = useRef(false);
   const restoreFocus = useRef<HTMLElement | null>(null);
@@ -20,7 +21,11 @@ export const ConnectionGate: React.FC = () => {
 
   useEffect(() => {
     onlineManager.setOnline(!blocked);
-  }, [blocked]);
+    if (blocked) {
+      // Drop hung reads so a page loading bar does not spin until the browser gives up.
+      void queryClient.cancelQueries();
+    }
+  }, [blocked, queryClient]);
 
   useEffect(() => {
     if (blocked) {
@@ -28,11 +33,11 @@ export const ConnectionGate: React.FC = () => {
       setRestoredOpen(false);
       return;
     }
-    if (wasBlocked.current) {
-      wasBlocked.current = false;
-      setRestoredOpen(true);
-    }
-  }, [blocked]);
+    if (!wasBlocked.current) return;
+    wasBlocked.current = false;
+    setRestoredOpen(true);
+    void queryClient.refetchQueries({ type: 'active' });
+  }, [blocked, queryClient]);
 
   useEffect(() => {
     if (!blocked) return;
@@ -78,6 +83,7 @@ export const ConnectionGate: React.FC = () => {
 
     markInert();
     blurExceptGate();
+    document.body.setAttribute('data-connection-paused', '');
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const observer = new MutationObserver(() => {
@@ -110,14 +116,12 @@ export const ConnectionGate: React.FC = () => {
         delete child.dataset.connectionBlur;
         delete child.dataset.connectionFilter;
       }
+      document.body.removeAttribute('data-connection-paused');
       document.body.style.overflow = previousOverflow;
     };
   }, [blocked]);
 
-  const detail =
-    status === 'offline'
-      ? 'The device is offline. This screen is paused until the internet is back.'
-      : 'The connection is too weak to continue. This screen is paused until it is stable.';
+  const detail = 'The signal is too weak to continue. This screen stays here until the signal improves.';
 
   return (
     <>
@@ -173,13 +177,9 @@ export const ConnectionGate: React.FC = () => {
                 <Typography id={`${GATE_ID}-detail`} variant="body1" color="text.secondary" sx={{ mb: 1.5 }}>
                   {detail}
                 </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-                  Your place on this screen is kept. You can continue from here once the internet is back.
+                <Typography variant="body2" color="text.secondary">
+                  Your place on this screen is kept. You can continue from here once the signal is back.
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
-                  <CircularProgress size={22} />
-                  <Typography variant="body2">Checking connection…</Typography>
-                </Box>
               </Paper>
             </Box>,
             document.body
