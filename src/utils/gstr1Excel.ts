@@ -193,6 +193,13 @@ function uqcLabel(raw: string | undefined): string {
   return value || 'NOS-NUMBERS';
 }
 
+function normalizeHsn(raw: string | undefined): string {
+  const digits = String(raw || '').replace(/\D/g, '').slice(0, 8);
+  if (digits.length >= 6) return digits;
+  if (digits === '3004') return '300490';
+  return digits;
+}
+
 function partyMap(result: Gstr1ExportResult): Map<string, string> {
   const map = new Map<string, string>();
   for (const row of result.register) {
@@ -455,7 +462,10 @@ function cdnurRows(notes: unknown, supplierState: string, amended = false): AoA 
     const pos = gstr1ExcelPos(String(raw.pos || ''));
     const val = num(raw.val);
     const ur = cdnurUrType(String(raw.typ || ''), pos, supplierState);
-    if (ur === 'B2CL' && supplierState && normalizeStateCode(pos) === supplierState) continue;
+    // V2.2 Excel CDNUR only accepts B2CL / EXPWP / EXPWOP. B2CS fails import
+    // and is then checked as B2CL ("POS cannot be same as Supplier State Code").
+    if (ur !== 'B2CL') continue;
+    if (supplierState && normalizeStateCode(pos) === supplierState) continue;
     const itms = raw.itms?.length ? raw.itms : [{ itm_det: { rt: 0, txval: 0, csamt: 0 } }];
     for (const itm of itms) {
       const det = itm.itm_det || {};
@@ -491,8 +501,8 @@ function hsnRows(rows: unknown): AoA {
   if (!Array.isArray(rows)) return [];
   const merged = new Map<string, Cell[]>();
   for (const raw of rows as HsnRow[]) {
-    const hsn = String(raw.hsn_sc || '').replace(/\D/g, '').slice(0, 8);
-    if (hsn.length < 4) continue;
+    const hsn = normalizeHsn(raw.hsn_sc);
+    if (hsn.length < 6) continue;
     const txval = num(raw.txval);
     const iamt = num(raw.iamt);
     const camt = num(raw.camt);
@@ -501,6 +511,7 @@ function hsnRows(rows: unknown): AoA {
     const qty = num(raw.qty);
     if (txval <= 0 || iamt < 0 || camt < 0 || samt < 0 || qty < 0) continue;
     const rt = num(raw.rt);
+    if (rt === 0 && iamt + camt + samt + csamt > 0) continue;
     const uqc = uqcLabel(raw.uqc);
     const tax = roundGst(iamt + camt + samt + csamt);
     const key = `${hsn}|${uqc}|${rt}`;
@@ -1281,8 +1292,14 @@ const COL_KINDS: Record<string, Array<'s' | 'n'>> = {
 };
 
 function makeSheet(def: SheetDef, data: AoA): XLSX.WorkSheet {
-  const header = def.header.map((row) => sparseRow(row, def.last));
-  const ws = XLSX.utils.aoa_to_sheet(header);
+  const ws: XLSX.WorkSheet = {};
+  def.header.forEach((sparse, r) => {
+    for (const [col, value] of Object.entries(sparse)) {
+      if (value === '' || value == null) continue;
+      const addr = XLSX.utils.encode_cell({ r, c: colIndex(col) });
+      ws[addr] = typeof value === 'number' ? { t: 'n', v: value } : { t: 's', v: String(value) };
+    }
+  });
   const kinds = COL_KINDS[def.name];
   const lastCol = colIndex(def.last);
   data.forEach((row, index) => {
@@ -1347,6 +1364,21 @@ export function buildGstr1ExcelWorkbook(result: Gstr1ExportResult): XLSX.WorkBoo
 export function gstr1ExcelFilename(result: Gstr1ExportResult): string {
   const suffix = result.summary.mode === 'amendment' ? '_A' : '';
   return `${result.summary.gstin}_GSTR1_${result.summary.fp}${suffix}.xlsx`;
+}
+
+export function gstr1ExcelWarnings(result: Gstr1ExportResult): string[] {
+  const supplierState = gstinStateCode(result.summary.gstin) || '';
+  const notes = Array.isArray(result.payload.cdnur) ? (result.payload.cdnur as NoteRow[]) : [];
+  let skipped = 0;
+  for (const raw of notes) {
+    const pos = gstr1ExcelPos(String(raw.pos || ''));
+    const ur = cdnurUrType(String(raw.typ || ''), pos, supplierState);
+    if (ur !== 'B2CL' || (supplierState && normalizeStateCode(pos) === supplierState)) skipped += 1;
+  }
+  if (!skipped) return [];
+  return [
+    `${skipped} intra-state unregistered credit/debit note(s) are not in Excel CDNUR. GST Offline Tool V2.2 only accepts B2CL there (place of supply must differ from your state). File those from the GSTR-1 JSON.`,
+  ];
 }
 
 export function downloadGstr1Excel(result: Gstr1ExportResult): void {

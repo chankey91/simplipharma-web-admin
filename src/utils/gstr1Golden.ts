@@ -178,11 +178,46 @@ export function gstr1GoldenErrors(): string[] {
     defval: '',
     raw: true,
   }) as unknown[][];
-  if (cdnurExcel[4]?.[0] !== 'B2CS') {
-    errors.push(`intra-state CDNUR must use UR Type B2CS, got ${String(cdnurExcel[4]?.[0])}`);
+  if (cdnurExcel.length > 4 && String(cdnurExcel[4]?.[0] || '')) {
+    errors.push('intra-state CDNUR must be omitted from Excel (V2.2 rejects UR Type B2CS)');
   }
-  if (String(cdnurExcel[4]?.[2] || '') !== '15-Apr-2026') {
-    errors.push(`CDNUR date must be DD-MMM-YYYY, got ${String(cdnurExcel[4]?.[2])}`);
+  const interNote = buildGstr1Payload({
+    gstin: SELLER,
+    filingFrequency: 'monthly',
+    skippedNoSnapshot: 0,
+    date: new Date('2026-04-15T06:30:00+05:30'),
+    documents: [
+      {
+        collection: 'credit_notes',
+        documentId: 'cn-ur-2',
+        kind: 'credit_note',
+        number: 'SPC202604002',
+        date: new Date('2026-04-15T06:30:00+05:30'),
+        totalAmount: 150000,
+        gst: {
+          ...gst,
+          buyerGstin: '',
+          invoiceType: 'CDNUR',
+          supplierStateCode: '23',
+          placeOfSupplyStateCode: '27',
+          supplyType: 'inter',
+          taxableValue: 142857.14,
+          cgst: 0,
+          sgst: 0,
+          igst: 7142.86,
+          lines: [{ hsn: '300490', gstRate: 5, qty: 10, taxableValue: 142857.14, taxAmount: 7142.86 }],
+        },
+        hsnParts: [{ hsn: '300490', qty: 10, net: 142857.14, gstRate: 5 }],
+      },
+    ],
+  });
+  const cdnurInter = XLSX.utils.sheet_to_json(buildGstr1ExcelWorkbook(interNote).Sheets.cdnur, {
+    header: 1,
+    defval: '',
+    raw: true,
+  }) as unknown[][];
+  if (cdnurInter[4]?.[0] !== 'B2CL') {
+    errors.push(`inter-state CDNUR Excel must be B2CL, got ${String(cdnurInter[4]?.[0])}`);
   }
 
   errors.push(...result.summary.errors);
