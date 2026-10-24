@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppDialogProvider } from './context/AppDialogProvider';
 import { FulfillmentLeaveGuardProvider } from './context/FulfillmentLeaveGuardContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ConnectionGate } from './components/ConnectionGate';
 import { Loading } from './components/Loading';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/Login';
@@ -185,6 +186,7 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <ThemeProvider theme={theme}>
           <CssBaseline />
+          <ConnectionGate />
           <AppDialogProvider>
             <FulfillmentLeaveGuardProvider>
               <AuthProvider>
