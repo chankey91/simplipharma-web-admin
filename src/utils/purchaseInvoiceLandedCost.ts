@@ -7,7 +7,8 @@ const toNum = (v: unknown): number => {
 };
 
 /**
- * Landed unit cost ex-GST from purchase invoice line (matches PI total before GST):
+ * Landed unit cost ex-GST from the purchase line only.
+ * The invoice additional discount is not spread onto the line; the margin report shows it separately.
  * (purchasePrice × paidQty − line discount) ÷ (paidQty + freeQty)
  */
 export function landedUnitCostExGstFromPurchaseLine(
@@ -36,7 +37,7 @@ export function purchaseLandedCostLookupKey(medicineId: string, batchNumber: str
   return `${medicineId}|${batchNumber}`;
 }
 
-/** Newest invoice wins per medicine+batch. */
+/** Newest invoice wins per medicine+batch. Pass invoices newest-first. */
 export function buildPurchaseLandedCostLookup(invoices: PurchaseInvoice[]): PurchaseLandedCostLookup {
   const map = new Map<string, number>();
   for (const inv of invoices) {

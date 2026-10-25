@@ -60,6 +60,27 @@ export function sumPurchaseInvoiceFromItems(
   };
 }
 
+/**
+ * Invoice additional discount for margin.
+ * Uses the saved field. Older bills that only reduced `totalAmount` are recovered from
+ * the gap above one rupee, so rounding is not treated as a discount.
+ */
+export function resolvedPurchaseAdditionalDiscount(invoice: {
+  additionalDiscount?: unknown;
+  subTotal?: number;
+  discount?: number;
+  taxAmount?: number;
+  totalAmount?: number;
+}): number {
+  const stored = normalizeAdditionalDiscount(invoice.additionalDiscount);
+  if (stored > 0) return stored;
+  const beforeExtra =
+    (Number(invoice.subTotal) || 0) - (Number(invoice.discount) || 0) + (Number(invoice.taxAmount) || 0);
+  const implied = beforeExtra - (Number(invoice.totalAmount) || 0);
+  if (implied > 1) return Math.round(implied * 100) / 100;
+  return 0;
+}
+
 /** Whole-invoice extra discount in rupees (settles payable; not line Disc %). */
 export function normalizeAdditionalDiscount(value: unknown): number {
   if (value === undefined || value === null || value === '') return 0;

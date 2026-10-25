@@ -34,7 +34,8 @@ import { useOrdersInPeriod } from '../hooks/useOrders';
 import { useMedicinesByIds } from '../hooks/useInventory';
 import { useCreditNotesInPeriod } from '../hooks/useCreditNotes';
 import { useExpiryReturnsInPeriod } from '../hooks/useExpiryReturns';
-import { Order, OrderStatus } from '../types';
+import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
+import { Order, OrderStatus, PurchaseInvoice } from '../types';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -45,6 +46,8 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
+import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
+import { resolvedPurchaseAdditionalDiscount } from '../utils/purchaseInvoiceTotals';
 
 type PeriodFilter = MarginPeriodFilter;
 
@@ -84,6 +87,39 @@ const orderDate = (o: Order): Date => coerceToDate(o.orderDate);
 const inPeriod = (date: Date, period: PeriodFilter): boolean =>
   dateInMarginPeriod(date, period);
 
+function batchKey(medicineId: string, batchNumber: string): string {
+  return `${medicineId}|${batchNumber.trim().toLowerCase()}`;
+}
+
+/** Batches actually shipped on the order. */
+function orderSoldBatchKeys(order: Order): string[] {
+  const keys: string[] = [];
+  for (const line of order.medicines ?? []) {
+    if (!line.medicineId) continue;
+    const allocations = line.batchAllocations;
+    if (allocations && allocations.length > 0) {
+      for (const allocation of allocations) {
+        if (allocation.batchNumber) keys.push(batchKey(line.medicineId, allocation.batchNumber));
+      }
+    } else if (line.batchNumber) {
+      keys.push(batchKey(line.medicineId, line.batchNumber));
+    }
+  }
+  return keys;
+}
+
+function invoiceBatchKeys(invoice: PurchaseInvoice): string[] {
+  const keys: string[] = [];
+  for (const item of invoice.items ?? []) {
+    if (!item.medicineId) continue;
+    const stockBatch = purchaseItemStockBatchNumber(item);
+    if (stockBatch) keys.push(batchKey(item.medicineId, stockBatch));
+    const printed = String(item.batchNumber ?? '').trim();
+    if (printed) keys.push(batchKey(item.medicineId, printed));
+  }
+  return keys;
+}
+
 export const MarginReportPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
@@ -109,6 +145,9 @@ export const MarginReportPage: React.FC = () => {
   const { data: creditNotes, isLoading: creditLoading } = useCreditNotesInPeriod(periodFilter);
   const { data: expiryReturns, isLoading: expiryLoading } = useExpiryReturnsInPeriod(periodFilter);
   const booksReady = !ordersLoading && !creditLoading && !expiryLoading;
+  const { data: purchaseInvoices, isLoading: purchaseLoading } = usePurchaseInvoices({
+    enabled: booksReady,
+  });
 
   const marginMedicineIds = useMemo(() => {
     const ids = new Set<string>();
@@ -227,22 +266,48 @@ export const MarginReportPage: React.FC = () => {
 
   const returnSummary = useMemo(
     () =>
-      computeReturnMarginSummary(
-        creditNotes,
-        expiryReturns,
-        medicineById,
-        periodFilter
-      ),
+      computeReturnMarginSummary(creditNotes, expiryReturns, medicineById, periodFilter),
     [creditNotes, expiryReturns, medicineById, periodFilter]
   );
+
+  const invoiceAdditionalDiscount = useMemo(() => {
+    const soldBatches = new Set<string>();
+    for (const row of filteredRows) {
+      for (const key of orderSoldBatchKeys(row.order)) soldBatches.add(key);
+    }
+
+    let total = 0;
+    let invoiceCount = 0;
+    const counted = new Set<string>();
+    // Purchase invoices are newest-first. The latest bill for a sold batch claims it,
+    // including older bills that supplied the sales on this page.
+    for (const invoice of purchaseInvoices ?? []) {
+      if (counted.has(invoice.id)) continue;
+      const keys = invoiceBatchKeys(invoice);
+      const suppliedSale = keys.some((key) => soldBatches.has(key));
+      if (suppliedSale) {
+        for (const key of keys) soldBatches.delete(key);
+      }
+      const amount = resolvedPurchaseAdditionalDiscount(invoice);
+      const inViewPeriod = dateInMarginPeriod(coerceToDate(invoice.invoiceDate), periodFilter);
+      if (amount <= 0 || (!inViewPeriod && !suppliedSale)) continue;
+      counted.add(invoice.id);
+      total += amount;
+      invoiceCount += 1;
+    }
+    return { total, invoiceCount };
+  }, [purchaseInvoices, periodFilter, filteredRows]);
 
   const summary = useMemo(() => {
     const netSales = filteredRows.reduce((s, r) => s + r.netSalesExGst, 0);
     const cogs = filteredRows.reduce((s, r) => s + r.cogsExGst, 0);
     const grossProfit = netSales - cogs;
     const netSalesAfterReturns = netSales - returnSummary.salesReversalExGst;
-    const cogsAfterReturns = cogs - returnSummary.cogsReversalExGst;
-    const netGrossProfit = grossProfit - returnSummary.grossProfitReversalExGst;
+    const purchaseAdditionalDiscount = invoiceAdditionalDiscount.total;
+    const cogsAfterReturns =
+      cogs - returnSummary.cogsReversalExGst - purchaseAdditionalDiscount;
+    const netGrossProfit =
+      grossProfit - returnSummary.grossProfitReversalExGst + purchaseAdditionalDiscount;
     return {
       orderCount: filteredRows.length,
       netSales,
@@ -252,6 +317,8 @@ export const MarginReportPage: React.FC = () => {
       returnSalesReversal: returnSummary.salesReversalExGst,
       returnCogsReversal: returnSummary.cogsReversalExGst,
       returnProfitReversal: returnSummary.grossProfitReversalExGst,
+      invoiceAdditionalDiscount: purchaseAdditionalDiscount,
+      invoiceAdditionalDiscountCount: invoiceAdditionalDiscount.invoiceCount,
       netSalesAfterReturns,
       cogsAfterReturns,
       netGrossProfit,
@@ -260,12 +327,12 @@ export const MarginReportPage: React.FC = () => {
       orderReturnCount: returnSummary.orderReturnDocCount,
       expiryReturnCount: returnSummary.expiryReturnDocCount,
     };
-  }, [filteredRows, returnSummary]);
+  }, [filteredRows, returnSummary, invoiceAdditionalDiscount]);
 
   const paginatedRows = sortedRows.slice((page - 1) * rowsPerPage, page * rowsPerPage);
   const pageCount = Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
 
-  if (ordersLoading || creditLoading || expiryLoading || medicinesLoading) {
+  if (ordersLoading || creditLoading || expiryLoading || medicinesLoading || purchaseLoading) {
     return <Loading message="Loading margin report..." />;
   }
 
@@ -279,7 +346,9 @@ export const MarginReportPage: React.FC = () => {
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Profit per order from batch landed cost vs invoice selling price (ex-GST, after line
-          discount). Returns (order credit notes and approved expiry returns) reduce net margin below.
+          discount). Returns reduce net margin.           Purchase-invoice additional discount stays one bill amount. Older bills are included
+          when they supplied the sales on this page, and bills that never saved the field are
+          recovered from the invoice total. It is not split onto sale lines.
           Prefer This month / Last month — All time downloads the full order history.
         </Typography>
       </Box>
@@ -305,6 +374,9 @@ export const MarginReportPage: React.FC = () => {
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 After {summary.orderReturnCount + summary.expiryReturnCount} return(s)
+                {summary.invoiceAdditionalDiscount > 0
+                  ? ` and invoice additional discount`
+                  : ''}
               </Typography>
             </CardContent>
           </Card>
@@ -386,6 +458,22 @@ export const MarginReportPage: React.FC = () => {
               </Typography>
               <Typography variant="h6" fontWeight={600}>
                 ₹{Math.round(summary.netSalesAfterReturns).toLocaleString('en-IN')}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider', opacity: 0.92 }}>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2" gutterBottom>
+                Invoice additional discount
+              </Typography>
+              <Typography variant="h6" fontWeight={600} color="success.main">
+                ₹{Math.round(summary.invoiceAdditionalDiscount).toLocaleString('en-IN')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {summary.invoiceAdditionalDiscountCount} purchase bill
+                {summary.invoiceAdditionalDiscountCount === 1 ? '' : 's'}, including older bills for these sales
               </Typography>
             </CardContent>
           </Card>
