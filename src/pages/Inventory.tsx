@@ -27,6 +27,7 @@ import {
   DialogActions,
   LinearProgress,
   CircularProgress,
+  Menu,
 } from '@mui/material';
 import {
   Search,
@@ -54,6 +55,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { zeroAllStockChunk } from '../services/inventory';
+import { istDateStampCompact } from '../utils/dateTime';
+import { Medicine } from '../types';
 
 const emptyNewProduct = {
   name: '',
@@ -94,6 +97,9 @@ export const InventoryPage: React.FC = () => {
   const [zeroing, setZeroing] = useState(false);
   const [zeroMessage, setZeroMessage] = useState<string | null>(null);
   const [addProductOpen, setAddProductOpen] = useState(false);
+  const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [newProduct, setNewProduct] = useState(emptyNewProduct);
   const createMedicineMutation = useCreateMedicine();
   const jobUnsubRef = useRef<(() => void) | null>(null);
@@ -330,6 +336,101 @@ export const InventoryPage: React.FC = () => {
       setZeroMessage(`Zero all stock failed: ${msg}. Click Zero all stock again to continue if a chunk timed out.`);
     } finally {
       setZeroing(false);
+    }
+  };
+
+  const handleExportInventory = async (mode: 'In Stock' | 'Low' | 'Out' | 'current') => {
+    setExportMenuAnchor(null);
+    if (exporting) return;
+    const stock = mode === 'current' ? stockFilter : mode;
+    const query = searchTerm.trim();
+    const browse = query.length < 2;
+    setExporting(true);
+    setExportMessage('Preparing export…');
+    try {
+      const pageSize = 120;
+      const rows: Medicine[] = [];
+      const seen = new Set<string>();
+      let totalFound = 0;
+      for (let pageNo = 1; pageNo <= 500; pageNo += 1) {
+        setExportMessage(
+          rows.length
+            ? `Exporting… ${rows.length.toLocaleString()} medicines`
+            : 'Preparing export…'
+        );
+        const result = await searchMedicinesCatalog(browse ? '' : query, {
+          browse,
+          hydrate: false,
+          refineResults: false,
+          limit: pageSize,
+          page: pageNo,
+          category: categoryFilter,
+          manufacturer: manufacturerFilter,
+          stockFilter: stock,
+          sortKey: browse ? 'name' : '_text_match',
+          sortDirection: 'asc',
+          includeFacets: false,
+        });
+        if (result.source === 'error') {
+          throw new Error('Inventory search failed. Rebuild the search index, then export again.');
+        }
+        totalFound = result.found;
+        if (pageNo === 1 && totalFound === 0) {
+          setExportMessage(null);
+          await alert('No medicines match this export.', { severity: 'info' });
+          return;
+        }
+        if (pageNo === 1 && totalFound > 20000) {
+          const ok = await confirm(
+            `This export has ${totalFound.toLocaleString()} medicines. The file can include up to 60,000. Continue?`,
+            { title: 'Large export', confirmLabel: 'Download' }
+          );
+          if (!ok) {
+            setExportMessage(null);
+            return;
+          }
+        }
+        if (result.medicines.length === 0) break;
+        let added = 0;
+        for (const medicine of result.medicines) {
+          if (!medicine.id || seen.has(medicine.id)) continue;
+          seen.add(medicine.id);
+          rows.push(medicine);
+          added += 1;
+        }
+        if (added === 0 || rows.length >= totalFound || result.medicines.length < pageSize) break;
+      }
+      const sheet = rows.map((medicine) => ({
+        'Medicine Name': medicine.name,
+        'Product ID': medicine.productId || '',
+        HSN: medicine.code || '',
+        Type: medicine.category || '',
+        Packaging: medicine.unit || '',
+        Manufacturer: medicine.manufacturer || '',
+        'GST Rate (%)': medicine.gstRate ?? 5,
+        Stock: medicine.currentStock ?? medicine.stock ?? 0,
+      }));
+      const ws = XLSX.utils.json_to_sheet(sheet);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+      const slug =
+        stock === 'In Stock'
+          ? 'in-stock'
+          : stock === 'Low'
+            ? 'low-stock'
+            : stock === 'Out'
+              ? 'out-of-stock'
+              : 'all';
+      XLSX.writeFile(wb, `inventory-${slug}-${istDateStampCompact()}.xlsx`);
+      setExportMessage(
+        totalFound > rows.length
+          ? `Downloaded ${rows.length.toLocaleString()} of ${totalFound.toLocaleString()} medicines. Narrow the type or manufacturer to export the rest.`
+          : `Downloaded ${rows.length.toLocaleString()} medicines.`
+      );
+    } catch (err: unknown) {
+      setExportMessage(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -604,6 +705,22 @@ export const InventoryPage: React.FC = () => {
         </Alert>
       )}
 
+      {exportMessage && (
+        <Alert
+          severity={
+            exportMessage.startsWith('Downloaded')
+              ? 'success'
+              : exportMessage.startsWith('Exporting') || exportMessage.startsWith('Preparing')
+                ? 'info'
+                : 'error'
+          }
+          onClose={exporting ? undefined : () => setExportMessage(null)}
+          sx={{ mb: 1 }}
+        >
+          {exportMessage}
+        </Alert>
+      )}
+
       {searchError && !searchLoading && (
         <Alert severity="error" sx={{ mb: 1 }}>
           Inventory search failed (Typesense). The list is empty because the catalog search
@@ -699,6 +816,25 @@ export const InventoryPage: React.FC = () => {
               <MenuItem value="Out">Out of stock</MenuItem>
             </Select>
           </FormControl>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={exporting ? <CircularProgress size={16} color="inherit" /> : <Download fontSize="small" />}
+            onClick={(e) => setExportMenuAnchor(e.currentTarget)}
+            disabled={exporting}
+          >
+            {exporting ? 'Exporting…' : 'Export'}
+          </Button>
+          <Menu
+            anchorEl={exportMenuAnchor}
+            open={Boolean(exportMenuAnchor)}
+            onClose={() => setExportMenuAnchor(null)}
+          >
+            <MenuItem onClick={() => void handleExportInventory('In Stock')}>In stock</MenuItem>
+            <MenuItem onClick={() => void handleExportInventory('Low')}>Low stock</MenuItem>
+            <MenuItem onClick={() => void handleExportInventory('Out')}>Out of stock</MenuItem>
+            <MenuItem onClick={() => void handleExportInventory('current')}>Current filters</MenuItem>
+          </Menu>
           <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
             {searchHint}
           </Typography>
