@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, Timestamp, serverTimestamp, db, getDoc, where, deleteField, deleteDoc } from './firebase';
+import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, startAfter, limit, Timestamp, serverTimestamp, db, getDoc, where, deleteField, deleteDoc } from './firebase';
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem, VendorInvoicePayment } from '../types';
 import {
   addStockBatchesToMedicine,
@@ -6,7 +6,9 @@ import {
 } from './inventory';
 import { attachLandedCostToBatchData } from '../utils/purchaseInvoiceLandedCost';
 import { attachStandardDiscountToBatchData } from '../utils/orderFulfillmentDiscount';
-import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
+import type { QueryConstraint, QueryDocumentSnapshot } from 'firebase/firestore';
+import { purchaseInvoiceLineBatchKeys, purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
+import { resolvedPurchaseAdditionalDiscount } from '../utils/purchaseInvoiceTotals';
 import { createInwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromPurchaseItems } from '../utils/gstLineSnapshot';
@@ -83,6 +85,89 @@ export const getAllPurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {
     });
   }
 };
+
+/** Bill totals kept for the margin page. Line items are not retained. */
+export type PurchaseInvoiceDiscountHeader = {
+  id: string;
+  invoiceDate: Date;
+  additionalDiscount?: unknown;
+  subTotal?: number;
+  discount?: number;
+  taxAmount?: number;
+  totalAmount?: number;
+};
+
+export type PurchaseDiscountScan = {
+  headers: PurchaseInvoiceDiscountHeader[];
+  batchKeys: Record<string, string[]>;
+};
+
+function mapDiscountHeader(
+  id: string,
+  data: Record<string, unknown>
+): PurchaseInvoiceDiscountHeader {
+  const raw = data.invoiceDate as { toDate?: () => Date } | string | number | Date | undefined;
+  const invoiceDate =
+    raw && typeof raw === 'object' && typeof raw.toDate === 'function'
+      ? raw.toDate()
+      : raw
+        ? new Date(raw as string | number | Date)
+        : new Date(0);
+  return {
+    id,
+    invoiceDate: Number.isNaN(invoiceDate.getTime()) ? new Date(0) : invoiceDate,
+    additionalDiscount: data.additionalDiscount,
+    subTotal: Number(data.subTotal) || 0,
+    discount: Number(data.discount) || 0,
+    taxAmount: Number(data.taxAmount) || 0,
+    totalAmount: Number(data.totalAmount) || 0,
+  };
+}
+
+/**
+ * Page through purchase bills and keep only those with an additional discount.
+ * `beforeMs` limits the scan to bills older than the margin period. Null scans every bill
+ * (All time). Line items are dropped after the batch keys are taken.
+ */
+export async function getPurchaseDiscountsBefore(
+  beforeMs: number | null,
+  signal?: AbortSignal
+): Promise<PurchaseDiscountScan> {
+  const invoicesCol = collection(db, 'purchaseInvoices');
+  const pageSize = 80;
+  const headers: PurchaseInvoiceDiscountHeader[] = [];
+  const batchKeys: Record<string, string[]> = {};
+  let cursor: QueryDocumentSnapshot | null = null;
+
+  for (;;) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const constraints: QueryConstraint[] = [];
+    if (beforeMs != null) {
+      constraints.push(where('invoiceDate', '<', Timestamp.fromMillis(beforeMs)));
+    }
+    constraints.push(orderBy('invoiceDate', 'desc'));
+    if (cursor) constraints.push(startAfter(cursor));
+    constraints.push(limit(pageSize));
+    const snapshot = await getDocs(query(invoicesCol, ...constraints));
+    if (snapshot.empty) break;
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data() as Record<string, unknown>;
+      const header = mapDiscountHeader(docSnap.id, data);
+      if (resolvedPurchaseAdditionalDiscount(header) <= 0) continue;
+      headers.push(header);
+      if (beforeMs != null) {
+        batchKeys[docSnap.id] = purchaseInvoiceLineBatchKeys(
+          data.items as Parameters<typeof purchaseInvoiceLineBatchKeys>[0]
+        );
+      }
+    }
+    cursor = snapshot.docs[snapshot.docs.length - 1] ?? null;
+    if (snapshot.docs.length < pageSize) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  return { headers, batchKeys };
+}
 
 /** Unpaid / partial purchase bills only — for vendor ledger (not the full collection). */
 export const getPayablePurchaseInvoices = async (): Promise<PurchaseInvoice[]> => {

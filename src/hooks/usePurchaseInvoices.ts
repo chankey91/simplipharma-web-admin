@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tansta
 import { useMemo } from 'react';
 import { 
   getAllPurchaseInvoices,
+  getPurchaseDiscountsBefore,
   getPayablePurchaseInvoices,
   getPurchaseInvoicesByVendor,
   getPurchaseInvoicesInRange,
@@ -22,6 +23,7 @@ import {
 import { TypesenseSearchParams, TypesenseSearchResult } from '../services/typesenseSearch';
 import { getPurchaseInvoiceAmountTotal } from '../services/dashboardAggregations';
 import { PurchaseInvoice } from '../types';
+import { marginPeriodRange, type MarginPeriodFilter } from '../utils/marginPeriod';
 import { buildLastPurchaseByMedicineId, buildMedicineNrNrxFlags } from '../utils/vendorLastPurchase';
 
 export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
@@ -34,6 +36,32 @@ export const usePurchaseInvoices = (options?: { enabled?: boolean }) => {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
+};
+
+/**
+ * Margin additional discount.
+ * This month / last month loads only that month's bills first, then older discounted bills.
+ * The report does not wait on the full purchase-invoice catalog.
+ */
+export const useMarginPurchaseDiscounts = (period: MarginPeriodFilter, scanOlder: boolean) => {
+  const range = marginPeriodRange(period);
+  const periodQuery = useQuery({
+    queryKey: ['marginPurchaseDiscountsInPeriod', range?.startMs ?? null, range?.endMs ?? null],
+    queryFn: () => getPurchaseInvoicesInRange(range!.startMs, range?.endMs),
+    enabled: range != null,
+    staleTime: 5 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+  const olderQuery = useQuery({
+    queryKey: ['marginOlderPurchaseDiscounts', range?.startMs ?? 'all'],
+    queryFn: ({ signal }) => getPurchaseDiscountsBefore(range?.startMs ?? null, signal),
+    enabled: scanOlder,
+    staleTime: 5 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+  return { periodQuery, olderQuery };
 };
 
 export const usePurchaseInvoicesInDateRange = (

@@ -34,19 +34,19 @@ import { useOrdersInPeriod } from '../hooks/useOrders';
 import { useMedicinesByIds } from '../hooks/useInventory';
 import { useCreditNotesInPeriod } from '../hooks/useCreditNotes';
 import { useExpiryReturnsInPeriod } from '../hooks/useExpiryReturns';
-import { usePurchaseInvoices } from '../hooks/usePurchaseInvoices';
-import { Order, OrderStatus, PurchaseInvoice } from '../types';
+import { useMarginPurchaseDiscounts } from '../hooks/usePurchaseInvoices';
+import { Order, OrderStatus } from '../types';
 import { format } from 'date-fns';
 import { Loading } from '../components/Loading';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { computeOrderMarginSummary, indexMedicinesById } from '../utils/orderLineMargin';
 import { computeReturnMarginSummary } from '../utils/returnMargin';
 import { coerceToDate, dateInMarginPeriod, type MarginPeriodFilter } from '../utils/marginPeriod';
+import { purchaseInvoiceLineBatchKeys } from '../utils/purchaseInvoiceBatch';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
-import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 import { resolvedPurchaseAdditionalDiscount } from '../utils/purchaseInvoiceTotals';
 
 type PeriodFilter = MarginPeriodFilter;
@@ -108,18 +108,6 @@ function orderSoldBatchKeys(order: Order): string[] {
   return keys;
 }
 
-function invoiceBatchKeys(invoice: PurchaseInvoice): string[] {
-  const keys: string[] = [];
-  for (const item of invoice.items ?? []) {
-    if (!item.medicineId) continue;
-    const stockBatch = purchaseItemStockBatchNumber(item);
-    if (stockBatch) keys.push(batchKey(item.medicineId, stockBatch));
-    const printed = String(item.batchNumber ?? '').trim();
-    if (printed) keys.push(batchKey(item.medicineId, printed));
-  }
-  return keys;
-}
-
 export const MarginReportPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
@@ -145,9 +133,6 @@ export const MarginReportPage: React.FC = () => {
   const { data: creditNotes, isLoading: creditLoading } = useCreditNotesInPeriod(periodFilter);
   const { data: expiryReturns, isLoading: expiryLoading } = useExpiryReturnsInPeriod(periodFilter);
   const booksReady = !ordersLoading && !creditLoading && !expiryLoading;
-  const { data: purchaseInvoices, isLoading: purchaseLoading } = usePurchaseInvoices({
-    enabled: booksReady,
-  });
 
   const marginMedicineIds = useMemo(() => {
     const ids = new Set<string>();
@@ -174,6 +159,10 @@ export const MarginReportPage: React.FC = () => {
   const { data: medicines, isLoading: medicinesLoading } = useMedicinesByIds(
     booksReady ? marginMedicineIds : undefined
   );
+  const reportReady = booksReady && !medicinesLoading;
+  const { periodQuery, olderQuery } = useMarginPurchaseDiscounts(periodFilter, reportReady);
+  const discountPending = periodQuery.isFetching || olderQuery.isFetching;
+  const olderDiscountError = olderQuery.isError;
   const medicineById = useMemo(() => indexMedicinesById(medicines), [medicines]);
 
   const [rowsPerPage] = useState(15);
@@ -276,27 +265,49 @@ export const MarginReportPage: React.FC = () => {
       for (const key of orderSoldBatchKeys(row.order)) soldBatches.add(key);
     }
 
+    const invoices: Array<{
+      id: string;
+      invoiceDate: Date;
+      amount: number;
+      keys: string[];
+    }> = [];
+    for (const invoice of periodQuery.data ?? []) {
+      invoices.push({
+        id: invoice.id,
+        invoiceDate: coerceToDate(invoice.invoiceDate),
+        amount: resolvedPurchaseAdditionalDiscount(invoice),
+        keys: purchaseInvoiceLineBatchKeys(invoice.items),
+      });
+    }
+    for (const invoice of olderQuery.data?.headers ?? []) {
+      invoices.push({
+        id: invoice.id,
+        invoiceDate: invoice.invoiceDate,
+        amount: resolvedPurchaseAdditionalDiscount(invoice),
+        keys: olderQuery.data?.batchKeys[invoice.id] ?? [],
+      });
+    }
+    invoices.sort((a, b) => b.invoiceDate.getTime() - a.invoiceDate.getTime());
+
     let total = 0;
     let invoiceCount = 0;
     const counted = new Set<string>();
-    // Purchase invoices are newest-first. The latest bill for a sold batch claims it,
-    // including older bills that supplied the sales on this page.
-    for (const invoice of purchaseInvoices ?? []) {
+    // Newest bill for a sold batch claims it, so an older bill for the same batch is not added again.
+    for (const invoice of invoices) {
       if (counted.has(invoice.id)) continue;
-      const keys = invoiceBatchKeys(invoice);
-      const suppliedSale = keys.some((key) => soldBatches.has(key));
+      const suppliedSale = invoice.keys.some((key) => soldBatches.has(key));
       if (suppliedSale) {
-        for (const key of keys) soldBatches.delete(key);
+        for (const key of invoice.keys) soldBatches.delete(key);
       }
-      const amount = resolvedPurchaseAdditionalDiscount(invoice);
-      const inViewPeriod = dateInMarginPeriod(coerceToDate(invoice.invoiceDate), periodFilter);
-      if (amount <= 0 || (!inViewPeriod && !suppliedSale)) continue;
+      const inViewPeriod =
+        periodFilter === 'all' || dateInMarginPeriod(invoice.invoiceDate, periodFilter);
+      if (invoice.amount <= 0 || (!inViewPeriod && !suppliedSale)) continue;
       counted.add(invoice.id);
-      total += amount;
+      total += invoice.amount;
       invoiceCount += 1;
     }
     return { total, invoiceCount };
-  }, [purchaseInvoices, periodFilter, filteredRows]);
+  }, [periodQuery.data, olderQuery.data, periodFilter, filteredRows]);
 
   const summary = useMemo(() => {
     const netSales = filteredRows.reduce((s, r) => s + r.netSalesExGst, 0);
@@ -332,7 +343,7 @@ export const MarginReportPage: React.FC = () => {
   const paginatedRows = sortedRows.slice((page - 1) * rowsPerPage, page * rowsPerPage);
   const pageCount = Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
 
-  if (ordersLoading || creditLoading || expiryLoading || medicinesLoading || purchaseLoading) {
+  if (ordersLoading || creditLoading || expiryLoading || medicinesLoading) {
     return <Loading message="Loading margin report..." />;
   }
 
@@ -472,8 +483,15 @@ export const MarginReportPage: React.FC = () => {
                 ₹{Math.round(summary.invoiceAdditionalDiscount).toLocaleString('en-IN')}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                {summary.invoiceAdditionalDiscountCount} purchase bill
-                {summary.invoiceAdditionalDiscountCount === 1 ? '' : 's'}, including older bills for these sales
+                {discountPending
+                  ? periodFilter === 'all' || periodQuery.isFetching
+                    ? 'Calculating purchase discounts…'
+                    : 'Adding older purchase bills…'
+                  : olderDiscountError
+                    ? 'Older purchase bills could not be loaded. Showing this period only.'
+                    : `${summary.invoiceAdditionalDiscountCount} purchase bill${
+                        summary.invoiceAdditionalDiscountCount === 1 ? '' : 's'
+                      }, including older bills for these sales`}
               </Typography>
             </CardContent>
           </Card>
