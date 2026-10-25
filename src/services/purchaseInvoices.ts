@@ -106,13 +106,16 @@ function mapDiscountHeader(
   id: string,
   data: Record<string, unknown>
 ): PurchaseInvoiceDiscountHeader {
-  const raw = data.invoiceDate as { toDate?: () => Date } | string | number | Date | undefined;
-  const invoiceDate =
-    raw && typeof raw === 'object' && typeof raw.toDate === 'function'
-      ? raw.toDate()
-      : raw
-        ? new Date(raw as string | number | Date)
-        : new Date(0);
+  const raw = data.invoiceDate;
+  let invoiceDate = new Date(0);
+  if (raw instanceof Date) {
+    invoiceDate = raw;
+  } else if (raw && typeof raw === 'object') {
+    const stamp = raw as { toDate?: () => Date };
+    if (typeof stamp.toDate === 'function') invoiceDate = stamp.toDate();
+  } else if (typeof raw === 'string' || typeof raw === 'number') {
+    invoiceDate = new Date(raw);
+  }
   return {
     id,
     invoiceDate: Number.isNaN(invoiceDate.getTime()) ? new Date(0) : invoiceDate,
