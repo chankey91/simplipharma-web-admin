@@ -69,7 +69,7 @@ export const useToggleStoreStatus = () => {
   return useMutation({
     mutationFn: ({ storeId, isActive }: { storeId: string; isActive: boolean }) =>
       toggleStoreStatus(storeId, isActive),
-    onSuccess: () => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] });
     }
   });

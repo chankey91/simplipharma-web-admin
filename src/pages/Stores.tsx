@@ -70,6 +70,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { DailyRetailerSalesDialog } from '../components/DailyRetailerSalesDialog';
 import { useAuth } from '../context/AuthContext';
 import {
   checkLicenseAndAadharUnique,
@@ -152,6 +153,7 @@ export const StoresPage: React.FC = () => {
   const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
   const [walletStore, setWalletStore] = useState<User | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [dailySalesOpen, setDailySalesOpen] = useState(false);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
 
   const salesOfficerNameById = useMemo(() => {
@@ -683,6 +685,30 @@ export const StoresPage: React.FC = () => {
     }
   };
 
+  const handleToggleRetailer = async (store: User) => {
+    const nextActive = store.isActive === false;
+    if (!nextActive) {
+      const ok = await confirm(
+        `${store.shopName || store.displayName || 'This retailer'} will be signed out and cannot sign in until you activate them again.`,
+        { title: 'Deactivate retailer?', confirmLabel: 'Deactivate', destructive: true }
+      );
+      if (!ok) return;
+    }
+    toggleStatusMutation.mutate(
+      { storeId: store.id, isActive: nextActive },
+      {
+        onSuccess: (result) => {
+          if (result?.message) void alert(result.message, { severity: 'warning' });
+        },
+        onError: (error: unknown) => {
+          void alert(error instanceof Error ? error.message : 'Could not update retailer access', {
+            severity: 'error',
+          });
+        },
+      }
+    );
+  };
+
   const handleExportRetailers = async () => {
     if (sortedStores.length === 0) {
       await alert('No retailers found to export', { severity: 'warning' });
@@ -718,6 +744,9 @@ export const StoresPage: React.FC = () => {
                 : `Assign missing codes (${missingStoreCodeCount})`}
             </Button>
           )}
+          <Button variant="outlined" onClick={() => setDailySalesOpen(true)}>
+            Daily sales
+          </Button>
           <Button
             variant="outlined"
             startIcon={<Download />}
@@ -968,7 +997,7 @@ export const StoresPage: React.FC = () => {
                   </IconButton>
                   <IconButton
                     size="small"
-                    onClick={() => toggleStatusMutation.mutate({ storeId: store.id, isActive: !store.isActive })}
+                    onClick={() => void handleToggleRetailer(store)}
                     color={store.isActive !== false ? 'success' : 'default'}
                   >
                     {store.isActive !== false ? <CheckCircle /> : <Cancel />}
@@ -1331,6 +1360,12 @@ export const StoresPage: React.FC = () => {
         store={walletStore}
         onClose={() => setWalletStore(null)}
         readOnly={!canEditStores}
+      />
+
+      <DailyRetailerSalesDialog
+        open={dailySalesOpen}
+        stores={stores ?? []}
+        onClose={() => setDailySalesOpen(false)}
       />
     </Box>
   );

@@ -2049,6 +2049,7 @@ export const sendCreditNotePdfEmail = ff
   });
 
 export { broadcastRetailerApkUpdate } from './retailerApk';
+export { setRetailerAccess } from './retailerAccess';
 
 export {
   onMedicineWriteTypesense,
