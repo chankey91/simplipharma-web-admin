@@ -40,7 +40,8 @@ export const DailyRetailerSalesDialog: React.FC<{
   open: boolean;
   onClose: () => void;
   stores: User[];
-}> = ({ open, onClose, stores }) => {
+  onSelectRetailer?: (retailer: { id: string; name: string; code?: string }) => void;
+}> = ({ open, onClose, stores, onSelectRetailer }) => {
   const [date, setDate] = useState(() => getTodayDateStringIST());
   const previousDate = date ? shiftIstDateString(date, -1) : '';
 
@@ -135,7 +136,19 @@ export const DailyRetailerSalesDialog: React.FC<{
             <TableBody>
               {rows.map((row) => (
                 <TableRow key={row.id}>
-                  <TableCell>{row.name}</TableCell>
+                  <TableCell>
+                    {onSelectRetailer ? (
+                      <Button
+                        size="small"
+                        onClick={() => onSelectRetailer({ id: row.id, name: row.name, code: row.code })}
+                        sx={{ textTransform: 'none', p: 0, minWidth: 0, justifyContent: 'flex-start' }}
+                      >
+                        {row.name}
+                      </Button>
+                    ) : (
+                      row.name
+                    )}
+                  </TableCell>
                   <TableCell>{row.code || '—'}</TableCell>
                   <TableCell align="right">{row.count}</TableCell>
                   <TableCell align="right">{inr(row.amount)}</TableCell>
