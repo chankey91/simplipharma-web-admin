@@ -43,6 +43,7 @@ import {
 } from '../hooks/usePurchaseInvoices';
 import { useVendors } from '../hooks/useVendors';
 import { IstDateField } from '../components/IstDateField';
+import { DailyPurchaseDialog } from '../components/DailyPurchaseDialog';
 import {
   getDefaultNotesFilterRangeIST,
   getTodayDateStringIST,
@@ -118,6 +119,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [rowsPerPage, setRowsPerPage] = useState<number>(DEFAULT_ROWS_PER_PAGE);
   const [typesenseDisabled, setTypesenseDisabled] = useState(false);
   const [reindexing, setReindexing] = useState(false);
+  const [dailyOpen, setDailyOpen] = useState(false);
   const [reindexMessage, setReindexMessage] = useState<string | null>(null);
   const [fillingLastPrices, setFillingLastPrices] = useState(false);
   const [minVendorDiscountPct, setMinVendorDiscountPct] = useState('');
@@ -498,6 +500,9 @@ export const PurchaseInvoicesPage: React.FC = () => {
             </span>
           </Tooltip>
         )}
+        <Button size="small" variant="outlined" onClick={() => setDailyOpen(true)}>
+          Daily purchase
+        </Button>
         {canEditPurchases && (
           <>
             <Button
@@ -762,6 +767,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
           </Typography>
         </Box>
       )}
+      <DailyPurchaseDialog open={dailyOpen} onClose={() => setDailyOpen(false)} />
     </Box>
   );
 };
