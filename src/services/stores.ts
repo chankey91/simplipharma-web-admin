@@ -472,8 +472,36 @@ export const createStore = async (storeData: Partial<User> & { initialPassword?:
   return storeRef.id;
 };
 
-export const toggleStoreStatus = async (storeId: string, isActive: boolean) => {
-  await updateStore(storeId, { isActive });
+export const toggleStoreStatus = async (
+  storeId: string,
+  isActive: boolean
+): Promise<{ ok: boolean; authUpdated: boolean; message?: string }> => {
+  const fn = httpsCallable<
+    { storeId: string; isActive: boolean },
+    { ok?: boolean; authUpdated?: boolean; message?: string }
+  >(functions, 'setRetailerAccess');
+  try {
+    const result = await fn({ storeId, isActive });
+    return {
+      ok: result.data?.ok !== false,
+      authUpdated: result.data?.authUpdated === true,
+      message: result.data?.message,
+    };
+  } catch (error: unknown) {
+    const code = String((error as { code?: string })?.code || '');
+    if (code === 'functions/not-found' || code === 'functions/unavailable') {
+      await updateStore(storeId, { isActive });
+      return {
+        ok: true,
+        authUpdated: false,
+        message: isActive
+          ? 'Store is active in the list. The login block could not be cleared because the access function is not deployed yet.'
+          : 'Store is inactive in the list. The retailer can still sign in until the access function is deployed.',
+      };
+    }
+    const message = (error as { message?: string })?.message || 'Could not update retailer access';
+    throw new Error(message);
+  }
 };
 
 /** Temporarily allow a payment-blocked retailer to place orders for 6 hours. */

@@ -90,6 +90,12 @@ export function istDayEndExclusiveMs(dateStr: string): number {
   return istDayStartMs(dateStr) + 24 * 60 * 60 * 1000;
 }
 
+/** Move a yyyy-MM-dd calendar day in IST by a number of days. */
+export function shiftIstDateString(dateStr: string, days: number): string {
+  const ms = new Date(`${dateStr}T12:00:00+05:30`).getTime() + days * 24 * 60 * 60 * 1000;
+  return getTodayDateStringIST(new Date(ms));
+}
+
 /** Calendar widget: treat yyyy-MM-dd as a naive local Date so the picker shows that day. */
 export function naiveDateFromIstDateString(value: string): Date | null {
   const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
