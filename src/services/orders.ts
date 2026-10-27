@@ -143,6 +143,37 @@ async function enrichOrdersWithPayments(orders: Order[]): Promise<LedgerOrder[]>
   );
 }
 
+/** One retailer's orders in [startMs, endMs), newest first. Cancelled orders are included; the caller decides. */
+export const getRetailerOrdersInRange = async (
+  retailerId: string,
+  startMs: number,
+  endMs: number
+): Promise<Order[]> => {
+  const rid = retailerId.trim();
+  if (!rid) return [];
+  const ordersCol = collection(db, 'orders');
+  try {
+    const snapshot = await getDocs(
+      query(
+        ordersCol,
+        where('retailerId', '==', rid),
+        where('orderDate', '>=', Timestamp.fromMillis(startMs)),
+        where('orderDate', '<', Timestamp.fromMillis(endMs)),
+        orderBy('orderDate', 'desc')
+      )
+    );
+    return snapshot.docs.map((docSnap) => mapOrderDoc(docSnap));
+  } catch (error) {
+    console.warn('getRetailerOrdersInRange query failed, falling back:', error);
+    const all = await getRetailerOrdersForSchemeHistory(rid);
+    return all.filter((order) => {
+      const d = order.orderDate instanceof Date ? order.orderDate : new Date(order.orderDate);
+      const t = d.getTime();
+      return t >= startMs && t < endMs;
+    });
+  }
+};
+
 /** All orders for a retailer, with payment lines attached for ledger generation. */
 export const getOrdersByRetailer = async (retailerId: string): Promise<LedgerOrder[]> => {
   const ordersCol = collection(db, 'orders');
