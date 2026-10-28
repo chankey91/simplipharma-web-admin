@@ -13,6 +13,7 @@ import { Layout } from './components/Layout';
 import { LoginPage } from './pages/Login';
 import { DashboardPage } from './pages/Dashboard';
 import { StoresPage } from './pages/Stores';
+import { RetailerDetailsPage } from './pages/RetailerDetails';
 import { VendorsPage } from './pages/Vendors';
 import { OrdersPage } from './pages/Orders';
 import { OrderDetailsPage } from './pages/OrderDetails';
@@ -127,6 +128,7 @@ const router = createBrowserRouter([
   { path: '/', element: withLayout(<DashboardPage />) },
   { path: '/support', element: withLayout(<SupportTicketsPage />) },
   { path: '/stores', element: withLayout(<StoresPage />) },
+  { path: '/stores/:storeId', element: withLayout(<RetailerDetailsPage />) },
   { path: '/store-receivables', element: withLayout(<StoreReceivablesPage />) },
   { path: '/so-receivables', element: withLayout(<SoReceivablesPage />) },
   { path: '/so-cash', element: withLayout(<SoCashPage />) },

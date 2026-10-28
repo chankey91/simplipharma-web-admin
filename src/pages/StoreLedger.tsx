@@ -49,7 +49,9 @@ const toInputDate = (d: Date) => format(d, 'yyyy-MM-dd');
 const formatCurrency = (n: number) =>
   `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const StoreLedgerPage: React.FC = () => {
+export const StoreLedgerPage: React.FC<{ lockedRetailerId?: string }> = ({
+  lockedRetailerId,
+}) => {
   const { data: stores, isLoading: storesLoading } = useStores();
   const { alert, confirm } = useAppDialog();
   const { canWrite } = useAuth();
@@ -58,11 +60,11 @@ export const StoreLedgerPage: React.FC = () => {
     canWrite('accounts') || canWrite('orders') || canWrite('receivables');
 
   const defaults = useMemo(() => defaultStoreLedgerDateRange(), []);
-  const [retailerId, setRetailerId] = useState('');
+  const [retailerId, setRetailerId] = useState(lockedRetailerId || '');
   const [fromDate, setFromDate] = useState(toInputDate(defaults.from));
   const [toDate, setToDate] = useState(toInputDate(defaults.to));
   const [storeSearch, setStoreSearch] = useState('');
-  const [generated, setGenerated] = useState(false);
+  const [generated, setGenerated] = useState(Boolean(lockedRetailerId));
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
   const [sharingWhatsApp, setSharingWhatsApp] = useState(false);
@@ -239,26 +241,29 @@ export const StoreLedgerPage: React.FC = () => {
     }
   };
 
-  if (storesLoading) {
+  if (storesLoading && !lockedRetailerId) {
     return <Loading message="Loading medical stores..." />;
   }
 
   return (
     <Box>
-      <Box mb={3}>
-        <Typography variant="h4" gutterBottom>
-          Store ledger
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Select a medical store and date range to generate a debit/credit receivables ledger
-          (sales, receipts, credit notes, and debit notes). Open a sales order in a new tab, or
-          edit / delete a payment, credit note, or debit note — related invoice, wallet, and GST
-          values stay in sync.
-        </Typography>
-      </Box>
+      {lockedRetailerId ? null : (
+        <Box mb={3}>
+          <Typography variant="h4" gutterBottom>
+            Store ledger
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Select a medical store and date range to generate a debit/credit receivables ledger
+            (sales, receipts, credit notes, and debit notes). Open a sales order in a new tab, or
+            edit / delete a payment, credit note, or debit note — related invoice, wallet, and GST
+            values stay in sync.
+          </Typography>
+        </Box>
+      )}
 
       <Paper sx={{ p: 2, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
+          {lockedRetailerId ? null : (
           <Grid item xs={12} md={4}>
             <TextField
               fullWidth
@@ -293,7 +298,8 @@ export const StoreLedgerPage: React.FC = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
+          )}
+          <Grid item xs={12} sm={6} md={lockedRetailerId ? 3 : 2}>
             <TextField
               fullWidth
               size="small"
@@ -302,12 +308,12 @@ export const StoreLedgerPage: React.FC = () => {
               value={fromDate}
               onChange={(e) => {
                 setFromDate(e.target.value);
-                setGenerated(false);
+                if (!lockedRetailerId) setGenerated(false);
               }}
               InputLabelProps={{ shrink: true }}
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
+          <Grid item xs={12} sm={6} md={lockedRetailerId ? 3 : 2}>
             <TextField
               fullWidth
               size="small"
@@ -316,7 +322,7 @@ export const StoreLedgerPage: React.FC = () => {
               value={toDate}
               onChange={(e) => {
                 setToDate(e.target.value);
-                setGenerated(false);
+                if (!lockedRetailerId) setGenerated(false);
               }}
               InputLabelProps={{ shrink: true }}
             />
@@ -356,9 +362,17 @@ export const StoreLedgerPage: React.FC = () => {
         </Grid>
       </Paper>
 
-      {generated && (ledgerLoading || isFetching) && <Loading message="Building ledger..." />}
+      {generated && fromDate > toDate ? (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          From date must be on or before the to date.
+        </Alert>
+      ) : null}
 
-      {generated && !ledgerLoading && !isFetching && ledger && (
+      {generated && fromDate <= toDate && (ledgerLoading || isFetching) && (
+        <Loading message="Building ledger..." />
+      )}
+
+      {generated && fromDate <= toDate && !ledgerLoading && !isFetching && ledger && (
         <>
           <Paper sx={{ p: 2, mb: 2 }}>
             <Typography variant="h6" align="center" fontWeight={700}>

@@ -26,7 +26,6 @@ import {
   Autocomplete,
 } from '@mui/material';
 import {
-  Edit,
   Search,
   Add,
   CheckCircle,
@@ -34,14 +33,9 @@ import {
   Save,
   MyLocation,
   PhotoCamera,
-  History,
   LockReset,
   Download,
-  Place,
-  AccountBalanceWallet,
 } from '@mui/icons-material';
-import { RetailerVisitLogDialog } from '../components/RetailerVisitLogDialog';
-import { RetailerWalletDialog } from '../components/RetailerWalletDialog';
 import {
   FormControl,
   InputLabel,
@@ -112,7 +106,7 @@ const generatePassword = () => {
 export const StoresPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { canWrite, canAccessPath } = useAuth();
+  const { canWrite } = useAuth();
   const canEditStores = canWrite('stores');
   const { data: stores, isLoading, error } = useStores();
   const { data: salesOfficers = [] } = useSalesOfficers();
@@ -150,8 +144,6 @@ export const StoresPage: React.FC = () => {
   const [aadharImageFile, setAadharImageFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const [visitLogStore, setVisitLogStore] = useState<User | null>(null);
-  const [walletStore, setWalletStore] = useState<User | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [dailySalesOpen, setDailySalesOpen] = useState(false);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
@@ -336,14 +328,6 @@ export const StoresPage: React.FC = () => {
 
   const handlePageChange = (event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
-  };
-
-  const handleOpenVisitLog = (store: User) => {
-    setVisitLogStore(store);
-  };
-
-  const handleOpenWallet = (store: User) => {
-    setWalletStore(store);
   };
 
   const handleGrantOrderOverride = async (retailerId: string) => {
@@ -730,7 +714,12 @@ export const StoresPage: React.FC = () => {
   return (
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">Store Management</Typography>
+        <Box>
+          <Typography variant="h4">Store Management</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Open a retailer for wallet, ledger, credit notes, and debit notes.
+          </Typography>
+        </Box>
         <Box display="flex" gap={1} flexWrap="wrap">
           {canEditStores && missingStoreCodeCount > 0 && (
             <Button
@@ -861,7 +850,7 @@ export const StoresPage: React.FC = () => {
                   bgcolor: 'background.paper',
                   zIndex: 2,
                   boxShadow: '-4px 0 8px rgba(0,0,0,0.06)',
-                  minWidth: 220,
+                  minWidth: 150,
                 }}
               >
                 Actions
@@ -888,7 +877,18 @@ export const StoresPage: React.FC = () => {
                   />
                 </TableCell>
                 <TableCell>
-                  <Typography variant="body2" fontWeight="bold">{store.shopName}</Typography>
+                  <Typography
+                    component="a"
+                    href={`/stores/${store.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    variant="body2"
+                    fontWeight="bold"
+                    color="primary"
+                    sx={{ cursor: 'pointer', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+                  >
+                    {store.shopName}
+                  </Typography>
                   <Typography variant="caption" color="textSecondary">{store.email}</Typography>
                 </TableCell>
                 <TableCell>{store.ownerName || store.displayName || 'N/A'}</TableCell>
@@ -960,57 +960,23 @@ export const StoresPage: React.FC = () => {
                   <Button
                     size="small"
                     variant="outlined"
-                    onClick={() => navigate(`/performance?retailer=${encodeURIComponent(store.id)}`)}
+                    component="a"
+                    href={`/stores/${store.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     sx={{ mr: 0.5 }}
                   >
-                    Sales
+                    Open
                   </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    color="warning"
-                    startIcon={<AccountBalanceWallet />}
-                    onClick={() => handleOpenWallet(store)}
-                    sx={{ mr: 0.5 }}
-                  >
-                    Wallet
-                  </Button>
-                  <IconButton
-                    size="small"
-                    onClick={() => handleOpenVisitLog(store)}
-                    color="secondary"
-                    title="View visit log"
-                  >
-                    <History />
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    onClick={() =>
-                      navigate(
-                        store.salesOfficerId
-                          ? `/so-visits?so=${encodeURIComponent(store.salesOfficerId)}`
-                          : '/so-visits'
-                      )
-                    }
-                    color="primary"
-                    title="All SO visits"
-                    disabled={!canAccessPath('/so-visits')}
-                  >
-                    <Place />
-                  </IconButton>
                   {canEditStores && (
-                    <>
-                  <IconButton size="small" onClick={() => handleOpenEdit(store)} color="primary">
-                    <Edit />
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    onClick={() => void handleToggleRetailer(store)}
-                    color={store.isActive !== false ? 'success' : 'default'}
-                  >
-                    {store.isActive !== false ? <CheckCircle /> : <Cancel />}
-                  </IconButton>
-                    </>
+                    <IconButton
+                      size="small"
+                      onClick={() => void handleToggleRetailer(store)}
+                      color={store.isActive !== false ? 'success' : 'default'}
+                      title={store.isActive !== false ? 'Deactivate' : 'Activate'}
+                    >
+                      {store.isActive !== false ? <CheckCircle /> : <Cancel />}
+                    </IconButton>
                   )}
                 </TableCell>
               </TableRow>
@@ -1355,20 +1321,6 @@ export const StoresPage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
-
-      <RetailerVisitLogDialog
-        open={Boolean(visitLogStore)}
-        store={visitLogStore}
-        salesOfficerNameById={salesOfficerNameById}
-        onClose={() => setVisitLogStore(null)}
-      />
-
-      <RetailerWalletDialog
-        open={Boolean(walletStore)}
-        store={walletStore}
-        onClose={() => setWalletStore(null)}
-        readOnly={!canEditStores}
-      />
 
       <DailyRetailerSalesDialog
         open={dailySalesOpen}

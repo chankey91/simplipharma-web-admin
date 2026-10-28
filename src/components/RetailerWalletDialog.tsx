@@ -37,12 +37,20 @@ type Props = {
   onClose: () => void;
   /** Hide credit/debit posting. */
   readOnly?: boolean;
+  /** Render on a page instead of inside a dialog. */
+  embedded?: boolean;
 };
 
 const formatAmount = (n: number) =>
   `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, readOnly }) => {
+export const RetailerWalletDialog: React.FC<Props> = ({
+  open,
+  store,
+  onClose,
+  readOnly,
+  embedded,
+}) => {
   const retailerId = store?.id || '';
   const { data, isLoading, error, refetch, isFetching } = useRetailerWallet(retailerId, open);
   const invalidateWallet = useInvalidateRetailerWallet();
@@ -95,18 +103,8 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
     }
   };
 
-  return (
+  const panel = (
     <>
-      <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-        <DialogTitle>
-          Wallet — {storeName}
-          {store?.storeCode ? (
-            <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-              ({store.storeCode})
-            </Typography>
-          ) : null}
-        </DialogTitle>
-        <DialogContent>
           {isLoading ? (
             <Loading message="Loading wallet…" />
           ) : error ? (
@@ -271,14 +269,41 @@ export const RetailerWalletDialog: React.FC<Props> = ({ open, store, onClose, re
               )}
             </>
           )}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => void refetch()} disabled={isLoading || isFetching}>
-            Refresh
-          </Button>
-          <Button onClick={onClose}>Close</Button>
-        </DialogActions>
-      </Dialog>
+    </>
+  );
+
+  const refreshButton = (
+    <Button onClick={() => void refetch()} disabled={isLoading || isFetching}>
+      Refresh
+    </Button>
+  );
+
+  return (
+    <>
+      {embedded ? (
+        <Box>
+          {panel}
+          <Box display="flex" justifyContent="flex-end" mt={2}>
+            {refreshButton}
+          </Box>
+        </Box>
+      ) : (
+        <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+          <DialogTitle>
+            Wallet — {storeName}
+            {store?.storeCode ? (
+              <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+                ({store.storeCode})
+              </Typography>
+            ) : null}
+          </DialogTitle>
+          <DialogContent>{panel}</DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            {refreshButton}
+            <Button onClick={onClose}>Close</Button>
+          </DialogActions>
+        </Dialog>
+      )}
 
       {!readOnly ? (
         <>
