@@ -450,7 +450,11 @@ export const useFulfillOrder = () => {
       queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
       queryClient.invalidateQueries({ queryKey: ['creditNotes'] });
       queryClient.invalidateQueries({ queryKey: ['debitNotes'] });
-    }
+    },
+    onError: () => {
+      invalidateInventoryStockQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ['retailerWallet'] });
+    },
   });
 };
 

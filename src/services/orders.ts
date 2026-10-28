@@ -983,6 +983,12 @@ export const fulfillOrder = async (
   }
 
   const stockUpdateErrors: string[] = [];
+  // Load the wallet module before any stock write. A missing chunk must not
+  // zero batches and then leave the order unfulfilled.
+  const walletModule = options?.applyWallet ? await import('./applyOrderWallet') : null;
+  const deductedDeltas: OrderInventoryDelta[] = [];
+  let walletPosted = false;
+  let walletApplications: PaymentRequestCreditApplication[] = [];
 
   const reduceAllStock = async () => {
     await Promise.all(
@@ -1000,6 +1006,14 @@ export const fulfillOrder = async (
               id: medicineId,
               stockBatches: updatedBatches,
             } as Medicine);
+          }
+          for (const batch of batches.values()) {
+            deductedDeltas.push({
+              medicineId,
+              medicineName: label,
+              batchNumber: batch.batchNumber,
+              quantity: batch.quantity,
+            });
           }
           console.log(`✓ Stock reduced for medicine ${medicineId} (${batches.size} batch(es))`);
         } catch (error: unknown) {
@@ -1038,6 +1052,7 @@ export const fulfillOrder = async (
     }
   };
 
+  try {
   const [, invoiceNumber, purchaseDiscountLookup] = await Promise.all([
     reduceAllStock(),
     resolveInvoiceNumber(),
@@ -1458,25 +1473,23 @@ export const fulfillOrder = async (
   const existingCredit = Number(orderDoc.data()?.creditApplied) || 0;
 
   let walletApplied = 0;
-  if (options?.applyWallet && invoiceTotal > 0.01) {
-    const {
-      applyRetailerWalletTowardAmount,
-      postWalletPaymentOnOrder,
-      rollbackWalletApplications,
-    } = await import('./applyOrderWallet');
+  if (walletModule && invoiceTotal > 0.01) {
     const remainingDue = Math.max(0, roundMoney2(invoiceTotal - existingPaid));
-    const wallet = await applyRetailerWalletTowardAmount(order.retailerId, remainingDue);
+    const wallet = await walletModule.applyRetailerWalletTowardAmount(order.retailerId, remainingDue);
     walletApplied = wallet.applied;
+    walletApplications = wallet.applications;
     if (walletApplied > 0.01) {
       try {
-        await postWalletPaymentOnOrder({
+        await walletModule.postWalletPaymentOnOrder({
           orderId,
           amount: walletApplied,
           applications: wallet.applications,
           note: 'Wallet applied at invoice fulfill',
         });
+        walletPosted = true;
       } catch (error) {
-        await rollbackWalletApplications(wallet.applications);
+        await walletModule.rollbackWalletApplications(wallet.applications);
+        walletApplications = [];
         throw error;
       }
       updateData.walletCreditApplications = wallet.applications;
@@ -1535,6 +1548,29 @@ export const fulfillOrder = async (
   
   await updateDoc(orderRef, updateData);
   return { walletApplied };
+  } catch (error) {
+    const restoreErrors = deductedDeltas.length
+      ? await applyInventoryRestores(deductedDeltas)
+      : [];
+    if (walletModule && (walletPosted || walletApplications.length > 0)) {
+      try {
+        if (walletPosted) {
+          await walletModule.reverseFulfillmentWallet(orderId, walletApplications);
+        } else {
+          await walletModule.rollbackWalletApplications(walletApplications);
+        }
+      } catch (rollbackError) {
+        console.error('Wallet rollback after failed fulfill failed:', rollbackError);
+      }
+    }
+    if (restoreErrors.length > 0) {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `${msg} Stock was taken and could not be fully put back: ${restoreErrors.join('; ')}`
+      );
+    }
+    throw error;
+  }
 };
 
 export type UnpaidInvoiceOption = {
