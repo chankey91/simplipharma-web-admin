@@ -71,7 +71,6 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { DailyRetailerSalesDialog } from '../components/DailyRetailerSalesDialog';
-import { RetailerDailySalesDialog, RetailerSalesTarget } from '../components/RetailerDailySalesDialog';
 import { useAuth } from '../context/AuthContext';
 import {
   checkLicenseAndAadharUnique,
@@ -155,7 +154,6 @@ export const StoresPage: React.FC = () => {
   const [walletStore, setWalletStore] = useState<User | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [dailySalesOpen, setDailySalesOpen] = useState(false);
-  const [performanceRetailer, setPerformanceRetailer] = useState<RetailerSalesTarget | null>(null);
   const { sortKey, sortDirection, requestSort } = useTableSort('shopName', 'asc');
 
   const salesOfficerNameById = useMemo(() => {
@@ -962,13 +960,7 @@ export const StoresPage: React.FC = () => {
                   <Button
                     size="small"
                     variant="outlined"
-                    onClick={() =>
-                      setPerformanceRetailer({
-                        id: store.id,
-                        name: store.shopName || store.displayName || store.email || 'Retailer',
-                        code: store.storeCode,
-                      })
-                    }
+                    onClick={() => navigate(`/performance?retailer=${encodeURIComponent(store.id)}`)}
                     sx={{ mr: 0.5 }}
                   >
                     Sales
@@ -1382,11 +1374,9 @@ export const StoresPage: React.FC = () => {
         open={dailySalesOpen}
         stores={stores ?? []}
         onClose={() => setDailySalesOpen(false)}
-        onSelectRetailer={(retailer) => setPerformanceRetailer(retailer)}
-      />
-      <RetailerDailySalesDialog
-        retailer={performanceRetailer}
-        onClose={() => setPerformanceRetailer(null)}
+        onSelectRetailer={(retailer) =>
+          navigate(`/performance?retailer=${encodeURIComponent(retailer.id)}`)
+        }
       />
     </Box>
   );
