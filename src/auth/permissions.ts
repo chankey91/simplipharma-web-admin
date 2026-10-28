@@ -60,6 +60,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/area-managers', label: 'Area managers' },
   { path: '/so-visits', label: 'SO visits' },
   { path: '/daily-performance', label: 'Daily performance' },
+  { path: '/performance', label: 'Performance' },
   { path: '/gst', label: 'GST' },
   { path: '/margin', label: 'Margin report' },
   { path: '/retailer-incentives', label: 'Retailer incentives' },
@@ -96,6 +97,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/purchase-lists',
     '/credit-notes',
     '/medicine-demand',
+    '/performance',
     '/support',
     '/offers',
   ],
@@ -109,6 +111,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/purchases',
     '/inventory',
     '/accounts',
+    '/performance',
   ],
 };
 
