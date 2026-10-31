@@ -138,6 +138,7 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Insights',
     items: [
       { text: 'Margin report', icon: <TrendingUp />, path: '/margin' },
+      { text: 'Offer margin', icon: <TrendingUp />, path: '/offer-margin' },
       { text: 'Retailer incentives', icon: <CardGiftcard />, path: '/retailer-incentives' },
       { text: 'Daily performance', icon: <Assessment />, path: '/daily-performance' },
       { text: 'Performance', icon: <ShowChart />, path: '/performance' },

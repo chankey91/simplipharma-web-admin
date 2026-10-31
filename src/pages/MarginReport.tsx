@@ -352,9 +352,14 @@ export const MarginReportPage: React.FC = () => {
   return (
     <Box sx={{ maxWidth: 1400, mx: 'auto' }}>
       <Box sx={{ mb: 3 }}>
-        <Typography variant="h4" component="h1" fontWeight={700} gutterBottom>
-          Margin report
-        </Typography>
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
+          <Typography variant="h4" component="h1" fontWeight={700} gutterBottom>
+            Margin report
+          </Typography>
+          <Button variant="outlined" onClick={() => navigate('/offer-margin')} sx={{ flexShrink: 0 }}>
+            Offer list
+          </Button>
+        </Stack>
         <Typography variant="body1" color="text.secondary">
           Profit per order from batch landed cost vs invoice selling price (ex-GST, after line
           discount). Returns reduce net margin.           Purchase-invoice additional discount stays one bill amount. Older bills are included

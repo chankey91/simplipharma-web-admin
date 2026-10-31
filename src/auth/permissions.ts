@@ -64,6 +64,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/performance', label: 'Performance' },
   { path: '/gst', label: 'GST' },
   { path: '/margin', label: 'Margin report' },
+  { path: '/offer-margin', label: 'Offer margin' },
   { path: '/retailer-incentives', label: 'Retailer incentives' },
   { path: '/medicine-demand', label: 'Top sellers' },
   { path: '/banners', label: 'Banners' },
