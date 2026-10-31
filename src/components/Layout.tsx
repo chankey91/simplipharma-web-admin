@@ -50,6 +50,7 @@ import {
   Payments,
   Article,
   HeadsetMic,
+  Report,
   Stars,
   Android,
   ShoppingBag,
@@ -81,6 +82,7 @@ const MENU_SECTIONS: MenuSection[] = [
     items: [
       { text: 'Dashboard', icon: <Dashboard />, path: '/' },
       { text: 'Support', icon: <HeadsetMic />, path: '/support' },
+      { text: 'Incidents', icon: <Report />, path: '/incidents' },
     ],
   },
   {

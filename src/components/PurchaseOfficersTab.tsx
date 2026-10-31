@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -41,6 +42,7 @@ const generatePassword = () => {
 };
 
 export const PurchaseOfficersTab: React.FC = () => {
+  const navigate = useNavigate();
   const { data: officers, isLoading, error } = usePurchaseOfficers();
   const createMutation = useCreatePurchaseOfficer();
   const updateMutation = useUpdatePurchaseOfficerProfile();
@@ -251,6 +253,16 @@ export const PurchaseOfficersTab: React.FC = () => {
                   <TableCell>{po.email}</TableCell>
                   <TableCell>{po.phoneNumber || '—'}</TableCell>
                   <TableCell align="right">
+                    <Button
+                      size="small"
+                      onClick={() =>
+                        navigate(
+                          `/incidents?new=1&subjectType=purchaseOfficer&subjectId=${encodeURIComponent(po.id)}`
+                        )
+                      }
+                    >
+                      Incident
+                    </Button>
                     <IconButton size="small" color="primary" aria-label="Edit" onClick={() => handleOpenEdit(po)}>
                       <Edit />
                     </IconButton>

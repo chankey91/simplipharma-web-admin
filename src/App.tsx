@@ -51,6 +51,7 @@ import { AccountsPage } from './pages/Accounts';
 import { PaymentRequestsPage } from './pages/PaymentRequests';
 import { SoCashPage } from './pages/SoCash';
 import { SupportTicketsPage } from './pages/SupportTickets';
+import { IncidentsPage } from './pages/Incidents';
 import { HomeFeedPage } from './pages/HomeFeed';
 import { RetailerAppPage } from './pages/RetailerApp';
 import { PurchaseListsPage } from './pages/PurchaseLists';
@@ -127,6 +128,7 @@ const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   { path: '/', element: withLayout(<DashboardPage />) },
   { path: '/support', element: withLayout(<SupportTicketsPage />) },
+  { path: '/incidents', element: withLayout(<IncidentsPage />) },
   { path: '/stores', element: withLayout(<StoresPage />) },
   { path: '/stores/:storeId', element: withLayout(<RetailerDetailsPage />) },
   { path: '/store-receivables', element: withLayout(<StoreReceivablesPage />) },

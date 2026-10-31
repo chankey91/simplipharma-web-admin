@@ -34,6 +34,7 @@ export const WRITE_MODULES: { id: WriteModule; label: string }[] = [
 export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/', label: 'Dashboard' },
   { path: '/support', label: 'Support' },
+  { path: '/incidents', label: 'Incidents' },
   { path: '/orders', label: 'Orders' },
   { path: '/order-shortfalls', label: 'Order shortfalls' },
   { path: '/product-demands', label: 'Product demands' },
@@ -99,6 +100,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/medicine-demand',
     '/performance',
     '/support',
+    '/incidents',
     '/offers',
   ],
   office: [
@@ -112,6 +114,7 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/inventory',
     '/accounts',
     '/performance',
+    '/incidents',
   ],
 };
 
