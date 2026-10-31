@@ -28,6 +28,7 @@ import {
   PersonAddAlt,
   LockReset,
   Group,
+  Report,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -461,6 +462,17 @@ export const AreaManagersPage: React.FC = () => {
                       <TableCell align="right">{sos.length}</TableCell>
                       <TableCell align="right">
                         <Box display="flex" gap={0.5} justifyContent="flex-end" flexWrap="wrap">
+                          <Button
+                            size="small"
+                            startIcon={<Report />}
+                            onClick={() =>
+                              navigate(
+                                `/incidents?new=1&subjectType=areaManager&subjectId=${encodeURIComponent(am.id)}`
+                              )
+                            }
+                          >
+                            Incident
+                          </Button>
                           <Button
                             size="small"
                             startIcon={<Edit />}

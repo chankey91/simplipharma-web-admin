@@ -33,6 +33,7 @@ import {
   PersonAddAlt,
   LockReset,
   Place,
+  Report,
   PhotoCamera,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
@@ -1237,6 +1238,18 @@ const SalesOfficerRow: React.FC<{
             color="secondary"
           >
             <Place fontSize="small" />
+          </IconButton>
+          <IconButton
+            size="small"
+            aria-label="Raise incident"
+            title="Raise incident"
+            onClick={() =>
+              navigate(
+                `/incidents?new=1&subjectType=salesOfficer&subjectId=${encodeURIComponent(officer.id)}`
+              )
+            }
+          >
+            <Report fontSize="small" />
           </IconButton>
           <IconButton size="small" aria-label="Edit Sales Officer" onClick={onEdit} color="primary">
             <Edit fontSize="small" />

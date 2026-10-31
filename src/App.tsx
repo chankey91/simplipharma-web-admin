@@ -42,6 +42,7 @@ import { OrderReturnsPage } from './pages/OrderReturns';
 import { ProductDemandsPage } from './pages/ProductDemandsPage';
 import { CreditNotesPage } from './pages/CreditNotes';
 import { MarginReportPage } from './pages/MarginReport';
+import { OfferMarginListPage } from './pages/OfferMarginList';
 import { RetailerIncentivesPage } from './pages/RetailerIncentives';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
 import { SoReceivablesPage } from './pages/SoReceivables';
@@ -51,6 +52,7 @@ import { AccountsPage } from './pages/Accounts';
 import { PaymentRequestsPage } from './pages/PaymentRequests';
 import { SoCashPage } from './pages/SoCash';
 import { SupportTicketsPage } from './pages/SupportTickets';
+import { IncidentsPage } from './pages/Incidents';
 import { HomeFeedPage } from './pages/HomeFeed';
 import { RetailerAppPage } from './pages/RetailerApp';
 import { PurchaseListsPage } from './pages/PurchaseLists';
@@ -127,6 +129,7 @@ const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   { path: '/', element: withLayout(<DashboardPage />) },
   { path: '/support', element: withLayout(<SupportTicketsPage />) },
+  { path: '/incidents', element: withLayout(<IncidentsPage />) },
   { path: '/stores', element: withLayout(<StoresPage />) },
   { path: '/stores/:storeId', element: withLayout(<RetailerDetailsPage />) },
   { path: '/store-receivables', element: withLayout(<StoreReceivablesPage />) },
@@ -171,6 +174,7 @@ const router = createBrowserRouter([
   { path: '/purchase-returns/new', element: withLayout(<CreatePurchaseReturnPage />) },
   { path: '/purchase-returns/:returnId', element: withLayout(<PurchaseReturnDetailsPage />) },
   { path: '/margin', element: withLayout(<MarginReportPage />) },
+  { path: '/offer-margin', element: withLayout(<OfferMarginListPage />) },
   { path: '/retailer-incentives', element: withLayout(<RetailerIncentivesPage />) },
   { path: '/medicine-demand', element: withLayout(<MedicineDemandPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
