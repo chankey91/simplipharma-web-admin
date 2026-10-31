@@ -728,9 +728,94 @@ service cloud.firestore {
         && request.resource.data.subjectName is string;
     }
 
+    // Retailer starts with their sales officer. Sales officer starts with their area manager.
+    // Anyone else, or a missing handler, starts with admin.
+    function incidentLevelOnCreate() {
+      return (
+        isRetailer()
+        && request.resource.data.raisedByRole == 'retailer'
+        && (
+          (
+            request.resource.data.salesOfficerId is string
+            && request.resource.data.salesOfficerId.size() > 0
+            && request.resource.data.level == 'salesOfficer'
+          )
+          || (
+            !(
+              request.resource.data.salesOfficerId is string
+              && request.resource.data.salesOfficerId.size() > 0
+            )
+            && request.resource.data.level == 'admin'
+          )
+        )
+      )
+      || (
+        isSalesOfficer()
+        && request.resource.data.raisedByRole == 'salesOfficer'
+        && (
+          (
+            request.resource.data.areaManagerId is string
+            && request.resource.data.areaManagerId.size() > 0
+            && request.resource.data.level == 'areaManager'
+          )
+          || (
+            !(
+              request.resource.data.areaManagerId is string
+              && request.resource.data.areaManagerId.size() > 0
+            )
+            && request.resource.data.level == 'admin'
+          )
+        )
+      )
+      || (
+        !(isRetailer() && request.resource.data.raisedByRole == 'retailer')
+        && !(isSalesOfficer() && request.resource.data.raisedByRole == 'salesOfficer')
+        && request.resource.data.level == 'admin'
+      )
+      || (
+        !('level' in request.resource.data)
+        && !(
+          isRetailer()
+          && request.resource.data.raisedByRole == 'retailer'
+          && request.resource.data.salesOfficerId is string
+          && request.resource.data.salesOfficerId.size() > 0
+        )
+        && !(
+          isSalesOfficer()
+          && request.resource.data.raisedByRole == 'salesOfficer'
+          && request.resource.data.areaManagerId is string
+          && request.resource.data.areaManagerId.size() > 0
+        )
+      );
+    }
+
+    function incidentIdentityUnchanged() {
+      return request.resource.data.subjectId == resource.data.subjectId
+        && request.resource.data.subjectType == resource.data.subjectType
+        && request.resource.data.raisedById == resource.data.raisedById
+        && request.resource.data.raisedByRole == resource.data.raisedByRole
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.details == resource.data.details
+        && request.resource.data.salesOfficerId == resource.data.salesOfficerId
+        && request.resource.data.areaManagerId == resource.data.areaManagerId
+        && request.resource.data.purchaseOfficerId == resource.data.purchaseOfficerId
+        && request.resource.data.priority == resource.data.priority;
+    }
+
+    function storedIncidentLevel(data) {
+      return data.level in ['salesOfficer', 'areaManager', 'admin'] ? data.level : 'admin';
+    }
+
+    function incidentCloseNoteOk() {
+      return request.resource.data.closeNote is string
+        && request.resource.data.closeNote.size() > 0
+        && request.resource.data.closeNote.size() < 4000
+        && request.resource.data.closedById == request.auth.uid;
+    }
+
     match /incidents/{incidentId} {
       allow read: if signedIn() && incidentReadable(resource.data);
-      allow create: if signedIn() && incidentCreateShape() && (
+      allow create: if signedIn() && incidentCreateShape() && incidentLevelOnCreate() && (
         (
           (isAdminOrOperations() || isOffice())
           && request.resource.data.raisedByRole in ['admin', 'operations', 'office']
@@ -778,17 +863,70 @@ service cloud.firestore {
           && request.resource.data.subjectId == request.auth.uid
         )
       );
-      allow update: if isAdmin()
-        && resource.data.status == 'open'
-        && request.resource.data.status == 'closed'
-        && request.resource.data.closeNote is string
-        && request.resource.data.closeNote.size() > 0
-        && request.resource.data.closeNote.size() < 4000
-        && request.resource.data.closedById == request.auth.uid
-        && request.resource.data.subjectId == resource.data.subjectId
-        && request.resource.data.raisedById == resource.data.raisedById
-        && request.resource.data.title == resource.data.title
-        && request.resource.data.details == resource.data.details;
+      allow update: if incidentIdentityUnchanged() && (
+        (
+          isAdmin()
+          && resource.data.status == 'open'
+          && request.resource.data.status == 'closed'
+          && incidentCloseNoteOk()
+          && (
+            (
+              request.resource.data.level == resource.data.level
+              && request.resource.data.closedAtLevel == resource.data.closedAtLevel
+            )
+            || (
+              request.resource.data.level == storedIncidentLevel(resource.data)
+              && request.resource.data.closedAtLevel == storedIncidentLevel(resource.data)
+            )
+          )
+        )
+        || (
+          isAdmin()
+          && resource.data.status == 'closed'
+          && request.resource.data.status == 'open'
+          && request.resource.data.level == (
+            resource.data.closedAtLevel in ['salesOfficer', 'areaManager', 'admin']
+              ? resource.data.closedAtLevel
+              : 'admin'
+          )
+        )
+        || (
+          isSalesOfficer()
+          && resource.data.salesOfficerId == request.auth.uid
+          && resource.data.level == 'salesOfficer'
+          && resource.data.status == 'open'
+          && request.resource.data.status == 'closed'
+          && request.resource.data.level == 'salesOfficer'
+          && request.resource.data.closedAtLevel == 'salesOfficer'
+          && incidentCloseNoteOk()
+        )
+        || (
+          isSalesOfficer()
+          && resource.data.salesOfficerId == request.auth.uid
+          && resource.data.level == 'salesOfficer'
+          && resource.data.status == 'open'
+          && request.resource.data.status == 'open'
+          && request.resource.data.level == 'admin'
+        )
+        || (
+          isAreaManager()
+          && resource.data.areaManagerId == request.auth.uid
+          && resource.data.level == 'areaManager'
+          && resource.data.status == 'open'
+          && request.resource.data.status == 'closed'
+          && request.resource.data.level == 'areaManager'
+          && request.resource.data.closedAtLevel == 'areaManager'
+          && incidentCloseNoteOk()
+        )
+        || (
+          isAreaManager()
+          && resource.data.areaManagerId == request.auth.uid
+          && resource.data.level == 'areaManager'
+          && resource.data.status == 'open'
+          && request.resource.data.status == 'open'
+          && request.resource.data.level == 'admin'
+        )
+      );
       allow delete: if false;
 
       match /comments/{commentId} {

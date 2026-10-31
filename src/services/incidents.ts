@@ -15,6 +15,7 @@ import { auth } from './firebase';
 export type IncidentSubjectType = 'retailer' | 'salesOfficer' | 'areaManager' | 'purchaseOfficer';
 export type IncidentStatus = 'open' | 'closed';
 export type IncidentPriority = 'normal' | 'urgent';
+export type IncidentLevel = 'salesOfficer' | 'areaManager' | 'admin';
 
 export type Incident = {
   id: string;
@@ -35,6 +36,10 @@ export type Incident = {
   details: string;
   priority: IncidentPriority;
   status: IncidentStatus;
+  /** Who should act next. Missing on older incidents means admin. */
+  level?: IncidentLevel;
+  /** Level at the moment it was closed, so reopen can put it back there. */
+  closedAtLevel?: IncidentLevel;
   createdAt?: Timestamp | Date | null;
   updatedAt?: Timestamp | Date | null;
   closedAt?: Timestamp | Date | null;
@@ -51,6 +56,30 @@ export type IncidentComment = {
   text: string;
   createdAt?: Timestamp | Date | null;
 };
+
+export function incidentLevel(incident: { level?: string | null }): IncidentLevel {
+  if (incident.level === 'salesOfficer' || incident.level === 'areaManager' || incident.level === 'admin') {
+    return incident.level;
+  }
+  return 'admin';
+}
+
+export function incidentLevelLabel(level: IncidentLevel): string {
+  if (level === 'salesOfficer') return 'With sales officer';
+  if (level === 'areaManager') return 'With area manager';
+  return 'With admin';
+}
+
+/** Retailer starts with the sales officer. A sales officer starts with the area manager. */
+export function startIncidentLevel(
+  raisedByRole: string,
+  salesOfficerId?: string,
+  areaManagerId?: string
+): IncidentLevel {
+  if (raisedByRole === 'retailer') return salesOfficerId ? 'salesOfficer' : 'admin';
+  if (raisedByRole === 'salesOfficer') return areaManagerId ? 'areaManager' : 'admin';
+  return 'admin';
+}
 
 export const INCIDENT_SUBJECT_LABEL: Record<IncidentSubjectType, string> = {
   retailer: 'Retailer',
@@ -115,6 +144,7 @@ export async function createIncident(input: {
       details,
       priority: input.priority,
       status: 'open',
+      level: startIncidentLevel(input.raisedByRole, input.salesOfficerId, input.areaManagerId),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     })
@@ -147,19 +177,38 @@ export async function addIncidentComment(
   });
 }
 
-export async function closeIncident(incidentId: string, closeNote: string): Promise<void> {
+export async function closeIncident(
+  incidentId: string,
+  closeNote: string,
+  level: IncidentLevel
+): Promise<void> {
   const user = auth.currentUser;
   if (!user) throw new Error('You must be signed in');
   const note = closeNote.trim();
   if (!note) throw new Error('Enter a closing note');
   await updateDoc(doc(db, 'incidents', incidentId), {
     status: 'closed',
+    level,
+    closedAtLevel: level,
     closeNote: note,
     closedById: user.uid,
     closedByName: user.displayName || user.email || 'Admin',
     closedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+}
+
+export async function reopenIncident(incidentId: string, note: string, restoreLevel: IncidentLevel): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('You must be signed in');
+  const body = note.trim();
+  if (!body) throw new Error('Enter why this is being reopened');
+  await updateDoc(doc(db, 'incidents', incidentId), {
+    status: 'open',
+    level: restoreLevel,
+    updatedAt: serverTimestamp(),
+  });
+  await addIncidentComment(incidentId, `Reopened: ${body}`, 'admin');
 }
 
 export function incidentTimeLabel(value: Incident['createdAt']): string {
