@@ -30,9 +30,12 @@ import {
   closeIncident,
   createIncident,
   INCIDENT_SUBJECT_LABEL,
+  incidentLevel,
+  incidentLevelLabel,
   incidentTimeLabel,
   listIncidentComments,
   listIncidents,
+  reopenIncident,
   type Incident,
   type IncidentPriority,
   type IncidentSubjectType,
@@ -69,6 +72,8 @@ export const IncidentsPage: React.FC = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
   const [closeNote, setCloseNote] = useState('');
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenNote, setReopenNote] = useState('');
   const [form, setForm] = useState({
     subjectType: 'retailer' as IncidentSubjectType,
     subjectId: '',
@@ -184,7 +189,7 @@ export const IncidentsPage: React.FC = () => {
   });
 
   const closeMutation = useMutation({
-    mutationFn: () => closeIncident(selectedId!, closeNote),
+    mutationFn: () => closeIncident(selectedId!, closeNote, incidentLevel(selected!)),
     onSuccess: async () => {
       setCloseOpen(false);
       setCloseNote('');
@@ -192,6 +197,28 @@ export const IncidentsPage: React.FC = () => {
     },
     onError: (error: unknown) => {
       void alert(error instanceof Error ? error.message : 'Could not close the incident', { severity: 'error' });
+    },
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: () => {
+      const current = selected!;
+      const restore =
+        current.closedAtLevel === 'salesOfficer' ||
+        current.closedAtLevel === 'areaManager' ||
+        current.closedAtLevel === 'admin'
+          ? current.closedAtLevel
+          : incidentLevel(current);
+      return reopenIncident(selectedId!, reopenNote, restore);
+    },
+    onSuccess: async () => {
+      setReopenOpen(false);
+      setReopenNote('');
+      await queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      await queryClient.invalidateQueries({ queryKey: ['incidentComments', selectedId] });
+    },
+    onError: (error: unknown) => {
+      void alert(error instanceof Error ? error.message : 'Could not reopen the incident', { severity: 'error' });
     },
   });
 
@@ -208,8 +235,9 @@ export const IncidentsPage: React.FC = () => {
             Incidents
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            A retailer incident is shown to that shop&apos;s sales officer and area manager. A purchase officer sees
-            incidents about them and can reply. Only an admin can close an incident.
+            A retailer incident waits on that shop&apos;s sales officer. If they cannot resolve it, they send it to
+            admin. A sales officer incident waits on their area manager, then admin. Admin can reply or close at any
+            step, and can reopen a closed incident.
           </Typography>
         </Box>
         <Button variant="contained" onClick={() => setCreateOpen(true)}>
@@ -280,6 +308,7 @@ export const IncidentsPage: React.FC = () => {
                 </Box>
                 <Box display="flex" gap={1} alignItems="center">
                   <Chip size="small" label={selected.priority === 'urgent' ? 'Urgent' : 'Normal'} color={selected.priority === 'urgent' ? 'error' : 'default'} />
+                  <Chip size="small" label={incidentLevelLabel(incidentLevel(selected))} />
                   <Chip size="small" label={selected.status === 'open' ? 'Open' : 'Closed'} color={selected.status === 'open' ? 'warning' : 'success'} />
                 </Box>
               </Box>
@@ -333,6 +362,12 @@ export const IncidentsPage: React.FC = () => {
                       Close
                     </Button>
                   ) : null}
+                </Box>
+              ) : canClose ? (
+                <Box sx={{ mt: 1 }}>
+                  <Button variant="outlined" onClick={() => setReopenOpen(true)}>
+                    Reopen
+                  </Button>
                 </Box>
               ) : null}
             </>
@@ -435,6 +470,32 @@ export const IncidentsPage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog open={reopenOpen} onClose={() => setReopenOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Reopen incident</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            multiline
+            minRows={3}
+            margin="dense"
+            label="Why it is being reopened"
+            value={reopenNote}
+            onChange={(event) => setReopenNote(event.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReopenOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={reopenMutation.isPending || !reopenNote.trim()}
+            onClick={() => reopenMutation.mutate()}
+          >
+            Reopen
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
@@ -463,10 +524,10 @@ function IncidentRow({
         <Typography variant="body2" fontWeight={700}>
           {row.title}
         </Typography>
-        <Chip size="small" label={row.status === 'open' ? 'Open' : 'Closed'} />
+        <Chip size="small" label={incidentLevelLabel(incidentLevel(row))} />
       </Box>
       <Typography variant="caption" color="text.secondary">
-        {INCIDENT_SUBJECT_LABEL[row.subjectType]} · {row.subjectName} · {row.raisedByRole}
+        {INCIDENT_SUBJECT_LABEL[row.subjectType]} · {row.subjectName} · {row.status === 'open' ? 'Open' : 'Closed'}
       </Typography>
     </Box>
   );
