@@ -282,6 +282,16 @@ export const RetailerDetailsPage: React.FC = () => {
           <Button variant="outlined" onClick={() => setVisitOpen(true)}>
             Visits
           </Button>
+          <Button
+            variant="outlined"
+            onClick={() =>
+              navigate(
+                `/incidents?new=1&subjectType=retailer&subjectId=${encodeURIComponent(store.id)}`
+              )
+            }
+          >
+            Incident
+          </Button>
           {canEditStores ? (
             <>
               <Button variant="outlined" onClick={() => navigate(`/stores?edit=${encodeURIComponent(store.id)}`)}>

@@ -86,6 +86,20 @@ service cloud.firestore {
       return affectedKeys().hasOnly(['gst']);
     }
 
+    function isAreaManager() {
+      return hasUserDoc() && (
+        userRole() == 'areaManager' ||
+        userRole() == 'AreaManager'
+      );
+    }
+
+    function isRetailer() {
+      return hasUserDoc() && (
+        userRole() == 'retailer' ||
+        userRole() == 'Retailer'
+      );
+    }
+
     function isPurchaseOfficer() {
       return hasUserDoc() && (
         userRole() == 'purchaseOfficer' ||
@@ -250,6 +264,14 @@ service cloud.firestore {
             || resource.data.alsoRetailer == true
           )
           && resource.data.salesOfficerId == request.auth.uid
+        )
+        || (
+          isRetailer()
+          && get(userDocPath()).data.salesOfficerId == userId
+          && (
+            resource.data.role == 'salesOfficer'
+            || resource.data.role == 'SalesOfficer'
+          )
         )
       );
       allow write: if signedIn() && (
@@ -678,6 +700,110 @@ service cloud.firestore {
         && request.resource.data.fileName is string
         && request.resource.data.downloadUrl is string;
       allow delete: if isAdmin();
+    }
+
+    function incidentReadable(data) {
+      return isAdminOrOperations()
+        || isOffice()
+        || data.raisedById == request.auth.uid
+        || data.subjectId == request.auth.uid
+        || data.salesOfficerId == request.auth.uid
+        || data.areaManagerId == request.auth.uid
+        || data.purchaseOfficerId == request.auth.uid;
+    }
+
+    function incidentCreateShape() {
+      return request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() < 200
+        && request.resource.data.details is string
+        && request.resource.data.details.size() > 0
+        && request.resource.data.details.size() < 8000
+        && request.resource.data.status == 'open'
+        && request.resource.data.priority in ['normal', 'urgent']
+        && request.resource.data.subjectType in ['retailer', 'salesOfficer', 'areaManager', 'purchaseOfficer']
+        && request.resource.data.subjectId is string
+        && request.resource.data.raisedById == request.auth.uid
+        && request.resource.data.raisedByRole is string
+        && request.resource.data.subjectName is string;
+    }
+
+    match /incidents/{incidentId} {
+      allow read: if signedIn() && incidentReadable(resource.data);
+      allow create: if signedIn() && incidentCreateShape() && (
+        (
+          (isAdminOrOperations() || isOffice())
+          && request.resource.data.raisedByRole in ['admin', 'operations', 'office']
+        )
+        || (
+          isRetailer()
+          && request.resource.data.raisedByRole == 'retailer'
+          && request.resource.data.subjectType == 'retailer'
+          && request.resource.data.subjectId == request.auth.uid
+          && request.resource.data.salesOfficerId == get(userDocPath()).data.salesOfficerId
+        )
+        || (
+          isSalesOfficer()
+          && request.resource.data.raisedByRole == 'salesOfficer'
+          && request.resource.data.salesOfficerId == request.auth.uid
+          && (
+            (request.resource.data.subjectType == 'salesOfficer' && request.resource.data.subjectId == request.auth.uid)
+            || (
+              request.resource.data.subjectType == 'retailer'
+              && retailerAssignedToSO(request.resource.data.subjectId)
+            )
+          )
+        )
+        || (
+          isAreaManager()
+          && request.resource.data.raisedByRole == 'areaManager'
+          && request.resource.data.areaManagerId == request.auth.uid
+          && (
+            (request.resource.data.subjectType == 'areaManager' && request.resource.data.subjectId == request.auth.uid)
+            || (
+              request.resource.data.subjectType == 'salesOfficer'
+              && get(/databases/$(database)/documents/users/$(request.resource.data.subjectId)).data.areaManagerId == request.auth.uid
+            )
+            || (
+              request.resource.data.subjectType == 'retailer'
+              && get(/databases/$(database)/documents/users/$(get(/databases/$(database)/documents/users/$(request.resource.data.subjectId)).data.salesOfficerId)).data.areaManagerId == request.auth.uid
+            )
+          )
+        )
+        || (
+          isPurchaseOfficer()
+          && request.resource.data.raisedByRole == 'purchaseOfficer'
+          && request.resource.data.purchaseOfficerId == request.auth.uid
+          && request.resource.data.subjectType == 'purchaseOfficer'
+          && request.resource.data.subjectId == request.auth.uid
+        )
+      );
+      allow update: if isAdmin()
+        && resource.data.status == 'open'
+        && request.resource.data.status == 'closed'
+        && request.resource.data.closeNote is string
+        && request.resource.data.closeNote.size() > 0
+        && request.resource.data.closeNote.size() < 4000
+        && request.resource.data.closedById == request.auth.uid
+        && request.resource.data.subjectId == resource.data.subjectId
+        && request.resource.data.raisedById == resource.data.raisedById
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.details == resource.data.details;
+      allow delete: if false;
+
+      match /comments/{commentId} {
+        allow read: if signedIn() && incidentReadable(get(/databases/$(database)/documents/incidents/$(incidentId)).data);
+        allow create: if signedIn()
+          && get(/databases/$(database)/documents/incidents/$(incidentId)).data.status == 'open'
+          && incidentReadable(get(/databases/$(database)/documents/incidents/$(incidentId)).data)
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.authorName is string
+          && request.resource.data.authorRole is string
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() < 8000;
+        allow update, delete: if false;
+      }
     }
 
     match /purchase_invoice_drafts/{draftId} {
