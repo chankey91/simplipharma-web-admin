@@ -1,3 +1,4 @@
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import {
   addDoc,
   collection,
@@ -9,8 +10,9 @@ import {
   updateDoc,
   doc,
   Timestamp,
+  auth,
+  storage,
 } from './firebase';
-import { auth } from './firebase';
 
 export type IncidentSubjectType = 'retailer' | 'salesOfficer' | 'areaManager' | 'purchaseOfficer';
 export type IncidentStatus = 'open' | 'closed';
@@ -34,6 +36,8 @@ export type Incident = {
   raisedByRole: string;
   title: string;
   details: string;
+  /** Optional photo attached when the incident was raised. */
+  imageUrl?: string;
   priority: IncidentPriority;
   status: IncidentStatus;
   /** Who should act next. Missing on older incidents means admin. */
@@ -103,6 +107,22 @@ function clean(data: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+export async function uploadIncidentImage(file: File): Promise<string> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('You must be signed in');
+  const contentType = file.type.startsWith('image/')
+    ? file.type
+    : /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(file.name)
+      ? 'image/jpeg'
+      : '';
+  if (!contentType) throw new Error('Choose a photo');
+  if (file.size > 6 * 1024 * 1024) throw new Error('Photo must be under 6 MB');
+  const safe = file.name.replace(/[^\w.\-]+/g, '_') || 'photo.jpg';
+  const fileRef = ref(storage, `incident_images/${user.uid}/${Date.now()}_${safe}`);
+  await uploadBytes(fileRef, file, { contentType });
+  return getDownloadURL(fileRef);
+}
+
 export async function listIncidents(): Promise<Incident[]> {
   const snap = await getDocs(query(collection(db, 'incidents'), orderBy('createdAt', 'desc')));
   return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Incident, 'id'>) }));
@@ -118,6 +138,7 @@ export async function createIncident(input: {
   purchaseOfficerId?: string;
   title: string;
   details: string;
+  imageUrl?: string;
   priority: IncidentPriority;
   raisedByRole: string;
 }): Promise<string> {
@@ -142,6 +163,7 @@ export async function createIncident(input: {
       raisedByRole: input.raisedByRole,
       title,
       details,
+      imageUrl: input.imageUrl?.trim(),
       priority: input.priority,
       status: 'open',
       level: startIncidentLevel(input.raisedByRole, input.salesOfficerId, input.areaManagerId),
