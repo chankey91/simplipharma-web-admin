@@ -102,6 +102,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Inventory', icon: <Inventory />, path: '/inventory' },
       { text: 'NRX register', icon: <Medication />, path: '/nrx-register' },
       { text: 'Purchase invoices', icon: <Receipt />, path: '/purchases' },
+      { text: 'Purchase short list', icon: <ReportProblem />, path: '/purchases/short-list' },
       { text: 'Vendors', icon: <Business />, path: '/vendors' },
       { text: 'Vendor ledger', icon: <AccountBalanceWallet />, path: '/vendor-ledger' },
       { text: 'Store ledger', icon: <AccountBalance />, path: '/store-ledger' },
@@ -215,7 +216,16 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const isSelected = (path: string) => {
     if (path === '/') return location.pathname === '/';
-    return location.pathname === path || location.pathname.startsWith(`${path}/`);
+    const matches = location.pathname === path || location.pathname.startsWith(`${path}/`);
+    if (!matches) return false;
+    const longerMenuMatch = menuSections.some((section) =>
+      section.items.some(
+        (item) =>
+          item.path.length > path.length &&
+          (location.pathname === item.path || location.pathname.startsWith(`${item.path}/`))
+      )
+    );
+    return !longerMenuMatch;
   };
 
   const drawer = (
