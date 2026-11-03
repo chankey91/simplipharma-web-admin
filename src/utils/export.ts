@@ -109,11 +109,12 @@ export const exportPendingOrdersByStore = async (
   });
 
   const excelData: (string | number)[][] = [
-    ['Store Code', 'Town / District', 'Shop Name', 'Medicine Name', 'Packaging', 'Quantity'],
+    ['S.No', 'Store Code', 'Town / District', 'Shop Name', 'Medicine Name', 'Packaging', 'Quantity'],
   ];
 
-  rows.forEach((row) => {
+  rows.forEach((row, index) => {
     excelData.push([
+      index + 1,
       row.storeCode,
       row.townDistrict,
       row.shopName,
@@ -125,7 +126,7 @@ export const exportPendingOrdersByStore = async (
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(excelData);
-  ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 35 }, { wch: 40 }, { wch: 18 }, { wch: 10 }];
+  ws['!cols'] = [{ wch: 6 }, { wch: 12 }, { wch: 28 }, { wch: 35 }, { wch: 40 }, { wch: 18 }, { wch: 10 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Pending Orders');
 
   const dateStr = istDateStampCompact();
@@ -152,7 +153,7 @@ export const exportPendingOrdersProductSummary = async (
     return;
   }
 
-  const medicineMap = new Map<string, { manufacturer: string; packaging: string }>();
+  const medicineMap = new Map<string, { manufacturer: string; packaging: string; productId: string }>();
   const allMedicineIds = new Set<string>();
 
   for (const order of orders) {
@@ -169,6 +170,7 @@ export const exportPendingOrdersProductSummary = async (
         medicineMap.set(medicineId, {
           manufacturer: med.manufacturer || 'N/A',
           packaging: resolvePackaging(med),
+          productId: med.productId?.trim() || '',
         });
       }
     } catch (error) {
@@ -188,6 +190,7 @@ export const exportPendingOrdersProductSummary = async (
     string,
     {
       medicineId: string;
+      productId: string;
       medicineName: string;
       manufacturer: string;
       packaging: string;
@@ -209,6 +212,7 @@ export const exportPendingOrdersProductSummary = async (
       } else {
         productAggregate.set(key, {
           medicineId: medicine.medicineId || '',
+          productId: medInfo?.productId || '',
           medicineName: medicine.name,
           manufacturer,
           packaging,
@@ -224,7 +228,8 @@ export const exportPendingOrdersProductSummary = async (
 
   const excelData: (string | number)[][] = [
     [
-      'SR',
+      'S.No',
+      'Product ID',
       'Medicine Name',
       'Packaging',
       'Total Quantity',
@@ -239,6 +244,7 @@ export const exportPendingOrdersProductSummary = async (
       : undefined;
     excelData.push([
       index + 1,
+      row.productId,
       row.medicineName,
       row.packaging,
       row.totalQty,
@@ -251,7 +257,8 @@ export const exportPendingOrdersProductSummary = async (
   const ws = XLSX.utils.aoa_to_sheet(excelData);
 
   ws['!cols'] = [
-    { wch: 5 },
+    { wch: 6 },
+    { wch: 16 },
     { wch: 40 },
     { wch: 18 },
     { wch: 14 },
