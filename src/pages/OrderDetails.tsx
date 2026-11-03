@@ -3610,7 +3610,15 @@ export const OrderDetailsPage: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {fulfillmentData.medicines.map((item, index) => {
+                  {fulfillmentData.medicines
+                    .map((item, index) => ({ item, index }))
+                    .sort((a, b) =>
+                      String(a.item?.name || '').localeCompare(String(b.item?.name || ''), undefined, {
+                        sensitivity: 'base',
+                        numeric: true,
+                      })
+                    )
+                    .map(({ item, index }) => {
                     if (!item) {
                       return null;
                     }
