@@ -719,6 +719,14 @@ service cloud.firestore {
         && request.resource.data.details is string
         && request.resource.data.details.size() > 0
         && request.resource.data.details.size() < 8000
+        && (
+          !('imageUrl' in request.resource.data)
+          || (
+            request.resource.data.imageUrl is string
+            && request.resource.data.imageUrl.size() > 0
+            && request.resource.data.imageUrl.size() < 4000
+          )
+        )
         && request.resource.data.status == 'open'
         && request.resource.data.priority in ['normal', 'urgent']
         && request.resource.data.subjectType in ['retailer', 'salesOfficer', 'areaManager', 'purchaseOfficer']
@@ -796,6 +804,7 @@ service cloud.firestore {
         && request.resource.data.raisedByRole == resource.data.raisedByRole
         && request.resource.data.title == resource.data.title
         && request.resource.data.details == resource.data.details
+        && request.resource.data.get('imageUrl', '') == resource.data.get('imageUrl', '')
         && request.resource.data.salesOfficerId == resource.data.salesOfficerId
         && request.resource.data.areaManagerId == resource.data.areaManagerId
         && request.resource.data.purchaseOfficerId == resource.data.purchaseOfficerId

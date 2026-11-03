@@ -29,6 +29,7 @@ import {
   addIncidentComment,
   closeIncident,
   createIncident,
+  uploadIncidentImage,
   INCIDENT_SUBJECT_LABEL,
   incidentLevel,
   incidentLevelLabel,
@@ -81,6 +82,8 @@ export const IncidentsPage: React.FC = () => {
     details: '',
     priority: 'normal' as IncidentPriority,
   });
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState('');
 
   const incidentsQuery = useQuery({
     queryKey: ['incidents'],
@@ -162,6 +165,7 @@ export const IncidentsPage: React.FC = () => {
         purchaseOfficerId,
         title: form.title,
         details: form.details,
+        imageUrl: imageFile ? await uploadIncidentImage(imageFile) : undefined,
         priority: form.priority,
         raisedByRole: panelRole || 'admin',
       });
@@ -171,6 +175,8 @@ export const IncidentsPage: React.FC = () => {
       setSelectedId(id);
       setCreateOpen(false);
       setForm({ subjectType: 'retailer', subjectId: '', title: '', details: '', priority: 'normal' });
+      setImageFile(null);
+      setImagePreview('');
     },
     onError: (error: unknown) => {
       void alert(error instanceof Error ? error.message : 'Could not create the incident', { severity: 'error' });
@@ -313,6 +319,22 @@ export const IncidentsPage: React.FC = () => {
                 </Box>
               </Box>
               <Typography sx={{ my: 2, whiteSpace: 'pre-wrap' }}>{selected.details}</Typography>
+              {selected.imageUrl ? (
+                <Box
+                  component="a"
+                  href={selected.imageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  sx={{ display: 'inline-block', mb: 2 }}
+                >
+                  <Box
+                    component="img"
+                    src={selected.imageUrl}
+                    alt=""
+                    sx={{ display: 'block', maxWidth: 280, maxHeight: 280, borderRadius: 1 }}
+                  />
+                </Box>
+              ) : null}
               {selected.status === 'closed' ? (
                 <Typography variant="body2" sx={{ mb: 2 }}>
                   Closed by {selected.closedByName || 'admin'}: {selected.closeNote}
@@ -422,6 +444,38 @@ export const IncidentsPage: React.FC = () => {
               multiline
               minRows={3}
             />
+            <Button variant="outlined" component="label">
+              {imageFile ? 'Change photo' : 'Add photo'}
+              <input
+                hidden
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  const file = event.target.files?.[0] ?? null;
+                  setImageFile(file);
+                  setImagePreview(file ? URL.createObjectURL(file) : '');
+                }}
+              />
+            </Button>
+            {imagePreview ? (
+              <Box>
+                <Box
+                  component="img"
+                  src={imagePreview}
+                  alt=""
+                  sx={{ display: 'block', maxWidth: 220, maxHeight: 220, borderRadius: 1 }}
+                />
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setImageFile(null);
+                    setImagePreview('');
+                  }}
+                >
+                  Remove photo
+                </Button>
+              </Box>
+            ) : null}
             <FormControl fullWidth size="small">
               <InputLabel>Priority</InputLabel>
               <Select
@@ -528,6 +582,7 @@ function IncidentRow({
       </Box>
       <Typography variant="caption" color="text.secondary">
         {INCIDENT_SUBJECT_LABEL[row.subjectType]} · {row.subjectName} · {row.status === 'open' ? 'Open' : 'Closed'}
+        {row.imageUrl ? ' · Photo' : ''}
       </Typography>
     </Box>
   );
