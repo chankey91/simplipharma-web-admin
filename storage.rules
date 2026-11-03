@@ -130,6 +130,16 @@ service firebase.storage {
         );
     }
 
+    // Incident photos. The raiser uploads under their own uid. Anyone signed in can read,
+    // because sales officer, area manager, purchase officer, and admin all open the same photo.
+    match /incident_images/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.size < 6 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
     // Store ledger PDFs shared via WhatsApp (admin uploads, public read via signed URL).
     match /store_ledgers/{userId}/{allPaths=**} {
       allow read: if true;
