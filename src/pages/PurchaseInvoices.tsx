@@ -500,6 +500,9 @@ export const PurchaseInvoicesPage: React.FC = () => {
             </span>
           </Tooltip>
         )}
+        <Button size="small" variant="outlined" onClick={() => navigate('/purchases/short-list')}>
+          Short list
+        </Button>
         <Button size="small" variant="outlined" onClick={() => setDailyOpen(true)}>
           Daily purchase
         </Button>
