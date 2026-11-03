@@ -19,12 +19,12 @@ import { FileDownload, Search } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
-import { IstDateField } from '../components/IstDateField';
+import { IstDateTimeField } from '../components/IstDateTimeField';
 import { useOrdersInDateRange } from '../hooks/useOrders';
 import { useMedicinesByIds } from '../hooks/useInventory';
 import { indexMedicinesById } from '../utils/orderLineMargin';
 import { buildPurchaseShortList, type PurchaseShortRow } from '../utils/purchaseShortList';
-import { getTodayDateStringIST, istDateRangeBounds } from '../utils/dateTime';
+import { getEndOfTodayIstDateTime, getTodayDateStringIST, parseIstDateTimeLocal } from '../utils/dateTime';
 
 function qty(value: number): string {
   return value.toLocaleString('en-IN', { maximumFractionDigits: 1 });
@@ -38,13 +38,19 @@ function orderLabel(numbers: string[]): string {
 export const PurchaseShortListPage: React.FC = () => {
   const navigate = useNavigate();
   const today = getTodayDateStringIST();
-  const [fromDate, setFromDate] = useState(today);
-  const [toDate, setToDate] = useState(today);
+  const [fromDateTime, setFromDateTime] = useState(`${today}T00:00`);
+  const [toDateTime, setToDateTime] = useState(getEndOfTodayIstDateTime());
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
 
-  const rangeOk = Boolean(fromDate && toDate && fromDate <= toDate);
-  const bounds = rangeOk ? istDateRangeBounds(fromDate, toDate) : null;
+  const fromMs = parseIstDateTimeLocal(fromDateTime);
+  const toMs = parseIstDateTimeLocal(toDateTime);
+  // The picker is to the minute. Include that whole minute.
+  const bounds =
+    fromMs != null && toMs != null && fromMs < toMs + 60 * 1000
+      ? { startMs: fromMs, endMsExclusive: toMs + 60 * 1000 }
+      : null;
+  const rangeOk = bounds != null;
   const { data: orders, isLoading: ordersLoading, isError } = useOrdersInDateRange(
     bounds?.startMs ?? 0,
     bounds?.endMsExclusive ?? 0,
@@ -105,7 +111,8 @@ export const PurchaseShortListPage: React.FC = () => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
     XLSX.utils.book_append_sheet(wb, ws, 'Short list');
-    XLSX.writeFile(wb, `purchase-short-list-${fromDate}-to-${toDate}.xlsx`);
+    const stamp = (value: string) => value.replace(/[-:T]/g, '');
+    XLSX.writeFile(wb, `purchase-short-list-${stamp(fromDateTime)}-to-${stamp(toDateTime)}.xlsx`);
   };
 
   return (
@@ -116,7 +123,7 @@ export const PurchaseShortListPage: React.FC = () => {
             Purchase short list
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            Pending orders in the dates you pick, compared with stock on hand. Save the day’s purchase
+            Pending orders between the date and time you pick, compared with stock on hand. Save the day’s purchase
             bills first — those bills already increase stock, so they are not added again. A row appears
             only when ordered quantity is still above stock. Product requests are listed separately
             because they are not a stock item.
@@ -128,8 +135,22 @@ export const PurchaseShortListPage: React.FC = () => {
       </Stack>
 
       <Stack direction="row" gap={2} flexWrap="wrap" alignItems="center" sx={{ mb: 2 }}>
-        <IstDateField label="Orders from" value={fromDate} onChange={(v) => { setFromDate(v); setPage(1); }} />
-        <IstDateField label="Orders to" value={toDate} onChange={(v) => { setToDate(v); setPage(1); }} />
+        <IstDateTimeField
+          label="Orders from"
+          value={fromDateTime}
+          onChange={(value) => {
+            setFromDateTime(value);
+            setPage(1);
+          }}
+        />
+        <IstDateTimeField
+          label="Orders to"
+          value={toDateTime}
+          onChange={(value) => {
+            setToDateTime(value);
+            setPage(1);
+          }}
+        />
         <TextField
           size="small"
           placeholder="Search product"
@@ -146,7 +167,7 @@ export const PurchaseShortListPage: React.FC = () => {
       </Stack>
 
       {!rangeOk ? (
-        <Typography color="error">Choose a from date that is on or before the to date.</Typography>
+        <Typography color="error">Choose a from time that is before the to time.</Typography>
       ) : null}
       {isError ? <Typography color="error">Could not load orders.</Typography> : null}
       {rangeOk && (!booksReady || medicinesLoading) ? <Loading message="Comparing orders with stock..." /> : null}
