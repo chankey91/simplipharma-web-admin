@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -22,6 +22,7 @@ import {
   FormControl,
   InputLabel,
   Select,
+  Stack,
   Autocomplete,
   Alert,
   Chip,
@@ -46,6 +47,11 @@ import { useCreateMedicine, useMedicine, useUpdateMedicine } from '../hooks/useI
 import { useCreatePurchaseInvoice, usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { PurchaseInvoiceItem, Medicine, Vendor, StockBatch } from '../types';
+import {
+  getPurchaseOrderDraft,
+  markPurchaseOrderDraftUsed,
+  type PurchaseOrderDraft,
+} from '../services/purchaseOrderDrafts';
 import { format } from 'date-fns';
 import { auth, isPermissionDeniedError, permissionDeniedUserMessage } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
@@ -132,8 +138,12 @@ function parseExpiryMmYy(value: string): ExpiryParseResult {
 
 export const CreatePurchaseInvoicePage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { invoiceId: editInvoiceId } = useParams<{ invoiceId?: string }>();
   const isEditMode = Boolean(editInvoiceId);
+  const orderDraftId = !isEditMode ? searchParams.get('orderDraft') || '' : '';
+  const [orderDraft, setOrderDraft] = useState<PurchaseOrderDraft | null>(null);
+  const [placedDraftLines, setPlacedDraftLines] = useState<number[]>([]);
   const { data: existingInvoice, isLoading: existingLoading } = usePurchaseInvoice(editInvoiceId || '');
   const { data: vendors } = useVendors();
   const { canWrite } = useAuth();
@@ -354,6 +364,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     if (purchaseDraftHydratedRef.current) return;
     purchaseDraftHydratedRef.current = true;
 
+    if (orderDraftId) {
+      setPurchaseDraftReady(true);
+      return;
+    }
+
     const local = readLocalFormDraft<PurchaseLocalDraft>(purchaseDraftKey);
     const hasLocalWork =
       Boolean(local?.data) &&
@@ -400,7 +415,26 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     });
     setItems(existingInvoice.items || []);
     setPurchaseDraftReady(true);
-  }, [isEditMode, existingLoading, existingInvoice, purchaseDraftKey]);
+  }, [isEditMode, existingLoading, existingInvoice, purchaseDraftKey, orderDraftId]);
+
+  useEffect(() => {
+    if (!orderDraftId) return;
+    let cancelled = false;
+    getPurchaseOrderDraft(orderDraftId)
+      .then((draft) => {
+        if (cancelled || !draft || draft.status !== 'open') return;
+        setOrderDraft(draft);
+        if (draft.vendorId) {
+          setInvoiceData((prev) => ({ ...prev, vendorId: draft.vendorId || prev.vendorId }));
+        }
+      })
+      .catch((error) => {
+        console.warn('Could not load purchase order draft', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [orderDraftId]);
 
   useEffect(() => {
     if (!purchaseDraftReady) return;
@@ -868,6 +902,14 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       }
       return [...prev, newItem];
     });
+    if (editIndex === null && orderDraft) {
+      setPlacedDraftLines((prev) => {
+        const nextIndex = orderDraft.lines.findIndex(
+          (line, index) => line.medicineId === medicineId && !prev.includes(index)
+        );
+        return nextIndex >= 0 ? [...prev, nextIndex] : prev;
+      });
+    }
 
     if (medicineId) {
       try {
@@ -1140,6 +1182,13 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       });
 
       clearLocalFormDraft(purchaseDraftKey);
+      if (orderDraftId) {
+        try {
+          await markPurchaseOrderDraftUsed(orderDraftId);
+        } catch (error) {
+          console.warn('Could not close the purchase order draft', error);
+        }
+      }
       navigate('/purchases');
     } catch (error: any) {
       await alert(
@@ -1195,6 +1244,66 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       {isEditMode ? (
         <Alert severity="info" sx={{ mb: 2 }}>
           Edit invoice number, date, vendor, or line items below — stock will sync on update.
+        </Alert>
+      ) : null}
+
+      {orderDraft ? (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            Vendor order for {orderDraft.vendorName}. These lines are name and quantity only. Add each one
+            and fill batch, expiry, and price. Stock changes when you save the bill.
+          </Typography>
+          <Stack direction="row" gap={1} flexWrap="wrap">
+            {orderDraft.lines.map((line, index) => {
+              const placed = placedDraftLines.includes(index);
+              const label = `${line.medicineName || line.excelName || line.productId} · ${line.quantity}`;
+              return line.medicineId && !placed ? (
+                <Button
+                  key={`${line.productId}-${index}`}
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    const medicine = {
+                      id: line.medicineId,
+                      name: line.medicineName || line.excelName || line.productId,
+                    } as Medicine;
+                    rememberMedicine(medicine);
+                    setSelectedMedicine(medicine);
+                    setCurrentItem({
+                      medicineId: medicine.id,
+                      medicineName: medicine.name,
+                      batchNumber: '',
+                      receivedBatchNumber: '',
+                      expiryDate: '',
+                      quantity: line.quantity > 0 ? String(line.quantity) : '',
+                      freeQuantity: '',
+                      schemePaidQty: '',
+                      schemeFreeQty: '',
+                      unitPrice: '',
+                      purchasePrice: '',
+                      mrp: '',
+                      gstRate: '5',
+                      standardDiscount: '20',
+                      discountPercentage: '',
+                      nonReturnable: false,
+                      nrxDrug: false,
+                    });
+                    lineBatchKeyWhenOpenedRef.current = '';
+                    setItemDialog({ open: true, itemIndex: null });
+                  }}
+                >
+                  Add {label}
+                </Button>
+              ) : (
+                <Chip
+                  key={`${line.productId}-${index}`}
+                  size="small"
+                  label={placed ? `Added ${label}` : `${label} · not in catalog`}
+                  color={placed ? 'success' : 'default'}
+                />
+              );
+            })}
+          </Stack>
         </Alert>
       ) : null}
 

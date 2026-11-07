@@ -58,6 +58,7 @@ import {
   ReceiptLong,
   CardGiftcard,
   LocalOffer,
+  UploadFile,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
 import { BrandLogo } from './BrandLogo';
@@ -103,6 +104,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'NRX register', icon: <Medication />, path: '/nrx-register' },
       { text: 'Purchase invoices', icon: <Receipt />, path: '/purchases' },
       { text: 'Purchase short list', icon: <ReportProblem />, path: '/purchases/short-list' },
+      { text: 'Purchase order drafts', icon: <UploadFile />, path: '/purchases/order-drafts' },
       { text: 'Vendors', icon: <Business />, path: '/vendors' },
       { text: 'Vendor ledger', icon: <AccountBalanceWallet />, path: '/vendor-ledger' },
       { text: 'Store ledger', icon: <AccountBalance />, path: '/store-ledger' },
