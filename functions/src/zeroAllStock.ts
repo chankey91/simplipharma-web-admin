@@ -5,7 +5,8 @@ import { assertAdmin } from './panelAuth';
 
 const BATCH_PAGE = 200;
 const MEDICINE_PAGE = 200;
-const TIME_BUDGET_MS = 200_000;
+/** Stay under the admin client's 180s callable timeout so a chunk can return a resume cursor. */
+const TIME_BUDGET_MS = 120_000;
 
 type Phase = 'batches' | 'medicines';
 
@@ -14,9 +15,25 @@ function batchQty(data: FirebaseFirestore.DocumentData): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function withoutUndefined(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) {
+    if (field !== undefined) out[key] = field;
+  }
+  return out;
+}
+
+function medicineDocId(value: unknown): string {
+  const id = String(value || '').trim();
+  if (!id || id === '.' || id === '..' || id.includes('/')) return '';
+  return id;
+}
+
 function zeroEmbeddedBatches(data: FirebaseFirestore.DocumentData): unknown[] | undefined {
   if (!Array.isArray(data.stockBatches) || data.stockBatches.length === 0) return undefined;
-  return data.stockBatches.map((b: Record<string, unknown>) => ({ ...b, quantity: 0 }));
+  return data.stockBatches.map((b: Record<string, unknown>) =>
+    withoutUndefined({ ...b, quantity: 0 })
+  );
 }
 
 /**
@@ -48,6 +65,8 @@ export const adminZeroAllStock = ff
 
     const timeLeft = () => Date.now() - started < TIME_BUDGET_MS;
 
+    try {
+
     if (phase === 'batches') {
       while (timeLeft()) {
         let q: FirebaseFirestore.Query = db
@@ -71,7 +90,7 @@ export const adminZeroAllStock = ff
           writer.update(d.ref, { quantity: 0 });
           writes += 1;
           batchesZeroed += 1;
-          const medicineId = String(d.data().medicineId || '').trim();
+          const medicineId = medicineDocId(d.data().medicineId);
           if (medicineId) medicineIds.add(medicineId);
         }
         for (const medicineId of medicineIds) {
@@ -145,4 +164,10 @@ export const adminZeroAllStock = ff
       batchesZeroed,
       medicinesUpdated,
     };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      const message = err instanceof Error ? err.message : 'Zero all stock failed';
+      console.error('adminZeroAllStock failed', err);
+      throw new functions.https.HttpsError('internal', message);
+    }
   });
