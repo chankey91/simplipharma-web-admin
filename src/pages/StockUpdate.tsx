@@ -40,16 +40,52 @@ import { Medicine, StockBatch } from '../types';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
 import { format } from 'date-fns';
-import { getTodayDateStringIST } from '../utils/dateTime';
+import { getTodayDateStringIST, getYearIST } from '../utils/dateTime';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 
+const MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
+
 const toInputDate = (value: unknown): string => {
   const d = value instanceof Date ? value : normalizeFirestoreDate(value);
   return d ? format(d, 'yyyy-MM-dd') : '';
+};
+
+const toMmYy = (value: unknown): string => {
+  const d = value instanceof Date ? value : normalizeFirestoreDate(value);
+  return d ? format(d, 'MM/yy') : '';
+};
+
+const formatMmYyInput = (raw: string): string => {
+  let value = raw.replace(/[^0-9/]/g, '');
+  if (value.length === 3 && !value.includes('/')) {
+    value = `${value.substring(0, 2)}/${value.substring(2)}`;
+  }
+  return value.slice(0, 5);
+};
+
+type MmYyParse = { ok: true; date: Date } | { ok: false; error: string };
+
+const parseMmYy = (value: string): MmYyParse => {
+  const parts = value.trim().split('/');
+  if (parts.length !== 2) return { ok: false, error: 'Format must be MM/YY (e.g., 12/25)' };
+  const monthStr = parts[0].trim();
+  const yearStr = parts[1].trim();
+  if (monthStr.length !== 2) return { ok: false, error: 'Month must be 2 digits (e.g., 01, 02, ..., 12)' };
+  const month = parseInt(monthStr, 10);
+  if (isNaN(month) || month < 1 || month > 12) return { ok: false, error: 'Month must be between 01 and 12' };
+  if (yearStr.length !== 2) return { ok: false, error: 'Year must be 2 digits (e.g., 25)' };
+  const yy = parseInt(yearStr, 10);
+  if (isNaN(yy)) return { ok: false, error: 'Year must be a valid number' };
+  const year = 2000 + yy;
+  const currentYear = getYearIST();
+  if (year < currentYear - 10 || year > currentYear + 20) {
+    return { ok: false, error: `Year must be between ${currentYear - 10} and ${currentYear + 20}` };
+  }
+  return { ok: true, date: new Date(year, month - 1, 1) };
 };
 
 const batchKey = (value: string | undefined) => String(value || '').trim().toLowerCase();
@@ -111,6 +147,8 @@ export const StockUpdatePage: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
   const [savingBatch, setSavingBatch] = useState<string | null>(null);
+  const [mfgError, setMfgError] = useState('');
+  const [expiryError, setExpiryError] = useState('');
 
   const batchSort = useTableSort('expiryDate', 'asc');
   const matchedBatch = useMemo(
@@ -203,12 +241,14 @@ export const StockUpdatePage: React.FC = () => {
     setStockData((prev) => ({
       quantity: opts?.keepQuantity ? prev.quantity : '',
       batchNumber: batch.batchNumber,
-      mfgDate: toInputDate(batch.mfgDate),
-      expiryDate: toInputDate(batch.expiryDate),
+      mfgDate: toMmYy(batch.mfgDate),
+      expiryDate: toMmYy(batch.expiryDate),
       purchaseDate: toInputDate(batch.purchaseDate) || prev.purchaseDate || getTodayDateStringIST(),
       purchasePrice: batch.purchasePrice != null ? String(batch.purchasePrice) : '',
       mrp: batch.mrp != null ? String(batch.mrp) : '',
     }));
+    setMfgError('');
+    setExpiryError('');
     setError(null);
     setSuccess(
       `Filled from existing batch ${batch.batchNumber}. Enter physical quantity, then Set qty on the row or Add / increase qty.`
@@ -241,6 +281,8 @@ export const StockUpdatePage: React.FC = () => {
     }
     setSelectedId(picked.id);
     setSearchInput(getMedicinePickerLabel(picked));
+    setMfgError('');
+    setExpiryError('');
     setStockData({
       quantity: '',
       batchNumber: '',
@@ -263,10 +305,28 @@ export const StockUpdatePage: React.FC = () => {
       setError('Please select a medicine');
       return;
     }
-    if (!stockData.quantity || !stockData.batchNumber || !stockData.expiryDate) {
+    if (!stockData.quantity || !stockData.batchNumber || !stockData.expiryDate.trim()) {
       setError('Please fill all required fields (Quantity, Batch Number, Expiry Date)');
       return;
     }
+    const expiryParsed = parseMmYy(stockData.expiryDate);
+    if (!expiryParsed.ok) {
+      setExpiryError(expiryParsed.error);
+      setError(`Expiry date: ${expiryParsed.error}`);
+      return;
+    }
+    let mfgDate: Date | undefined;
+    if (stockData.mfgDate.trim()) {
+      const mfgParsed = parseMmYy(stockData.mfgDate);
+      if (!mfgParsed.ok) {
+        setMfgError(mfgParsed.error);
+        setError(`Mfg date: ${mfgParsed.error}`);
+        return;
+      }
+      mfgDate = mfgParsed.date;
+    }
+    setMfgError('');
+    setExpiryError('');
 
     try {
       await addBatch.mutateAsync({
@@ -274,15 +334,15 @@ export const StockUpdatePage: React.FC = () => {
         batch: {
           batchNumber: stockData.batchNumber,
           quantity: parseInt(stockData.quantity),
-          mfgDate: stockData.mfgDate ? new Date(stockData.mfgDate) : undefined,
-          expiryDate: new Date(stockData.expiryDate),
+          mfgDate,
+          expiryDate: expiryParsed.date,
           purchaseDate: stockData.purchaseDate ? new Date(stockData.purchaseDate) : new Date(),
           purchasePrice: stockData.purchasePrice ? parseFloat(stockData.purchasePrice) : undefined,
           mrp: stockData.mrp ? parseFloat(stockData.mrp) : undefined,
         },
       });
 
-      const expiry = new Date(stockData.expiryDate);
+      const expiry = expiryParsed.date;
       const batchNumber = stockData.batchNumber;
       const mrp = stockData.mrp ? parseFloat(stockData.mrp) : selectedMedicine.mrp;
 
@@ -463,21 +523,49 @@ export const StockUpdatePage: React.FC = () => {
                 <TextField
                   fullWidth
                   label="Mfg Date"
-                  type="date"
-                  InputLabelProps={{ shrink: true }}
                   value={stockData.mfgDate}
-                  onChange={(e) => setStockData({ ...stockData, mfgDate: e.target.value })}
+                  onChange={(e) => {
+                    setMfgError('');
+                    setStockData({ ...stockData, mfgDate: formatMmYyInput(e.target.value) });
+                  }}
+                  onBlur={() => {
+                    const value = stockData.mfgDate.trim();
+                    if (!value) {
+                      setMfgError('');
+                      return;
+                    }
+                    const parsed = parseMmYy(value);
+                    setMfgError(parsed.ok ? '' : parsed.error);
+                  }}
+                  placeholder="MM/YY"
+                  error={!!mfgError}
+                  helperText={mfgError || MM_YY_HELPER}
+                  inputProps={{ maxLength: 5 }}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
                   label="Expiry Date"
-                  type="date"
                   required
-                  InputLabelProps={{ shrink: true }}
                   value={stockData.expiryDate}
-                  onChange={(e) => setStockData({ ...stockData, expiryDate: e.target.value })}
+                  onChange={(e) => {
+                    setExpiryError('');
+                    setStockData({ ...stockData, expiryDate: formatMmYyInput(e.target.value) });
+                  }}
+                  onBlur={() => {
+                    const value = stockData.expiryDate.trim();
+                    if (!value) {
+                      setExpiryError('');
+                      return;
+                    }
+                    const parsed = parseMmYy(value);
+                    setExpiryError(parsed.ok ? '' : parsed.error);
+                  }}
+                  placeholder="MM/YY"
+                  error={!!expiryError}
+                  helperText={expiryError || MM_YY_HELPER}
+                  inputProps={{ maxLength: 5 }}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -584,20 +672,8 @@ export const StockUpdatePage: React.FC = () => {
                         >
                           <TableCell>{b.batchNumber}</TableCell>
                           <TableCell>{b.quantity}</TableCell>
-                          <TableCell>
-                            {b.mfgDate
-                              ? format(
-                                  b.mfgDate instanceof Date ? b.mfgDate : b.mfgDate.toDate(),
-                                  'dd MMM yyyy'
-                                )
-                              : '—'}
-                          </TableCell>
-                          <TableCell>
-                            {format(
-                              b.expiryDate instanceof Date ? b.expiryDate : b.expiryDate.toDate(),
-                              'dd MMM yyyy'
-                            )}
-                          </TableCell>
+                          <TableCell>{toMmYy(b.mfgDate) || '—'}</TableCell>
+                          <TableCell>{toMmYy(b.expiryDate) || '—'}</TableCell>
                           <TableCell>{b.mrp ?? '—'}</TableCell>
                           <TableCell align="right">
                             <Box
