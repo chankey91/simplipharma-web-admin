@@ -9,6 +9,8 @@ import {
   Alert,
   Card,
   CardContent,
+  Checkbox,
+  FormControlLabel,
   Table,
   TableBody,
   TableCell,
@@ -31,8 +33,11 @@ import {
   useUpdateStock,
   useAddStockBatch,
   useUpdateStockBatch,
+  useUpdateMedicine,
   useFindMedicineByBarcode,
 } from '../hooks/useInventory';
+import { useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
+import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { getMedicineById, normalizeFirestoreDate } from '../services/inventory';
@@ -46,8 +51,45 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { useMedicineSearch } from '../hooks/useMedicineSearch';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { parseOptionalGstRate, resolveGstRate } from '../utils/gstRate';
+import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 
 const MM_YY_HELPER = 'Format: MM/YY (e.g., 12/25)';
+
+const parseNumber = (value: unknown): number => {
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const purchasePriceFromMrp = (mrp: number, gstRate: number, standardDiscount: number): number => {
+  if (mrp <= 0) return 0;
+  return (mrp * (1 - standardDiscount / 100)) / (1 + gstRate / 100);
+};
+
+const standardDiscountFromPrice = (mrp: number, purchasePrice: number, gstRate: number): number => {
+  if (mrp <= 0 || purchasePrice <= 0) return 20;
+  const priceWithGst = purchasePrice * (1 + gstRate / 100);
+  return (1 - priceWithGst / mrp) * 100;
+};
+
+const emptyStockForm = () => ({
+  batchNumber: '',
+  receivedBatchNumber: '',
+  quantity: '',
+  freeQuantity: '',
+  schemePaidQty: '',
+  schemeFreeQty: '',
+  nonReturnable: false,
+  nrxDrug: false,
+  mfgDate: '',
+  expiryDate: '',
+  purchaseDate: getTodayDateStringIST(),
+  mrp: '',
+  gstRate: '',
+  standardDiscount: '20',
+  purchasePrice: '',
+  discountPercentage: '',
+});
 
 const toInputDate = (value: unknown): string => {
   const d = value instanceof Date ? value : normalizeFirestoreDate(value);
@@ -111,6 +153,10 @@ export const StockUpdatePage: React.FC = () => {
   const updateStock = useUpdateStock();
   const addBatch = useAddStockBatch();
   const updateBatch = useUpdateStockBatch();
+  const updateMedicine = useUpdateMedicine();
+  const { lastPurchaseByMedicineId } = useVendorLastPurchases(undefined, undefined, {
+    enabled: true,
+  });
   const findMedicine = useFindMedicineByBarcode();
   const { alert } = useAppDialog();
 
@@ -133,15 +179,7 @@ export const StockUpdatePage: React.FC = () => {
     skipQuery: skipLabel,
   });
 
-  const [stockData, setStockData] = useState({
-    quantity: '',
-    batchNumber: '',
-    mfgDate: '',
-    expiryDate: '',
-    purchaseDate: getTodayDateStringIST(),
-    purchasePrice: '',
-    mrp: '',
-  });
+  const [stockData, setStockData] = useState(emptyStockForm);
   const [barcodeInput, setBarcodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -153,9 +191,15 @@ export const StockUpdatePage: React.FC = () => {
   const [expiryError, setExpiryError] = useState('');
 
   const batchSort = useTableSort('expiryDate', 'asc');
+  const stockBatchNumber = purchaseItemStockBatchNumber({
+    batchNumber: stockData.batchNumber,
+    receivedBatchNumber: stockData.receivedBatchNumber,
+  });
   const matchedBatch = useMemo(
-    () => findExistingBatch(batches, stockData.batchNumber),
-    [batches, stockData.batchNumber]
+    () =>
+      findExistingBatch(batches, stockBatchNumber) ||
+      findExistingBatch(batches, stockData.batchNumber),
+    [batches, stockBatchNumber, stockData.batchNumber]
   );
   const sortedBatches = useMemo(() => {
     if (!batches.length) return [];
@@ -298,14 +342,48 @@ export const StockUpdatePage: React.FC = () => {
   };
 
   const applyExistingBatch = (batch: StockBatch, opts?: { keepQuantity?: boolean }) => {
+    const invoiceBatch = batch.invoiceBatchNumber?.trim() || batch.batchNumber;
+    const received =
+      batch.invoiceBatchNumber && batchKey(batch.invoiceBatchNumber) !== batchKey(batch.batchNumber)
+        ? batch.batchNumber
+        : '';
+    const gstRate = resolveGstRate(selectedMedicine?.gstRate);
+    const mrp = batch.mrp && batch.mrp > 0 ? batch.mrp : 0;
+    let purchasePrice = batch.purchasePrice && batch.purchasePrice > 0 ? batch.purchasePrice : 0;
+    const standardDiscountSeed =
+      batch.standardDiscount != null && Number.isFinite(batch.standardDiscount)
+        ? batch.standardDiscount
+        : 20;
+    if (purchasePrice <= 0 && mrp > 0) {
+      purchasePrice = purchasePriceFromMrp(mrp, gstRate, standardDiscountSeed);
+    }
+    const standardDiscount =
+      mrp > 0 && purchasePrice > 0
+        ? standardDiscountFromPrice(mrp, purchasePrice, gstRate)
+        : standardDiscountSeed;
     setStockData((prev) => ({
+      ...prev,
       quantity: opts?.keepQuantity ? prev.quantity : '',
-      batchNumber: batch.batchNumber,
+      batchNumber: invoiceBatch,
+      receivedBatchNumber: received,
+      freeQuantity: prev.freeQuantity,
+      schemePaidQty:
+        batch.schemePaidQty != null && batch.schemePaidQty > 0 ? String(Math.floor(batch.schemePaidQty)) : '',
+      schemeFreeQty:
+        batch.schemeFreeQty != null && batch.schemeFreeQty > 0 ? String(Math.floor(batch.schemeFreeQty)) : '',
+      nonReturnable: batch.nonReturnable === true,
+      nrxDrug: batch.nrxDrug === true,
       mfgDate: toMmYy(batch.mfgDate),
       expiryDate: toMmYy(batch.expiryDate),
       purchaseDate: toInputDate(batch.purchaseDate) || prev.purchaseDate || getTodayDateStringIST(),
-      purchasePrice: batch.purchasePrice != null ? String(batch.purchasePrice) : '',
-      mrp: batch.mrp != null ? String(batch.mrp) : '',
+      purchasePrice: purchasePrice > 0 ? purchasePrice.toFixed(2) : '',
+      mrp: mrp > 0 ? String(mrp) : '',
+      gstRate: selectedMedicine?.gstRate != null ? String(selectedMedicine.gstRate) : prev.gstRate,
+      standardDiscount: Number.isFinite(standardDiscount) ? standardDiscount.toFixed(2) : '20',
+      discountPercentage:
+        batch.discountPercentage != null && batch.discountPercentage > 0
+          ? String(batch.discountPercentage)
+          : '',
     }));
     setMfgError('');
     setExpiryError('');
@@ -344,20 +422,26 @@ export const StockUpdatePage: React.FC = () => {
     setMfgError('');
     setExpiryError('');
     setStockData({
-      quantity: '',
-      batchNumber: '',
-      mfgDate: '',
-      expiryDate: '',
-      purchaseDate: getTodayDateStringIST(),
-      purchasePrice: '',
-      mrp: '',
+      ...emptyStockForm(),
+      gstRate: picked.gstRate != null ? String(picked.gstRate) : '',
     });
     try {
       const full = await getMedicineById(picked.id);
-      if (full) setSearchInput(getMedicinePickerLabel(full));
+      if (full) {
+        setSearchInput(getMedicinePickerLabel(full));
+        if (full.gstRate != null) {
+          setStockData((prev) => ({ ...prev, gstRate: String(full.gstRate) }));
+        }
+      }
     } catch {
       // ignore
     }
+  };
+
+  const itemGstRate = () => {
+    const entered = parseOptionalGstRate(stockData.gstRate);
+    if (entered !== undefined) return entered;
+    return resolveGstRate(selectedMedicine?.gstRate);
   };
 
   const handleSave = async () => {
@@ -365,8 +449,21 @@ export const StockUpdatePage: React.FC = () => {
       setError('Please select a medicine');
       return;
     }
-    if (!stockData.quantity || !stockData.batchNumber || !stockData.expiryDate.trim()) {
-      setError('Please fill all required fields (Quantity, Batch Number, Expiry Date)');
+    const paidQty = parseNumber(stockData.quantity);
+    const freeQty = parseNumber(stockData.freeQuantity);
+    const invoiceBatch = stockData.batchNumber.trim();
+    const receivedBatch = stockData.receivedBatchNumber.trim();
+    const stockBatch = purchaseItemStockBatchNumber({
+      batchNumber: invoiceBatch,
+      receivedBatchNumber: receivedBatch,
+    });
+    if (!invoiceBatch || !stockData.expiryDate.trim() || !(paidQty > 0)) {
+      setError('Please fill invoice batch, quantity greater than 0, and expiry (MM/YY).');
+      return;
+    }
+    const priceNum = parseNumber(stockData.purchasePrice);
+    if (!Number.isFinite(priceNum) || stockData.purchasePrice.trim() === '' || priceNum < 0) {
+      setError('Please enter purchase price.');
       return;
     }
     const expiryParsed = parseMmYy(stockData.expiryDate);
@@ -385,6 +482,17 @@ export const StockUpdatePage: React.FC = () => {
       }
       mfgDate = mfgParsed.date;
     }
+    const spRaw = parseNumber(stockData.schemePaidQty);
+    const sfRaw = parseNumber(stockData.schemeFreeQty);
+    const schemePaidQty = spRaw > 0 && sfRaw > 0 ? Math.floor(spRaw) : undefined;
+    const schemeFreeQty = schemePaidQty != null ? Math.floor(sfRaw) : undefined;
+    const gstRate = itemGstRate();
+    const mrp = stockData.mrp.trim() ? parseNumber(stockData.mrp) : undefined;
+    const enteredStandard = stockData.standardDiscount.trim();
+    const standardDiscount = enteredStandard
+      ? parseNumber(enteredStandard)
+      : standardDiscountFromPrice(mrp ?? 0, priceNum, gstRate);
+    const discountPercentage = parseNumber(stockData.discountPercentage);
     setMfgError('');
     setExpiryError('');
 
@@ -392,42 +500,54 @@ export const StockUpdatePage: React.FC = () => {
       await addBatch.mutateAsync({
         medicineId: selectedMedicine.id,
         batch: {
-          batchNumber: stockData.batchNumber,
-          quantity: parseInt(stockData.quantity),
+          batchNumber: stockBatch,
+          quantity: Math.floor(paidQty + (freeQty > 0 ? freeQty : 0)),
           mfgDate,
           expiryDate: expiryParsed.date,
           purchaseDate: stockData.purchaseDate ? new Date(stockData.purchaseDate) : new Date(),
-          purchasePrice: stockData.purchasePrice ? parseFloat(stockData.purchasePrice) : undefined,
-          mrp: stockData.mrp ? parseFloat(stockData.mrp) : undefined,
+          purchasePrice: priceNum,
+          mrp,
+          ...(discountPercentage > 0 ? { discountPercentage } : {}),
+          ...(Number.isFinite(standardDiscount) ? { standardDiscount } : {}),
+          ...(schemePaidQty != null && schemeFreeQty != null ? { schemePaidQty, schemeFreeQty } : {}),
+          ...(stockData.nonReturnable ? { nonReturnable: true } : {}),
+          ...(stockData.nrxDrug ? { nrxDrug: true } : {}),
+          ...(receivedBatch && batchKey(receivedBatch) !== batchKey(invoiceBatch)
+            ? { invoiceBatchNumber: invoiceBatch }
+            : {}),
         },
       });
-
-      const expiry = expiryParsed.date;
-      const batchNumber = stockData.batchNumber;
-      const mrp = stockData.mrp ? parseFloat(stockData.mrp) : selectedMedicine.mrp;
+      try {
+        await updateMedicine.mutateAsync({
+          medicineId: selectedMedicine.id,
+          updates: { gstRate },
+        });
+      } catch {
+        // Stock is already saved. GST on the medicine master can be retried.
+      }
 
       setStockData({
-        quantity: '',
-        batchNumber: '',
-        mfgDate: '',
-        expiryDate: '',
-        purchaseDate: getTodayDateStringIST(),
-        purchasePrice: '',
-        mrp: '',
+        ...emptyStockForm(),
+        gstRate: String(gstRate),
       });
-      setSuccess('Batch saved. If this batch already existed, the quantity was added to it.');
+      setSuccess(
+        freeQty > 0
+          ? `Added ${Math.floor(paidQty)} + ${Math.floor(freeQty)} free on ${stockBatch}. Existing batches have the quantity added, not replaced.`
+          : `Added ${Math.floor(paidQty)} on ${stockBatch}. Existing batches have the quantity added, not replaced.`
+      );
 
       await updateStock.mutateAsync({
         medicineId: selectedMedicine.id,
         updates: {
-          expiryDate: expiry,
-          batchNumber,
-          mrp,
+          expiryDate: expiryParsed.date,
+          batchNumber: stockBatch,
+          mrp: mrp ?? selectedMedicine.mrp,
         },
       });
       await refetchMedicine();
-    } catch (err: any) {
-      setError(err.message || 'Failed to update stock');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update stock';
+      setError(msg);
     }
   };
 
@@ -547,26 +667,41 @@ export const StockUpdatePage: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <Autocomplete
                   freeSolo
-                  options={batches.map((b) => b.batchNumber)}
+                  options={[...new Set(batches.flatMap((b) => [b.invoiceBatchNumber, b.batchNumber].filter(Boolean) as string[]))]}
                   inputValue={stockData.batchNumber}
                   onInputChange={(_e, value, reason) => handleBatchNumberChange(value, reason)}
                   onChange={(_e, value) => handleBatchNumberChange(String(value || ''), 'selectOption')}
                   renderInput={(params) => (
                     <TextField
                       {...params}
-                      label="Batch Number"
+                      label="Invoice Batch Number"
                       required
                       helperText={
                         matchedBatch
-                          ? `Existing batch ${matchedBatch.batchNumber} — expiry, MRP and price filled from inventory`
-                          : batches.length
-                            ? 'Type or pick an existing batch to auto-fill expiry / MRP'
-                            : selectedMedicine
-                              ? 'No batches loaded for this medicine yet'
-                              : 'Select a medicine first, then type the batch'
+                          ? `Existing batch ${matchedBatch.batchNumber} — other fields filled from inventory`
+                          : 'Batch as printed on the vendor bill'
                       }
                     />
                   )}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Received Batch Number"
+                  value={stockData.receivedBatchNumber}
+                  onChange={(e) => setStockData({ ...stockData, receivedBatchNumber: e.target.value })}
+                  onBlur={() => {
+                    const match = findExistingBatch(
+                      batches,
+                      purchaseItemStockBatchNumber({
+                        batchNumber: stockData.batchNumber,
+                        receivedBatchNumber: stockData.receivedBatchNumber,
+                      })
+                    );
+                    if (match) applyExistingBatch(match, { keepQuantity: true });
+                  }}
+                  helperText="Physical batch on packs if different from invoice (used for stock)"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -577,6 +712,73 @@ export const StockUpdatePage: React.FC = () => {
                   required
                   value={stockData.quantity}
                   onChange={(e) => setStockData({ ...stockData, quantity: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Free quantity (this bill)"
+                  type="number"
+                  helperText="Extra strips/units free on this invoice (stock)"
+                  value={stockData.freeQuantity}
+                  onChange={(e) => setStockData({ ...stockData, freeQuantity: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <Box display="flex" alignItems="center" justifyContent="space-between" gap={1}>
+                  <Typography variant="caption" color="text.secondary">
+                    Retailer scheme (optional): e.g. 1 free on 10 strips → pay for = 10, free = 1. Shown in the retailer app for this batch.
+                  </Typography>
+                  {selectedMedicine ? (
+                    <RetailerLastSchemeHint
+                      lastScheme={lastPurchaseByMedicineId.get(selectedMedicine.id)}
+                      contextLabel="Previous purchase (same item · any vendor)"
+                      emptyHint="No prior purchase for this item"
+                      subjectLabel="this item"
+                    />
+                  ) : null}
+                </Box>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Scheme — pay for (qty)"
+                  type="number"
+                  inputProps={{ min: 1 }}
+                  value={stockData.schemePaidQty}
+                  onChange={(e) => setStockData({ ...stockData, schemePaidQty: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Scheme — get free (qty)"
+                  type="number"
+                  inputProps={{ min: 1 }}
+                  value={stockData.schemeFreeQty}
+                  onChange={(e) => setStockData({ ...stockData, schemeFreeQty: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={stockData.nonReturnable}
+                      onChange={(e) => setStockData({ ...stockData, nonReturnable: e.target.checked })}
+                    />
+                  }
+                  label="Non-returnable (retailer cannot return this batch)"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={stockData.nrxDrug}
+                      onChange={(e) => setStockData({ ...stockData, nrxDrug: e.target.checked })}
+                    />
+                  }
+                  label="NRX drug (Schedule H / restricted)"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -631,11 +833,71 @@ export const StockUpdatePage: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="Purchase Date"
-                  type="date"
-                  InputLabelProps={{ shrink: true }}
-                  value={stockData.purchaseDate}
-                  onChange={(e) => setStockData({ ...stockData, purchaseDate: e.target.value })}
+                  label="MRP"
+                  type="number"
+                  value={stockData.mrp}
+                  onChange={(e) => {
+                    const mrpValue = e.target.value;
+                    const mrp = parseNumber(mrpValue);
+                    const gstRate = itemGstRate();
+                    const standardDiscount = stockData.standardDiscount.trim()
+                      ? parseNumber(stockData.standardDiscount)
+                      : 20;
+                    const purchasePrice = purchasePriceFromMrp(mrp, gstRate, standardDiscount);
+                    setStockData({
+                      ...stockData,
+                      mrp: mrpValue,
+                      ...(purchasePrice > 0
+                        ? { purchasePrice: purchasePrice.toFixed(2) }
+                        : {}),
+                    });
+                  }}
+                  InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
+                  helperText="Purchase Price is calculated from MRP, Standard Discount and GST"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="GST Rate (%)"
+                  type="number"
+                  value={stockData.gstRate}
+                  onChange={(e) => {
+                    const gstValue = e.target.value;
+                    const gstRate = parseOptionalGstRate(gstValue) ?? 0;
+                    const mrp = parseNumber(stockData.mrp);
+                    const standardDiscount = stockData.standardDiscount.trim()
+                      ? parseNumber(stockData.standardDiscount)
+                      : 20;
+                    const purchasePrice = purchasePriceFromMrp(mrp, gstRate, standardDiscount);
+                    setStockData({
+                      ...stockData,
+                      gstRate: gstValue,
+                      ...(mrp > 0 ? { purchasePrice: purchasePrice.toFixed(2) } : {}),
+                    });
+                  }}
+                  inputProps={{ min: 0, max: 100, step: 0.01 }}
+                  helperText="Saved on this line and on the medicine in inventory"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Standard Discount (%)"
+                  type="number"
+                  value={stockData.standardDiscount}
+                  onChange={(e) => {
+                    const standardDiscountValue = e.target.value;
+                    const mrp = parseNumber(stockData.mrp);
+                    const gstRate = itemGstRate();
+                    const purchasePrice = purchasePriceFromMrp(mrp, gstRate, parseNumber(standardDiscountValue));
+                    setStockData({
+                      ...stockData,
+                      standardDiscount: standardDiscountValue,
+                      ...(mrp > 0 ? { purchasePrice: purchasePrice.toFixed(2) } : {}),
+                    });
+                  }}
+                  helperText="Change this to auto-update Purchase Price from MRP"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -643,17 +905,60 @@ export const StockUpdatePage: React.FC = () => {
                   fullWidth
                   label="Purchase Price"
                   type="number"
+                  required
                   value={stockData.purchasePrice}
-                  onChange={(e) => setStockData({ ...stockData, purchasePrice: e.target.value })}
+                  onChange={(e) => {
+                    const purchasePriceValue = e.target.value;
+                    const mrp = parseNumber(stockData.mrp);
+                    const gstRate = itemGstRate();
+                    const standardDiscount = standardDiscountFromPrice(mrp, parseNumber(purchasePriceValue), gstRate);
+                    setStockData({
+                      ...stockData,
+                      purchasePrice: purchasePriceValue,
+                      ...(mrp > 0 ? { standardDiscount: standardDiscount.toFixed(2) } : {}),
+                    });
+                  }}
+                  InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography> }}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="MRP"
+                  label="Discount Percentage (%)"
                   type="number"
-                  value={stockData.mrp}
-                  onChange={(e) => setStockData({ ...stockData, mrp: e.target.value })}
+                  value={stockData.discountPercentage}
+                  onChange={(e) => setStockData({ ...stockData, discountPercentage: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Purchase Date"
+                  type="date"
+                  InputLabelProps={{ shrink: true }}
+                  value={stockData.purchaseDate}
+                  onChange={(e) => setStockData({ ...stockData, purchaseDate: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Total Amount"
+                  value={(() => {
+                    const qty = parseNumber(stockData.quantity);
+                    const price = parseNumber(stockData.purchasePrice);
+                    const gstRate = itemGstRate();
+                    const discountPercentage = parseNumber(stockData.discountPercentage);
+                    const baseAmount = price * qty;
+                    const discountAmount = (baseAmount * discountPercentage) / 100;
+                    const amountAfterDiscount = baseAmount - discountAmount;
+                    const gstAmount = (amountAfterDiscount * gstRate) / 100;
+                    return (amountAfterDiscount + gstAmount).toFixed(2);
+                  })()}
+                  InputProps={{
+                    readOnly: true,
+                    startAdornment: <Typography sx={{ mr: 1 }}>₹</Typography>,
+                  }}
                 />
               </Grid>
               <Grid item xs={12}>
