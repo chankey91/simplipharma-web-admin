@@ -503,6 +503,9 @@ export const PurchaseInvoicesPage: React.FC = () => {
         <Button size="small" variant="outlined" onClick={() => navigate('/purchases/short-list')}>
           Short list
         </Button>
+        <Button size="small" variant="outlined" onClick={() => navigate('/purchases/order-drafts')}>
+          Order draft
+        </Button>
         <Button size="small" variant="outlined" onClick={() => setDailyOpen(true)}>
           Daily purchase
         </Button>

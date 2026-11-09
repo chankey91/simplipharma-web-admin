@@ -7,15 +7,30 @@ const functionRegion_1 = require("./functionRegion");
 const panelAuth_1 = require("./panelAuth");
 const BATCH_PAGE = 200;
 const MEDICINE_PAGE = 200;
-const TIME_BUDGET_MS = 200000;
+/** Stay under the admin client's 180s callable timeout so a chunk can return a resume cursor. */
+const TIME_BUDGET_MS = 120000;
 function batchQty(data) {
     const n = Number(data.quantity);
     return Number.isFinite(n) ? n : 0;
 }
+function withoutUndefined(value) {
+    const out = {};
+    for (const [key, field] of Object.entries(value)) {
+        if (field !== undefined)
+            out[key] = field;
+    }
+    return out;
+}
+function medicineDocId(value) {
+    const id = String(value || '').trim();
+    if (!id || id === '.' || id === '..' || id.includes('/'))
+        return '';
+    return id;
+}
 function zeroEmbeddedBatches(data) {
     if (!Array.isArray(data.stockBatches) || data.stockBatches.length === 0)
         return undefined;
-    return data.stockBatches.map((b) => (Object.assign(Object.assign({}, b), { quantity: 0 })));
+    return data.stockBatches.map((b) => withoutUndefined(Object.assign(Object.assign({}, b), { quantity: 0 })));
 }
 /**
  * Set every batch quantity to 0. Does not delete medicineBatches docs.
@@ -43,101 +58,110 @@ exports.adminZeroAllStock = functionRegion_1.ff
     let batchesZeroed = 0;
     let medicinesUpdated = 0;
     const timeLeft = () => Date.now() - started < TIME_BUDGET_MS;
-    if (phase === 'batches') {
-        while (timeLeft()) {
-            let q = db
-                .collection('medicineBatches')
-                .orderBy(admin.firestore.FieldPath.documentId())
-                .limit(BATCH_PAGE);
-            if (startAfterId)
-                q = q.startAfter(startAfterId);
-            const snap = await q.get();
-            if (snap.empty) {
-                phase = 'medicines';
-                startAfterId = '';
-                break;
+    try {
+        if (phase === 'batches') {
+            while (timeLeft()) {
+                let q = db
+                    .collection('medicineBatches')
+                    .orderBy(admin.firestore.FieldPath.documentId())
+                    .limit(BATCH_PAGE);
+                if (startAfterId)
+                    q = q.startAfter(startAfterId);
+                const snap = await q.get();
+                if (snap.empty) {
+                    phase = 'medicines';
+                    startAfterId = '';
+                    break;
+                }
+                scanned += snap.docs.length;
+                const writer = db.batch();
+                const medicineIds = new Set();
+                let writes = 0;
+                for (const d of snap.docs) {
+                    const qty = batchQty(d.data());
+                    if (qty === 0)
+                        continue;
+                    writer.update(d.ref, { quantity: 0 });
+                    writes += 1;
+                    batchesZeroed += 1;
+                    const medicineId = medicineDocId(d.data().medicineId);
+                    if (medicineId)
+                        medicineIds.add(medicineId);
+                }
+                for (const medicineId of medicineIds) {
+                    writer.set(db.collection('medicines').doc(medicineId), {
+                        stock: 0,
+                        currentStock: 0,
+                        activeBatchCount: 0,
+                        nearestExpiry: null,
+                    }, { merge: true });
+                    writes += 1;
+                    medicinesUpdated += 1;
+                }
+                if (writes > 0)
+                    await writer.commit();
+                startAfterId = snap.docs[snap.docs.length - 1].id;
+                if (snap.size < BATCH_PAGE) {
+                    phase = 'medicines';
+                    startAfterId = '';
+                    break;
+                }
             }
-            scanned += snap.docs.length;
-            const writer = db.batch();
-            const medicineIds = new Set();
-            let writes = 0;
-            for (const d of snap.docs) {
-                const qty = batchQty(d.data());
-                if (qty === 0)
-                    continue;
-                writer.update(d.ref, { quantity: 0 });
-                writes += 1;
-                batchesZeroed += 1;
-                const medicineId = String(d.data().medicineId || '').trim();
-                if (medicineId)
-                    medicineIds.add(medicineId);
-            }
-            for (const medicineId of medicineIds) {
-                writer.set(db.collection('medicines').doc(medicineId), {
-                    stock: 0,
-                    currentStock: 0,
-                    activeBatchCount: 0,
-                    nearestExpiry: null,
-                }, { merge: true });
-                writes += 1;
-                medicinesUpdated += 1;
-            }
-            if (writes > 0)
+        }
+        if (phase === 'medicines' && timeLeft()) {
+            while (timeLeft()) {
+                const [byCurrent, byStock] = await Promise.all([
+                    db.collection('medicines').where('currentStock', '>', 0).limit(MEDICINE_PAGE).get(),
+                    db.collection('medicines').where('stock', '>', 0).limit(MEDICINE_PAGE).get(),
+                ]);
+                const byId = new Map();
+                for (const d of [...byCurrent.docs, ...byStock.docs]) {
+                    byId.set(d.id, d);
+                }
+                scanned += byId.size;
+                if (byId.size === 0) {
+                    return {
+                        done: true,
+                        phase,
+                        nextStartAfterId: null,
+                        scanned,
+                        batchesZeroed,
+                        medicinesUpdated,
+                    };
+                }
+                const writer = db.batch();
+                for (const d of byId.values()) {
+                    const payload = {
+                        stock: 0,
+                        currentStock: 0,
+                        activeBatchCount: 0,
+                        nearestExpiry: null,
+                    };
+                    const embedded = zeroEmbeddedBatches(d.data());
+                    if (embedded)
+                        payload.stockBatches = embedded;
+                    writer.set(d.ref, payload, { merge: true });
+                    medicinesUpdated += 1;
+                }
                 await writer.commit();
-            startAfterId = snap.docs[snap.docs.length - 1].id;
-            if (snap.size < BATCH_PAGE) {
-                phase = 'medicines';
                 startAfterId = '';
-                break;
             }
         }
+        return {
+            done: false,
+            phase,
+            nextStartAfterId: startAfterId || null,
+            scanned,
+            batchesZeroed,
+            medicinesUpdated,
+        };
     }
-    if (phase === 'medicines' && timeLeft()) {
-        while (timeLeft()) {
-            const [byCurrent, byStock] = await Promise.all([
-                db.collection('medicines').where('currentStock', '>', 0).limit(MEDICINE_PAGE).get(),
-                db.collection('medicines').where('stock', '>', 0).limit(MEDICINE_PAGE).get(),
-            ]);
-            const byId = new Map();
-            for (const d of [...byCurrent.docs, ...byStock.docs]) {
-                byId.set(d.id, d);
-            }
-            scanned += byId.size;
-            if (byId.size === 0) {
-                return {
-                    done: true,
-                    phase,
-                    nextStartAfterId: null,
-                    scanned,
-                    batchesZeroed,
-                    medicinesUpdated,
-                };
-            }
-            const writer = db.batch();
-            for (const d of byId.values()) {
-                const payload = {
-                    stock: 0,
-                    currentStock: 0,
-                    activeBatchCount: 0,
-                    nearestExpiry: null,
-                };
-                const embedded = zeroEmbeddedBatches(d.data());
-                if (embedded)
-                    payload.stockBatches = embedded;
-                writer.set(d.ref, payload, { merge: true });
-                medicinesUpdated += 1;
-            }
-            await writer.commit();
-            startAfterId = '';
-        }
+    catch (err) {
+        if (err instanceof functions.https.HttpsError)
+            throw err;
+        const message = err instanceof Error ? err.message : 'Zero all stock failed';
+        console.error('adminZeroAllStock failed', err);
+        throw new functions.https.HttpsError('internal', message);
     }
-    return {
-        done: false,
-        phase,
-        nextStartAfterId: startAfterId || null,
-        scanned,
-        batchesZeroed,
-        medicinesUpdated,
-    };
 });
 //# sourceMappingURL=zeroAllStock.js.map

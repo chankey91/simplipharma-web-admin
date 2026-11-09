@@ -36,6 +36,7 @@ export const IstDateTimeField: React.FC<IstDateTimeFieldProps> = ({
         disabled={disabled}
         ampm={false}
         format="dd MMM yyyy, HH:mm"
+        views={['year', 'month', 'day', 'hours', 'minutes']}
         minutesStep={1}
         closeOnSelect={false}
         slotProps={{
