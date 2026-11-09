@@ -35,6 +35,7 @@ import {
   Edit,
 } from '@mui/icons-material';
 import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useVendorLastPurchases, useDeletePurchaseInvoice } from '../hooks/usePurchaseInvoices';
+import { useMedicinesByIds } from '../hooks/useInventory';
 import { useVendor } from '../hooks/useVendors';
 import { format } from 'date-fns';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
@@ -107,6 +108,19 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     nonReturnable: false,
     nrxDrug: false,
   });
+  const itemMedicineIds = useMemo(
+    () => [...new Set(items.map((item) => item.medicineId).filter(Boolean))],
+    [items]
+  );
+  const { data: itemMedicines } = useMedicinesByIds(itemMedicineIds);
+  const productIdByMedicineId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const medicine of itemMedicines ?? []) {
+      const productId = medicine.productId?.trim();
+      if (productId) map.set(medicine.id, productId);
+    }
+    return map;
+  }, [itemMedicines]);
 
   useEffect(() => {
     if (invoice?.items) {
@@ -462,6 +476,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>Medicine</TableCell>
+                    <TableCell>Product ID</TableCell>
                     <TableCell>Invoice Batch</TableCell>
                     <TableCell>Received Batch</TableCell>
                     <TableCell align="right">Qty</TableCell>
@@ -496,6 +511,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
                             Exp: {item.expiryDate ? format(item.expiryDate instanceof Date ? item.expiryDate : item.expiryDate.toDate(), 'MM/yyyy') : 'N/A'}
                           </Typography>
                         </TableCell>
+                        <TableCell>{productIdByMedicineId.get(item.medicineId) || '—'}</TableCell>
                         <TableCell>{item.batchNumber}</TableCell>
                         <TableCell>
                           {item.receivedBatchNumber?.trim() ? (
