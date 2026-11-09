@@ -13,7 +13,6 @@ import {
   InputAdornment,
   Button,
   Stack,
-  Pagination,
 } from '@mui/material';
 import { FileDownload, Search } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
@@ -41,7 +40,6 @@ export const PurchaseShortListPage: React.FC = () => {
   const [fromDateTime, setFromDateTime] = useState(`${today}T00:00`);
   const [toDateTime, setToDateTime] = useState(getEndOfTodayIstDateTime());
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
 
   const fromMs = parseIstDateTimeLocal(fromDateTime);
   const toMs = parseIstDateTimeLocal(toDateTime);
@@ -82,11 +80,6 @@ export const PurchaseShortListPage: React.FC = () => {
   const q = search.trim().toLowerCase();
   const shorts = (list?.shorts ?? []).filter((row) => !q || row.name.toLowerCase().includes(q));
   const requests = (list?.requests ?? []).filter((row) => !q || row.name.toLowerCase().includes(q));
-
-  const rowsPerPage = 25;
-  const pageCount = Math.max(1, Math.ceil(shorts.length / rowsPerPage));
-  const safePage = Math.min(page, pageCount);
-  const pageRows = shorts.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
   const exportRows = () => {
     const header = ['Kind', 'Product', 'Ordered', 'In stock', 'Short', 'Orders'];
@@ -138,24 +131,20 @@ export const PurchaseShortListPage: React.FC = () => {
         <IstDateTimeField
           label="Orders from"
           value={fromDateTime}
-          onChange={(value) => {
-            setFromDateTime(value);
-            setPage(1);
-          }}
+          onChange={setFromDateTime}
+          sx={{ width: 250 }}
         />
         <IstDateTimeField
           label="Orders to"
           value={toDateTime}
-          onChange={(value) => {
-            setToDateTime(value);
-            setPage(1);
-          }}
+          onChange={setToDateTime}
+          sx={{ width: 250 }}
         />
         <TextField
           size="small"
           placeholder="Search product"
           value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          onChange={(e) => setSearch(e.target.value)}
           InputProps={{
             startAdornment: (
               <InputAdornment position="start">
@@ -188,12 +177,7 @@ export const PurchaseShortListPage: React.FC = () => {
             </Button>
           </Stack>
 
-          <ShortTable title="Still short after stock" rows={pageRows} empty="Nothing is short for these orders." showStock />
-          {pageCount > 1 ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
-              <Pagination count={pageCount} page={safePage} onChange={(_e, value) => setPage(value)} />
-            </Box>
-          ) : null}
+          <ShortTable title="Still short after stock" rows={shorts} empty="Nothing is short for these orders." showStock />
 
           <Box sx={{ mt: 3 }}>
             <ShortTable
