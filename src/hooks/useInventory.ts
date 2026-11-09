@@ -8,6 +8,8 @@ import {
   updateMedicineStock,
   addStockBatch,
   setStockBatchQuantity,
+  updateStockBatch,
+  type StockBatchEdit,
   findMedicineByBarcode,
   getExpiringMedicines,
   getExpiredMedicines,
@@ -113,6 +115,26 @@ export const useAddStockBatch = () => {
     }) => addStockBatch(medicineId, batch),
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['medicineBatches', vars.medicineId] });
+    },
+  });
+};
+
+export const useUpdateStockBatch = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      medicineId,
+      currentBatchNumber,
+      edit,
+    }: {
+      medicineId: string;
+      currentBatchNumber: string;
+      edit: StockBatchEdit;
+    }) => updateStockBatch(medicineId, currentBatchNumber, edit),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['medicines'] });
+      queryClient.invalidateQueries({ queryKey: ['medicines', vars.medicineId] });
       queryClient.invalidateQueries({ queryKey: ['medicineBatches', vars.medicineId] });
     },
   });

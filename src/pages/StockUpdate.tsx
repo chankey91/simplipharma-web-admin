@@ -30,7 +30,7 @@ import {
   useMedicineBatches,
   useUpdateStock,
   useAddStockBatch,
-  useSetStockBatchQuantity,
+  useUpdateStockBatch,
   useFindMedicineByBarcode,
 } from '../hooks/useInventory';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -110,7 +110,7 @@ export const StockUpdatePage: React.FC = () => {
 
   const updateStock = useUpdateStock();
   const addBatch = useAddStockBatch();
-  const setBatchQty = useSetStockBatchQuantity();
+  const updateBatch = useUpdateStockBatch();
   const findMedicine = useFindMedicineByBarcode();
   const { alert } = useAppDialog();
 
@@ -145,7 +145,9 @@ export const StockUpdatePage: React.FC = () => {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
+  const [batchDrafts, setBatchDrafts] = useState<
+    Record<string, { batchNumber: string; quantity: string; expiry: string; mrp: string }>
+  >({});
   const [savingBatch, setSavingBatch] = useState<string | null>(null);
   const [mfgError, setMfgError] = useState('');
   const [expiryError, setExpiryError] = useState('');
@@ -188,32 +190,90 @@ export const StockUpdatePage: React.FC = () => {
   }, [medicineIdFromUrl]);
 
   useEffect(() => {
-    const next: Record<string, string> = {};
+    const next: Record<string, { batchNumber: string; quantity: string; expiry: string; mrp: string }> = {};
     for (const b of batches) {
-      next[b.batchNumber] = String(b.quantity ?? 0);
+      const key = b.id || b.batchNumber;
+      next[key] = {
+        batchNumber: b.batchNumber,
+        quantity: String(b.quantity ?? 0),
+        expiry: toMmYy(b.expiryDate),
+        mrp: b.mrp != null ? String(b.mrp) : '',
+      };
     }
-    setQtyDrafts(next);
+    setBatchDrafts(next);
   }, [selectedMedicine?.id, batches]);
 
-  const handleSetPhysicalQty = async (batchNumber: string) => {
+  const patchBatchDraft = (
+    key: string,
+    patch: Partial<{ batchNumber: string; quantity: string; expiry: string; mrp: string }>
+  ) => {
+    setBatchDrafts((prev) => ({
+      ...prev,
+      [key]: {
+        batchNumber: prev[key]?.batchNumber ?? '',
+        quantity: prev[key]?.quantity ?? '',
+        expiry: prev[key]?.expiry ?? '',
+        mrp: prev[key]?.mrp ?? '',
+        ...patch,
+      },
+    }));
+  };
+
+  const handleSaveExistingBatch = async (batch: StockBatch) => {
     if (!selectedMedicine) return;
-    const qty = Math.floor(Number(qtyDrafts[batchNumber]));
+    const key = batch.id || batch.batchNumber;
+    const draft = batchDrafts[key];
+    const nextNumber = draft?.batchNumber.trim() ?? '';
+    if (!nextNumber) {
+      await alert('Enter a batch number.', { severity: 'warning' });
+      return;
+    }
+    const qty = Math.floor(Number(draft?.quantity));
     if (!Number.isFinite(qty) || qty < 0) {
       await alert('Enter a quantity of 0 or more.', { severity: 'warning' });
       return;
     }
+    const expiryParsed = parseMmYy(draft?.expiry ?? '');
+    if (!expiryParsed.ok) {
+      await alert(`Expiry date: ${expiryParsed.error}`, { severity: 'warning' });
+      return;
+    }
+    const mrpRaw = draft?.mrp.trim() ?? '';
+    let mrp: number | undefined;
+    if (mrpRaw) {
+      mrp = Number(mrpRaw);
+      if (!Number.isFinite(mrp) || mrp < 0) {
+        await alert('Enter a valid MRP, or leave it blank.', { severity: 'warning' });
+        return;
+      }
+    }
+    const clash = batches.some(
+      (b) => (b.id || b.batchNumber) !== key && batchKey(b.batchNumber) === batchKey(nextNumber)
+    );
+    if (clash) {
+      await alert(`Batch ${nextNumber} already exists on this medicine.`, { severity: 'warning' });
+      return;
+    }
+
     setError(null);
-    setSavingBatch(batchNumber);
+    setSavingBatch(key);
     try {
-      await setBatchQty.mutateAsync({
+      await updateBatch.mutateAsync({
         medicineId: selectedMedicine.id,
-        batchNumber,
-        quantity: qty,
+        currentBatchNumber: batch.batchNumber,
+        edit: {
+          batchNumber: nextNumber,
+          quantity: qty,
+          expiryDate: expiryParsed.date,
+          mrp,
+        },
       });
-      setSuccess(`Set ${batchNumber} to ${qty}. This replaces the quantity (does not add).`);
+      setSuccess(
+        `Saved ${nextNumber}: qty ${qty}, expiry ${draft?.expiry.trim()}. This replaces the quantity (does not add).`
+      );
       await refetchMedicine();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to set quantity';
+      const msg = err instanceof Error ? err.message : 'Failed to update batch';
       setError(msg);
     } finally {
       setSavingBatch(null);
@@ -382,9 +442,9 @@ export const StockUpdatePage: React.FC = () => {
         <Typography variant="h4">Update stock</Typography>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        After a stock zero, open the medicine, type the physical quantity on the existing batch, and
-        click Set qty. That replaces the number. Add batch below is only for a new lot, or to add
-        extra units on top of the current qty.
+        After a stock zero, open the medicine and save the physical quantity on the existing batch.
+        That replaces the number. The same row can correct the batch number, expiry, and MRP. Add
+        batch below is only for a new lot, or to add extra units on top of the current qty.
       </Typography>
 
       <Grid container spacing={3}>
@@ -617,7 +677,8 @@ export const StockUpdatePage: React.FC = () => {
                   Existing batches — set physical qty
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                  Set qty replaces the current number. Use this after Zero all stock.
+                  Save replaces the quantity and can change the batch number, expiry (MM/YY), and MRP.
+                  It does not add quantity. Past orders keep the old batch number.
                 </Typography>
                 <TableContainer>
                   <Table size="small">
@@ -658,55 +719,72 @@ export const StockUpdatePage: React.FC = () => {
                           sortDirection={batchSort.sortDirection}
                           onRequestSort={batchSort.requestSort}
                         />
-                        <TableCell align="right">Physical qty</TableCell>
+                        <TableCell align="right">Save</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {sortedBatches.map((b) => (
+                      {sortedBatches.map((b) => {
+                        const rowKey = b.id || b.batchNumber;
+                        const draft = batchDrafts[rowKey];
+                        return (
                         <TableRow
-                          key={b.id || b.batchNumber}
+                          key={rowKey}
                           hover
                           selected={batchKey(stockData.batchNumber) === batchKey(b.batchNumber)}
                           onClick={() => applyExistingBatch(b, { keepQuantity: true })}
                           sx={{ cursor: 'pointer' }}
                         >
-                          <TableCell>{b.batchNumber}</TableCell>
-                          <TableCell>{b.quantity}</TableCell>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <TextField
+                              size="small"
+                              value={draft?.batchNumber ?? b.batchNumber}
+                              onChange={(e) => patchBatchDraft(rowKey, { batchNumber: e.target.value })}
+                              inputProps={{ style: { width: 120 } }}
+                            />
+                          </TableCell>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <TextField
+                              size="small"
+                              type="number"
+                              value={draft?.quantity ?? String(b.quantity ?? 0)}
+                              onChange={(e) => patchBatchDraft(rowKey, { quantity: e.target.value })}
+                              inputProps={{ min: 0, style: { width: 72 } }}
+                            />
+                          </TableCell>
                           <TableCell>{toMmYy(b.mfgDate) || '—'}</TableCell>
-                          <TableCell>{toMmYy(b.expiryDate) || '—'}</TableCell>
-                          <TableCell>{b.mrp ?? '—'}</TableCell>
-                          <TableCell align="right">
-                            <Box
-                              display="flex"
-                              gap={1}
-                              justifyContent="flex-end"
-                              alignItems="center"
-                              onClick={(e) => e.stopPropagation()}
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <TextField
+                              size="small"
+                              placeholder="MM/YY"
+                              value={draft?.expiry ?? toMmYy(b.expiryDate)}
+                              onChange={(e) =>
+                                patchBatchDraft(rowKey, { expiry: formatMmYyInput(e.target.value) })
+                              }
+                              inputProps={{ maxLength: 5, style: { width: 72 } }}
+                            />
+                          </TableCell>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <TextField
+                              size="small"
+                              type="number"
+                              value={draft?.mrp ?? (b.mrp != null ? String(b.mrp) : '')}
+                              onChange={(e) => patchBatchDraft(rowKey, { mrp: e.target.value })}
+                              inputProps={{ min: 0, style: { width: 80 } }}
+                            />
+                          </TableCell>
+                          <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              disabled={savingBatch === rowKey || updateBatch.isPending}
+                              onClick={() => void handleSaveExistingBatch(b)}
                             >
-                              <TextField
-                                size="small"
-                                type="number"
-                                value={qtyDrafts[b.batchNumber] ?? ''}
-                                onChange={(e) =>
-                                  setQtyDrafts((prev) => ({
-                                    ...prev,
-                                    [b.batchNumber]: e.target.value,
-                                  }))
-                                }
-                                inputProps={{ min: 0, style: { width: 72 } }}
-                              />
-                              <Button
-                                size="small"
-                                variant="contained"
-                                disabled={savingBatch === b.batchNumber || setBatchQty.isPending}
-                                onClick={() => void handleSetPhysicalQty(b.batchNumber)}
-                              >
-                                {savingBatch === b.batchNumber ? 'Saving…' : 'Set qty'}
-                              </Button>
-                            </Box>
+                              {savingBatch === rowKey ? 'Saving…' : 'Save'}
+                            </Button>
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </TableContainer>

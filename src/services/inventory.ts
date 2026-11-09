@@ -432,12 +432,16 @@ async function replaceMedicineBatchesDocs(
   );
 
   // Prefer updating in place by batchNumber to keep stable doc ids across merges.
+  // A renamed lot keeps its document id so the old row is not deleted and recreated.
   const existingByKey = new Map<string, { id: string }>();
+  const existingIds = new Set<string>();
   for (const d of existingSnap.docs) {
     existingByKey.set(batchKey(d.data().batchNumber), { id: d.id });
+    existingIds.add(d.id);
   }
 
   const desiredKeys = new Set(batches.map((b) => batchKey(b.batchNumber)));
+  const desiredIds = new Set(batches.map((b) => b.id).filter(Boolean));
   const finalized: StockBatch[] = [];
 
   let batchWriter = writeBatch(db);
@@ -450,9 +454,9 @@ async function replaceMedicineBatchesDocs(
     opCount = 0;
   };
 
-  // Delete docs whose batchNumber is no longer present
+  // Delete docs whose batch number and document id are both gone.
   for (const d of existingSnap.docs) {
-    if (!desiredKeys.has(batchKey(d.data().batchNumber))) {
+    if (!desiredKeys.has(batchKey(d.data().batchNumber)) && !desiredIds.has(d.id)) {
       batchWriter.delete(d.ref);
       opCount += 1;
       await flush();
@@ -462,11 +466,10 @@ async function replaceMedicineBatchesDocs(
   for (const b of batches) {
     const key = batchKey(b.batchNumber);
     const existing = existingByKey.get(key);
-    const ref = existing
-      ? doc(db, MEDICINE_BATCHES_COLLECTION, existing.id)
-      : b.id
-        ? doc(db, MEDICINE_BATCHES_COLLECTION, b.id)
-        : doc(collection(db, MEDICINE_BATCHES_COLLECTION));
+    const stableId = b.id && existingIds.has(b.id) ? b.id : existing?.id;
+    const ref = stableId
+      ? doc(db, MEDICINE_BATCHES_COLLECTION, stableId)
+      : doc(collection(db, MEDICINE_BATCHES_COLLECTION));
     const payload = serializeBatchForFirestore({ ...b, id: ref.id }, medicineId);
     payload.id = ref.id;
     batchWriter.set(ref, payload);
@@ -1204,6 +1207,60 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
 
   await setDoc(medicineRef, newMedicine);
   return medicineRef.id;
+};
+
+export type StockBatchEdit = {
+  batchNumber: string;
+  quantity: number;
+  expiryDate: Date;
+  mrp?: number;
+};
+
+/**
+ * Replace quantity, expiry, MRP, and batch number on one existing lot.
+ * Keeps the same medicineBatches document when the batch number changes.
+ * Does not add quantity and does not rewrite past orders.
+ */
+export const updateStockBatch = async (
+  medicineId: string,
+  currentBatchNumber: string,
+  edit: StockBatchEdit
+): Promise<void> => {
+  const nextNumber = edit.batchNumber.trim();
+  if (!nextNumber) throw new Error('Batch number is required');
+  const qty = Math.floor(Number(edit.quantity));
+  if (!Number.isFinite(qty) || qty < 0) throw new Error('Enter a quantity of 0 or more');
+  if (!(edit.expiryDate instanceof Date) || Number.isNaN(edit.expiryDate.getTime())) {
+    throw new Error('Expiry date is required');
+  }
+
+  const medicineRef = doc(db, 'medicines', medicineId);
+  const medicineDoc = await getDoc(medicineRef);
+  if (!medicineDoc.exists()) throw new Error('Medicine not found');
+  const gstRate = parseGstRate(medicineDoc.data());
+  const batches = await loadBatchesForMedicine(
+    medicineId,
+    medicineDoc.data()?.stockBatches,
+    gstRate
+  );
+  const idx = batches.findIndex((b) => batchKey(b.batchNumber) === batchKey(currentBatchNumber));
+  if (idx < 0) throw new Error(`Batch ${currentBatchNumber} not found`);
+  const clash = batches.some(
+    (b, i) => i !== idx && batchKey(b.batchNumber) === batchKey(nextNumber)
+  );
+  if (clash) throw new Error(`Batch ${nextNumber} already exists on this medicine`);
+
+  const existing = batches[idx];
+  const next: StockBatch = {
+    ...existing,
+    batchNumber: nextNumber,
+    quantity: qty,
+    expiryDate: edit.expiryDate,
+  };
+  if (edit.mrp != null && Number.isFinite(edit.mrp)) next.mrp = edit.mrp;
+  else delete next.mrp;
+  batches[idx] = next;
+  await replaceMedicineBatchesDocs(medicineId, batches);
 };
 
 /** Replace quantity on an existing batch. Does not create or delete the batch. */
