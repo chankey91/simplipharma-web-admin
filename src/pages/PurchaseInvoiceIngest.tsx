@@ -49,7 +49,7 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 import { useVendors } from '../hooks/useVendors';
 import { useCreatePurchaseInvoice, useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { useCreateMedicine } from '../hooks/useInventory';
-import { createMedicine, getMedicineById } from '../services/inventory';
+import { createMedicine, ensureMedicineNonReturnable, getMedicineById, setMedicineNonReturnable } from '../services/inventory';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
 import { getTodayDateStringIST } from '../utils/dateTime';
 import { normalizeAdditionalDiscount, roundPurchaseInvoicePayable } from '../utils/purchaseInvoiceTotals';
@@ -690,19 +690,28 @@ const StackLines: React.FC<{
               <LineMedicinePicker
                 line={line}
                 onPick={(medicineId, medicineName, productId, gstRate) => {
-                  const prior = nrNrxByMedicineId.get(medicineId);
-                  patchLine(line.lineId, {
-                    selectedMedicineId: medicineId,
-                    selectedMedicineName: medicineName,
-                    medicineId,
-                    medicineName,
-                    productId,
-                    ...(gstRate != null ? { gstRate } : {}),
-                    matchStatus: 'matched',
-                    matchReason: 'inventory',
-                    ...(prior?.nonReturnable ? { nonReturnable: true } : {}),
-                    ...(prior?.nrxDrug ? { nrxDrug: true } : {}),
-                  });
+                  void (async () => {
+                    let nonReturnable = false;
+                    try {
+                      const full = await getMedicineById(medicineId);
+                      if (full) nonReturnable = await ensureMedicineNonReturnable(full);
+                    } catch (error) {
+                      console.warn('Failed to read non-returnable from medicine master', error);
+                    }
+                    const prior = nrNrxByMedicineId.get(medicineId);
+                    patchLine(line.lineId, {
+                      selectedMedicineId: medicineId,
+                      selectedMedicineName: medicineName,
+                      medicineId,
+                      medicineName,
+                      productId,
+                      ...(gstRate != null ? { gstRate } : {}),
+                      matchStatus: 'matched',
+                      matchReason: 'inventory',
+                      nonReturnable,
+                      ...(prior?.nrxDrug ? { nrxDrug: true } : {}),
+                    });
+                  })();
                 }}
                 onClear={() => {
                   patchLine(line.lineId, {
@@ -859,9 +868,16 @@ const StackLines: React.FC<{
                   <Checkbox
                     size="small"
                     checked={line.nonReturnable === true}
-                    onChange={(e) =>
-                      void patchLine(line.lineId, { nonReturnable: e.target.checked })
-                    }
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      void patchLine(line.lineId, { nonReturnable: checked });
+                      const medicineId = line.selectedMedicineId || line.medicineId;
+                      if (medicineId) {
+                        void setMedicineNonReturnable(medicineId, checked).catch((error) => {
+                          console.warn('Failed to save non-returnable on medicine master', error);
+                        });
+                      }
+                    }}
                   />
                 }
                 label="Non-returnable (retailer cannot return this batch)"
@@ -1220,18 +1236,59 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
         const id = line.selectedMedicineId || line.medicineId;
         if (!id) return line;
         const prior = nrNrxByMedicineId.get(id);
-        if (!prior) return line;
-        const nonReturnable = line.nonReturnable === true || prior.nonReturnable;
-        const nrxDrug = line.nrxDrug === true || prior.nrxDrug;
-        if (nonReturnable === (line.nonReturnable === true) && nrxDrug === (line.nrxDrug === true)) {
-          return line;
-        }
+        if (!prior?.nrxDrug) return line;
+        if (line.nrxDrug === true) return line;
         changed = true;
-        return { ...line, ...(nonReturnable ? { nonReturnable: true } : {}), ...(nrxDrug ? { nrxDrug: true } : {}) };
+        return { ...line, nrxDrug: true };
       });
       return changed ? next : prev;
     });
   }, [draftId, localLines.length, nrNrxByMedicineId]);
+
+  useEffect(() => {
+    const pendingIds = [
+      ...new Set(
+        localLines
+          .map((line) => line.selectedMedicineId || line.medicineId)
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
+    const needsMaster = pendingIds.filter((id) =>
+      localLines.some((line) => {
+        const lineId = line.selectedMedicineId || line.medicineId;
+        return lineId === id && typeof line.nonReturnable !== 'boolean';
+      })
+    );
+    if (!needsMaster.length) return;
+    let cancelled = false;
+    void (async () => {
+      const flags = new Map<string, boolean>();
+      await Promise.all(
+        needsMaster.map(async (id) => {
+          try {
+            const full = await getMedicineById(id);
+            if (full) flags.set(id, await ensureMedicineNonReturnable(full));
+          } catch (error) {
+            console.warn('Failed to read non-returnable from medicine master', error);
+          }
+        })
+      );
+      if (cancelled || flags.size === 0) return;
+      setLocalLines((prev) => {
+        let changed = false;
+        const next = prev.map((line) => {
+          const id = line.selectedMedicineId || line.medicineId;
+          if (!id || typeof line.nonReturnable === 'boolean' || !flags.has(id)) return line;
+          changed = true;
+          return { ...line, nonReturnable: flags.get(id) === true };
+        });
+        return changed ? next : prev;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [localLines]);
 
   const flushLinePatches = useCallback(async () => {
     if (!draftId || !pendingLinesRef.current) return;
@@ -1444,6 +1501,13 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
     try {
       const existing = await findMedicineByExactName(newMedicineData.name.trim());
       if (existing) {
+        let nonReturnable = false;
+        try {
+          const full = await getMedicineById(existing.id);
+          if (full) nonReturnable = await ensureMedicineNonReturnable(full);
+        } catch (error) {
+          console.warn('Failed to read non-returnable from medicine master', error);
+        }
         await patchLine(addMedicineLineId, {
           selectedMedicineId: existing.id,
           selectedMedicineName: existing.name,
@@ -1453,7 +1517,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
           gstRate: existing.gstRate ?? (parseFloat(newMedicineData.gstRate) || 5),
           matchStatus: 'matched',
           matchReason: 'inventory',
-          ...(nrNrxByMedicineId.get(existing.id)?.nonReturnable ? { nonReturnable: true } : {}),
+          nonReturnable,
           ...(nrNrxByMedicineId.get(existing.id)?.nrxDrug ? { nrxDrug: true } : {}),
         });
         closeAddMedicine();
@@ -1487,6 +1551,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
         gstRate: created?.gstRate ?? (parseFloat(newMedicineData.gstRate) || 5),
         matchStatus: 'matched',
         matchReason: 'inventory',
+        nonReturnable: created?.nonReturnable === true,
       });
       closeAddMedicine();
       await alert(
@@ -1670,7 +1735,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
               : undefined,
           gstRate,
           qrCode,
-          ...(line.nonReturnable === true ? { nonReturnable: true } : {}),
+          ...(typeof line.nonReturnable === 'boolean' ? { nonReturnable: line.nonReturnable } : {}),
           ...(line.nrxDrug === true ? { nrxDrug: true } : {}),
         });
       }

@@ -22,6 +22,10 @@ import { Medicine, StockBatch } from '../types';
 import { standardDiscountFromStockBatch } from '../utils/orderFulfillmentDiscount';
 import { allocateSpsProductId } from '../utils/spsProductId';
 import { resolveGstRate } from '../utils/gstRate';
+import {
+  defaultNonReturnableForMedicine,
+  matchesDefaultNonReturnable,
+} from '../utils/nonReturnableDefault';
 
 /** Top-level collection for on-hand lots (transactional). Master stays on `medicines`. */
 export const MEDICINE_BATCHES_COLLECTION = 'medicineBatches';
@@ -333,6 +337,8 @@ function masterFromDoc(
     stockBatches: batches,
     gstRate,
     description: data.description != null ? String(data.description) : undefined,
+    nonReturnable:
+      data.nonReturnable === true ? true : data.nonReturnable === false ? false : undefined,
   };
 }
 
@@ -523,7 +529,11 @@ function mergeBatchIntoList(
         id: existing.id,
         medicineId,
         nonReturnable:
-          batchInput.nonReturnable === true || existing.nonReturnable === true ? true : undefined,
+          batchInput.nonReturnable === false
+            ? undefined
+            : batchInput.nonReturnable === true || existing.nonReturnable === true
+              ? true
+              : undefined,
         nrxDrug: batchInput.nrxDrug === true || existing.nrxDrug === true ? true : undefined,
         invoiceBatchNumber:
           String(batchInput.invoiceBatchNumber || '').trim() ||
@@ -1142,6 +1152,27 @@ export const setStockBatchNonReturnable = async (
   await replaceMedicineBatchesDocs(medicineId, batches);
 };
 
+/** Write the product-level non-returnable choice. False is stored, so the rule does not run again. */
+export const setMedicineNonReturnable = async (
+  medicineId: string,
+  nonReturnable: boolean
+): Promise<void> => {
+  if (!medicineId) return;
+  await updateDoc(doc(db, 'medicines', medicineId), { nonReturnable });
+};
+
+/**
+ * Return the saved master flag. If it has never been saved, apply the default rule once and store it.
+ */
+export const ensureMedicineNonReturnable = async (medicine: Medicine): Promise<boolean> => {
+  if (typeof medicine.nonReturnable === 'boolean') return medicine.nonReturnable;
+  const value = defaultNonReturnableForMedicine(medicine);
+  if (medicine.id) {
+    await updateDoc(doc(db, 'medicines', medicine.id), { nonReturnable: value });
+  }
+  return value;
+};
+
 /** Toggle NRX flag on an existing inventory batch (used when editing PI lines). */
 export const setStockBatchNrxDrug = async (
   medicineId: string,
@@ -1198,6 +1229,14 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
         : 5,
     price: 0,
     migrationVersion: MEDICINE_MIGRATION_VERSION,
+    nonReturnable:
+      typeof medicineData.nonReturnable === 'boolean'
+        ? medicineData.nonReturnable
+        : matchesDefaultNonReturnable({
+            name: medicineData.name,
+            category: medicineData.category,
+            mrp: typeof medicineData.mrp === 'number' ? medicineData.mrp : undefined,
+          }),
   };
 
   if (medicineData.code) newMedicine.code = medicineData.code;

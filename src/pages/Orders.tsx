@@ -1210,13 +1210,15 @@ export const OrdersPage: React.FC = () => {
             label="From"
             value={draftFromDateFilter}
             onChange={setDraftFromDateFilter}
-            sx={{ width: { xs: '100%', sm: 230 } }}
+            ampm
+            sx={{ width: { xs: '100%', sm: 270 } }}
           />
           <IstDateTimeField
             label="To"
             value={draftToDateFilter}
             onChange={setDraftToDateFilter}
-            sx={{ width: { xs: '100%', sm: 230 } }}
+            ampm
+            sx={{ width: { xs: '100%', sm: 270 } }}
           />
           <Button
             size="small"

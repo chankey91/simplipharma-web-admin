@@ -40,7 +40,7 @@ import { useVendorLastPurchases } from '../hooks/usePurchaseInvoices';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { useAppDialog } from '../context/AppDialogProvider';
-import { getMedicineById, normalizeFirestoreDate } from '../services/inventory';
+import { getMedicineById, normalizeFirestoreDate, ensureMedicineNonReturnable, setMedicineNonReturnable } from '../services/inventory';
 import { Medicine, StockBatch } from '../types';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
@@ -162,6 +162,7 @@ export const StockUpdatePage: React.FC = () => {
 
   const [scannerOpen, setScannerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(medicineIdFromUrl);
+  const [masterNonReturnable, setMasterNonReturnable] = useState(false);
   const [searchInput, setSearchInput] = useState('');
 
   const { data: selectedMedicine, isLoading: medicineLoading, refetch: refetchMedicine } =
@@ -171,6 +172,26 @@ export const StockUpdatePage: React.FC = () => {
     if (loadedBatches?.length) return loadedBatches;
     return selectedMedicine?.stockBatches ?? [];
   }, [loadedBatches, selectedMedicine?.stockBatches]);
+
+  useEffect(() => {
+    if (!selectedMedicine?.id) {
+      setMasterNonReturnable(false);
+      return;
+    }
+    let cancelled = false;
+    void ensureMedicineNonReturnable(selectedMedicine)
+      .then((nr) => {
+        if (cancelled) return;
+        setMasterNonReturnable(nr);
+        setStockData((prev) => ({ ...prev, nonReturnable: nr }));
+      })
+      .catch((error) => {
+        console.warn('Failed to read non-returnable from medicine master', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMedicine?.id, selectedMedicine?.nonReturnable]);
 
   const skipLabel = selectedMedicine ? getMedicinePickerLabel(selectedMedicine) : undefined;
   const { medicines: searchHits, loading: searchLoading } = useMedicineSearch(searchInput, {
@@ -371,7 +392,6 @@ export const StockUpdatePage: React.FC = () => {
         batch.schemePaidQty != null && batch.schemePaidQty > 0 ? String(Math.floor(batch.schemePaidQty)) : '',
       schemeFreeQty:
         batch.schemeFreeQty != null && batch.schemeFreeQty > 0 ? String(Math.floor(batch.schemeFreeQty)) : '',
-      nonReturnable: batch.nonReturnable === true,
       nrxDrug: batch.nrxDrug === true,
       mfgDate: toMmYy(batch.mfgDate),
       expiryDate: toMmYy(batch.expiryDate),
@@ -510,13 +530,19 @@ export const StockUpdatePage: React.FC = () => {
           ...(discountPercentage > 0 ? { discountPercentage } : {}),
           ...(Number.isFinite(standardDiscount) ? { standardDiscount } : {}),
           ...(schemePaidQty != null && schemeFreeQty != null ? { schemePaidQty, schemeFreeQty } : {}),
-          ...(stockData.nonReturnable ? { nonReturnable: true } : {}),
+          nonReturnable: stockData.nonReturnable === true,
           ...(stockData.nrxDrug ? { nrxDrug: true } : {}),
           ...(receivedBatch && batchKey(receivedBatch) !== batchKey(invoiceBatch)
             ? { invoiceBatchNumber: invoiceBatch }
             : {}),
         },
       });
+      try {
+        await setMedicineNonReturnable(selectedMedicine.id, stockData.nonReturnable === true);
+        setMasterNonReturnable(stockData.nonReturnable === true);
+      } catch {
+        // Stock is already saved. The master flag can be retried on the next save.
+      }
       try {
         await updateMedicine.mutateAsync({
           medicineId: selectedMedicine.id,
