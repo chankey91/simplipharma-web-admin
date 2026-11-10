@@ -408,6 +408,8 @@ export const createPurchaseInvoice = async (
     }
     if (item.nonReturnable === true) {
       cleanedItem.nonReturnable = true;
+    } else if (item.nonReturnable === false) {
+      cleanedItem.nonReturnable = false;
     }
     if (item.nrxDrug === true) {
       cleanedItem.nrxDrug = true;
@@ -706,6 +708,8 @@ export const updatePurchaseInvoice = async (
       }
       if (item.nonReturnable === true) {
         cleanedItem.nonReturnable = true;
+      } else if (item.nonReturnable === false) {
+        cleanedItem.nonReturnable = false;
       }
       if (item.nrxDrug === true) {
         cleanedItem.nrxDrug = true;
@@ -786,6 +790,8 @@ function buildStockBatchPayloadFromPurchaseItem(
   }
   if (item.nonReturnable === true) {
     batchData.nonReturnable = true;
+  } else if (item.nonReturnable === false) {
+    batchData.nonReturnable = false;
   }
   if (item.nrxDrug === true) {
     batchData.nrxDrug = true;

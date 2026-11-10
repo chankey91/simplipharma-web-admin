@@ -5,7 +5,7 @@
 import type { Medicine, Order } from '../types';
 import type { ProductDemandRow } from './productDemandSearch';
 import { deriveSearchMatchTokens } from './medicineSearch';
-import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { getMedicinePackaging, getMedicinePickerLabel } from '../utils/medicinePickerLabel';
 
 export type MedicineResolveGroup = 'pending_order' | 'product_demand' | 'inventory';
 
@@ -22,6 +22,11 @@ export type MedicineResolveOption = {
   group: MedicineResolveGroup;
   groupLabel: string;
   label: string;
+  /**
+   * Pack size, set only when another suggestion in this list has the same product name.
+   * Shown beside the pending marker so same-name products can be told apart.
+   */
+  packaging?: string;
   /** When true, selecting applies a medicine master (batch can be added). */
   selectable: boolean;
   medicine?: Medicine;
@@ -159,7 +164,34 @@ export function buildMedicineResolveOptions(args: {
     pushMedicine(args.selectedMedicine, 'inventory');
   }
 
-  return out;
+  return annotateDuplicateNamePackaging(out);
+}
+
+function productNameKey(option: MedicineResolveOption): string {
+  const raw = option.medicine?.name || option.demand?.productName || '';
+  return raw.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function optionPackaging(option: MedicineResolveOption): string {
+  if (option.medicine) return getMedicinePackaging(option.medicine);
+  return option.demand?.requestedUnit?.trim() || '';
+}
+
+/** When two suggestions share a product name, attach packaging so the list can show it. */
+function annotateDuplicateNamePackaging(options: MedicineResolveOption[]): MedicineResolveOption[] {
+  const counts = new Map<string, number>();
+  for (const option of options) {
+    const key = productNameKey(option);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return options.map((option) => {
+    const key = productNameKey(option);
+    if (!key || (counts.get(key) ?? 0) < 2) return option;
+    const packaging = optionPackaging(option);
+    if (!packaging) return option;
+    return { ...option, packaging };
+  });
 }
 
 /**
