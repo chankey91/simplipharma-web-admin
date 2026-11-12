@@ -23,7 +23,7 @@ import {
 import { ArrowBack, Delete, PictureAsPdf, Add } from '@mui/icons-material';
 import { format } from 'date-fns';
 import QRCode from 'qrcode';
-import { auth } from '../services/firebase';
+import { auth, isFirestoreInternalAssertion, purchaseInvoiceAssertionMessage } from '../services/firebase';
 import { useVendors } from '../hooks/useVendors';
 import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
@@ -390,7 +390,11 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
       await alert('Purchase invoice created', { severity: 'success' });
       navigate('/purchases');
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = isFirestoreInternalAssertion(e)
+        ? purchaseInvoiceAssertionMessage()
+        : e instanceof Error
+          ? e.message
+          : String(e);
       await alert(msg || 'Failed to create invoice', { severity: 'error' });
     }
   };
