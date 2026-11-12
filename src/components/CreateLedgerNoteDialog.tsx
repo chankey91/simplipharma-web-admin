@@ -22,6 +22,7 @@ import {
   type LedgerNoteGstRate,
 } from '../services/ledgerNotes';
 import { setRetailerWalletBalance } from '../services/retailerWallet';
+import { firestoreInternalAssertionMessage, isFirestoreInternalAssertion } from '../services/firebase';
 
 type NoteKind = 'credit' | 'debit';
 
@@ -62,13 +63,8 @@ function parseLocalDateInput(value: string): Date {
 }
 
 function mapCreateNoteError(e: unknown): string {
+  if (isFirestoreInternalAssertion(e)) return firestoreInternalAssertionMessage();
   const msg = e instanceof Error ? e.message : String(e ?? '');
-  if (/INTERNAL ASSERTION FAILED/i.test(msg) || /Unexpected state/i.test(msg)) {
-    return (
-      'Firestore client crashed (local cache). Reload this page, keep only one admin tab open, then try again. ' +
-      'If it persists, clear site data for this origin and sign in again.'
-    );
-  }
   return msg || 'Failed to create note';
 }
 

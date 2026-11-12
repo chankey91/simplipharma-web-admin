@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, startAfter, limit, Timestamp, serverTimestamp, db, getDoc, where, deleteField, deleteDoc } from './firebase';
+import { collection, getDocs, doc, setDoc, updateDoc, query, orderBy, startAfter, limit, Timestamp, serverTimestamp, db, getDoc, where, deleteField, deleteDoc, isFirestoreInternalAssertion } from './firebase';
 import { ProductDemand, PurchaseInvoice, PurchaseInvoiceItem, VendorInvoicePayment } from '../types';
 import {
   addStockBatchesToMedicine,
@@ -512,8 +512,10 @@ export const createPurchaseInvoice = async (
       total: Math.max(1, stockItems.length),
     });
 
-    await Promise.all(
-      [...itemsByMedicine.entries()].map(async ([medicineId, items]) => {
+    // Sequential: parallel writeBatch commits against the persistent cache throw
+    // FIRESTORE INTERNAL ASSERTION FAILED (client-side; nothing is logged in Cloud Logging).
+    for (const [medicineId, items] of itemsByMedicine) {
+      await (async () => {
         const batchPayloads: Array<Record<string, unknown>> = [];
         const labels: string[] = [];
 
@@ -591,12 +593,18 @@ export const createPurchaseInvoice = async (
             total: Math.max(1, stockItems.length),
           });
         }
-      })
-    );
+      })();
+    }
 
     console.log(
       `Stock update summary: ${invoiceData.items.length - stockUpdateErrors.length} successful, ${stockUpdateErrors.length} failed`
     );
+
+    if (stockUpdateErrors.some((msg) => isFirestoreInternalAssertion(new Error(msg)))) {
+      throw new Error(
+        stockUpdateErrors.find((msg) => isFirestoreInternalAssertion(new Error(msg)))
+      );
+    }
 
     if (stockUpdateErrors.length > 0) {
       console.warn('Some stock updates failed:', stockUpdateErrors);
@@ -898,8 +906,9 @@ export async function syncStockForPurchaseInvoiceEdit(
     }
   }
 
-  await Promise.all(
-    [...byMedicine.values()].map(async (entry) => {
+  // One medicine at a time so concurrent batch commits do not crash the Firestore client.
+  for (const entry of byMedicine.values()) {
+    await (async () => {
       const labelOf = (sample: PurchaseInvoiceItem, batchNumber: string) =>
         `${sample.medicineName || sample.medicineId} / ${batchNumber}`;
 
@@ -959,8 +968,8 @@ export async function syncStockForPurchaseInvoiceEdit(
         current: Math.min(done, total),
         total,
       });
-    })
-  );
+    })();
+  }
 
   return errors;
 }
@@ -1143,8 +1152,8 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
     itemsByMedicine.get(item.medicineId)!.push(item);
   }
 
-  await Promise.all(
-    [...itemsByMedicine.entries()].map(async ([medicineId, items]) => {
+  for (const [medicineId, items] of itemsByMedicine) {
+    await (async () => {
       const batchPayloads: Array<Record<string, unknown>> = [];
       const labels: string[] = [];
 
@@ -1186,8 +1195,8 @@ export const updateStockForExistingInvoice = async (invoiceId: string) => {
           stockUpdateErrors.push(`Failed to update stock for ${label}: ${msg}`);
         }
       }
-    })
-  );
+    })();
+  }
 
   const totalItems = invoice.items.length;
   const successful = totalItems - stockUpdateErrors.length;

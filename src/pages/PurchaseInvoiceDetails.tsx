@@ -38,6 +38,7 @@ import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useVendorLastPur
 import { useMedicinesByIds } from '../hooks/useInventory';
 import { useVendor } from '../hooks/useVendors';
 import { format } from 'date-fns';
+import { isFirestoreInternalAssertion, purchaseInvoiceAssertionMessage } from '../services/firebase';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
@@ -218,7 +219,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     try {
       await persistItems(updatedItems);
     } catch (error: any) {
-      await alert(error?.message || 'Failed to delete item', { severity: 'error' });
+      await alert(
+        isFirestoreInternalAssertion(error)
+          ? purchaseInvoiceAssertionMessage()
+          : error?.message || 'Failed to delete item',
+        { severity: 'error' }
+      );
     }
   };
 
@@ -241,7 +247,11 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       }
       navigate('/purchases');
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to delete purchase bill';
+      const message = isFirestoreInternalAssertion(error)
+        ? purchaseInvoiceAssertionMessage()
+        : error instanceof Error
+          ? error.message
+          : 'Failed to delete purchase bill';
       await alert(message, { severity: 'error' });
     }
   };
@@ -337,7 +347,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       }
       setItemDialog({ open: false, itemIndex: null });
     } catch (error: any) {
-      await alert(error?.message || 'Failed to update item', { severity: 'error' });
+      await alert(
+        isFirestoreInternalAssertion(error)
+          ? purchaseInvoiceAssertionMessage()
+          : error?.message || 'Failed to update item',
+        { severity: 'error' }
+      );
     }
   };
 

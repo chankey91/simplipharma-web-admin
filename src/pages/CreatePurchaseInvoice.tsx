@@ -53,7 +53,13 @@ import {
   type PurchaseOrderDraft,
 } from '../services/purchaseOrderDrafts';
 import { format } from 'date-fns';
-import { auth, isPermissionDeniedError, permissionDeniedUserMessage } from '../services/firebase';
+import {
+  auth,
+  purchaseInvoiceAssertionMessage,
+  isFirestoreInternalAssertion,
+  isPermissionDeniedError,
+  permissionDeniedUserMessage,
+} from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -1303,7 +1309,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             notes: invoiceData.notes || undefined,
           },
         });
-        if (result.stockSyncErrors.length > 0) {
+        if (result.stockSyncErrors.some((msg) => isFirestoreInternalAssertion(new Error(msg)))) {
+          await alert(purchaseInvoiceAssertionMessage(), { severity: 'error' });
+        } else if (result.stockSyncErrors.length > 0) {
           await alert(
             `Invoice updated. Stock note:\n${result.stockSyncErrors.slice(0, 5).join('\n')}`,
             { severity: 'warning' }
@@ -1349,9 +1357,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       navigate('/purchases');
     } catch (error: any) {
       await alert(
-        isPermissionDeniedError(error)
-          ? permissionDeniedUserMessage(isEditMode ? 'update this purchase invoice' : 'save this purchase invoice')
-          : error.message || (isEditMode ? 'Failed to update invoice' : 'Failed to create invoice'),
+        isFirestoreInternalAssertion(error)
+          ? purchaseInvoiceAssertionMessage()
+          : isPermissionDeniedError(error)
+            ? permissionDeniedUserMessage(isEditMode ? 'update this purchase invoice' : 'save this purchase invoice')
+            : error.message || (isEditMode ? 'Failed to update invoice' : 'Failed to create invoice'),
         { severity: 'error' }
       );
     } finally {
