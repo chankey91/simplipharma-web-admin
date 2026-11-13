@@ -58,6 +58,7 @@ import {
   ReceiptLong,
   CardGiftcard,
   LocalOffer,
+  Percent,
   UploadFile,
 } from '@mui/icons-material';
 import { auth, getUserProfile, logout } from '../services/firebase';
@@ -143,6 +144,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Margin report', icon: <TrendingUp />, path: '/margin' },
       { text: 'Offer margin', icon: <TrendingUp />, path: '/offer-margin' },
       { text: 'Retailer incentives', icon: <CardGiftcard />, path: '/retailer-incentives' },
+      { text: 'Discounted sales', icon: <Percent />, path: '/retailer-discount-sales' },
       { text: 'Daily performance', icon: <Assessment />, path: '/daily-performance' },
       { text: 'Performance', icon: <ShowChart />, path: '/performance' },
       { text: 'Top sellers', icon: <Insights />, path: '/medicine-demand' },

@@ -46,6 +46,7 @@ import { CreditNotesPage } from './pages/CreditNotes';
 import { MarginReportPage } from './pages/MarginReport';
 import { OfferMarginListPage } from './pages/OfferMarginList';
 import { RetailerIncentivesPage } from './pages/RetailerIncentives';
+import { RetailerDiscountSalesPage } from './pages/RetailerDiscountSales';
 import { StoreReceivablesPage } from './pages/StoreReceivables';
 import { SoReceivablesPage } from './pages/SoReceivables';
 import { StoreLedgerPage } from './pages/StoreLedger';
@@ -180,6 +181,7 @@ const router = createBrowserRouter([
   { path: '/margin', element: withLayout(<MarginReportPage />) },
   { path: '/offer-margin', element: withLayout(<OfferMarginListPage />) },
   { path: '/retailer-incentives', element: withLayout(<RetailerIncentivesPage />) },
+  { path: '/retailer-discount-sales', element: withLayout(<RetailerDiscountSalesPage />) },
   { path: '/medicine-demand', element: withLayout(<MedicineDemandPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
   { path: '/purchase-lists', element: withLayout(<PurchaseListsPage />) },

@@ -68,6 +68,7 @@ export const MENU_CATALOG: { path: string; label: string }[] = [
   { path: '/margin', label: 'Margin report' },
   { path: '/offer-margin', label: 'Offer margin' },
   { path: '/retailer-incentives', label: 'Retailer incentives' },
+  { path: '/retailer-discount-sales', label: 'Discounted sales' },
   { path: '/medicine-demand', label: 'Top sellers' },
   { path: '/banners', label: 'Banners' },
   { path: '/offers', label: 'Retailer offers' },
