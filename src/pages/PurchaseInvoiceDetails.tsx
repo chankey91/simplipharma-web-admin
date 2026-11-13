@@ -38,6 +38,7 @@ import { usePurchaseInvoice, useUpdatePurchaseInvoiceWithStock, useVendorLastPur
 import { useMedicinesByIds } from '../hooks/useInventory';
 import { useVendor } from '../hooks/useVendors';
 import { format } from 'date-fns';
+import { isFirestoreInternalAssertion, purchaseInvoiceAssertionMessage } from '../services/firebase';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { Loading } from '../components/Loading';
 import { RetailerLastSchemeHint } from '../components/RetailerLastSchemeHint';
@@ -51,7 +52,7 @@ import {
 import { PurchaseInvoiceItem } from '../types';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useAuth } from '../context/AuthContext';
-import { setStockBatchNonReturnable, setStockBatchNrxDrug, updateMedicine } from '../services/inventory';
+import { ensureMedicineNonReturnable, getMedicineById, setMedicineNonReturnable, setStockBatchNonReturnable, setStockBatchNrxDrug, updateMedicine } from '../services/inventory';
 import { parseOptionalGstRate } from '../utils/gstRate';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 
@@ -150,8 +151,17 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
   const calculateTotals = (invoiceItems: PurchaseInvoiceItem[], extraDiscount: unknown = 0) =>
     sumPurchaseInvoiceFromItems(invoiceItems, extraDiscount);
 
-  const handleEditItem = (index: number) => {
+  const handleEditItem = async (index: number) => {
     const item = items[index];
+    let nonReturnable = item.nonReturnable === true;
+    if (item.medicineId) {
+      try {
+        const full = await getMedicineById(item.medicineId);
+        if (full) nonReturnable = await ensureMedicineNonReturnable(full);
+      } catch (error) {
+        console.warn('Failed to read non-returnable from medicine master', error);
+      }
+    }
     setCurrentItem({
       medicineName: item.medicineName || '',
       batchNumber: item.batchNumber || '',
@@ -166,7 +176,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       purchasePrice: String(item.purchasePrice ?? ''),
       gstRate: item.gstRate !== undefined ? String(item.gstRate) : '',
       discountPercentage: item.discountPercentage !== undefined ? String(item.discountPercentage) : '',
-      nonReturnable: item.nonReturnable === true,
+      nonReturnable,
       nrxDrug: item.nrxDrug === true,
     });
     setItemDialog({ open: true, itemIndex: index });
@@ -209,7 +219,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
     try {
       await persistItems(updatedItems);
     } catch (error: any) {
-      await alert(error?.message || 'Failed to delete item', { severity: 'error' });
+      await alert(
+        isFirestoreInternalAssertion(error)
+          ? purchaseInvoiceAssertionMessage()
+          : error?.message || 'Failed to delete item',
+        { severity: 'error' }
+      );
     }
   };
 
@@ -232,7 +247,11 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       }
       navigate('/purchases');
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to delete purchase bill';
+      const message = isFirestoreInternalAssertion(error)
+        ? purchaseInvoiceAssertionMessage()
+        : error instanceof Error
+          ? error.message
+          : 'Failed to delete purchase bill';
       await alert(message, { severity: 'error' });
     }
   };
@@ -286,7 +305,7 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       ...(gstRate !== undefined ? { gstRate } : {}),
       ...(discountPercentage !== undefined ? { discountPercentage } : {}),
       ...(oldItem.qrCode ? { qrCode: oldItem.qrCode } : {}),
-      ...(currentItem.nonReturnable === true ? { nonReturnable: true } : {}),
+      nonReturnable: currentItem.nonReturnable === true,
       ...(currentItem.nrxDrug === true ? { nrxDrug: true } : {}),
     };
 
@@ -300,6 +319,13 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
           await updateMedicine(updatedItem.medicineId, { gstRate });
         } catch (e) {
           console.warn('Failed to update medicine GST on master', e);
+        }
+      }
+      if (updatedItem.medicineId) {
+        try {
+          await setMedicineNonReturnable(updatedItem.medicineId, updatedItem.nonReturnable === true);
+        } catch (e) {
+          console.warn('Failed to save non-returnable on medicine master', e);
         }
       }
       const stockBatch = purchaseItemStockBatchNumber(updatedItem);
@@ -321,7 +347,12 @@ export const PurchaseInvoiceDetailsPage: React.FC = () => {
       }
       setItemDialog({ open: false, itemIndex: null });
     } catch (error: any) {
-      await alert(error?.message || 'Failed to update item', { severity: 'error' });
+      await alert(
+        isFirestoreInternalAssertion(error)
+          ? purchaseInvoiceAssertionMessage()
+          : error?.message || 'Failed to update item',
+        { severity: 'error' }
+      );
     }
   };
 

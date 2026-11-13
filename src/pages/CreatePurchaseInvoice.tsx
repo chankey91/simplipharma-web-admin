@@ -53,7 +53,13 @@ import {
   type PurchaseOrderDraft,
 } from '../services/purchaseOrderDrafts';
 import { format } from 'date-fns';
-import { auth, isPermissionDeniedError, permissionDeniedUserMessage } from '../services/firebase';
+import {
+  auth,
+  purchaseInvoiceAssertionMessage,
+  isFirestoreInternalAssertion,
+  isPermissionDeniedError,
+  permissionDeniedUserMessage,
+} from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -75,10 +81,11 @@ import type { MedicineResolveOption } from '../services/medicineResolution';
 import { getTodayDateStringIST, getYearIST } from '../utils/dateTime';
 import { formatPurchaseSchemeLabel } from '../utils/purchaseSchemeLabel';
 import { getMedicinePickerLabel } from '../utils/medicinePickerLabel';
-import { normalizeFirestoreDate } from '../services/inventory';
+import { normalizeFirestoreDate, getMedicineById, ensureMedicineNonReturnable, setMedicineNonReturnable } from '../services/inventory';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { VendorFormDialog } from '../components/VendorFormDialog';
 import { purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
+import { pickLatestBatch } from '../utils/nonReturnableDefault';
 import { resolveMedicineNrNrxFlags } from '../utils/vendorLastPurchase';
 import {
   normalizeAdditionalDiscount,
@@ -291,6 +298,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     nrxDrug: false,
   });
   const [expiryDateError, setExpiryDateError] = useState<string>('');
+  const [suggestionNote, setSuggestionNote] = useState<string | null>(null);
 
   const [medicineSearchInput, setMedicineSearchInput] = useState('');
   const medicineSearchInputElRef = useRef<HTMLInputElement | null>(null);
@@ -306,7 +314,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     if (currentItemMedicineFull) rememberMedicine(currentItemMedicineFull);
   }, [currentItemMedicineFull, rememberMedicine]);
 
-  // Search hits often omit batches; once the full medicine loads, tick NR/NRX if it was used before.
+  // Search hits often omit batches; once the full medicine loads, tick NRX if it was used before.
+  // Non-returnable comes from the medicine master, not from older bills.
   useEffect(() => {
     if (!itemDialog.open || itemDialog.itemIndex !== null) return;
     const medicineId = String(currentItem.medicineId || '');
@@ -317,14 +326,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       invoiceItems: items,
       stockBatches: currentItemMedicineFull.stockBatches,
     });
-    if (!priorNrNrx.nonReturnable && !priorNrNrx.nrxDrug) return;
+    if (!priorNrNrx.nrxDrug) return;
     setCurrentItem((prev) => {
       if (prev.medicineId !== medicineId) return prev;
-      if (prev.nonReturnable === true && prev.nrxDrug === true) return prev;
-      const nonReturnable = prev.nonReturnable === true || priorNrNrx.nonReturnable;
-      const nrxDrug = prev.nrxDrug === true || priorNrNrx.nrxDrug;
-      if (prev.nonReturnable === nonReturnable && prev.nrxDrug === nrxDrug) return prev;
-      return { ...prev, nonReturnable, nrxDrug };
+      if (prev.nrxDrug === true) return prev;
+      return { ...prev, nrxDrug: true };
     });
   }, [
     itemDialog.open,
@@ -660,9 +666,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   });
   const batchKeyChangedSinceOpen =
     currentLineStockBatchKey !== lineBatchKeyWhenOpenedRef.current;
-  /** Fill from inventory on add, or when editing after the batch number actually changed. */
-  const shouldFillFromExistingBatch =
-    itemDialog.itemIndex === null || batchKeyChangedSinceOpen;
+  /** Fill from inventory only after the batch number changes from the value the dialog opened with. */
+  const shouldFillFromExistingBatch = batchKeyChangedSinceOpen;
 
   /** Fill item fields from inventory when batch already exists for this medicine (quantity unchanged). */
   const applyExistingBatchDetails = () => {
@@ -717,7 +722,6 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         batchSchemeFree != null && Number(batchSchemeFree) > 0
           ? String(Math.floor(Number(batchSchemeFree)))
           : prev.schemeFreeQty,
-      nonReturnable: batch.nonReturnable === true,
       nrxDrug: batch.nrxDrug === true,
       gstRate,
     }));
@@ -736,26 +740,161 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       invoiceItems: items,
       stockBatches: selectedMedicine.stockBatches,
     });
+    let nonReturnable = false;
+    let batches = selectedMedicine.stockBatches;
+    let gstRate = resolveGstRate(selectedMedicine.gstRate);
+    try {
+      const full = await getMedicineById(selectedMedicine.id);
+      nonReturnable = full
+        ? await ensureMedicineNonReturnable(full)
+        : false;
+      if (full) {
+        rememberMedicine({ ...full, nonReturnable });
+        batches = full.stockBatches ?? batches;
+        gstRate = resolveGstRate(full.gstRate);
+      }
+    } catch (error) {
+      console.warn('Failed to read non-returnable from medicine master', error);
+    }
+
+    const positiveText = (value: number | undefined | null) =>
+      value != null && Number(value) > 0 ? String(value) : '';
+
+    const priorOnThisInvoice = [...items]
+      .reverse()
+      .find((item) => item.medicineId === selectedMedicine.id);
+    const latestBatch = pickLatestBatch(batches);
+    const lastPurchase = lastPurchaseByMedicineId.get(selectedMedicine.id);
+
+    let batchNumber = '';
+    let receivedBatchNumber = '';
+    let expiryDate = '';
+    let quantity = '';
+    let freeQuantity = '';
+    let schemePaidQty = '';
+    let schemeFreeQty = '';
+    let unitPrice = '';
+    let purchasePrice = '';
+    let mrp = '';
+    let standardDiscount = '20';
+    let discountPercentage = '';
+    let nrxDrug = priorNrNrx.nrxDrug;
+    let suggestionNote: string | null = null;
+
+    if (priorOnThisInvoice) {
+      const price = Number(priorOnThisInvoice.purchasePrice) || 0;
+      const priorMrp = Number(priorOnThisInvoice.mrp) || 0;
+      const priorGst = resolveGstRate(priorOnThisInvoice.gstRate ?? gstRate);
+      gstRate = priorGst;
+      batchNumber = priorOnThisInvoice.batchNumber || '';
+      receivedBatchNumber = priorOnThisInvoice.receivedBatchNumber || '';
+      expiryDate = formatExpiryMmYy(priorOnThisInvoice.expiryDate);
+      quantity = positiveText(priorOnThisInvoice.quantity);
+      freeQuantity = positiveText(priorOnThisInvoice.freeQuantity);
+      schemePaidQty = positiveText(priorOnThisInvoice.schemePaidQty);
+      schemeFreeQty = positiveText(priorOnThisInvoice.schemeFreeQty);
+      purchasePrice = price > 0 ? String(price) : '';
+      unitPrice = String(priorOnThisInvoice.unitPrice ?? price);
+      mrp = priorMrp > 0 ? String(priorMrp) : '';
+      standardDiscount =
+        priorOnThisInvoice.standardDiscount != null
+          ? String(priorOnThisInvoice.standardDiscount)
+          : calculateStandardDiscountFromMrpAndPurchasePrice(priorMrp, price, priorGst).toFixed(2);
+      discountPercentage = positiveText(priorOnThisInvoice.discountPercentage);
+      nrxDrug = priorOnThisInvoice.nrxDrug === true || nrxDrug;
+      suggestionNote = `Suggested from the last line already on this invoice${
+        batchNumber ? ` (batch ${batchNumber})` : ''
+      }. Change anything that is different, then save.`;
+    } else if (latestBatch || lastPurchase) {
+      const invoiceBatch = latestBatch?.invoiceBatchNumber?.trim() || '';
+      const stockBatch = String(latestBatch?.batchNumber || lastPurchase?.batchNumber || '').trim();
+      if (invoiceBatch && invoiceBatch.toLowerCase() !== stockBatch.toLowerCase()) {
+        batchNumber = invoiceBatch;
+        receivedBatchNumber = stockBatch;
+      } else {
+        batchNumber = stockBatch;
+      }
+
+      const mrpNum =
+        latestBatch?.mrp && latestBatch.mrp > 0
+          ? latestBatch.mrp
+          : lastPurchase?.mrp && lastPurchase.mrp > 0
+            ? lastPurchase.mrp
+            : 0;
+      let priceNum =
+        latestBatch?.purchasePrice && latestBatch.purchasePrice > 0
+          ? latestBatch.purchasePrice
+          : lastPurchase?.price && lastPurchase.price > 0
+            ? lastPurchase.price
+            : 0;
+      if (lastPurchase?.gstRate && lastPurchase.gstRate > 0) {
+        gstRate = resolveGstRate(lastPurchase.gstRate);
+      }
+      const standardSeed =
+        latestBatch?.standardDiscount != null && Number.isFinite(latestBatch.standardDiscount)
+          ? latestBatch.standardDiscount
+          : 20;
+      if (priceNum <= 0 && mrpNum > 0) {
+        priceNum = calculatePurchasePriceFromMrpAndDiscount(mrpNum, gstRate, standardSeed);
+      }
+      const standard =
+        mrpNum > 0 && priceNum > 0
+          ? calculateStandardDiscountFromMrpAndPurchasePrice(mrpNum, priceNum, gstRate)
+          : standardSeed;
+
+      expiryDate = latestBatch ? formatExpiryMmYy(latestBatch.expiryDate) : '';
+      mrp = mrpNum > 0 ? String(mrpNum) : '';
+      purchasePrice = priceNum > 0 ? priceNum.toFixed(2) : '';
+      unitPrice = purchasePrice;
+      standardDiscount = Number.isFinite(standard) ? standard.toFixed(2) : '20';
+      discountPercentage = positiveText(
+        latestBatch?.discountPercentage ?? lastPurchase?.discountPercentage
+      );
+
+      const batchLegacy = latestBatch as
+        | (StockBatch & { purchaseSchemeDeal?: number; purchaseSchemeFree?: number })
+        | undefined;
+      const paid = latestBatch?.schemePaidQty ?? batchLegacy?.purchaseSchemeDeal ?? lastPurchase?.schemePaidQty;
+      const free = latestBatch?.schemeFreeQty ?? batchLegacy?.purchaseSchemeFree ?? lastPurchase?.schemeFreeQty;
+      schemePaidQty = positiveText(paid);
+      schemeFreeQty = positiveText(free);
+      quantity = positiveText(lastPurchase?.quantity);
+      freeQuantity = positiveText(lastPurchase?.freeQuantity) || freeQuantity;
+      if (latestBatch?.nrxDrug === true) nrxDrug = true;
+
+      const source = latestBatch
+        ? `previous batch ${stockBatch || 'on file'}`
+        : `last purchase${stockBatch ? ` (batch ${stockBatch})` : ''}`;
+      const qtyNote = quantity
+        ? ' Quantity and free quantity are from the last purchase.'
+        : ' Enter the quantity on this bill.';
+      suggestionNote = `Suggested from the ${source}.${qtyNote} Change anything that is different, then save.`;
+    }
+
     setCurrentItem({
       medicineId: selectedMedicine.id,
       medicineName: selectedMedicine.name,
-      batchNumber: '',
-      receivedBatchNumber: '',
-      expiryDate: '', // MM/YY format
-      quantity: '',
-      freeQuantity: '',
-      schemePaidQty: '',
-      schemeFreeQty: '',
-      unitPrice: '',
-      purchasePrice: '',
-      mrp: '',
-      gstRate: resolveGstRate(selectedMedicine.gstRate),
-      standardDiscount: '20',
-      discountPercentage: '',
-      nonReturnable: priorNrNrx.nonReturnable,
-      nrxDrug: priorNrNrx.nrxDrug,
+      batchNumber,
+      receivedBatchNumber,
+      expiryDate,
+      quantity,
+      freeQuantity,
+      schemePaidQty,
+      schemeFreeQty,
+      unitPrice,
+      purchasePrice,
+      mrp,
+      gstRate,
+      standardDiscount,
+      discountPercentage,
+      nonReturnable,
+      nrxDrug,
     });
-    lineBatchKeyWhenOpenedRef.current = '';
+    lineBatchKeyWhenOpenedRef.current = purchaseItemStockBatchNumber({
+      batchNumber,
+      receivedBatchNumber,
+    });
+    setSuggestionNote(suggestionNote);
     setItemDialog({ open: true, itemIndex: null });
   };
 
@@ -889,7 +1028,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       discountPercentage: discountPercentage > 0 ? discountPercentage : undefined,
       totalAmount,
       qrCode: qrCode || undefined,
-      ...(currentItem.nonReturnable === true ? { nonReturnable: true } : {}),
+      nonReturnable: currentItem.nonReturnable === true,
       ...(currentItem.nrxDrug === true ? { nrxDrug: true } : {}),
     };
 
@@ -912,15 +1051,26 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     if (medicineId) {
+      const nonReturnable = currentItem.nonReturnable === true;
+      try {
+        await setMedicineNonReturnable(medicineId, nonReturnable);
+        const existing = lookupMedicine(medicineId);
+        if (existing) rememberMedicine({ ...existing, nonReturnable });
+        if (selectedMedicine?.id === medicineId) {
+          setSelectedMedicine({ ...selectedMedicine, nonReturnable });
+        }
+      } catch (error) {
+        console.warn('Failed to save non-returnable on medicine master', error);
+      }
       try {
         await updateMedicineMutation.mutateAsync({
           medicineId,
           updates: { gstRate },
         });
         const existing = lookupMedicine(medicineId);
-        if (existing) rememberMedicine({ ...existing, gstRate });
+        if (existing) rememberMedicine({ ...existing, gstRate, nonReturnable });
         if (selectedMedicine?.id === medicineId) {
-          setSelectedMedicine({ ...selectedMedicine, gstRate });
+          setSelectedMedicine({ ...selectedMedicine, gstRate, nonReturnable });
         }
       } catch (error) {
         console.warn('Failed to update medicine GST on master', error);
@@ -953,13 +1103,25 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     });
   };
 
-  const handleEditItem = (index: number) => {
+  const handleEditItem = async (index: number) => {
     const item = items[index];
     if (!item) return;
     setExpiryDateError('');
     const gstRate = resolveGstRate(item.gstRate, resolveGstRate(lookupMedicine(item.medicineId)?.gstRate));
     const purchasePrice = Number(item.purchasePrice) || 0;
     const mrp = Number(item.mrp) || 0;
+    let nonReturnable = item.nonReturnable === true;
+    if (item.medicineId) {
+      try {
+        const full = await getMedicineById(item.medicineId);
+        if (full) {
+          nonReturnable = await ensureMedicineNonReturnable(full);
+          rememberMedicine({ ...full, nonReturnable });
+        }
+      } catch (error) {
+        console.warn('Failed to read non-returnable from medicine master', error);
+      }
+    }
     setCurrentItem({
       medicineId: item.medicineId || '',
       medicineName: item.medicineName || '',
@@ -982,7 +1144,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         item.discountPercentage != null && item.discountPercentage > 0
           ? String(item.discountPercentage)
           : '',
-      nonReturnable: item.nonReturnable === true,
+      nonReturnable,
       nrxDrug: item.nrxDrug === true,
     });
     // Keep medicine in picker cache so GST / batch helpers work while editing.
@@ -992,6 +1154,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       batchNumber: item.batchNumber || '',
       receivedBatchNumber: item.receivedBatchNumber || '',
     });
+    setSuggestionNote(null);
     setItemDialog({ open: true, itemIndex: index });
   };
 
@@ -1146,7 +1309,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             notes: invoiceData.notes || undefined,
           },
         });
-        if (result.stockSyncErrors.length > 0) {
+        if (result.stockSyncErrors.some((msg) => isFirestoreInternalAssertion(new Error(msg)))) {
+          await alert(purchaseInvoiceAssertionMessage(), { severity: 'error' });
+        } else if (result.stockSyncErrors.length > 0) {
           await alert(
             `Invoice updated. Stock note:\n${result.stockSyncErrors.slice(0, 5).join('\n')}`,
             { severity: 'warning' }
@@ -1192,9 +1357,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       navigate('/purchases');
     } catch (error: any) {
       await alert(
-        isPermissionDeniedError(error)
-          ? permissionDeniedUserMessage(isEditMode ? 'update this purchase invoice' : 'save this purchase invoice')
-          : error.message || (isEditMode ? 'Failed to update invoice' : 'Failed to create invoice'),
+        isFirestoreInternalAssertion(error)
+          ? purchaseInvoiceAssertionMessage()
+          : isPermissionDeniedError(error)
+            ? permissionDeniedUserMessage(isEditMode ? 'update this purchase invoice' : 'save this purchase invoice')
+            : error.message || (isEditMode ? 'Failed to update invoice' : 'Failed to create invoice'),
         { severity: 'error' }
       );
     } finally {
@@ -1699,6 +1866,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           if (reason === 'backdropClick') return;
           setItemDialog({ open: false, itemIndex: null });
           setExpiryDateError('');
+          setSuggestionNote(null);
         }}
         maxWidth="sm"
         fullWidth
@@ -1707,6 +1875,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           {itemDialog.itemIndex !== null ? 'Edit Item' : 'Add Item'} - {currentItem.medicineName}
         </DialogTitle>
         <DialogContent>
+          {itemDialog.itemIndex === null && suggestionNote ? (
+            <Alert severity="info" sx={{ mt: 1 }}>
+              {suggestionNote}
+            </Alert>
+          ) : null}
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12} sm={6}>
               <TextField
@@ -1720,8 +1893,10 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                 onBlur={applyExistingBatchDetails}
                 helperText={
                   existingBatchForCurrentItem && shouldFillFromExistingBatch
-                    ? 'Existing stock batch found — other fields filled from inventory (enter quantity for this bill)'
-                    : 'Batch as printed on the vendor bill'
+                    ? 'Existing stock batch found — other fields filled from inventory (quantity left as entered)'
+                    : itemDialog.itemIndex === null && suggestionNote
+                      ? 'Suggested from the previous entry. Change it if this bill is different.'
+                      : 'Batch as printed on the vendor bill'
                 }
               />
             </Grid>

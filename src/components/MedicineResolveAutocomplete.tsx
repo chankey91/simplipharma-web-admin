@@ -52,17 +52,24 @@ export function renderMedicineResolveOption(
         <Typography variant="body2" noWrap>
           {option.label}
         </Typography>
-        {option.group === 'pending_order' ? (
-          <Chip label="Pending order" size="small" color="warning" sx={{ mt: 0.5, height: 20 }} />
-        ) : null}
-        {option.group === 'product_demand' ? (
-          <Chip
-            label="Product demand — click to add medicine"
-            size="small"
-            color="info"
-            variant="outlined"
-            sx={{ mt: 0.5, height: 20 }}
-          />
+        {option.packaging || option.group === 'pending_order' || option.group === 'product_demand' ? (
+          <Box display="flex" alignItems="center" gap={0.75} flexWrap="wrap" mt={0.5}>
+            {option.packaging ? (
+              <Chip label={option.packaging} size="small" variant="outlined" sx={{ height: 20 }} />
+            ) : null}
+            {option.group === 'pending_order' ? (
+              <Chip label="Pending order" size="small" color="warning" sx={{ height: 20 }} />
+            ) : null}
+            {option.group === 'product_demand' ? (
+              <Chip
+                label="Product demand — click to add medicine"
+                size="small"
+                color="info"
+                variant="outlined"
+                sx={{ height: 20 }}
+              />
+            ) : null}
+          </Box>
         ) : null}
       </Box>
     </Box>

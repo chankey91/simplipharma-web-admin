@@ -75,6 +75,8 @@ const COLLECTION_FIELDS_BASE = [
     { name: 'nearestExpiry', type: 'int64', optional: true, sort: true },
     { name: 'unit', type: 'string', optional: true },
     { name: 'gstRate', type: 'float', optional: true },
+    /** Ex-GST rate from the newest purchase bill. Stored for retailer cards. */
+    { name: 'lastPurchasePrice', type: 'float', optional: true },
     /** Stored for retailer cards; not searchable. */
     { name: 'imageUrl', type: 'string', optional: true, index: false },
 ];
@@ -86,6 +88,7 @@ const OPTIONAL_SCHEMA_FIELDS = COLLECTION_FIELDS_BASE.filter((f) => [
     'nearestExpiry',
     'unit',
     'gstRate',
+    'lastPurchasePrice',
     'imageUrl',
 ].includes(f.name));
 /** One ensure per warm instance â€” never on every search (hot path). */
@@ -118,6 +121,14 @@ async function ensureCollection(client) {
         });
     }
     await ensureCollectionPromise;
+}
+function optionalPositiveFloat(value) {
+    if (value == null || value === '')
+        return undefined;
+    const n = typeof value === 'number' ? value : parseFloat(String(value));
+    if (!Number.isFinite(n) || n <= 0)
+        return undefined;
+    return n;
 }
 function toEpochMs(value) {
     var _a;
@@ -175,6 +186,9 @@ function firestoreDataToTypesenseDoc(medicineId, data) {
         unit: data.unit != null ? String(data.unit) : '',
         gstRate,
     };
+    const lastPurchasePrice = optionalPositiveFloat(data.lastPurchasePrice);
+    if (lastPurchasePrice != null)
+        doc.lastPurchasePrice = lastPurchasePrice;
     if (searchBlob)
         doc.search_blob = searchBlob;
     const imageUrl = typeof data.imageUrl === 'string' ? data.imageUrl.trim() : '';
@@ -320,6 +334,7 @@ async function parseMedicineLiteFromSnap(snap) {
         description: data.description,
         imageUrl: data.imageUrl,
         gstRate: data.gstRate,
+        lastPurchasePrice: optionalPositiveFloat(data.lastPurchasePrice),
         salesSchemeDeal: data.salesSchemeDeal,
         salesSchemeFree: data.salesSchemeFree,
         purchaseSchemeDeal: data.purchaseSchemeDeal,
@@ -367,26 +382,14 @@ function medicinesFromTypesenseHitsOnly(hits) {
         const nearestExpiry = typeof nearestRaw === 'number' && nearestRaw > 0 ? nearestRaw : undefined;
         const gstRaw = d.gstRate;
         const gstRate = typeof gstRaw === 'number' ? gstRaw : parseFloat(String(gstRaw !== null && gstRaw !== void 0 ? gstRaw : 5)) || 5;
+        const lastPurchasePrice = optionalPositiveFloat(d.lastPurchasePrice);
         const unitRaw = d.unit;
         const productIdRaw = d.productId;
         const imageRaw = d.imageUrl;
-        out.push({
-            id,
-            name: String(d.name || ''),
-            code: codeRaw != null && String(codeRaw).trim() !== '' ? String(codeRaw) : undefined,
-            productId: productIdRaw != null && String(productIdRaw).trim() !== ''
+        out.push(Object.assign(Object.assign({ id, name: String(d.name || ''), code: codeRaw != null && String(codeRaw).trim() !== '' ? String(codeRaw) : undefined, productId: productIdRaw != null && String(productIdRaw).trim() !== ''
                 ? String(productIdRaw)
-                : undefined,
-            category: String(d.category || ''),
-            manufacturer: String(d.manufacturer || ''),
-            price,
-            stock,
-            currentStock: stock,
-            nearestExpiry,
-            unit: unitRaw != null && String(unitRaw).trim() !== '' ? String(unitRaw) : undefined,
-            gstRate,
-            imageUrl: imageRaw != null && String(imageRaw).trim() !== '' ? String(imageRaw).trim() : undefined,
-        });
+                : undefined, category: String(d.category || ''), manufacturer: String(d.manufacturer || ''), price,
+            stock, currentStock: stock, nearestExpiry, unit: unitRaw != null && String(unitRaw).trim() !== '' ? String(unitRaw) : undefined, gstRate }, (lastPurchasePrice != null ? { lastPurchasePrice } : {})), { imageUrl: imageRaw != null && String(imageRaw).trim() !== '' ? String(imageRaw).trim() : undefined }));
     }
     return out;
 }

@@ -22,6 +22,10 @@ import { Medicine, StockBatch } from '../types';
 import { standardDiscountFromStockBatch } from '../utils/orderFulfillmentDiscount';
 import { allocateSpsProductId } from '../utils/spsProductId';
 import { resolveGstRate } from '../utils/gstRate';
+import {
+  defaultNonReturnableForMedicine,
+  matchesDefaultNonReturnable,
+} from '../utils/nonReturnableDefault';
 
 /** Top-level collection for on-hand lots (transactional). Master stays on `medicines`. */
 export const MEDICINE_BATCHES_COLLECTION = 'medicineBatches';
@@ -114,6 +118,44 @@ function batchKey(batchNumber: string | undefined | null): string {
   return String(batchNumber ?? '')
     .trim()
     .toLowerCase();
+}
+
+function signatureNumber(val: unknown): number | null {
+  if (val === undefined || val === null || val === '') return null;
+  const n = typeof val === 'number' ? val : parseFloat(String(val));
+  return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : null;
+}
+
+/** Fields that matter for a medicineBatches write. Ignores a missing purchaseDate so a fresh Timestamp.now() stamp does not rewrite every legacy lot. */
+function batchWriteSignature(data: Record<string, any>, includePurchaseDate: boolean): string {
+  return JSON.stringify({
+    medicineId: String(data.medicineId || ''),
+    batchNumber: String(data.batchNumber || '').trim(),
+    quantity: signatureNumber(data.quantity) ?? 0,
+    expiryDate: normalizeFirestoreDate(data.expiryDate)?.getTime() ?? null,
+    mfgDate: normalizeFirestoreDate(data.mfgDate)?.getTime() ?? null,
+    purchaseDate: includePurchaseDate
+      ? normalizeFirestoreDate(data.purchaseDate)?.getTime() ?? null
+      : null,
+    purchasePrice: signatureNumber(data.purchasePrice),
+    mrp: signatureNumber(data.mrp),
+    discountPercentage: signatureNumber(data.discountPercentage),
+    standardDiscount: signatureNumber(data.standardDiscount),
+    schemePaidQty: signatureNumber(data.schemePaidQty),
+    schemeFreeQty: signatureNumber(data.schemeFreeQty),
+    nonReturnable: data.nonReturnable === true,
+    nrxDrug: data.nrxDrug === true,
+    invoiceBatchNumber: String(data.invoiceBatchNumber || ''),
+    landedUnitCostExGst: signatureNumber(data.landedUnitCostExGst),
+  });
+}
+
+function sameBatchDocument(existing: Record<string, any>, next: Record<string, any>): boolean {
+  const existingHasPurchaseDate = normalizeFirestoreDate(existing.purchaseDate) != null;
+  return (
+    batchWriteSignature(existing, existingHasPurchaseDate) ===
+    batchWriteSignature(next, existingHasPurchaseDate)
+  );
 }
 
 function toFirestoreTimestamp(val: any): Timestamp | undefined {
@@ -333,6 +375,8 @@ function masterFromDoc(
     stockBatches: batches,
     gstRate,
     description: data.description != null ? String(data.description) : undefined,
+    nonReturnable:
+      data.nonReturnable === true ? true : data.nonReturnable === false ? false : undefined,
   };
 }
 
@@ -433,10 +477,10 @@ async function replaceMedicineBatchesDocs(
 
   // Prefer updating in place by batchNumber to keep stable doc ids across merges.
   // A renamed lot keeps its document id so the old row is not deleted and recreated.
-  const existingByKey = new Map<string, { id: string }>();
+  const existingByKey = new Map<string, { id: string; data: Record<string, any> }>();
   const existingIds = new Set<string>();
   for (const d of existingSnap.docs) {
-    existingByKey.set(batchKey(d.data().batchNumber), { id: d.id });
+    existingByKey.set(batchKey(d.data().batchNumber), { id: d.id, data: d.data() });
     existingIds.add(d.id);
   }
 
@@ -472,9 +516,14 @@ async function replaceMedicineBatchesDocs(
       : doc(collection(db, MEDICINE_BATCHES_COLLECTION));
     const payload = serializeBatchForFirestore({ ...b, id: ref.id }, medicineId);
     payload.id = ref.id;
+    finalized.push({ ...b, id: ref.id, medicineId });
+    const unchanged =
+      existing != null &&
+      stableId === existing.id &&
+      sameBatchDocument(existing.data, payload);
+    if (unchanged) continue;
     batchWriter.set(ref, payload);
     opCount += 1;
-    finalized.push({ ...b, id: ref.id, medicineId });
     await flush();
   }
   await flush(true);
@@ -523,7 +572,11 @@ function mergeBatchIntoList(
         id: existing.id,
         medicineId,
         nonReturnable:
-          batchInput.nonReturnable === true || existing.nonReturnable === true ? true : undefined,
+          batchInput.nonReturnable === false
+            ? undefined
+            : batchInput.nonReturnable === true || existing.nonReturnable === true
+              ? true
+              : undefined,
         nrxDrug: batchInput.nrxDrug === true || existing.nrxDrug === true ? true : undefined,
         invoiceBatchNumber:
           String(batchInput.invoiceBatchNumber || '').trim() ||
@@ -1142,6 +1195,27 @@ export const setStockBatchNonReturnable = async (
   await replaceMedicineBatchesDocs(medicineId, batches);
 };
 
+/** Write the product-level non-returnable choice. False is stored, so the rule does not run again. */
+export const setMedicineNonReturnable = async (
+  medicineId: string,
+  nonReturnable: boolean
+): Promise<void> => {
+  if (!medicineId) return;
+  await updateDoc(doc(db, 'medicines', medicineId), { nonReturnable });
+};
+
+/**
+ * Return the saved master flag. If it has never been saved, apply the default rule once and store it.
+ */
+export const ensureMedicineNonReturnable = async (medicine: Medicine): Promise<boolean> => {
+  if (typeof medicine.nonReturnable === 'boolean') return medicine.nonReturnable;
+  const value = defaultNonReturnableForMedicine(medicine);
+  if (medicine.id) {
+    await updateDoc(doc(db, 'medicines', medicine.id), { nonReturnable: value });
+  }
+  return value;
+};
+
 /** Toggle NRX flag on an existing inventory batch (used when editing PI lines). */
 export const setStockBatchNrxDrug = async (
   medicineId: string,
@@ -1198,6 +1272,14 @@ export const createMedicine = async (medicineData: Omit<Medicine, 'id'>): Promis
         : 5,
     price: 0,
     migrationVersion: MEDICINE_MIGRATION_VERSION,
+    nonReturnable:
+      typeof medicineData.nonReturnable === 'boolean'
+        ? medicineData.nonReturnable
+        : matchesDefaultNonReturnable({
+            name: medicineData.name,
+            category: medicineData.category,
+            mrp: typeof medicineData.mrp === 'number' ? medicineData.mrp : undefined,
+          }),
   };
 
   if (medicineData.code) newMedicine.code = medicineData.code;

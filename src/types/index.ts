@@ -61,6 +61,11 @@ export interface Medicine {
    */
   stockBatches?: StockBatch[];
   gstRate?: number; // GST rate percentage (default: 5)
+  /**
+   * Product-level non-returnable flag.
+   * Absent until the first default is saved. After that, only a manual change updates it.
+   */
+  nonReturnable?: boolean;
   /** Set by migration when embedded stockBatches were copied to medicineBatches. */
   batchesMigratedAt?: Date | any;
   migrationVersion?: number;

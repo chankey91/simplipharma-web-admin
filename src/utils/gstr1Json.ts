@@ -135,7 +135,7 @@ export function snapGstRate(taxAmount: number, taxableValue: number): number {
   return snapGstPercent((tax / taxable) * 100);
 }
 
-/** Product GST % first. Only infer from amounts when the line has no rate. */
+/** Product GST % first. Do not infer 3%/7.5% from discounted tax ÷ taxable. */
 export function gstRateOf(
   gstRate?: number,
   taxAmount = 0,
@@ -144,14 +144,15 @@ export function gstRateOf(
 ): number {
   if (Number(gstRate) > 0) return snapGstPercent(Number(gstRate));
   const stated = (hsnParts || [])
-    .map((part) => Number(part.gstRate) || 0)
-    .filter((rate) => rate > 0)
+    .map((part) => Number(part.gstRate))
+    .filter((rate) => Number.isFinite(rate) && rate > 0)
     .map(snapGstPercent);
   if (stated.length) {
     const unique = [...new Set(stated)];
     if (unique.length === 1) return unique[0];
   }
-  return snapGstRate(taxAmount, taxableValue);
+  if (Number(gstRate) === 0 && (Number(taxAmount) || 0) <= 0) return 0;
+  return 5;
 }
 
 function gstRateForLine(

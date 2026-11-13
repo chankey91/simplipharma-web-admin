@@ -168,6 +168,27 @@ export function permissionDeniedUserMessage(action: string): string {
   );
 }
 
+/** Client SDK crash (IndexedDB persistence). It is not a Firestore server error and does not appear in Cloud Logging. */
+export function isFirestoreInternalAssertion(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /INTERNAL ASSERTION FAILED/i.test(msg) || /Unexpected state/i.test(msg);
+}
+
+export function firestoreInternalAssertionMessage(): string {
+  return (
+    'Saving stopped because the Firestore client on this browser crashed (internal assertion). ' +
+    'Reload this page, keep only one admin tab open, and try again. ' +
+    'If it keeps happening, clear site data for this site and sign in again.'
+  );
+}
+
+export function purchaseInvoiceAssertionMessage(): string {
+  return (
+    firestoreInternalAssertionMessage() +
+    ' Check the purchase invoice list before saving again. If this bill number is already there, open it — stock on it may be incomplete.'
+  );
+}
+
 // User helpers
 export const getUserProfile = async (userId: string): Promise<{ id: string; role?: string; [key: string]: any } | null> => {
   const userRef = doc(db, 'users', userId);
