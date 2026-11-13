@@ -30,7 +30,7 @@ export const RetailerDiscountSalesPage: React.FC = () => {
   const [toDate, setToDate] = useState(today);
   const [search, setSearch] = useState('');
 
-  const rangeOk = fromDate && toDate && fromDate <= toDate;
+  const rangeOk = Boolean(fromDate && toDate && fromDate <= toDate);
   const { startMs, endMsExclusive } = useMemo(
     () => (rangeOk ? istDateRangeBounds(fromDate, toDate) : { startMs: 0, endMsExclusive: 0 }),
     [fromDate, toDate, rangeOk]
