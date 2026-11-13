@@ -27,14 +27,25 @@ export type RetailerDiscountSaleLine = {
   offerTitle?: string;
 };
 
-export type RetailerDiscountSaleGroup = {
-  retailerId: string;
-  displayName: string;
-  storeCode: string;
+export type RetailerDiscountSaleInvoice = {
+  orderId: string;
+  invoiceLabel: string;
+  orderDate: Date;
   lineCount: number;
   discountAmount: number;
   lineAmount: number;
   lines: RetailerDiscountSaleLine[];
+};
+
+export type RetailerDiscountSaleGroup = {
+  retailerId: string;
+  displayName: string;
+  storeCode: string;
+  invoiceCount: number;
+  lineCount: number;
+  discountAmount: number;
+  lineAmount: number;
+  invoices: RetailerDiscountSaleInvoice[];
 };
 
 /**
@@ -97,15 +108,31 @@ export function buildRetailerDiscountSales(
   const groups: RetailerDiscountSaleGroup[] = [];
   for (const [retailerId, lines] of linesByRetailer) {
     const store = storeById.get(retailerId) ?? null;
-    const sorted = [...lines].sort((a, b) => b.orderDate.getTime() - a.orderDate.getTime());
+    const byInvoice = new Map<string, RetailerDiscountSaleLine[]>();
+    for (const line of lines) {
+      const list = byInvoice.get(line.orderId);
+      if (list) list.push(line);
+      else byInvoice.set(line.orderId, [line]);
+    }
+    const invoices: RetailerDiscountSaleInvoice[] = [...byInvoice.entries()].map(([orderId, invoiceLines]) => ({
+      orderId,
+      invoiceLabel: invoiceLines[0].invoiceLabel,
+      orderDate: invoiceLines[0].orderDate,
+      lineCount: invoiceLines.length,
+      discountAmount: round2(invoiceLines.reduce((s, l) => s + l.discountAmount, 0)),
+      lineAmount: round2(invoiceLines.reduce((s, l) => s + l.lineAmount, 0)),
+      lines: invoiceLines,
+    }));
+    invoices.sort((a, b) => b.orderDate.getTime() - a.orderDate.getTime());
     groups.push({
       retailerId,
       displayName: store?.shopName || store?.displayName || retailerId,
       storeCode: store?.storeCode || '—',
-      lineCount: sorted.length,
-      discountAmount: round2(sorted.reduce((s, l) => s + l.discountAmount, 0)),
-      lineAmount: round2(sorted.reduce((s, l) => s + l.lineAmount, 0)),
-      lines: sorted,
+      invoiceCount: invoices.length,
+      lineCount: lines.length,
+      discountAmount: round2(lines.reduce((s, l) => s + l.discountAmount, 0)),
+      lineAmount: round2(lines.reduce((s, l) => s + l.lineAmount, 0)),
+      invoices,
     });
   }
 
