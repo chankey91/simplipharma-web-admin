@@ -12,7 +12,11 @@ import {
   Grid,
   Card,
   CardContent,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
+import { ExpandMore } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useOrdersInDateRange } from '../hooks/useOrders';
 import { useStores } from '../hooks/useStores';
@@ -52,7 +56,10 @@ export const RetailerDiscountSalesPage: React.FC = () => {
       (g) =>
         g.displayName.toLowerCase().includes(q) ||
         g.storeCode.toLowerCase().includes(q) ||
-        g.lines.some((l) => l.medicineName.toLowerCase().includes(q))
+        g.invoices.some((invoice) =>
+          invoice.invoiceLabel.toLowerCase().includes(q) ||
+          invoice.lines.some((l) => l.medicineName.toLowerCase().includes(q))
+        )
     );
   }, [groups, search]);
 
@@ -134,55 +141,77 @@ export const RetailerDiscountSalesPage: React.FC = () => {
         </Paper>
       ) : (
         filtered.map((group) => (
-          <Paper key={group.retailerId} sx={{ p: 2, mb: 2 }}>
-            <Box display="flex" justifyContent="space-between" flexWrap="wrap" gap={1} mb={1}>
-              <Box>
-                <Typography variant="h6">{group.displayName}</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {group.storeCode} · {group.lineCount} item{group.lineCount === 1 ? '' : 's'}
-                </Typography>
+          <Accordion key={group.retailerId} disableGutters sx={{ mb: 1, '&:before': { display: 'none' } }}>
+            <AccordionSummary expandIcon={<ExpandMore />}>
+              <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1} width="100%" pr={1}>
+                <Box>
+                  <Typography fontWeight={600}>{group.displayName}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {group.storeCode} · {group.invoiceCount} invoice{group.invoiceCount === 1 ? '' : 's'} · {group.lineCount} item{group.lineCount === 1 ? '' : 's'}
+                  </Typography>
+                </Box>
+                <Box textAlign="right">
+                  <Typography variant="body2">Discount {formatCurrency(group.discountAmount)}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Sale after discount {formatCurrency(group.lineAmount)}
+                  </Typography>
+                </Box>
               </Box>
-              <Box textAlign="right">
-                <Typography variant="body2">Discount {formatCurrency(group.discountAmount)}</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Sale after discount {formatCurrency(group.lineAmount)}
-                </Typography>
-              </Box>
-            </Box>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Date</TableCell>
-                  <TableCell>Invoice</TableCell>
-                  <TableCell>Item</TableCell>
-                  <TableCell align="right">Qty</TableCell>
-                  <TableCell align="right">Discount %</TableCell>
-                  <TableCell align="right">Discount</TableCell>
-                  <TableCell align="right">Amount</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {group.lines.map((line, index) => (
-                  <TableRow key={`${line.orderId}-${index}`}>
-                    <TableCell>{format(line.orderDate, 'dd MMM yyyy')}</TableCell>
-                    <TableCell>{line.invoiceLabel}</TableCell>
-                    <TableCell>
-                      {line.medicineName}
-                      {line.offerTitle ? (
-                        <Typography variant="caption" display="block" color="text.secondary">
-                          {line.offerTitle}
+            </AccordionSummary>
+            <AccordionDetails sx={{ pt: 0 }}>
+              {group.invoices.map((invoice) => (
+                <Accordion key={invoice.orderId} disableGutters sx={{ boxShadow: 'none', border: '1px solid', borderColor: 'divider', mb: 1 }}>
+                  <AccordionSummary expandIcon={<ExpandMore />}>
+                    <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1} width="100%" pr={1}>
+                      <Box>
+                        <Typography fontWeight={600}>{invoice.invoiceLabel}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {format(invoice.orderDate, 'dd MMM yyyy')} · {invoice.lineCount} item{invoice.lineCount === 1 ? '' : 's'}
                         </Typography>
-                      ) : null}
-                    </TableCell>
-                    <TableCell align="right">{line.quantity}</TableCell>
-                    <TableCell align="right">{line.discountPct}%</TableCell>
-                    <TableCell align="right">{formatCurrency(line.discountAmount)}</TableCell>
-                    <TableCell align="right">{formatCurrency(line.lineAmount)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Paper>
+                      </Box>
+                      <Box textAlign="right">
+                        <Typography variant="body2">Discount {formatCurrency(invoice.discountAmount)}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Sale after discount {formatCurrency(invoice.lineAmount)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0 }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Item</TableCell>
+                          <TableCell align="right">Qty</TableCell>
+                          <TableCell align="right">Discount %</TableCell>
+                          <TableCell align="right">Discount</TableCell>
+                          <TableCell align="right">Amount</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {invoice.lines.map((line, index) => (
+                          <TableRow key={`${invoice.orderId}-${index}`}>
+                            <TableCell>
+                              {line.medicineName}
+                              {line.offerTitle ? (
+                                <Typography variant="caption" display="block" color="text.secondary">
+                                  {line.offerTitle}
+                                </Typography>
+                              ) : null}
+                            </TableCell>
+                            <TableCell align="right">{line.quantity}</TableCell>
+                            <TableCell align="right">{line.discountPct}%</TableCell>
+                            <TableCell align="right">{formatCurrency(line.discountAmount)}</TableCell>
+                            <TableCell align="right">{formatCurrency(line.lineAmount)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </AccordionDetails>
+                </Accordion>
+              ))}
+            </AccordionDetails>
+          </Accordion>
         ))
       )}
     </Box>
