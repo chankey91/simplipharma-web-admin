@@ -98,6 +98,8 @@ export const ROLE_MENU_PATHS: Record<PanelRole, string[]> = {
     '/store-ledger',
     '/accounts',
     '/orders',
+    '/store-receivables',
+    '/so-receivables',
     '/order-shortfalls',
     '/product-demands',
     '/operations',

@@ -139,6 +139,14 @@
       ]
     },
     {
+      "collectionGroup": "medicineBatches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "medicineId", "order": "ASCENDING" },
+        { "fieldPath": "quantity", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "medicines",
       "queryScope": "COLLECTION",
       "fields": [
