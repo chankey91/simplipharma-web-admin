@@ -316,6 +316,8 @@ async function callGeminiVertex(parts) {
             generationConfig: {
                 temperature: 0.1,
                 responseMimeType: 'application/json',
+                // Default output cap truncates the JSON once a bill has several pages of lines.
+                maxOutputTokens: 65536,
             },
         }),
     });
@@ -347,6 +349,8 @@ async function callGeminiApiKey(parts) {
             generationConfig: {
                 temperature: 0.1,
                 responseMimeType: 'application/json',
+                // Default output cap truncates the JSON once a bill has several pages of lines.
+                maxOutputTokens: 65536,
             },
         }),
     });
@@ -387,9 +391,10 @@ async function callGemini(parts) {
         : 'Gemini not configured (Vertex project or gemini.api_key)');
 }
 async function extractWithGeminiFromPdfBytes(buffer) {
+    // PDF first. With the prompt first, later pages of a multi-page scan are easy to drop.
     const { text, model } = await callGemini([
-        { text: GEMINI_PROMPT },
         { inline_data: { mime_type: 'application/pdf', data: buffer.toString('base64') } },
+        { text: GEMINI_PROMPT },
     ]);
     const parsed = parseGeminiJson(text);
     return {
@@ -558,13 +563,25 @@ function linesFromText(text) {
     }
     return out;
 }
+/** pdf-parse default joiner, e.g. "-- 1 of 3 --". Not invoice content. */
+const PDF_PAGE_MARKER = /--\s*\d+\s+of\s+\d+\s*--/g;
+function stripPdfPageMarkers(text) {
+    return text
+        .replace(PDF_PAGE_MARKER, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
 async function extractTextFromPdf(buffer) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { PDFParse } = require('pdf-parse');
     const parser = new PDFParse({ data: buffer });
     try {
-        const result = await parser.getText();
-        return String((result === null || result === void 0 ? void 0 : result.text) || '');
+        // Default pageJoiner is "\n-- N of M --" (~16 chars per page). A scanned
+        // PDF with no text layer still returns those markers, and 3+ pages cross
+        // the 40-char gate below, so Gemini never sees the pages.
+        const result = await parser.getText({ pageJoiner: '' });
+        return stripPdfPageMarkers(String((result === null || result === void 0 ? void 0 : result.text) || ''));
     }
     finally {
         try {
