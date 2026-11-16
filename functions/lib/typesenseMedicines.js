@@ -593,7 +593,9 @@ function recordMedicineSearchAnalytics(payload) {
  * Autocomplete: q length ≥ 2. Inventory browse: `browse: true` → q:"*" + page/filters/facets.
  */
 exports.searchMedicinesTypesense = functionRegion_1.ff
-    .runWith({ minInstances: 0, memory: '512MB', timeoutSeconds: 60 })
+    // Retailer autocomplete calls this on every keystroke. One warm instance avoids
+    // a multi-second cold start after the function has been idle.
+    .runWith({ minInstances: 1, memory: '512MB', timeoutSeconds: 60 })
     .https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
