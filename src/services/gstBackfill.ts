@@ -1,5 +1,6 @@
 import { doc, updateDoc, deleteField, writeBatch, db } from './firebase';
 import { getOrdersInRange } from './orders';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import { getCreditNotesInRange } from './creditNotes';
 import { getDebitNotesInRange } from './debitNotes';
 import { getPurchaseInvoicesInRange } from './purchaseInvoices';
@@ -59,7 +60,7 @@ async function loadLegacyDocuments(date = new Date()) {
     (o) =>
       o.invoiceNumber &&
       o.status !== 'Pending' &&
-      o.status !== 'Cancelled' &&
+      !isCancelledOrderStatus(o.status) &&
       !hasGstSnapshot(o)
   );
   const legacyCreditNotes = creditNotes.filter((n) => !hasGstSnapshot(n));

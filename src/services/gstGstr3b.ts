@@ -1,5 +1,6 @@
 import { loadGstPeriodBooks } from './gstPeriodBooks';
 import { hasGstSnapshot } from '../utils/gstSnapshot';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import { normalizeStateCode } from '../utils/gstin';
 import {
   addSnapshot,
@@ -33,7 +34,7 @@ export async function buildGstr3bExport(date = new Date()): Promise<Gstr3bExport
   };
 
   for (const order of books.orders) {
-    if (!order.invoiceNumber || order.status === 'Pending' || order.status === 'Cancelled') continue;
+    if (!order.invoiceNumber || order.status === 'Pending' || isCancelledOrderStatus(order.status)) continue;
     if (!hasGstSnapshot(order) || !order.gst) {
       warnings.push(`Sales invoice ${order.invoiceNumber} has no GST snapshot.`);
       continue;

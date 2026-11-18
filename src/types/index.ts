@@ -102,7 +102,13 @@ export interface StockBatch {
   schemeFreeQty?: number;
 }
 
-export type OrderStatus = 'Pending' | 'Order Fulfillment' | 'In Transit' | 'Delivered' | 'Cancelled';
+export type OrderStatus =
+  | 'Pending'
+  | 'Order Fulfillment'
+  | 'In Transit'
+  | 'Delivered'
+  | 'Cancelled'
+  | 'Cancelled-Merged';
 
 export interface OrderMedicine {
   medicineId: string;

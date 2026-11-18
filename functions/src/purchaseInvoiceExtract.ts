@@ -357,6 +357,7 @@ async function callGeminiVertex(parts: GeminiPart[]): Promise<{ text: string; mo
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
+    signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       contents: [{ role: 'user', parts: toVertexParts(parts) }],
       generationConfig: {
@@ -394,6 +395,7 @@ async function callGeminiApiKey(parts: GeminiPart[]): Promise<{ text: string; mo
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       contents: [{ role: 'user', parts }],
       generationConfig: {
@@ -441,6 +443,22 @@ async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: s
       ? `Gemini unavailable: ${errors.join(' | ')}`
       : 'Gemini not configured (Vertex project or gemini.api_key)'
   );
+}
+
+/** Text-only Gemini call for other extractors (live stock files). */
+export async function askGeminiText(prompt: string): Promise<{ text: string; model: string }> {
+  return callGemini([{ text: prompt }]);
+}
+
+/** PDF first, then the instruction, so later pages are not dropped. */
+export async function askGeminiPdf(
+  prompt: string,
+  pdf: Buffer
+): Promise<{ text: string; model: string }> {
+  return callGemini([
+    { inline_data: { mime_type: 'application/pdf', data: pdf.toString('base64') } },
+    { text: prompt },
+  ]);
 }
 
 async function extractWithGeminiFromPdfBytes(
@@ -629,7 +647,7 @@ function stripPdfPageMarkers(text: string): string {
     .trim();
 }
 
-async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { PDFParse } = require('pdf-parse');
   const parser = new PDFParse({ data: buffer });

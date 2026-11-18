@@ -38,6 +38,18 @@ export interface PurchaseListItem {
   orderNumbers: string[];
   status: PurchaseItemStatus;
   foundQty: number | null;
+  deals?: Array<{
+    priority: 'P1' | 'P2' | 'P3';
+    vendorId: string;
+    vendorName: string;
+    productName: string;
+    pack?: string;
+    stockQty: number;
+    rate?: number | null;
+    effectiveRate?: number | null;
+    scheme?: string;
+    coversNeed?: boolean;
+  }>;
   remark?: string;
   updatedBy?: string;
   updatedAt?: unknown;

@@ -3,8 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.normalizeGstin = normalizeGstin;
 exports.findGstinsInText = findGstinsInText;
 exports.normalizeInvoiceDate = normalizeInvoiceDate;
+exports.askGeminiText = askGeminiText;
+exports.askGeminiPdf = askGeminiPdf;
 exports.parseProductLineFromRawLine = parseProductLineFromRawLine;
 exports.extractPotentialProductLines = extractPotentialProductLines;
+exports.extractTextFromPdf = extractTextFromPdf;
 exports.extractInvoiceFromFile = extractInvoiceFromFile;
 /**
  * Invoice extraction for purchase-invoice ingest.
@@ -311,6 +314,7 @@ async function callGeminiVertex(parts) {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({
             contents: [{ role: 'user', parts: toVertexParts(parts) }],
             generationConfig: {
@@ -344,6 +348,7 @@ async function callGeminiApiKey(parts) {
     const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({
             contents: [{ role: 'user', parts }],
             generationConfig: {
@@ -389,6 +394,17 @@ async function callGemini(parts) {
     throw new Error(errors.length
         ? `Gemini unavailable: ${errors.join(' | ')}`
         : 'Gemini not configured (Vertex project or gemini.api_key)');
+}
+/** Text-only Gemini call for other extractors (live stock files). */
+async function askGeminiText(prompt) {
+    return callGemini([{ text: prompt }]);
+}
+/** PDF first, then the instruction, so later pages are not dropped. */
+async function askGeminiPdf(prompt, pdf) {
+    return callGemini([
+        { inline_data: { mime_type: 'application/pdf', data: pdf.toString('base64') } },
+        { text: prompt },
+    ]);
 }
 async function extractWithGeminiFromPdfBytes(buffer) {
     // PDF first. With the prompt first, later pages of a multi-page scan are easy to drop.

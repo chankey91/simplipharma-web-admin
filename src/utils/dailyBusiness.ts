@@ -1,4 +1,5 @@
 import type { Order, PurchaseInvoice } from '../types';
+import { isCancelledOrderStatus } from './orderStatus';
 import type { CreditNote } from '../types';
 import { getTodayDateStringIST, coerceToDate } from './dateTime';
 
@@ -70,7 +71,7 @@ export function buildDailyBusiness(opts: {
     const key = getTodayDateStringIST(d);
     if (!inRange(key, opts.fromDate, opts.toDate)) continue;
     const row = bucket(key);
-    if (order.status === 'Cancelled') {
+    if (isCancelledOrderStatus(order.status)) {
       row.cancelledCount += 1;
       continue;
     }

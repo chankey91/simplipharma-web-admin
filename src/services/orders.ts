@@ -35,6 +35,7 @@ import { createOutwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromOrderMedicines } from '../utils/gstLineSnapshot';
 import { roundMoney2 } from '../utils/retailerWallet';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -369,7 +370,7 @@ export const getReceivableOrders = async (): Promise<Order[]> => {
     } as Order;
   };
   const isCandidate = (o: Order) => {
-    if (o.status === 'Cancelled' || o.status === 'Pending') return false;
+    if (isCancelledOrderStatus(o.status) || o.status === 'Pending') return false;
     const ps = o.paymentStatus;
     return ps === 'Unpaid' || ps === 'Partial' || !ps;
   };
@@ -547,7 +548,7 @@ export const cancelOrder = async (
   const currentTimeline = orderData?.timeline || [];
   const currentStatus = orderData?.status;
 
-  if (currentStatus === 'Cancelled') {
+  if (isCancelledOrderStatus(currentStatus)) {
     throw new Error('Order is already cancelled');
   }
 
@@ -556,7 +557,7 @@ export const cancelOrder = async (
   let stockRestoredOnCancel = currentStatus === 'Pending';
   
   // If order has been fulfilled (stock deducted), restore inventory batches
-  if (currentStatus && currentStatus !== 'Pending' && currentStatus !== 'Cancelled' && orderData.medicines) {
+  if (currentStatus && currentStatus !== 'Pending' && !isCancelledOrderStatus(currentStatus) && orderData.medicines) {
     console.log(`Order ${orderId} has status ${currentStatus}, restoring stock from batches...`);
     const deltas = resolveOrderInventoryDeltas(orderData);
     stockRestoreErrors = await restoreStockForOrderMedicines(orderData.medicines, { deltas });
@@ -704,13 +705,13 @@ export type MergePendingOrdersResult = {
 };
 
 /**
- * Manual merge: combine selected Pending orders for one retailer into the oldest
+ * Manual merge: combine selected Pending orders for one retailer into the latest
  * (or explicit target). Same catalog/demand item → summed quantity. Sources cancelled.
  */
 export const mergePendingOrders = async (args: {
   orderIds: string[];
   mergedBy: string;
-  /** Defaults to oldest by orderDate among the set. */
+  /** Defaults to the latest by orderDate among the set. */
   targetOrderId?: string;
 }): Promise<MergePendingOrdersResult> => {
   const uniqueIds = [...new Set(args.orderIds.map((id) => String(id || '').trim()).filter(Boolean))];
@@ -739,10 +740,11 @@ export const mergePendingOrders = async (args: {
   const byDateAsc = [...loaded].sort((a, b) => {
     const ta = a.orderDate instanceof Date ? a.orderDate.getTime() : new Date(a.orderDate).getTime();
     const tb = b.orderDate instanceof Date ? b.orderDate.getTime() : new Date(b.orderDate).getTime();
-    return ta - tb;
+    if (ta !== tb) return ta - tb;
+    return String(a.id).localeCompare(String(b.id));
   });
 
-  const targetId = (args.targetOrderId || '').trim() || byDateAsc[0].id;
+  const targetId = (args.targetOrderId || '').trim() || byDateAsc[byDateAsc.length - 1].id;
   const target = loaded.find((o) => o.id === targetId);
   if (!target) throw new Error('Target order is not in the selected set');
 
@@ -786,9 +788,9 @@ export const mergePendingOrders = async (args: {
     const sourceRef = doc(db, 'orders', source.id);
     const sourceTimeline = Array.isArray(source.timeline) ? [...source.timeline] : [];
     const cancelReason = `Merged into order ${targetId}`;
-    sourceTimeline.push(createTimelineEvent('Cancelled', args.mergedBy, cancelReason));
+    sourceTimeline.push(createTimelineEvent('Cancelled-Merged', args.mergedBy, cancelReason));
     batch.update(sourceRef, {
-      status: 'Cancelled',
+      status: 'Cancelled-Merged',
       cancelReason,
       cancelledAt: serverTimestamp(),
       stockRestoredOnCancel: true,
@@ -849,6 +851,69 @@ export const mergePendingOrders = async (args: {
   };
 };
 
+export type MergePendingOrdersByRetailerResult = {
+  retailersMerged: number;
+  ordersCombined: number;
+  retailersLeftSingle: number;
+  pendingBeforeCutoff: number;
+  failures: string[];
+};
+
+/**
+ * Combine every Pending order placed before cutoff, one merged order per retailer.
+ * A retailer with a single pending order is left unchanged.
+ */
+export const mergePendingOrdersBefore = async (
+  cutoffMs: number,
+  mergedBy: string
+): Promise<MergePendingOrdersByRetailerResult> => {
+  const ordersCol = collection(db, 'orders');
+  const snapshot = await getDocs(
+    query(
+      ordersCol,
+      where('status', '==', 'Pending'),
+      where('orderDate', '<', Timestamp.fromMillis(cutoffMs))
+    )
+  );
+
+  const byRetailer = new Map<string, string[]>();
+  for (const docSnap of snapshot.docs) {
+    const retailerId = String(docSnap.data().retailerId || '').trim();
+    if (!retailerId) continue;
+    const ids = byRetailer.get(retailerId) || [];
+    ids.push(docSnap.id);
+    byRetailer.set(retailerId, ids);
+  }
+
+  let retailersMerged = 0;
+  let ordersCombined = 0;
+  let retailersLeftSingle = 0;
+  const failures: string[] = [];
+
+  for (const [, orderIds] of byRetailer) {
+    if (orderIds.length < 2) {
+      retailersLeftSingle += 1;
+      continue;
+    }
+    try {
+      const result = await mergePendingOrders({ orderIds, mergedBy });
+      retailersMerged += 1;
+      ordersCombined += result.cancelledOrderIds.length + 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(message);
+    }
+  }
+
+  return {
+    retailersMerged,
+    ordersCombined,
+    retailersLeftSingle,
+    pendingBeforeCutoff: snapshot.size,
+    failures,
+  };
+};
+
 /**
  * Repair path: restore inventory for a cancelled order that never got stock back
  * (e.g. cancelled from retailer app while in Order Fulfillment).
@@ -864,7 +929,7 @@ export const restoreStockForCancelledOrder = async (
   }
 
   const data = orderDoc.data();
-  if (data?.status !== 'Cancelled') {
+  if (!isCancelledOrderStatus(data?.status)) {
     throw new Error('Order is not cancelled');
   }
   if (data?.stockRestoredOnCancel === true) {
@@ -1615,7 +1680,7 @@ export async function applyWalletToUnpaidOrder(
 ): Promise<{ applied: number; paymentStatus: 'Paid' | 'Partial' | 'Unpaid'; remainingDue: number }> {
   const order = await getOrderById(orderId);
   if (!order) throw new Error('Invoice not found');
-  if (order.status === 'Cancelled' || order.status === 'Pending') {
+  if (isCancelledOrderStatus(order.status) || order.status === 'Pending') {
     throw new Error('Wallet can only be applied to a billed invoice');
   }
 
@@ -1824,7 +1889,7 @@ export const recalculateOrderPricing = async (
   }
 
   if (
-    order.status === 'Cancelled' ||
+    isCancelledOrderStatus(order.status) ||
     order.status === 'In Transit' ||
     order.status === 'Delivered'
   ) {

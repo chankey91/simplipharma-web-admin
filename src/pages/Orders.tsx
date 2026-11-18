@@ -53,7 +53,7 @@ import {
 } from '../hooks/useOrders';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
-import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered, unfulfillOrder } from '../services/orders';
+import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered, unfulfillOrder, mergePendingOrdersBefore } from '../services/orders';
 import { generateOrderInvoice } from '../utils/invoice';
 import {
   extractOrderShortfallsFromOrders,
@@ -65,6 +65,8 @@ import { auth } from '../services/firebase';
 import { Loading } from '../components/Loading';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { exportPendingOrdersByStore, exportPendingOrdersProductSummary, exportSelectedOrderStores, formatTownDistrict } from '../utils/export';
+import { ORDER_CANCEL_REASONS } from '../constants/orderCancelReasons';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import { publishPurchaseList } from '../services/purchaseLists';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -80,6 +82,7 @@ import {
   getDefaultOrdersFilterRangeIST,
   isDateInIstDateTimeRange,
   parseIstDateTimeLocal,
+  formatIstDateTimeLocal,
 } from '../utils/dateTime';
 import { loadOrdersListView, saveOrdersListView } from '../utils/ordersListView';
 import { useSessionPrintedIds } from '../utils/sessionPrintedInvoices';
@@ -195,6 +198,8 @@ export const OrdersPage: React.FC = () => {
   });
   const [bulkDeliverDialog, setBulkDeliverDialog] = useState({ open: false });
   const [mergePendingDialog, setMergePendingDialog] = useState({ open: false });
+  const [mergeAllDialog, setMergeAllDialog] = useState({ open: false, beforeDateTime: '' });
+  const [mergeAllBusy, setMergeAllBusy] = useState(false);
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: string; reason: string }>({
     open: false,
     orderId: '',
@@ -576,6 +581,7 @@ export const OrdersPage: React.FC = () => {
     Transit: statusCounts['In Transit'] ?? 0,
     Delivered: statusCounts['Delivered'] ?? 0,
     Cancelled: statusCounts['Cancelled'] ?? 0,
+    CancelledMerged: statusCounts['Cancelled-Merged'] ?? 0,
   };
   const requestSortResetPage = (key: string) => {
     requestSort(key);
@@ -915,6 +921,49 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
+  const handleMergeAllPendingConfirm = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+    const cutoffMs = parseIstDateTimeLocal(mergeAllDialog.beforeDateTime);
+    if (cutoffMs == null) {
+      await alert('Please choose a valid date and time', { severity: 'warning' });
+      return;
+    }
+    setMergeAllBusy(true);
+    try {
+      const result = await mergePendingOrdersBefore(cutoffMs, user.uid);
+      setMergeAllDialog({ open: false, beforeDateTime: '' });
+      setStatusFilter('Pending');
+      setPage(1);
+      await queryClient.invalidateQueries({ queryKey: ['productDemands'] });
+      await refreshListsAfterBulk();
+      if (result.pendingBeforeCutoff === 0) {
+        await alert('No pending orders were placed before that time.', { severity: 'info' });
+        return;
+      }
+      if (result.retailersMerged === 0 && result.failures.length === 0) {
+        await alert(
+          `${result.pendingBeforeCutoff} pending order(s) were before that time, and each retailer had only one. Nothing was merged.`,
+          { severity: 'info' }
+        );
+        return;
+      }
+      const failureNote =
+        result.failures.length > 0
+          ? `\n${result.failures.length} retailer(s) could not be merged:\n${result.failures.slice(0, 5).join('\n')}`
+          : '';
+      await alert(
+        `Merged pending orders for ${result.retailersMerged} retailer(s) (${result.ordersCombined} orders combined into one order each). ${result.retailersLeftSingle} retailer(s) had only one order and were left as they are.${failureNote}`,
+        { severity: result.failures.length > 0 ? 'warning' : 'success' }
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to merge pending orders';
+      await alert(msg, { severity: 'error' });
+    } finally {
+      setMergeAllBusy(false);
+    }
+  };
+
   const handleMergePendingConfirm = async () => {
     const user = auth.currentUser;
     if (!user || !canMergePending) return;
@@ -930,7 +979,7 @@ export const OrdersPage: React.FC = () => {
       setPage(1);
       await refreshListsAfterBulk();
       await alert(
-        `Merged into #${formatOrderNumberForDisplay(result.targetOrderId)} (${result.lineCount} line(s)). ${result.cancelledOrderIds.length} source order(s) cancelled for admin audit and hidden from the retailer.`,
+        `Merged into #${formatOrderNumberForDisplay(result.targetOrderId)} (${result.lineCount} line(s)). ${result.cancelledOrderIds.length} source order(s) are Cancelled-Merged and hidden from the retailer.`,
         { severity: 'success' }
       );
     } catch (e) {
@@ -947,7 +996,9 @@ export const OrdersPage: React.FC = () => {
       case 'Order Fulfillment': return 'primary';
       case 'In Transit': return 'info';
       case 'Delivered': return 'success';
-      case 'Cancelled': return 'error';
+      case 'Cancelled':
+      case 'Cancelled-Merged':
+        return 'error';
       default: return 'default';
     }
   };
@@ -1130,6 +1181,12 @@ export const OrdersPage: React.FC = () => {
     { label: 'In Transit', status: 'In Transit', count: ordersByStatus.Transit, color: 'info' },
     { label: 'Delivered', status: 'Delivered', count: ordersByStatus.Delivered, color: 'success' },
     { label: 'Cancelled', status: 'Cancelled', count: ordersByStatus.Cancelled, color: 'error' },
+    {
+      label: 'Cancelled-Merged',
+      status: 'Cancelled-Merged',
+      count: ordersByStatus.CancelledMerged,
+      color: 'error',
+    },
   ];
 
   return (
@@ -1307,7 +1364,7 @@ export const OrdersPage: React.FC = () => {
         )}
       </Paper>
 
-      {canEditOrders && selectedIds.length > 0 && (
+      {canEditOrders && (
         <Paper sx={{ mb: 2 }}>
           <Toolbar
             sx={{
@@ -1317,6 +1374,8 @@ export const OrdersPage: React.FC = () => {
               minHeight: 56,
             }}
           >
+            {selectedIds.length > 0 && (
+              <>
             <Typography variant="body2" sx={{ mr: 1 }}>
               {selectedIds.length} selected
               {selectedPendingIds.length > 0 ? ` · ${selectedPendingIds.length} pending` : ''}
@@ -1338,6 +1397,22 @@ export const OrdersPage: React.FC = () => {
             >
               Merge Pending ({selectedPendingIds.length})
             </Button>
+              </>
+            )}
+            <Button
+              size="small"
+              variant="outlined"
+              color="secondary"
+              startIcon={<MergeType />}
+              disabled={mergeAllBusy || bulkBusy}
+              onClick={() =>
+                setMergeAllDialog({ open: true, beforeDateTime: formatIstDateTimeLocal() })
+              }
+            >
+              {mergeAllBusy ? 'Merging…' : 'Merge by retailer'}
+            </Button>
+            {selectedIds.length > 0 && (
+            <>
             <Button
               size="small"
               variant="contained"
@@ -1405,6 +1480,8 @@ export const OrdersPage: React.FC = () => {
               <Typography variant="caption" color="warning.main" sx={{ width: '100%' }}>
                 Merge needs 2+ Pending orders for the same retailer (check Town / store).
               </Typography>
+            )}
+            </>
             )}
           </Toolbar>
           {bulkBusy && <LinearProgress />}
@@ -1543,7 +1620,7 @@ export const OrdersPage: React.FC = () => {
                         <OpenInNew fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                    {canEditOrders && order.status !== 'Cancelled' && (
+                    {canEditOrders && !isCancelledOrderStatus(order.status) && (
                       <IconButton
                         size="small"
                         color="error"
@@ -1606,15 +1683,21 @@ export const OrdersPage: React.FC = () => {
             Are you sure you want to cancel order #{formatOrderNumberForDisplay(cancelDialog.orderId)}?
             If stock was deducted, it will be restored to inventory.
           </Typography>
-          <TextField
-            fullWidth
-            label="Reason for cancellation"
-            multiline
-            rows={3}
-            value={cancelDialog.reason}
-            onChange={(e) => setCancelDialog({ ...cancelDialog, reason: e.target.value })}
-            sx={{ mt: 2 }}
-          />
+          <FormControl fullWidth sx={{ mt: 2 }} required>
+            <InputLabel id="cancel-order-reason-label">Reason for cancellation</InputLabel>
+            <Select
+              labelId="cancel-order-reason-label"
+              label="Reason for cancellation"
+              value={cancelDialog.reason}
+              onChange={(e) => setCancelDialog({ ...cancelDialog, reason: e.target.value })}
+            >
+              {ORDER_CANCEL_REASONS.map((reason) => (
+                <MenuItem key={reason} value={reason}>
+                  {reason}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCancelDialog({ ...cancelDialog, open: false })}>Keep Order</Button>
@@ -1718,6 +1801,49 @@ export const OrdersPage: React.FC = () => {
       </Dialog>
 
       <Dialog
+        open={mergeAllDialog.open}
+        onClose={() => !mergeAllBusy && setMergeAllDialog({ open: false, beforeDateTime: '' })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Merge pending orders by retailer</DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom>
+            Choose a cutoff. Every pending order placed before that time is combined per retailer
+            into that retailer&apos;s latest order. Same medicines add their quantities. A retailer
+            with only one pending order is left unchanged, and orders placed at or after this time
+            stay separate.
+          </Typography>
+          <Box sx={{ mt: 2 }}>
+            <IstDateTimeField
+              label="Merge orders before"
+              value={mergeAllDialog.beforeDateTime}
+              onChange={(value) => setMergeAllDialog((prev) => ({ ...prev, beforeDateTime: value }))}
+              ampm
+              disabled={mergeAllBusy}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setMergeAllDialog({ open: false, beforeDateTime: '' })}
+            disabled={mergeAllBusy}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={<MergeType />}
+            onClick={() => void handleMergeAllPendingConfirm()}
+            disabled={mergeAllBusy || !mergeAllDialog.beforeDateTime}
+          >
+            {mergeAllBusy ? 'Merging…' : 'Merge orders'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
         open={mergePendingDialog.open}
         onClose={() =>
           !bulkBusy &&
@@ -1731,7 +1857,7 @@ export const OrdersPage: React.FC = () => {
         <DialogContent>
           <Typography gutterBottom>
             Merge {selectedPendingIds.length} Pending orders for <strong>{mergePendingStoreName}</strong>{' '}
-            into the oldest order. Same medicines combine quantities; source orders stay Cancelled for
+            into the latest order. Same medicines combine quantities; source orders are Cancelled-Merged for
             admin audit but are hidden from the retailer (they only see the combined order).
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
