@@ -300,7 +300,7 @@ const PurchaseListDetailDialog: React.FC<{
   }, [items]);
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
       <DialogTitle>
         Purchase list {list ? `${list.fromDate} → ${list.toDate}` : ''}
       </DialogTitle>
@@ -341,6 +341,7 @@ const PurchaseListDetailDialog: React.FC<{
                 <TableHead>
                   <TableRow>
                     <TableCell>Medicine</TableCell>
+                    <TableCell>Live stock</TableCell>
                     <TableCell align="right">Need</TableCell>
                     <TableCell align="right">Found</TableCell>
                     <TableCell>Status</TableCell>
@@ -350,6 +351,20 @@ const PurchaseListDetailDialog: React.FC<{
                   {rows.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>{item.medicineName}</TableCell>
+                      <TableCell>
+                        {(item.deals || []).length === 0 ? (
+                          '—'
+                        ) : (
+                          (item.deals || []).map((deal) => (
+                            <Typography key={deal.priority} variant="caption" display="block">
+                              {deal.priority} {deal.vendorName}
+                              {deal.effectiveRate != null ? ` · ₹${deal.effectiveRate}` : ''}
+                              {deal.scheme ? ` · ${deal.scheme}` : ''} · qty {deal.stockQty}
+                              {deal.coversNeed ? '' : ' (short)'}
+                            </Typography>
+                          ))
+                        )}
+                      </TableCell>
                       <TableCell align="right">{item.totalQty}</TableCell>
                       <TableCell align="right">{item.foundQty ?? '—'}</TableCell>
                       <TableCell>

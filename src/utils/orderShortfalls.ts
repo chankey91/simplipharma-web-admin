@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
 import { Order, OrderMedicine, OrderStatus } from '../types';
+import { isCancelledOrderStatus } from './orderStatus';
 import { hasBatchAssignment } from './orderTotals';
 import { coerceToDate, istDateStampCompact } from './dateTime';
 
@@ -70,7 +71,7 @@ function lineFulfilledQty(line: OrderMedicine): number {
  * - partial ship (originalQuantity > fulfilled quantity)
  */
 export function extractOrderShortfalls(order: Order): OrderShortfallRow[] {
-  if (!order || order.status === 'Cancelled') return [];
+  if (!order || isCancelledOrderStatus(order.status)) return [];
 
   const orderDate = coerceToDate(order.orderDate) || new Date(0);
   const retailerName = resolveRetailerName(order);

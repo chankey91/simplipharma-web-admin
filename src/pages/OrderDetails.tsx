@@ -91,6 +91,8 @@ import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Medicine, OrderMedicine, OrderStatus, ProductDemand } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
+import { ORDER_CANCEL_REASONS } from '../constants/orderCancelReasons';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import {
   buildWhatsAppUrl,
   formatOrderItemsWhatsAppList,
@@ -1235,7 +1237,7 @@ export const OrderDetailsPage: React.FC = () => {
   // Cancel restores stock in Firestore, but Inventory used a 15-minute cache and
   // cancel never invalidated it — refresh medicines whenever a cancelled order is opened.
   useEffect(() => {
-    if (!order?.id || order.status !== 'Cancelled') return;
+    if (!order?.id || !isCancelledOrderStatus(order.status)) return;
     void queryClient.invalidateQueries({ queryKey: ['medicines'] });
     void queryClient.invalidateQueries({ queryKey: ['expiringMedicines'] });
     void queryClient.invalidateQueries({ queryKey: ['expiredMedicines'] });
@@ -1244,7 +1246,7 @@ export const OrderDetailsPage: React.FC = () => {
   // Auto-restore when cancel never put stock back (failed restore, or retailer/SO cancel after fulfill).
   useEffect(() => {
     if (!canEditOrders) return;
-    if (!order?.id || order.status !== 'Cancelled') return;
+    if (!order?.id || !isCancelledOrderStatus(order.status)) return;
     if (order.stockRestoredOnCancel === true) return;
     if (autoStockRestoreRef.current === order.id) return;
 
@@ -1282,7 +1284,7 @@ export const OrderDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!canEditOrders) return;
     if (!order?.id) return;
-    if (order.status === 'Cancelled') return;
+    if (isCancelledOrderStatus(order.status)) return;
     if (!medicines?.length) return;
 
     const liveTotal = orderTotals.grandTotal;
@@ -1548,14 +1550,15 @@ export const OrderDetailsPage: React.FC = () => {
         });
         break;
       case 'cancel':
+        setCancelReason('');
         setConfirmDialog({
           open: true,
           action: 'cancel',
           title: 'Cancel Order',
           message:
             order.status === 'Pending'
-              ? 'Please provide a reason for cancelling this order.'
-              : 'Please provide a reason for cancelling this order. Allocated stock will be restored to inventory.',
+              ? 'Choose a reason for cancelling this order.'
+              : 'Choose a reason for cancelling this order. Allocated stock will be restored to inventory.',
         });
         break;
       case 'unfulfill':
@@ -1707,7 +1710,7 @@ export const OrderDetailsPage: React.FC = () => {
         });
       } else if (confirmDialog.action === 'cancel') {
         if (!cancelReason.trim()) {
-          await alert('Please provide a cancellation reason', { severity: 'warning' });
+          await alert('Please choose a cancellation reason', { severity: 'warning' });
           return;
         }
         const res = await cancelOrderMutation.mutateAsync({
@@ -3225,7 +3228,7 @@ export const OrderDetailsPage: React.FC = () => {
             Un-fulfill
           </Button>
         )}
-        {canEditOrders && order.status !== 'Cancelled' && (
+        {canEditOrders && !isCancelledOrderStatus(order.status) && (
           <Button
             size="small"
             variant="outlined"
@@ -3363,7 +3366,7 @@ export const OrderDetailsPage: React.FC = () => {
             const event = order.timeline?.find((t) => t.status === label);
             return (
             <Step key={label}>
-              <StepLabel error={order.status === 'Cancelled' && label === order.status}>
+              <StepLabel error={isCancelledOrderStatus(order.status) && label === order.status}>
                 {label}
                 {event && (
                   <Typography component="span" variant="caption" color="text.secondary">
@@ -3455,7 +3458,7 @@ export const OrderDetailsPage: React.FC = () => {
           )}
 
           {/* Tray & Operator - Display and option to assign/change (for Pending and Order Fulfillment) */}
-          {order.status !== 'Cancelled' && order.status !== 'Delivered' && (
+          {!isCancelledOrderStatus(order.status) && order.status !== 'Delivered' && (
             <Card sx={{ mb: 1, p: 1 }}>
               <CardContent sx={{ p: '8px !important', '&:last-child': { pb: '8px' } }}>
                 <Box display="flex" alignItems="center" flexWrap="wrap" gap={2}>
@@ -4507,9 +4510,11 @@ export const OrderDetailsPage: React.FC = () => {
             </Paper>
           )}
 
-          {order.status === 'Cancelled' && (
+          {isCancelledOrderStatus(order.status) && (
             <Alert severity="error" sx={{ mb: 3 }}>
-              <Typography variant="subtitle2">Order Cancelled</Typography>
+              <Typography variant="subtitle2">
+                {order.status === 'Cancelled-Merged' ? 'Cancelled-Merged' : 'Order Cancelled'}
+              </Typography>
               <Typography variant="body2">Reason: {order.cancelReason}</Typography>
               {restoreCancelledOrderStockMutation.isPending && (
                 <Typography variant="body2" sx={{ mt: 1 }}>
@@ -4556,16 +4561,21 @@ export const OrderDetailsPage: React.FC = () => {
             </Box>
           )}
           {confirmDialog.action === 'cancel' && (
-            <TextField
-              fullWidth
-              label="Cancellation Reason"
-              margin="normal"
-              multiline
-              rows={3}
-              value={cancelReason}
-              onChange={(e) => setCancelReason(e.target.value)}
-              required
-            />
+            <FormControl fullWidth sx={{ mt: 2 }} required>
+              <InputLabel id="order-detail-cancel-reason-label">Cancellation reason</InputLabel>
+              <Select
+                labelId="order-detail-cancel-reason-label"
+                label="Cancellation reason"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+              >
+                {ORDER_CANCEL_REASONS.map((reason) => (
+                  <MenuItem key={reason} value={reason}>
+                    {reason}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           )}
         </DialogContent>
         <DialogActions>

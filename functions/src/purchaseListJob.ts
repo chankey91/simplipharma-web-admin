@@ -1,6 +1,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { ff } from './functionRegion';
+import { loadLiveStockOffers, rankDeals, type RankedDeal } from './liveStockRank';
 
 type AggregateRow = {
   key: string;
@@ -194,6 +195,7 @@ async function writePurchaseListItems(
     orderIds: string[];
     grossQty: number;
     coveredQty: number;
+    deals?: RankedDeal[];
   }>
 ): Promise<void> {
   const chunkSize = 400;
@@ -214,6 +216,7 @@ async function writePurchaseListItems(
         orderIds: row.orderIds,
         status: 'pending',
         foundQty: null,
+        deals: row.deals && row.deals.length > 0 ? row.deals : [],
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     }
@@ -307,8 +310,19 @@ export async function publishNetPurchaseListForDay(args: {
     };
   }
 
+  let liveOffers: Awaited<ReturnType<typeof loadLiveStockOffers>> = [];
+  try {
+    liveOffers = await loadLiveStockOffers(db);
+  } catch (error) {
+    console.warn('purchaseListJob: live stock lookup failed', error);
+  }
+  const rankedRows = netRows.map((row) => ({
+    ...row,
+    deals: liveOffers.length > 0 ? rankDeals(row.medicineName, row.totalQty, liveOffers) : [],
+  }));
+
   const supersededOpenLists = await supersedeOpenLists(db);
-  const totalQtyNeeded = netRows.reduce((s, r) => s + r.totalQty, 0);
+  const totalQtyNeeded = rankedRows.reduce((s, r) => s + r.totalQty, 0);
   const listRef = db.collection('purchaseLists').doc();
   await listRef.set({
     fromDate,
@@ -325,11 +339,11 @@ export async function publishNetPurchaseListForDay(args: {
     reducedCount,
   });
 
-  await writePurchaseListItems(db, listRef, netRows);
+  await writePurchaseListItems(db, listRef, rankedRows);
 
   return {
     listId: listRef.id,
-    itemCount: netRows.length,
+    itemCount: rankedRows.length,
     totalQtyNeeded,
     pendingOrderCount: orderDocs.length,
     eliminatedCount,
@@ -337,7 +351,9 @@ export async function publishNetPurchaseListForDay(args: {
     supersededOpenLists,
     fromDate,
     toDate,
-    message: `Published ${netRows.length} medicines (net remaining after purchase officer findings)`,
+    message: `Published ${rankedRows.length} medicines (net remaining after purchase officer findings). ${
+      rankedRows.filter((row) => row.deals.length > 0).length
+    } matched a live-stock deal.`,
   };
 }
 

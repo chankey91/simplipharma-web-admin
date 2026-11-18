@@ -94,6 +94,7 @@ const MENU_SECTIONS: MenuSection[] = [
       { text: 'Order shortfalls', icon: <ReportProblem />, path: '/order-shortfalls' },
       { text: 'Product demands', icon: <PostAdd />, path: '/product-demands' },
       { text: 'Purchase lists', icon: <ShoppingBag />, path: '/purchase-lists' },
+      { text: 'Live stock', icon: <Inventory />, path: '/live-stocks' },
       { text: 'Sales invoices', icon: <Description />, path: '/invoices' },
       { text: 'Credit & debit notes', icon: <Article />, path: '/credit-notes' },
     ],

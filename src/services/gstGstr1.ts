@@ -1,6 +1,7 @@
 import { loadGstPeriodBooks, gstDocDate, taxableFrom } from './gstPeriodBooks';
 import { getGstPeriod } from './gstPeriods';
 import { hasGstSnapshot } from '../utils/gstSnapshot';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import {
   attachGstr1Integrity,
   buildGstr1Payload,
@@ -111,7 +112,7 @@ export async function loadGstOutwardDocuments(date = new Date()) {
   let skippedNoSnapshot = 0;
 
   for (const order of books.orders) {
-    if (!order.invoiceNumber || order.status === 'Pending' || order.status === 'Cancelled') continue;
+    if (!order.invoiceNumber || order.status === 'Pending' || isCancelledOrderStatus(order.status)) continue;
     if (!hasGstSnapshot(order) || !order.gst) {
       skippedNoSnapshot += 1;
       continue;
@@ -192,7 +193,7 @@ export async function buildGstr1Export(
       previousFingerprints: mode === 'amendment' ? period.outwardFingerprints : undefined,
       issuedInvoices: books.orders
         .filter((o) => o.invoiceNumber && o.status !== 'Pending')
-        .map((o) => ({ number: o.invoiceNumber as string, cancelled: o.status === 'Cancelled' })),
+        .map((o) => ({ number: o.invoiceNumber as string, cancelled: isCancelledOrderStatus(o.status) })),
       issuedCreditNotes: books.creditNotes
         .filter((n) => String(n.status || '').toLowerCase() !== 'cancelled')
         .map((n) => ({ number: n.creditNoteNumber })),

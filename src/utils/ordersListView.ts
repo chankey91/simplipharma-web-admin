@@ -11,6 +11,7 @@ const STATUSES = new Set<OrderStatus | 'All'>([
   'In Transit',
   'Delivered',
   'Cancelled',
+  'Cancelled-Merged',
 ]);
 const SORT_KEYS = new Set([
   'id',

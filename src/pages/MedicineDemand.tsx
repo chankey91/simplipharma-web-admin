@@ -23,8 +23,9 @@ import {
   Button,
   Alert,
 } from '@mui/material';
-import { Search, Inventory2 } from '@mui/icons-material';
+import { Download, Search, Inventory2 } from '@mui/icons-material';
 import { format } from 'date-fns';
+import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
@@ -33,6 +34,7 @@ import { useMedicinesByIds } from '../hooks/useInventory';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc } from '../utils/tableSort';
+import { istDateStampCompact } from '../utils/dateTime';
 import {
   aggregateMedicineDemand,
   attachStockToDemandRows,
@@ -147,6 +149,47 @@ export const MedicineDemandPage: React.FC = () => {
     return sorted;
   }, [rows, searchTerm, lowStockOnly, sortKey, sortDirection]);
 
+  const exportExcel = () => {
+    const header = [
+      'Rank',
+      'Medicine',
+      'Qty sold',
+      'Orders',
+      'Amount',
+      'Avg / day',
+      'Weekly need',
+      'Stock',
+      'Gap vs weekly',
+    ];
+    const body = filtered.map((row, index) => [
+      index + 1,
+      row.medicineName,
+      row.qtySold,
+      row.orderCount,
+      Math.round(row.amount * 100) / 100,
+      row.avgPerDay,
+      row.projectedWeekly,
+      row.currentStock,
+      row.stockGapVsWeekly,
+    ]);
+    const sheet = XLSX.utils.aoa_to_sheet([header, ...body]);
+    sheet['!cols'] = [
+      { wch: 8 },
+      { wch: 36 },
+      { wch: 12 },
+      { wch: 10 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 16 },
+    ];
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Top sellers');
+    const periodSlug = period === 'custom' ? `${customFrom}-to-${customTo}` : period.replace(/_/g, '-');
+    XLSX.writeFile(book, `top-sellers-${periodSlug}-${istDateStampCompact()}.xlsx`);
+  };
+
   const pageCount = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
   const pageRows = filtered.slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE);
 
@@ -173,6 +216,14 @@ export const MedicineDemandPage: React.FC = () => {
             Medicines ranked by units sold — use this to plan stock ahead of purchase
           </Typography>
         </Box>
+        <Button
+          variant="outlined"
+          startIcon={<Download />}
+          onClick={exportExcel}
+          disabled={filtered.length === 0}
+        >
+          Export Excel
+        </Button>
       </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>

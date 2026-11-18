@@ -4,6 +4,7 @@
  * Sale margin uses the same ex-GST line math as the margin report.
  */
 import type { Order, PurchaseInvoice } from '../types';
+import { isCancelledOrderStatus } from './orderStatus';
 import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import { orderLineCogsExGst, orderLineNetSalesExGst } from './orderLineMargin';
 import {
@@ -108,7 +109,7 @@ export function aggregateOfferMargin(
   const purchaseLookup: PurchaseLandedCostLookup = buildPurchaseLandedCostLookup(invoices);
 
   for (const order of orders) {
-    if (order.status === 'Cancelled') continue;
+    if (isCancelledOrderStatus(order.status)) continue;
     for (const item of order.medicines ?? []) {
       const hasBatch =
         Boolean(item.batchNumber) ||

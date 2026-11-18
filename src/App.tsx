@@ -59,6 +59,7 @@ import { IncidentsPage } from './pages/Incidents';
 import { HomeFeedPage } from './pages/HomeFeed';
 import { RetailerAppPage } from './pages/RetailerApp';
 import { PurchaseListsPage } from './pages/PurchaseLists';
+import { LiveStocksPage } from './pages/LiveStocks';
 import { PurchaseReturnsPage } from './pages/PurchaseReturns';
 import { CreatePurchaseReturnPage } from './pages/CreatePurchaseReturn';
 import { PurchaseReturnDetailsPage } from './pages/PurchaseReturnDetails';
@@ -185,6 +186,7 @@ const router = createBrowserRouter([
   { path: '/medicine-demand', element: withLayout(<MedicineDemandPage />) },
   { path: '/product-demands', element: withLayout(<ProductDemandsPage />) },
   { path: '/purchase-lists', element: withLayout(<PurchaseListsPage />) },
+  { path: '/live-stocks', element: withLayout(<LiveStocksPage />) },
   { path: '/gst', element: withLayout(<GstDashboardPage />) },
   { path: '/gst/slab-sales', element: withLayout(<GstSlabReportPage />) },
   { path: '/gst/gstr-1', element: withLayout(<GstGstr1Page />) },

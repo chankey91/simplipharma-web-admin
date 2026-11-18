@@ -1,4 +1,5 @@
 import { Order } from '../types';
+import { isCancelledOrderStatus } from './orderStatus';
 import { formatOrderNumberForDisplay } from './orderDisplay';
 
 /** Grace period after delivery to record full payment before new orders are blocked. */
@@ -69,7 +70,7 @@ export function isOrderPaymentFullyRecorded(order: Order): boolean {
  * Same rule as the retailer app checkout block.
  */
 export function isOrderPlacementBlockingOrder(order: Order, nowMs = Date.now()): boolean {
-  if (order.status === 'Cancelled') return false;
+  if (isCancelledOrderStatus(order.status)) return false;
   if (order.status !== 'Delivered') return false;
   if (isOrderPaymentFullyRecorded(order)) return false;
   const deliveredAt = getOrderDeliveredAt(order);

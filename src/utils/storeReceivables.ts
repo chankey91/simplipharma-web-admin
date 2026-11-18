@@ -1,4 +1,5 @@
 import { Order, User } from '../types';
+import { isCancelledOrderStatus } from './orderStatus';
 import { resolveOrderInvoiceGrandTotal } from './orderTotals';
 import { formatOrderInvoiceLabel } from './orderDisplay';
 
@@ -20,7 +21,7 @@ export type StoreReceivableSummary = {
 
 /** Billable = fulfilled, not cancelled, money still owed */
 export function isReceivableOrder(o: Order): boolean {
-  if (o.status === 'Cancelled' || o.status === 'Pending') return false;
+  if (isCancelledOrderStatus(o.status) || o.status === 'Pending') return false;
   const ps = o.paymentStatus;
   return ps === 'Unpaid' || ps === 'Partial' || !ps;
 }

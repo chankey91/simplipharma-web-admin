@@ -35,6 +35,7 @@ import { getOrdersInRange } from '../services/orders';
 import { IstDateField } from '../components/IstDateField';
 import { Loading } from '../components/Loading';
 import { User } from '../types';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import {
   coerceToDate,
   getTodayDateStringIST,
@@ -140,7 +141,7 @@ export const PerformancePage: React.FC = () => {
 
     const sales: Sale[] = [];
     for (const order of orders) {
-      if (order.status === 'Cancelled' || !order.retailerId) continue;
+      if (isCancelledOrderStatus(order.status) || !order.retailerId) continue;
       const date = coerceToDate(order.orderDate);
       if (!date) continue;
       sales.push({

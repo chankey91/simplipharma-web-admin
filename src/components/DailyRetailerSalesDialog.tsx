@@ -18,6 +18,7 @@ import { getOrdersInRange } from '../services/orders';
 import { IstDateField } from './IstDateField';
 import { Loading } from './Loading';
 import { User } from '../types';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import {
   coerceToDate,
   getTodayDateStringIST,
@@ -70,7 +71,7 @@ export const DailyRetailerSalesDialog: React.FC<{
     };
 
     for (const order of orders) {
-      if (order.status === 'Cancelled' || !order.retailerId) continue;
+      if (isCancelledOrderStatus(order.status) || !order.retailerId) continue;
       const orderDate = coerceToDate(order.orderDate);
       if (!orderDate) continue;
       const key = getTodayDateStringIST(orderDate);

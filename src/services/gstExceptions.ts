@@ -5,6 +5,7 @@ import { loadGstPeriodBooks } from './gstPeriodBooks';
 import { searchMedicinesCatalog } from './medicineSearch';
 import { isValidGstinFormat, normalizeGstin } from '../utils/gstin';
 import { hasGstSnapshot } from '../utils/gstSnapshot';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 
 const MAX_DETAIL_ROWS = 40;
 
@@ -57,7 +58,7 @@ export async function loadGstHealthReport(date = new Date()): Promise<GstHealthR
   let detailRows = 0;
 
   const invoiced = books.orders.filter(
-    (o) => o.invoiceNumber && o.status !== 'Pending' && o.status !== 'Cancelled'
+    (o) => o.invoiceNumber && o.status !== 'Pending' && !isCancelledOrderStatus(o.status)
   );
   let snapshotsThisPeriod = 0;
   let legacyInvoicesThisPeriod = 0;

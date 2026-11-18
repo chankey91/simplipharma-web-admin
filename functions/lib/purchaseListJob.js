@@ -8,6 +8,7 @@ exports.propagateManufacturerAvailability = propagateManufacturerAvailability;
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const functionRegion_1 = require("./functionRegion");
+const liveStockRank_1 = require("./liveStockRank");
 function productAggregateKey(medicine) {
     var _a, _b;
     if ((_a = medicine.medicineId) === null || _a === void 0 ? void 0 : _a.trim())
@@ -179,6 +180,7 @@ async function writePurchaseListItems(db, listRef, rows) {
                 orderIds: row.orderIds,
                 status: 'pending',
                 foundQty: null,
+                deals: row.deals && row.deals.length > 0 ? row.deals : [],
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
             });
         }
@@ -238,8 +240,16 @@ async function publishNetPurchaseListForDay(args) {
                 : 'All pending product need is already covered by purchase officer findings',
         };
     }
+    let liveOffers = [];
+    try {
+        liveOffers = await (0, liveStockRank_1.loadLiveStockOffers)(db);
+    }
+    catch (error) {
+        console.warn('purchaseListJob: live stock lookup failed', error);
+    }
+    const rankedRows = netRows.map((row) => (Object.assign(Object.assign({}, row), { deals: liveOffers.length > 0 ? (0, liveStockRank_1.rankDeals)(row.medicineName, row.totalQty, liveOffers) : [] })));
     const supersededOpenLists = await supersedeOpenLists(db);
-    const totalQtyNeeded = netRows.reduce((s, r) => s + r.totalQty, 0);
+    const totalQtyNeeded = rankedRows.reduce((s, r) => s + r.totalQty, 0);
     const listRef = db.collection('purchaseLists').doc();
     await listRef.set({
         fromDate,
@@ -255,10 +265,10 @@ async function publishNetPurchaseListForDay(args) {
         eliminatedCount,
         reducedCount,
     });
-    await writePurchaseListItems(db, listRef, netRows);
+    await writePurchaseListItems(db, listRef, rankedRows);
     return {
         listId: listRef.id,
-        itemCount: netRows.length,
+        itemCount: rankedRows.length,
         totalQtyNeeded,
         pendingOrderCount: orderDocs.length,
         eliminatedCount,
@@ -266,7 +276,7 @@ async function publishNetPurchaseListForDay(args) {
         supersededOpenLists,
         fromDate,
         toDate,
-        message: `Published ${netRows.length} medicines (net remaining after purchase officer findings)`,
+        message: `Published ${rankedRows.length} medicines (net remaining after purchase officer findings). ${rankedRows.filter((row) => row.deals.length > 0).length} matched a live-stock deal.`,
     };
 }
 async function runScheduledPublish(source) {

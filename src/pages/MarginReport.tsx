@@ -47,6 +47,7 @@ import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 import { resolvedPurchaseAdditionalDiscount } from '../utils/purchaseInvoiceTotals';
 
 type PeriodFilter = MarginPeriodFilter;
@@ -76,6 +77,7 @@ const getStatusColor = (status: string) => {
     case 'Delivered':
       return 'success';
     case 'Cancelled':
+    case 'Cancelled-Merged':
       return 'error';
     default:
       return 'default';
@@ -175,7 +177,7 @@ export const MarginReportPage: React.FC = () => {
     const rows: MarginOrderRow[] = [];
 
     for (const order of list) {
-      if (order.status === 'Cancelled') continue;
+      if (isCancelledOrderStatus(order.status)) continue;
       if (statusFilter !== 'All' && order.status !== statusFilter) continue;
       const d = orderDate(order);
       if (!inPeriod(d, periodFilter)) continue;

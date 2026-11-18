@@ -11,6 +11,7 @@ import { isBefore } from 'date-fns';
 import { db } from './firebase';
 import { getAllOrders } from './orders';
 import { OrderStatus } from '../types';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
 
 /**
  * Server-side aggregation of the order KPIs the Dashboard needs. This replaces a
@@ -24,6 +25,7 @@ const ORDER_STATUSES: OrderStatus[] = [
   'In Transit',
   'Delivered',
   'Cancelled',
+  'Cancelled-Merged',
 ];
 
 export interface OrderDashboardStats {
@@ -45,7 +47,7 @@ async function getOrderDashboardStatsFromDocs(monthStart: Date): Promise<OrderDa
     return acc;
   }, {} as Record<OrderStatus, number>);
 
-  const activeOrders = list.filter((o) => o.status !== 'Cancelled');
+  const activeOrders = list.filter((o) => !isCancelledOrderStatus(o.status));
   const lifetimeGross = activeOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
   const thisMonthGross = activeOrders
     .filter((o) => {
@@ -56,7 +58,7 @@ async function getOrderDashboardStatsFromDocs(monthStart: Date): Promise<OrderDa
 
   const totalOrders = list.length;
   const unpaidCount = list.filter(
-    (o) => o.status !== 'Cancelled' && (o.paymentStatus === 'Unpaid' || !o.paymentStatus)
+    (o) => !isCancelledOrderStatus(o.status) && (o.paymentStatus === 'Unpaid' || !o.paymentStatus)
   ).length;
 
   return { statusCounts, totalOrders, unpaidCount, lifetimeGross, thisMonthGross };
@@ -86,14 +88,14 @@ export const getOrderDashboardStats = async (monthStart: Date): Promise<OrderDas
       getAggregateFromServer(query(col, where('paymentStatus', '==', 'Partial')), { c: count() }),
       // Lifetime gross = all minus cancelled (avoids a multi-inequality query).
       getAggregateFromServer(query(col), { s: sum('totalAmount') }),
-      getAggregateFromServer(query(col, where('status', '==', 'Cancelled')), { s: sum('totalAmount') }),
+      getAggregateFromServer(query(col, where('status', 'in', ['Cancelled', 'Cancelled-Merged'])), { s: sum('totalAmount') }),
       // This-month gross = month total minus month cancelled.
       getAggregateFromServer(query(col, where('orderDate', '>=', monthTs)), { s: sum('totalAmount') }),
       // Needs a (status, orderDate) composite index. If it's not deployed yet, fall
       // back to 0 (month gross then includes any cancelled-this-month) rather than
       // failing the whole dashboard.
       getAggregateFromServer(
-        query(col, where('status', '==', 'Cancelled'), where('orderDate', '>=', monthTs)),
+        query(col, where('status', 'in', ['Cancelled', 'Cancelled-Merged']), where('orderDate', '>=', monthTs)),
         { s: sum('totalAmount') }
       )
         .then((snap) => snap.data().s ?? 0)
@@ -109,7 +111,7 @@ export const getOrderDashboardStats = async (monthStart: Date): Promise<OrderDas
     }, {} as Record<OrderStatus, number>);
 
     const totalOrders = ORDER_STATUSES.reduce((total, s) => total + statusCounts[s], 0);
-    const cancelled = statusCounts['Cancelled'] ?? 0;
+    const cancelled = (statusCounts['Cancelled'] ?? 0) + (statusCounts['Cancelled-Merged'] ?? 0);
     const paid = paidSnap.data().c ?? 0;
     const partial = partialSnap.data().c ?? 0;
     // Non-cancelled orders that are neither Paid nor Partial. Deriving it this way

@@ -67,6 +67,7 @@ const getStatusColor = (status: string) => {
     case 'Delivered':
       return 'success';
     case 'Cancelled':
+    case 'Cancelled-Merged':
       return 'error';
     default:
       return 'default';

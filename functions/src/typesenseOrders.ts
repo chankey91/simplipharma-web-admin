@@ -25,6 +25,7 @@ const ORDER_STATUSES = [
   'In Transit',
   'Delivered',
   'Cancelled',
+  'Cancelled-Merged',
 ] as const;
 
 /** Fields the client is allowed to sort by, mapped to indexed Typesense fields. */
@@ -401,7 +402,7 @@ export const searchOrdersTypesense = ff
     const filters: string[] = [];
     if (scopeFilter) filters.push(scopeFilter);
     if (status && status !== 'All') filters.push(`status:=\`${status}\``);
-    if (invoicedOnly) filters.push('status:!=[`Pending`, `Cancelled`]');
+    if (invoicedOnly) filters.push('status:!=[`Pending`, `Cancelled`, `Cancelled-Merged`]');
     if (paymentDueOnly) {
       filters.push('paymentStatus:=[`Unpaid`, `Partial`]');
     } else if (paymentStatus && paymentStatus !== 'All') {
