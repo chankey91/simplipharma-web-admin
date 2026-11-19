@@ -21,6 +21,7 @@ import { isCancelledOrderStatus } from '../utils/orderStatus';
  */
 const ORDER_STATUSES: OrderStatus[] = [
   'Pending',
+  'Picked up',
   'Order Fulfillment',
   'In Transit',
   'Delivered',

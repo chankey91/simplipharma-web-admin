@@ -26,6 +26,7 @@ import {
   LinearProgress,
   Alert,
   Checkbox,
+  FormControlLabel,
   Toolbar,
   Link,
   Tooltip,
@@ -53,7 +54,7 @@ import {
 } from '../hooks/useOrders';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useStores } from '../hooks/useStores';
-import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered, unfulfillOrder, mergePendingOrdersBefore } from '../services/orders';
+import { getOrdersInRange, getOrderById, updateOrderDispatch, markOrderDelivered, unfulfillOrder, mergePendingOrdersBefore, markOrdersPickedUp } from '../services/orders';
 import { generateOrderInvoice } from '../utils/invoice';
 import {
   extractOrderShortfallsFromOrders,
@@ -66,7 +67,7 @@ import { Loading } from '../components/Loading';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { exportPendingOrdersByStore, exportPendingOrdersProductSummary, exportSelectedOrderStores, formatTownDistrict } from '../utils/export';
 import { ORDER_CANCEL_REASONS } from '../constants/orderCancelReasons';
-import { isCancelledOrderStatus } from '../utils/orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from '../utils/orderStatus';
 import { publishPurchaseList } from '../services/purchaseLists';
 import { useTableSort } from '../hooks/useTableSort';
 import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
@@ -115,6 +116,7 @@ function getInitialOrdersListView() {
 
 const isBulkSelectableStatus = (status: OrderStatus) =>
   status === 'Pending' ||
+  status === 'Picked up' ||
   status === 'Order Fulfillment' ||
   status === 'In Transit' ||
   status === 'Delivered';
@@ -214,6 +216,8 @@ export const OrdersPage: React.FC = () => {
     open: false,
     fromDateTime: '',
     toDateTime: '',
+    markPickedUp: false,
+    includePickedUp: false,
   });
 
   const { sortKey, sortDirection, requestSort } = useTableSort(
@@ -490,8 +494,8 @@ export const OrdersPage: React.FC = () => {
         case 'items':
           return applyDirection(compareAsc(a.medicines.length, b.medicines.length), sortDirection);
         case 'amount': {
-          const va = a.status === 'Pending' ? 0 : a.totalAmount;
-          const vb = b.status === 'Pending' ? 0 : b.totalAmount;
+          const va = isAwaitingFulfillmentStatus(a.status) ? 0 : a.totalAmount;
+          const vb = isAwaitingFulfillmentStatus(b.status) ? 0 : b.totalAmount;
           return applyDirection(compareAsc(va, vb), sortDirection);
         }
         case 'status':
@@ -577,6 +581,7 @@ export const OrdersPage: React.FC = () => {
 
   const ordersByStatus = {
     Pending: statusCounts['Pending'] ?? 0,
+    PickedUp: statusCounts['Picked up'] ?? 0,
     Fulfillment: statusCounts['Order Fulfillment'] ?? 0,
     Transit: statusCounts['In Transit'] ?? 0,
     Delivered: statusCounts['Delivered'] ?? 0,
@@ -993,6 +998,7 @@ export const OrdersPage: React.FC = () => {
   const getStatusColor = (status: OrderStatus) => {
     switch (status) {
       case 'Pending': return 'warning';
+      case 'Picked up': return 'secondary';
       case 'Order Fulfillment': return 'primary';
       case 'In Transit': return 'info';
       case 'Delivered': return 'success';
@@ -1067,22 +1073,44 @@ export const OrdersPage: React.FC = () => {
     try {
       const ordersInRange = await getOrdersInRange(range.startMs, range.endMs);
       const pendingInRange = ordersInRange.filter((o) => o.status === 'Pending');
+      const pickedUpInRange = ordersInRange.filter((o) => o.status === 'Picked up');
+      const exportOrders = productSummaryDialog.includePickedUp
+        ? [...pendingInRange, ...pickedUpInRange]
+        : pendingInRange;
 
-      if (pendingInRange.length === 0) {
-        await alert('No pending orders found in the selected date & time range', {
-          severity: 'warning',
-        });
+      if (exportOrders.length === 0) {
+        await alert(
+          productSummaryDialog.includePickedUp
+            ? 'No pending or picked up orders found in the selected date & time range'
+            : 'No pending orders found in the selected date & time range',
+          { severity: 'warning' }
+        );
         return;
       }
 
       const fromStamp = fromDateTime.replace(/[-:T]/g, '');
       const toStamp = toDateTime.replace(/[-:T]/g, '');
       const filename = `pending-orders-product-summary-${fromStamp}-${toStamp}`;
-      await exportPendingOrdersProductSummary(pendingInRange, filename);
+      await exportPendingOrdersProductSummary(exportOrders, filename);
+
+      let marked = 0;
+      if (productSummaryDialog.markPickedUp && pendingInRange.length > 0) {
+        const user = auth.currentUser;
+        if (!user) throw new Error('Sign in required to mark orders picked up');
+        marked = await markOrdersPickedUp(
+          pendingInRange.map((order) => order.id),
+          user.uid
+        );
+        await refreshOrderLists();
+      }
+
       setProductSummaryDialog((prev) => ({ ...prev, open: false }));
-      await alert('Product summary Excel file generated successfully!', {
-        severity: 'success',
-      });
+      await alert(
+        marked > 0
+          ? `Product summary downloaded. ${marked} pending order(s) marked as Picked up.`
+          : 'Product summary Excel file generated successfully!',
+        { severity: 'success' }
+      );
     } catch (error: unknown) {
       console.error('Error exporting product summary:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -1168,7 +1196,7 @@ export const OrdersPage: React.FC = () => {
     label: string;
     status: OrderStatus | 'All';
     count: number;
-    color: 'default' | 'warning' | 'primary' | 'info' | 'success' | 'error';
+    color: 'default' | 'warning' | 'secondary' | 'primary' | 'info' | 'success' | 'error';
   }> = [
     {
       label: 'All',
@@ -1177,6 +1205,7 @@ export const OrdersPage: React.FC = () => {
       color: 'default',
     },
     { label: 'Pending', status: 'Pending', count: ordersByStatus.Pending, color: 'warning' },
+    { label: 'Picked up', status: 'Picked up', count: ordersByStatus.PickedUp, color: 'secondary' },
     { label: 'Fulfillment', status: 'Order Fulfillment', count: ordersByStatus.Fulfillment, color: 'primary' },
     { label: 'In Transit', status: 'In Transit', count: ordersByStatus.Transit, color: 'info' },
     { label: 'Delivered', status: 'Delivered', count: ordersByStatus.Delivered, color: 'success' },
@@ -1342,6 +1371,8 @@ export const OrdersPage: React.FC = () => {
                 onClick={() =>
                   setProductSummaryDialog({
                     open: true,
+                    markPickedUp: false,
+                    includePickedUp: false,
                     ...getDefaultNoonToNoonRangeIST(),
                   })
                 }
@@ -1572,7 +1603,7 @@ export const OrdersPage: React.FC = () => {
                   <TableCell>{order.retailerEmail || 'N/A'}</TableCell>
                   <TableCell>{order.itemCount} items</TableCell>
                   <TableCell>
-                    {order.status === 'Pending' ? (
+                    {isAwaitingFulfillmentStatus(order.status) ? (
                       <Typography variant="caption" color="textSecondary">-</Typography>
                     ) : (
                       <>₹{order.totalAmount.toFixed(2)}</>
@@ -1974,6 +2005,35 @@ export const OrdersPage: React.FC = () => {
               sx={{ width: 250 }}
             />
           </Box>
+          <FormControlLabel
+            sx={{ mt: 1, display: 'flex' }}
+            control={
+              <Checkbox
+                checked={productSummaryDialog.markPickedUp}
+                onChange={(event) =>
+                  setProductSummaryDialog((prev) => ({ ...prev, markPickedUp: event.target.checked }))
+                }
+                disabled={isExportingProductSummary || isPublishingPurchaseList}
+              />
+            }
+            label="Mark these pending orders as Picked up"
+          />
+          <FormControlLabel
+            sx={{ display: 'flex' }}
+            control={
+              <Checkbox
+                checked={productSummaryDialog.includePickedUp}
+                onChange={(event) =>
+                  setProductSummaryDialog((prev) => ({
+                    ...prev,
+                    includePickedUp: event.target.checked,
+                  }))
+                }
+                disabled={isExportingProductSummary || isPublishingPurchaseList}
+              />
+            }
+            label="Include items from orders already picked up"
+          />
         </DialogContent>
         <DialogActions sx={{ flexWrap: 'wrap', gap: 1 }}>
           <Button

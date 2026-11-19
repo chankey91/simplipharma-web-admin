@@ -7,6 +7,7 @@ const PAGE_SIZES = new Set([20, 50, 100]);
 const STATUSES = new Set<OrderStatus | 'All'>([
   'All',
   'Pending',
+  'Picked up',
   'Order Fulfillment',
   'In Transit',
   'Delivered',

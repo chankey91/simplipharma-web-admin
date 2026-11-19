@@ -35,7 +35,7 @@ import { createOutwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromOrderMedicines } from '../utils/gstLineSnapshot';
 import { roundMoney2 } from '../utils/retailerWallet';
-import { isCancelledOrderStatus } from '../utils/orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from '../utils/orderStatus';
 
 const createTimelineEvent = (status: OrderStatus, updatedBy: string, note?: string): OrderTimelineEvent => ({
   status,
@@ -370,7 +370,7 @@ export const getReceivableOrders = async (): Promise<Order[]> => {
     } as Order;
   };
   const isCandidate = (o: Order) => {
-    if (isCancelledOrderStatus(o.status) || o.status === 'Pending') return false;
+    if (isCancelledOrderStatus(o.status) || isAwaitingFulfillmentStatus(o.status)) return false;
     const ps = o.paymentStatus;
     return ps === 'Unpaid' || ps === 'Partial' || !ps;
   };
@@ -516,6 +516,35 @@ export const updateOrderTotalAmount = async (
   });
 };
 
+/** Mark pending orders picked up after a product-summary export. Skips anything no longer pending. */
+export async function markOrdersPickedUp(orderIds: string[], updatedBy: string): Promise<number> {
+  const ids = [...new Set(orderIds.map((id) => id.trim()).filter(Boolean))];
+  let marked = 0;
+  const chunkSize = 400;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const slice = ids.slice(i, i + chunkSize);
+    const snaps = await Promise.all(slice.map((id) => getDoc(doc(db, 'orders', id))));
+    const batch = writeBatch(db);
+    let count = 0;
+    for (const snap of snaps) {
+      if (!snap.exists() || snap.data()?.status !== 'Pending') continue;
+      batch.update(snap.ref, {
+        status: 'Picked up',
+        timeline: [
+          ...(snap.data()?.timeline || []),
+          createTimelineEvent('Picked up', updatedBy, 'Marked picked up from the product summary export'),
+        ],
+      });
+      count += 1;
+    }
+    if (count > 0) {
+      await batch.commit();
+      marked += count;
+    }
+  }
+  return marked;
+}
+
 export const updateOrderStatus = async (
   orderId: string, 
   status: OrderStatus, 
@@ -554,10 +583,10 @@ export const cancelOrder = async (
 
   let stockRestoreErrors: string[] = [];
   // Pending never deducted inventory; mark restored so repair UI does not double-add.
-  let stockRestoredOnCancel = currentStatus === 'Pending';
+  let stockRestoredOnCancel = isAwaitingFulfillmentStatus(currentStatus);
   
   // If order has been fulfilled (stock deducted), restore inventory batches
-  if (currentStatus && currentStatus !== 'Pending' && !isCancelledOrderStatus(currentStatus) && orderData.medicines) {
+  if (currentStatus && !isAwaitingFulfillmentStatus(currentStatus) && !isCancelledOrderStatus(currentStatus) && orderData.medicines) {
     console.log(`Order ${orderId} has status ${currentStatus}, restoring stock from batches...`);
     const deltas = resolveOrderInventoryDeltas(orderData);
     stockRestoreErrors = await restoreStockForOrderMedicines(orderData.medicines, { deltas });
@@ -1680,7 +1709,7 @@ export async function applyWalletToUnpaidOrder(
 ): Promise<{ applied: number; paymentStatus: 'Paid' | 'Partial' | 'Unpaid'; remainingDue: number }> {
   const order = await getOrderById(orderId);
   if (!order) throw new Error('Invoice not found');
-  if (isCancelledOrderStatus(order.status) || order.status === 'Pending') {
+  if (isCancelledOrderStatus(order.status) || isAwaitingFulfillmentStatus(order.status)) {
     throw new Error('Wallet can only be applied to a billed invoice');
   }
 
@@ -1911,8 +1940,8 @@ export const recalculateOrderPricing = async (
     purchaseLookup,
     // Past Pending an invoice exists; totals must match it (batch-assigned lines only).
     {
-      invoiceLinesOnly: order.status !== 'Pending',
-      lockPersistedDiscount: order.status !== 'Pending',
+      invoiceLinesOnly: !isAwaitingFulfillmentStatus(order.status),
+      lockPersistedDiscount: !isAwaitingFulfillmentStatus(order.status),
     }
   );
 
