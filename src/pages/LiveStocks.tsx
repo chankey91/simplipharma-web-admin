@@ -237,7 +237,7 @@ export const LiveStocksPage: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {visibleOffers.slice(0, 400).map((row) => (
+                {visibleOffers.slice(0, 2000).map((row) => (
                   <TableRow key={row.id}>
                     <TableCell>
                       {row.productName}
@@ -257,9 +257,9 @@ export const LiveStocksPage: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
-          {visibleOffers.length > 400 ? (
+          {visibleOffers.length > 2000 ? (
             <Typography variant="caption" color="text.secondary">
-              Showing the first 400 matches.
+              Showing the first 2000 matches. Use Find product to narrow the list.
             </Typography>
           ) : null}
         </Paper>
