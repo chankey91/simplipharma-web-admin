@@ -1,4 +1,5 @@
 import type { CurrentLiveStockOffer } from '../services/liveStock';
+import type { VendorSuggestion } from './vendorLastPurchase';
 
 const STOP = new Set([
   'tab',
@@ -46,31 +47,50 @@ function sameProduct(a: string, b: string): boolean {
   return shared >= 1 && shared >= Math.min(at.length, bt.length);
 }
 
-function compareOffers(a: CurrentLiveStockOffer, b: CurrentLiveStockOffer, needQty: number): number {
-  const need = Math.max(1, needQty);
-  const coverA = a.stockQty >= need ? 0 : 1;
-  const coverB = b.stockQty >= need ? 0 : 1;
-  if (coverA !== coverB) return coverA - coverB;
-  const priceA = a.effectiveRate ?? Number.POSITIVE_INFINITY;
-  const priceB = b.effectiveRate ?? Number.POSITIVE_INFINITY;
-  if (priceA !== priceB) return priceA - priceB;
+/** Percent off the vendor's rate, including scheme. Higher is a better discount. */
+export function offerDiscountPercent(offer: {
+  rate?: number | null;
+  effectiveRate?: number | null;
+  discountPercentage?: number | null;
+}): { discount: number; known: boolean } {
+  const rate = offer.rate;
+  const effective = offer.effectiveRate;
+  if (rate != null && rate > 0 && effective != null && effective >= 0 && effective <= rate) {
+    return {
+      discount: Math.round(((rate - effective) / rate) * 10000) / 100,
+      known: true,
+    };
+  }
+  const pct = offer.discountPercentage;
+  if (pct != null && Number.isFinite(pct)) return { discount: Math.max(0, pct), known: true };
+  return { discount: 0, known: false };
+}
+
+function compareOffers(a: CurrentLiveStockOffer, b: CurrentLiveStockOffer): number {
+  const discountA = offerDiscountPercent(a).discount;
+  const discountB = offerDiscountPercent(b).discount;
+  if (discountA !== discountB) return discountB - discountA;
   return b.stockQty - a.stockQty;
 }
 
-/** Up to three vendor names: full quantity first, then lowest effective rate. */
+/** One row per vendor that currently stocks this product. Discount, then stock. */
 export function rankLiveStockVendors(
   productName: string,
-  needQty: number,
   offers: CurrentLiveStockOffer[]
-): string[] {
+): VendorSuggestion[] {
   const matched = offers.filter((offer) => sameProduct(productName, offer.productName));
   const byVendor = new Map<string, CurrentLiveStockOffer>();
   for (const offer of matched) {
     const current = byVendor.get(offer.vendorId);
-    if (!current || compareOffers(offer, current, needQty) < 0) byVendor.set(offer.vendorId, offer);
+    if (!current || compareOffers(offer, current) < 0) byVendor.set(offer.vendorId, offer);
   }
-  return [...byVendor.values()]
-    .sort((a, b) => compareOffers(a, b, needQty))
-    .slice(0, 3)
-    .map((offer) => offer.vendorName);
+  return [...byVendor.values()].map((offer) => {
+    const priced = offerDiscountPercent(offer);
+    return {
+      vendorName: offer.vendorName,
+      discount: priced.discount,
+      stockQty: offer.stockQty,
+      discountKnown: priced.known,
+    };
+  });
 }

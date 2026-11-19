@@ -127,7 +127,7 @@ export const LiveStocksPage: React.FC = () => {
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Upload each vendor&apos;s stock file. The latest file replaces that vendor&apos;s previous
-        stock. Purchase lists then mark P1, P2, and P3 from price, scheme, and available quantity.
+        stock. Purchase suggestions rank P1 through P5 by discount first, then by stock quantity.
       </Typography>
 
       <Paper sx={{ p: 2, mb: 2 }}>

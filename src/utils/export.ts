@@ -10,9 +10,10 @@ import { rankLiveStockVendors } from './liveStockDeals';
 import {
   buildBestDiscountVendorByMedicineId,
   buildRankedPurchaseVendorsByMedicineId,
-  fillVendorSlots,
+  suggestVendors,
   formatBestDiscountVendorLabel,
   type BestDiscountVendorPurchase,
+  type VendorSuggestion,
 } from './vendorLastPurchase';
 
 function resolvePackaging(med?: { unit?: string; description?: string } | null): string {
@@ -183,7 +184,7 @@ export const exportPendingOrdersProductSummary = async (
   }
 
   let bestDiscountByMedicineId = new Map<string, BestDiscountVendorPurchase>();
-  let pastVendorsByMedicineId = new Map<string, string[]>();
+  let pastVendorsByMedicineId = new Map<string, VendorSuggestion[]>();
   try {
     const purchaseInvoices = await getAllPurchaseInvoices();
     bestDiscountByMedicineId = buildBestDiscountVendorByMedicineId(purchaseInvoices);
@@ -196,7 +197,7 @@ export const exportPendingOrdersProductSummary = async (
   try {
     liveOffers = await listCurrentLiveStockOffers();
   } catch (error) {
-    console.warn('Failed to load live stock for P1–P3 vendor columns:', error);
+    console.warn('Failed to load live stock for vendor columns:', error);
   }
 
   const productAggregate = new Map<
@@ -251,6 +252,8 @@ export const exportPendingOrdersProductSummary = async (
       'P1 Vendor',
       'P2 Vendor',
       'P3 Vendor',
+      'P4 Vendor',
+      'P5 Vendor',
     ],
   ];
 
@@ -259,8 +262,8 @@ export const exportPendingOrdersProductSummary = async (
       ? bestDiscountByMedicineId.get(row.medicineId)
       : undefined;
     const history = row.medicineId ? pastVendorsByMedicineId.get(row.medicineId) || [] : [];
-    const live = rankLiveStockVendors(row.medicineName, row.totalQty, liveOffers);
-    const [p1, p2, p3] = fillVendorSlots(live, history);
+    const live = rankLiveStockVendors(row.medicineName, liveOffers);
+    const [p1, p2, p3, p4, p5] = suggestVendors(live, history);
     excelData.push([
       index + 1,
       row.productId,
@@ -272,6 +275,8 @@ export const exportPendingOrdersProductSummary = async (
       p1,
       p2,
       p3,
+      p4,
+      p5,
     ]);
   });
 
@@ -286,6 +291,8 @@ export const exportPendingOrdersProductSummary = async (
     { wch: 14 },
     { wch: 36 },
     { wch: 30 },
+    { wch: 28 },
+    { wch: 28 },
     { wch: 28 },
     { wch: 28 },
     { wch: 28 },

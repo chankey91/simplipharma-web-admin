@@ -260,14 +260,21 @@ export function buildBestDiscountVendorByMedicineId(
   return map;
 }
 
+export type VendorSuggestion = {
+  vendorName: string;
+  discount: number;
+  stockQty: number;
+  /** False when this row has stock but the file did not state a discount. */
+  discountKnown?: boolean;
+};
+
 /**
- * Up to three vendors we have actually purchased this medicine from.
- * Highest discount first, then the more recent bill. Used when live stock
- * has no current offer.
+ * Vendors we have purchased this medicine from.
+ * Highest discount first, then the more recent bill.
  */
 export function buildRankedPurchaseVendorsByMedicineId(
   invoices: PurchaseInvoice[]
-): Map<string, string[]> {
+): Map<string, VendorSuggestion[]> {
   type Row = { vendorName: string; discount: number; invoiceMs: number };
   const byMedicine = new Map<string, Map<string, Row>>();
 
@@ -294,7 +301,7 @@ export function buildRankedPurchaseVendorsByMedicineId(
     }
   }
 
-  const out = new Map<string, string[]>();
+  const out = new Map<string, VendorSuggestion[]>();
   for (const [medicineId, vendors] of byMedicine) {
     const ranked = [...vendors.values()].sort((a, b) => {
       if (b.discount !== a.discount) return b.discount - a.discount;
@@ -302,26 +309,53 @@ export function buildRankedPurchaseVendorsByMedicineId(
     });
     out.set(
       medicineId,
-      ranked.slice(0, 3).map((row) => row.vendorName)
+      ranked.map((row) => ({
+        vendorName: row.vendorName,
+        discount: row.discount,
+        stockQty: 0,
+        discountKnown: true,
+      }))
     );
   }
   return out;
 }
 
-/** Live-stock names first. Past purchase vendors fill any empty P1–P3 slot. */
-export function fillVendorSlots(liveNames: string[], history: string[]): [string, string, string] {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  const add = (name: string) => {
-    const trimmed = name.trim();
-    const key = trimmed.toLowerCase();
-    if (!trimmed || seen.has(key) || names.length >= 3) return;
-    seen.add(key);
-    names.push(trimmed);
-  };
-  for (const name of liveNames) add(name);
-  for (const name of history) add(name);
-  return [names[0] || '', names[1] || '', names[2] || ''];
+/**
+ * P1–P5. Higher discount first. Stock quantity is the tie-break.
+ * Current stock keeps its quantity. Its discount is used when the file states one.
+ * A past bill supplies the discount only when the stock file does not.
+ */
+export function suggestVendors(live: VendorSuggestion[], history: VendorSuggestion[]): string[] {
+  const byName = new Map<string, VendorSuggestion>();
+  for (const row of history) {
+    const vendorName = row.vendorName.trim();
+    const key = vendorName.toLowerCase();
+    if (!key) continue;
+    const existing = byName.get(key);
+    if (!existing || row.discount > existing.discount) {
+      byName.set(key, { vendorName, discount: row.discount, stockQty: 0, discountKnown: true });
+    }
+  }
+  for (const row of live) {
+    const vendorName = row.vendorName.trim();
+    const key = vendorName.toLowerCase();
+    if (!key) continue;
+    const existing = byName.get(key);
+    const useLiveDiscount = row.discountKnown !== false;
+    byName.set(key, {
+      vendorName: vendorName || existing?.vendorName || '',
+      discount: useLiveDiscount ? row.discount : existing?.discount ?? row.discount,
+      stockQty: row.stockQty,
+      discountKnown: useLiveDiscount || existing?.discountKnown === true,
+    });
+  }
+  const ranked = [...byName.values()].sort((a, b) => {
+    if (b.discount !== a.discount) return b.discount - a.discount;
+    return b.stockQty - a.stockQty;
+  });
+  const names = ranked.slice(0, 5).map((row) => row.vendorName);
+  while (names.length < 5) names.push('');
+  return names;
 }
 
 /** Excel / UI label: "Vendor — 12%" */
