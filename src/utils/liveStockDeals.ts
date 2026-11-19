@@ -73,7 +73,7 @@ function compareOffers(a: CurrentLiveStockOffer, b: CurrentLiveStockOffer): numb
   return b.stockQty - a.stockQty;
 }
 
-/** One row per vendor that currently stocks this product. Discount, then stock. */
+/** One row per vendor whose stock file lists this product, including quantity 0. Discount, then stock. */
 export function rankLiveStockVendors(
   productName: string,
   offers: CurrentLiveStockOffer[]

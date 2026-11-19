@@ -125,7 +125,6 @@ export async function loadLiveStockOffers(
     const productName = String(d.productName || '').trim();
     if (!vendorId || !productName) continue;
     const stockQty = asNumber(d.stockQty) ?? 0;
-    if (stockQty <= 0) continue;
     rows.push({
       vendorId,
       vendorName: String(d.vendorName || ''),
