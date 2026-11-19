@@ -19,7 +19,7 @@ import {
   Link as MuiLink,
   LinearProgress,
 } from '@mui/material';
-import { Visibility, OpenInNew, ShoppingBag } from '@mui/icons-material';
+import { Visibility, OpenInNew, ShoppingBag, FileDownload } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { useSearchParams } from 'react-router-dom';
@@ -37,6 +37,7 @@ import { applyDirection, compareAsc } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { useQueryClient } from '@tanstack/react-query';
 import { Refresh } from '@mui/icons-material';
+import { exportPurchaseListSummary } from '../utils/purchaseListSummaryExport';
 
 function toDate(value: unknown): Date | null {
   if (value && typeof value === 'object' && 'toDate' in value) {
@@ -78,6 +79,7 @@ export const PurchaseListsPage: React.FC = () => {
   const { sortKey, sortDirection, requestSort } = useTableSort('publishedAt', 'desc');
   const [detailList, setDetailList] = useState<PurchaseList | null>(null);
   const [runningNow, setRunningNow] = useState(false);
+  const [exportingId, setExportingId] = useState('');
 
   const handleRunNow = async () => {
     setRunningNow(true);
@@ -105,6 +107,19 @@ export const PurchaseListsPage: React.FC = () => {
       await alert(message, { severity: 'error' });
     } finally {
       setRunningNow(false);
+    }
+  };
+
+  const downloadSummary = async (row: PurchaseList) => {
+    setExportingId(row.id);
+    try {
+      const items = await getPurchaseListItems(row.id);
+      await exportPurchaseListSummary(row, items);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not download this purchase list';
+      await alert(message, { severity: 'error' });
+    } finally {
+      setExportingId('');
     }
   };
 
@@ -234,6 +249,14 @@ export const PurchaseListsPage: React.FC = () => {
                       ) : null}
                     </TableCell>
                     <TableCell align="right">
+                      <Button
+                        size="small"
+                        startIcon={<FileDownload />}
+                        disabled={exportingId === row.id}
+                        onClick={() => void downloadSummary(row)}
+                      >
+                        {exportingId === row.id ? 'Exporting…' : 'Summary'}
+                      </Button>
                       <IconButton
                         size="small"
                         color="primary"
@@ -263,6 +286,8 @@ const PurchaseListDetailDialog: React.FC<{
   list: PurchaseList | null;
   onClose: () => void;
 }> = ({ list, onClose }) => {
+  const { alert } = useAppDialog();
+  const [exporting, setExporting] = useState(false);
   const open = Boolean(list);
   const { data: items, isLoading } = useQuery({
     queryKey: ['purchaseListItems', list?.id],
@@ -298,6 +323,19 @@ const PurchaseListDetailDialog: React.FC<{
     }
     return Array.from(map.entries());
   }, [items]);
+
+  const downloadSummary = async () => {
+    if (!list) return;
+    setExporting(true);
+    try {
+      await exportPurchaseListSummary(list, items || []);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not download this purchase list';
+      await alert(message, { severity: 'error' });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
@@ -379,6 +417,13 @@ const PurchaseListDetailDialog: React.FC<{
         ))}
       </DialogContent>
       <DialogActions>
+        <Button
+          startIcon={<FileDownload />}
+          disabled={exporting || isLoading || !(items || []).length}
+          onClick={() => void downloadSummary()}
+        >
+          {exporting ? 'Exporting…' : 'Summary'}
+        </Button>
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>
