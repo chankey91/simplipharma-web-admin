@@ -66,7 +66,7 @@ export const getTraysInUse = async (excludeOrderId?: string): Promise<string[]> 
   const ordersRef = collection(db, 'orders');
   const trayNumbers = new Set<string>();
   
-  const statusesToCheck = ['Pending', 'Order Fulfillment'];
+  const statusesToCheck = ['Pending', 'Picked up', 'Order Fulfillment'];
   for (const status of statusesToCheck) {
     const q = query(ordersRef, where('status', '==', status));
     const snapshot = await getDocs(q);

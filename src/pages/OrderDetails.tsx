@@ -92,7 +92,7 @@ import { Medicine, OrderMedicine, OrderStatus, ProductDemand } from '../types';
 import { generateOrderInvoice } from '../utils/invoice';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { ORDER_CANCEL_REASONS } from '../constants/orderCancelReasons';
-import { isCancelledOrderStatus } from '../utils/orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from '../utils/orderStatus';
 import {
   buildWhatsAppUrl,
   formatOrderItemsWhatsAppList,
@@ -154,7 +154,7 @@ import { useAuth } from '../context/AuthContext';
 import { recalculateMedicinesPricingFromInventory } from '../utils/recalculateOrderLinePricing';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
 
-const statusSteps: OrderStatus[] = ['Pending', 'Order Fulfillment', 'In Transit', 'Delivered'];
+const statusSteps: OrderStatus[] = ['Pending', 'Picked up', 'Order Fulfillment', 'In Transit', 'Delivered'];
 
 const toNumber = (value: unknown): number => {
   if (value === undefined || value === null || value === '') return 0;
@@ -413,7 +413,7 @@ function mapRepairedLineToFulfillment(
         })()
       : lineSchemeFreeQty(line.batchNumber, toNumber(line.quantity));
 
-  const shouldRefreshDiscount = orderStatus === 'Pending';
+  const shouldRefreshDiscount = isAwaitingFulfillmentStatus(orderStatus);
 
   const withDefaults = shouldRefreshDiscount
     ? applyDefaultDiscountToFulfillmentLine(
@@ -498,8 +498,8 @@ export const OrderDetailsPage: React.FC = () => {
   const { data: order, isLoading } = useOrder(orderId || '');
   const printedAt = useSessionPrintedAt(order?.id || orderId);
   // Only Pending orders need soft batch-reservation scans — skip until we know status is Pending.
-  const { data: allOrders } = useOrdersByStatuses(['Pending'], {
-    enabled: order?.status === 'Pending',
+  const { data: allOrders } = useOrdersByStatuses(['Pending', 'Picked up'], {
+    enabled: isAwaitingFulfillmentStatus(order?.status),
   });
   const { data: retailerPhone } = useQuery({
     queryKey: ['retailerPhone', order?.retailerId],
@@ -593,7 +593,7 @@ export const OrderDetailsPage: React.FC = () => {
 
   const persistFulfillmentDraft = useCallback(
     async (meds: any[], taxPct?: number) => {
-      if (!canEditOrders || !order?.id || order.status !== 'Pending') return;
+      if (!canEditOrders || !order?.id || !isAwaitingFulfillmentStatus(order.status)) return;
       const payload = {
         medicines: serializeDraftMedicines(meds),
         taxPercentage: taxPct ?? order.taxPercentage ?? 5,
@@ -611,7 +611,7 @@ export const OrderDetailsPage: React.FC = () => {
 
   const scheduleFulfillmentDraftSave = useCallback(
     (meds: any[]) => {
-      if (!canEditOrders || !order?.id || order.status !== 'Pending') return;
+      if (!canEditOrders || !order?.id || !isAwaitingFulfillmentStatus(order.status)) return;
       if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = setTimeout(() => {
         void persistFulfillmentDraft(meds).catch((err) =>
@@ -812,13 +812,13 @@ export const OrderDetailsPage: React.FC = () => {
   }, [orderId]);
 
   useEffect(() => {
-    const guardOn = fulfillmentDirty && order?.status === 'Pending';
+    const guardOn = fulfillmentDirty && isAwaitingFulfillmentStatus(order?.status);
     setGuardActive(guardOn);
     return () => setGuardActive(false);
   }, [fulfillmentDirty, order?.status, setGuardActive]);
 
   useEffect(() => {
-    if (!fulfillmentDirty || order?.status !== 'Pending') return;
+    if (!fulfillmentDirty || !isAwaitingFulfillmentStatus(order?.status)) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
@@ -828,7 +828,7 @@ export const OrderDetailsPage: React.FC = () => {
   }, [fulfillmentDirty, order?.status]);
 
   const leaveBlocker = useBlocker(
-    Boolean(fulfillmentDirty && order?.status === 'Pending')
+    Boolean(fulfillmentDirty && isAwaitingFulfillmentStatus(order?.status))
   );
   const leaveConfirmInFlightRef = useRef(false);
 
@@ -898,13 +898,13 @@ export const OrderDetailsPage: React.FC = () => {
     ].join('|');
 
     // Fulfilled+: skip remount only when this snapshot is already on screen.
-    if (order.status !== 'Pending' && fulfilledUiFrozenRef.current === structureKey) {
+    if (!isAwaitingFulfillmentStatus(order.status) && fulfilledUiFrozenRef.current === structureKey) {
       return;
     }
 
     // Pending already hydrated for this structure — ignore medicines/PI catalog churn.
     if (
-      order.status === 'Pending' &&
+      isAwaitingFulfillmentStatus(order.status) &&
       pendingHydrateStructureKeyRef.current === structureKey &&
       fulfillmentInitOrderId === order.id
     ) {
@@ -918,7 +918,7 @@ export const OrderDetailsPage: React.FC = () => {
     const stepIndex = statusSteps.indexOf(order.status as OrderStatus);
     setActiveStep(stepIndex >= 0 ? stepIndex : 0);
 
-    if (order.status === 'Pending' && !order.trayNumber && !order.processedBy) {
+    if (isAwaitingFulfillmentStatus(order.status) && !order.trayNumber && !order.processedBy) {
       setTrayNumberDialog({ open: true, orderId: order.id });
       setTrayNumber('');
       setProcessedBy('');
@@ -931,7 +931,7 @@ export const OrderDetailsPage: React.FC = () => {
       order.medicines && Array.isArray(order.medicines) ? order.medicines : [];
 
     const savedDraft =
-      order.status === 'Pending'
+      isAwaitingFulfillmentStatus(order.status)
         ? pickFulfillmentDraft(order.id, order.fulfillmentDraft)
         : null;
 
@@ -952,7 +952,7 @@ export const OrderDetailsPage: React.FC = () => {
 
     setFulfillmentData((prev) => {
       if (
-        order.status === 'Pending' &&
+        isAwaitingFulfillmentStatus(order.status) &&
         localPendingEditsRef.current.orderId === order.id &&
         localPendingEditsRef.current.dirty &&
         prev.medicines.length > 0
@@ -969,7 +969,7 @@ export const OrderDetailsPage: React.FC = () => {
       };
     });
     setFulfillmentInitOrderId(order.id);
-    if (order.status === 'Pending') {
+    if (isAwaitingFulfillmentStatus(order.status)) {
       pendingHydrateStructureKeyRef.current = structureKey;
     } else {
       fulfilledUiFrozenRef.current = structureKey;
@@ -980,7 +980,7 @@ export const OrderDetailsPage: React.FC = () => {
 
     void (async () => {
       // Demand-line repair: convert fulfilled product requests → medicine lines (batch Assign).
-      if (order.status !== 'Pending') {
+      if (!isAwaitingFulfillmentStatus(order.status)) {
         if (orderDemandRepairAttempted.current === repairAttemptKey) return;
         const { medicines: repaired, changed } = await prepareFulfilledDemandOrderMedicines(
           rawMedicines,
@@ -1078,7 +1078,7 @@ export const OrderDetailsPage: React.FC = () => {
   // Re-apply batch/PI trade discount only while Pending (before fulfill).
   // Updates Disc % in place — does not mark dirty / does not remount the page.
   useEffect(() => {
-    if (!order || order.status !== 'Pending') return;
+    if (!order || !isAwaitingFulfillmentStatus(order.status)) return;
     if (fulfillmentInitOrderId !== order.id) return;
 
     setFulfillmentData((prev) => {
@@ -1124,7 +1124,7 @@ export const OrderDetailsPage: React.FC = () => {
 
   // Auto-save only after a real user edit (fulfillmentDirty), not on catalog remap.
   useEffect(() => {
-    if (order?.status !== 'Pending') return;
+    if (!isAwaitingFulfillmentStatus(order?.status)) return;
     if (!fulfillmentDirty) return;
     if (!localPendingEditsRef.current.dirty) return;
     if (!fulfillmentData.medicines.length) return;
@@ -1147,7 +1147,7 @@ export const OrderDetailsPage: React.FC = () => {
   );
 
   const canRecalculatePricing =
-    (order?.status === 'Pending' || order?.status === 'Order Fulfillment') &&
+    (isAwaitingFulfillmentStatus(order?.status) || order?.status === 'Order Fulfillment') &&
     allBatchesAssignedForTotals;
 
   const externalBatchReservations = useMemo(
@@ -1165,7 +1165,7 @@ export const OrderDetailsPage: React.FC = () => {
   );
 
   const batchStockConflicts = useMemo(() => {
-    if (order?.status !== 'Pending' || !fulfillmentData.medicines.length) return [];
+    if (!isAwaitingFulfillmentStatus(order?.status) || !fulfillmentData.medicines.length) return [];
     return findBatchStockConflicts(
       fulfillmentData.medicines,
       externalBatchReservations,
@@ -1194,8 +1194,8 @@ export const OrderDetailsPage: React.FC = () => {
   );
 
   const taxPctForTotals = order?.taxPercentage || fulfillmentData.taxPercentage || 5;
-  const lockDiscAfterFulfill = Boolean(order && order.status !== 'Pending');
-  const isPendingFulfillment = order?.status === 'Pending';
+  const lockDiscAfterFulfill = Boolean(order && !isAwaitingFulfillmentStatus(order.status));
+  const isPendingFulfillment = isAwaitingFulfillmentStatus(order?.status);
   const orderTotals = useMemo(
     () =>
       order
@@ -1292,7 +1292,7 @@ export const OrderDetailsPage: React.FC = () => {
     if (orderTotals.billableLines.length === 0) return;
 
     // Pending: wait until batches are assigned before writing totals.
-    if (order.status === 'Pending' && !allBatchesAssignedForTotals) return;
+    if (isAwaitingFulfillmentStatus(order.status) && !allBatchesAssignedForTotals) return;
 
     setOrderTotalOverride(order.id, liveTotal);
 
@@ -1413,7 +1413,7 @@ export const OrderDetailsPage: React.FC = () => {
     }
 
     const proceed = await confirm(
-      order.status === 'Pending'
+      isAwaitingFulfillmentStatus(order.status)
         ? 'Update unit prices and discount % on this screen from current inventory batch data?'
         : 'Recalculate saved order line prices and totals from current inventory? Re-print the invoice afterward.',
       { title: 'Recalculate pricing from inventory' }
@@ -1422,7 +1422,7 @@ export const OrderDetailsPage: React.FC = () => {
 
     setRecalculatingPricing(true);
     try {
-      if (order.status === 'Pending') {
+      if (isAwaitingFulfillmentStatus(order.status)) {
         const recalculated = recalculateMedicinesPricingFromInventory(
           fulfillmentData.medicines,
           medicines,
@@ -1556,7 +1556,7 @@ export const OrderDetailsPage: React.FC = () => {
           action: 'cancel',
           title: 'Cancel Order',
           message:
-            order.status === 'Pending'
+            isAwaitingFulfillmentStatus(order.status)
               ? 'Choose a reason for cancelling this order.'
               : 'Choose a reason for cancelling this order. Allocated stock will be restored to inventory.',
         });
@@ -1798,7 +1798,7 @@ export const OrderDetailsPage: React.FC = () => {
       setTrayNumberDialog({ open: false, orderId: null });
       // Keep trayNumber and processedBy in state for use when fulfilling
       
-      if (order?.status === 'Pending') {
+      if (isAwaitingFulfillmentStatus(order?.status)) {
         await alert('Tray number and processor information saved successfully!', { severity: 'success' });
       } else {
         await alert('Tray number and processor information saved successfully!', { severity: 'success' });
@@ -2527,7 +2527,7 @@ export const OrderDetailsPage: React.FC = () => {
       if (
         order?.id &&
         canEditOrders &&
-        (order.status === 'Order Fulfillment' || order.status === 'Pending')
+        (order.status === 'Order Fulfillment' || isAwaitingFulfillmentStatus(order.status))
       ) {
         if (order.status === 'Order Fulfillment') {
           void updateOrderMedicines(order.id, newMedicines.map(toPersistedOrderMedicine)).catch((err) =>
@@ -2674,7 +2674,7 @@ export const OrderDetailsPage: React.FC = () => {
   };
 
   const handleAdjustOrderedQuantity = async (itemIndex: number, nextPhysicalO: number) => {
-    if (!order || order.status !== 'Pending') return;
+    if (!order || !isAwaitingFulfillmentStatus(order.status)) return;
     const item = fulfillmentData.medicines[itemIndex];
     if (!item || (item as { lineType?: string }).lineType === 'product_demand') return;
 
@@ -2727,7 +2727,7 @@ export const OrderDetailsPage: React.FC = () => {
   };
 
   const handleReplaceProduct = async (replacement: Medicine) => {
-    if (!order || order.status !== 'Pending') return;
+    if (!order || !isAwaitingFulfillmentStatus(order.status)) return;
     const itemIndex = replaceProductDialog.itemIndex;
     const item = fulfillmentData.medicines[itemIndex];
     if (!item || (item as { lineType?: string }).lineType === 'product_demand') return;
@@ -2805,7 +2805,7 @@ export const OrderDetailsPage: React.FC = () => {
   };
 
   const openAddProductDialog = () => {
-    if (!order || order.status !== 'Pending') return;
+    if (!order || !isAwaitingFulfillmentStatus(order.status)) return;
     setAddProductSearchInput('');
     setAddProductSelected(null);
     setAddProductQty('1');
@@ -2822,7 +2822,7 @@ export const OrderDetailsPage: React.FC = () => {
   };
 
   const handleAddProduct = async () => {
-    if (!order || order.status !== 'Pending') return;
+    if (!order || !isAwaitingFulfillmentStatus(order.status)) return;
     if (!addProductSelected?.id) {
       await alert('Select a medicine from the catalog.', { severity: 'warning' });
       return;
@@ -2916,7 +2916,7 @@ export const OrderDetailsPage: React.FC = () => {
   };
 
   const handleDeleteOrderItem = async (itemIndex: number) => {
-    if (!order || order.status !== 'Pending') return;
+    if (!order || !isAwaitingFulfillmentStatus(order.status)) return;
     const item = fulfillmentData.medicines[itemIndex];
     if (!item) return;
 
@@ -3024,7 +3024,7 @@ export const OrderDetailsPage: React.FC = () => {
     const gstRateForDisc =
       toNumber(allocation?.gstRate) || toNumber(item.gstRate) || toNumber(med?.gstRate) || 5;
     const useManualOverride = item.discountManuallySet === true;
-    const lockPersisted = order?.status !== 'Pending';
+    const lockPersisted = !isAwaitingFulfillmentStatus(order?.status);
     // After fulfill: show saved Disc % only (never re-derive from PI — that caused flicker).
     const discountPct = lockPersisted
       ? toNumber(
@@ -3045,7 +3045,7 @@ export const OrderDetailsPage: React.FC = () => {
           )
         : 0;
 
-    if (order?.status === 'Pending') {
+    if (isAwaitingFulfillmentStatus(order?.status)) {
       if (!canEditOrders) {
         return (
           <Typography variant={allocation ? 'caption' : 'body2'}>
@@ -3162,9 +3162,9 @@ export const OrderDetailsPage: React.FC = () => {
   const totalDiscount = liveBreakdown.totalDiscount;
   const roundoff = liveBreakdown.roundoff;
 
-  const showPendingActions = order.status === 'Pending' && canEditOrders;
+  const showPendingActions = isAwaitingFulfillmentStatus(order.status) && canEditOrders;
   const showOrderSchemeControls =
-    (order.status === 'Pending' || order.status === 'Order Fulfillment') && canEditOrders;
+    (isAwaitingFulfillmentStatus(order.status) || order.status === 'Order Fulfillment') && canEditOrders;
 
   return (
     <Box>
@@ -3254,7 +3254,7 @@ export const OrderDetailsPage: React.FC = () => {
                 hasBatchAssignment(m)
             );
 
-            if (readyForInvoice.length === 0 && order.status === 'Pending') {
+            if (readyForInvoice.length === 0 && isAwaitingFulfillmentStatus(order.status)) {
               await alert(
                 'Assign a batch to at least one item before generating the invoice PDF.',
                 { severity: 'warning' }
@@ -3492,13 +3492,13 @@ export const OrderDetailsPage: React.FC = () => {
 
         {/* Order Items & Fulfillment */}
         <Grid item xs={12}>
-          {fulfillmentDirty && order.status === 'Pending' && (
+          {fulfillmentDirty && isAwaitingFulfillmentStatus(order.status) && (
             <Alert severity="info" sx={{ mb: 2 }}>
               Fulfillment in progress — batch assignments are saved automatically and will be restored
               when you return. Refreshing the page or navigating away will ask you to confirm first.
             </Alert>
           )}
-          {batchStockConflicts.length > 0 && order.status === 'Pending' && (
+          {batchStockConflicts.length > 0 && isAwaitingFulfillmentStatus(order.status) && (
             <Alert
               severity="warning"
               sx={{ mb: 2 }}
@@ -3761,14 +3761,14 @@ export const OrderDetailsPage: React.FC = () => {
                         medForLine,
                         taxPercentage,
                         purchaseDiscountLookup,
-                        { lockPersistedDiscount: order.status !== 'Pending' }
+                        { lockPersistedDiscount: !isAwaitingFulfillmentStatus(order.status) }
                       );
                       const econLine = orderLineInvoiceEconomics(
                         item,
                         medForLine,
                         taxPercentage,
                         purchaseDiscountLookup,
-                        { lockPersistedDiscount: order.status !== 'Pending' }
+                        { lockPersistedDiscount: !isAwaitingFulfillmentStatus(order.status) }
                       );
                       const sumAllocQtyForLine = item.batchAllocations.reduce(
                         (s: number, a: any) => s + toNumber(a.quantity),
@@ -3835,7 +3835,7 @@ export const OrderDetailsPage: React.FC = () => {
                               )}
                             </TableCell>
                             <TableCell align="right">
-                              {order.status === 'Pending'
+                              {isAwaitingFulfillmentStatus(order.status)
                                 ? renderOrderedQtyControls(item, index)
                                 : (
                               <Typography variant="body2" fontWeight="medium">
@@ -4054,7 +4054,7 @@ export const OrderDetailsPage: React.FC = () => {
                       medSingle,
                       taxPercentage,
                       purchaseDiscountLookup,
-                      { lockPersistedDiscount: order.status !== 'Pending' }
+                      { lockPersistedDiscount: !isAwaitingFulfillmentStatus(order.status) }
                     );
                     const paidForDisplay = lineEcon.paidQty;
                     const physicalForDisplay = singleLineDisplay.totalQty;
@@ -4072,7 +4072,7 @@ export const OrderDetailsPage: React.FC = () => {
                       Boolean(item.batchNumber) ||
                       Boolean(item.batchAllocations && item.batchAllocations.length > 0);
                     const assignedBatches = assignedBatchLabel(item);
-                    const canShowPricingColumns = order.status !== 'Pending' || hasAssignedBatch;
+                    const canShowPricingColumns = !isAwaitingFulfillmentStatus(order.status) || hasAssignedBatch;
                     const displayGstRate =
                       (item.batchAllocations && item.batchAllocations.length === 1
                         ? toNumber(item.batchAllocations[0].gstRate)
@@ -4101,7 +4101,7 @@ export const OrderDetailsPage: React.FC = () => {
                           ),
                           gstRate: displayGstRate,
                           discountManuallySet: item.discountManuallySet === true,
-                          lockPersistedDiscount: order.status !== 'Pending',
+                          lockPersistedDiscount: !isAwaitingFulfillmentStatus(order.status),
                         })
                       : toNumber(item.discountPercentage);
                     return (
@@ -4158,7 +4158,7 @@ export const OrderDetailsPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell align="right">
-                          {order.status === 'Pending' ? (
+                          {isAwaitingFulfillmentStatus(order.status) ? (
                             renderOrderedQtyControls(item, index)
                           ) : item.originalQuantity && item.originalQuantity !== item.quantity ? (
                             <Box>
@@ -4290,7 +4290,7 @@ export const OrderDetailsPage: React.FC = () => {
                         </TableCell>
                         <TableCell align="right">
                           {canShowPricingColumns && (item.batchNumber || (item.batchAllocations && item.batchAllocations.length > 0) || hasLinePricing)
-                            ? `₹${orderLineAmountAfterDiscount(item, medSingle, taxPercentage, purchaseDiscountLookup, { lockPersistedDiscount: order.status !== 'Pending' }).toFixed(2)}`
+                            ? `₹${orderLineAmountAfterDiscount(item, medSingle, taxPercentage, purchaseDiscountLookup, { lockPersistedDiscount: !isAwaitingFulfillmentStatus(order.status) }).toFixed(2)}`
                             : <Typography variant="caption" color="textSecondary">-</Typography>}
                         </TableCell>
                         {showPendingActions && (
@@ -4617,11 +4617,11 @@ export const OrderDetailsPage: React.FC = () => {
         PaperProps={{ sx: { overflow: 'visible' } }}
       >
         <DialogTitle>
-          {order?.status === 'Pending' ? 'Order Information' : 'Order Fulfilled Successfully'}
+          {isAwaitingFulfillmentStatus(order?.status) ? 'Order Information' : 'Order Fulfilled Successfully'}
         </DialogTitle>
         <DialogContent sx={{ overflow: 'visible' }}>
           <Box sx={{ mt: 2, overflow: 'visible' }}>
-            {order?.status === 'Pending' ? (
+            {isAwaitingFulfillmentStatus(order?.status) ? (
               <Alert severity="info" sx={{ mb: 2 }}>
                 Please enter the tray number and processor name for this pending order.
               </Alert>

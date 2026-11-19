@@ -1,5 +1,5 @@
 import { Order } from '../types';
-import { isCancelledOrderStatus } from './orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from './orderStatus';
 import { formatOrderNumberForDisplay } from './orderDisplay';
 import { formatPurchaseSchemeLabel } from './purchaseSchemeLabel';
 
@@ -161,7 +161,7 @@ export function buildLastSchemeByMedicineId(
   for (const order of sorted) {
     if (!order?.id) continue;
     if (excludeOrderId && order.id === excludeOrderId) continue;
-    if (order.status === 'Pending' || isCancelledOrderStatus(order.status)) continue;
+    if (isAwaitingFulfillmentStatus(order.status) || isCancelledOrderStatus(order.status)) continue;
 
     for (const line of order.medicines || []) {
       const medicineId = (line.medicineId || '').trim();

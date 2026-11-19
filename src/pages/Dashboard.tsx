@@ -59,6 +59,7 @@ const formatInr = (amount: number) => `₹${Math.round(amount).toLocaleString('e
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'Pending':
+    case 'Picked up':
       return 'warning';
     case 'Order Fulfillment':
       return 'primary';
