@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Autocomplete,
   Box,
   Button,
-  MenuItem,
   Paper,
   Table,
   TableBody,
@@ -15,7 +15,7 @@ import {
   Chip,
   LinearProgress,
 } from '@mui/material';
-import { UploadFile } from '@mui/icons-material';
+import { Add, UploadFile } from '@mui/icons-material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAllVendors } from '../services/vendors';
 import {
@@ -27,6 +27,7 @@ import {
 } from '../services/liveStock';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { Loading } from '../components/Loading';
+import { VendorFormDialog } from '../components/VendorFormDialog';
 
 function statusColor(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {
   if (status === 'ready') return 'success';
@@ -44,6 +45,7 @@ export const LiveStocksPage: React.FC = () => {
   const [deletingId, setDeletingId] = useState('');
   const [selected, setSelected] = useState<LiveStockUpload | null>(null);
   const [filter, setFilter] = useState('');
+  const [addVendorOpen, setAddVendorOpen] = useState(false);
 
   const vendorsQuery = useQuery({ queryKey: ['vendors'], queryFn: getAllVendors });
   const uploadsQuery = useQuery({ queryKey: ['liveStockUploads'], queryFn: listLiveStockUploads });
@@ -57,6 +59,7 @@ export const LiveStocksPage: React.FC = () => {
     () => (vendorsQuery.data || []).filter((vendor) => vendor.isActive !== false),
     [vendorsQuery.data]
   );
+  const selectedVendor = vendors.find((vendor) => vendor.id === vendorId) || null;
 
   const visibleOffers = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -129,20 +132,21 @@ export const LiveStocksPage: React.FC = () => {
 
       <Paper sx={{ p: 2, mb: 2 }}>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-          <TextField
-            select
-            label="Vendor"
-            value={vendorId}
-            onChange={(event) => setVendorId(event.target.value)}
-            sx={{ minWidth: 280 }}
+          <Autocomplete
+            options={vendors}
             size="small"
-          >
-            {vendors.map((vendor) => (
-              <MenuItem key={vendor.id} value={vendor.id}>
-                {vendor.vendorName}
-              </MenuItem>
-            ))}
-          </TextField>
+            sx={{ minWidth: 280 }}
+            getOptionLabel={(option) => option.vendorName || ''}
+            value={selectedVendor}
+            onChange={(_, value) => setVendorId(value?.id || '')}
+            isOptionEqualToValue={(option, value) => option.id === value.id}
+            renderInput={(params) => (
+              <TextField {...params} label="Vendor" placeholder="Search vendor" />
+            )}
+          />
+          <Button variant="outlined" startIcon={<Add />} onClick={() => setAddVendorOpen(true)}>
+            Add vendor
+          </Button>
           <Button variant="outlined" component="label" startIcon={<UploadFile />}>
             {file ? file.name : 'CSV, Excel, or PDF'}
             <input
@@ -264,6 +268,12 @@ export const LiveStocksPage: React.FC = () => {
           ) : null}
         </Paper>
       ) : null}
+
+      <VendorFormDialog
+        open={addVendorOpen}
+        onClose={() => setAddVendorOpen(false)}
+        onCreated={(vendor) => setVendorId(vendor.id)}
+      />
     </Box>
   );
 };
