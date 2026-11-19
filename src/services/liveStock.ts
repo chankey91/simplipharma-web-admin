@@ -167,7 +167,7 @@ function asNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Latest uploaded file per vendor, skipping rows with no quantity. */
+/** Latest uploaded file per vendor, including rows that list the product with no quantity. */
 export async function listCurrentLiveStockOffers(): Promise<CurrentLiveStockOffer[]> {
   const snap = await getDocs(collection(db, 'liveStockOffers'));
   const rows: Array<CurrentLiveStockOffer & { uploadedAtMs: number }> = [];
@@ -176,7 +176,7 @@ export async function listCurrentLiveStockOffers(): Promise<CurrentLiveStockOffe
     const vendorId = String(data.vendorId || '').trim();
     const productName = String(data.productName || '').trim();
     const stockQty = asNumber(data.stockQty) ?? 0;
-    if (!vendorId || !productName || stockQty <= 0) continue;
+    if (!vendorId || !productName) continue;
     rows.push({
       vendorId,
       vendorName: String(data.vendorName || ''),
