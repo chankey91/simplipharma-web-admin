@@ -104,6 +104,7 @@ export interface StockBatch {
 
 export type OrderStatus =
   | 'Pending'
+  | 'Picked up'
   | 'Order Fulfillment'
   | 'In Transit'
   | 'Delivered'

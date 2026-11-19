@@ -1,5 +1,5 @@
 import { Medicine } from '../types';
-import { isCancelledOrderStatus } from './orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from './orderStatus';
 import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import type { PurchaseBatchDiscountLookup } from './orderFulfillmentDiscount';
 
@@ -147,7 +147,7 @@ export function resolveOrderInvoiceGrandTotal(
 ): number {
   const stored = toNum(order.totalAmount);
   const lines = order.medicines || [];
-  if (!lines.length || order.status === 'Pending' || isCancelledOrderStatus(order.status)) {
+  if (!lines.length || isAwaitingFulfillmentStatus(order.status) || isCancelledOrderStatus(order.status)) {
     return stored;
   }
 

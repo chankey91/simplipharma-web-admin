@@ -21,6 +21,7 @@ export const TYPESENSE_ORDERS_COLLECTION = 'orders';
 
 const ORDER_STATUSES = [
   'Pending',
+  'Picked up',
   'Order Fulfillment',
   'In Transit',
   'Delivered',
@@ -197,7 +198,7 @@ async function firestoreDataToOrderDoc(
     paymentStatus: String(data.paymentStatus || 'Unpaid'),
     orderDate: toMillis(data.orderDate),
     itemCount: medicines.length,
-    amountSortable: status === 'Pending' ? 0 : totalAmount,
+    amountSortable: status === 'Pending' || status === 'Picked up' ? 0 : totalAmount,
     totalAmount,
   };
 }
@@ -402,7 +403,7 @@ export const searchOrdersTypesense = ff
     const filters: string[] = [];
     if (scopeFilter) filters.push(scopeFilter);
     if (status && status !== 'All') filters.push(`status:=\`${status}\``);
-    if (invoicedOnly) filters.push('status:!=[`Pending`, `Cancelled`, `Cancelled-Merged`]');
+    if (invoicedOnly) filters.push('status:!=[`Pending`, `Picked up`, `Cancelled`, `Cancelled-Merged`]');
     if (paymentDueOnly) {
       filters.push('paymentStatus:=[`Unpaid`, `Partial`]');
     } else if (paymentStatus && paymentStatus !== 'All') {
