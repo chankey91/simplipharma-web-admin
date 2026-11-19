@@ -6,11 +6,10 @@ import { istDateStampCompact } from './dateTime';
 import { appAlert } from './appDialog';
 import {
   buildBestDiscountVendorByMedicineId,
+  buildRankedPurchaseVendorsByMedicineId,
   formatBestDiscountVendorLabel,
   type BestDiscountVendorPurchase,
 } from './vendorLastPurchase';
-
-type Deal = NonNullable<PurchaseListItem['deals']>[number];
 
 function packagingOf(med?: { unit?: string; description?: string } | null): string {
   let packaging = med?.unit?.trim();
@@ -21,22 +20,26 @@ function packagingOf(med?: { unit?: string; description?: string } | null): stri
   return packaging || '—';
 }
 
-function dealCells(deal?: Deal): (string | number)[] {
-  if (!deal) return ['', '', '', '', ''];
-  const stock =
-    deal.coversNeed === false ? `${deal.stockQty} (short)` : deal.stockQty;
-  return [
-    deal.vendorName || '',
-    deal.effectiveRate ?? deal.rate ?? '',
-    deal.scheme || '',
-    stock,
-    deal.pack || '',
-  ];
+/** Live-stock vendors first. Past purchase vendors fill any empty P1–P3 slot. */
+function vendorSuggestions(item: PurchaseListItem, history: string[]): [string, string, string] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  const add = (name: string) => {
+    const trimmed = name.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key) || names.length >= 3) return;
+    seen.add(key);
+    names.push(trimmed);
+  };
+  const live = [...(item.deals || [])].sort((a, b) => a.priority.localeCompare(b.priority));
+  for (const deal of live) add(deal.vendorName);
+  for (const name of history) add(name);
+  return [names[0] || '', names[1] || '', names[2] || ''];
 }
 
 /**
- * Same columns as Orders → Summary, plus P1 / P2 / P3 from the live-stock
- * deals saved on the purchase list.
+ * Same columns as Orders → Summary, plus P1 / P2 / P3 vendor names.
+ * Live stock fills the slots it can. Older purchase bills fill the rest.
  */
 export async function exportPurchaseListSummary(
   list: PurchaseList,
@@ -62,11 +65,13 @@ export async function exportPurchaseListSummary(
   }
 
   let bestDiscount = new Map<string, BestDiscountVendorPurchase>();
+  let pastVendors = new Map<string, string[]>();
   try {
     const invoices = await getAllPurchaseInvoices();
     bestDiscount = buildBestDiscountVendorByMedicineId(invoices);
+    pastVendors = buildRankedPurchaseVendorsByMedicineId(invoices);
   } catch (error) {
-    console.warn('purchase list summary: best-discount lookup failed', error);
+    console.warn('purchase list summary: purchase history lookup failed', error);
   }
 
   const rows = [...items].sort((a, b) => {
@@ -75,7 +80,6 @@ export async function exportPurchaseListSummary(
     return (a.medicineName || '').localeCompare(b.medicineName || '');
   });
 
-  const priorities = ['P1', 'P2', 'P3'] as const;
   const headers = [
     'S.No',
     'Product ID',
@@ -84,22 +88,17 @@ export async function exportPurchaseListSummary(
     'Total Quantity',
     'Best Discount Vendor',
     'Manufacturer',
+    'P1 Vendor',
+    'P2 Vendor',
+    'P3 Vendor',
   ];
-  for (const priority of priorities) {
-    headers.push(
-      `${priority} Vendor`,
-      `${priority} Rate`,
-      `${priority} Scheme`,
-      `${priority} Stock`,
-      `${priority} Pack`
-    );
-  }
 
   const excelData: (string | number)[][] = [headers];
   rows.forEach((item, index) => {
     const med = item.medicineId ? medicineById.get(item.medicineId) : undefined;
-    const deals = item.deals || [];
-    const cells: (string | number)[] = [
+    const history = item.medicineId ? pastVendors.get(item.medicineId) || [] : [];
+    const [p1, p2, p3] = vendorSuggestions(item, history);
+    excelData.push([
       index + 1,
       med?.productId || '',
       item.medicineName,
@@ -107,11 +106,10 @@ export async function exportPurchaseListSummary(
       item.totalQty,
       formatBestDiscountVendorLabel(item.medicineId ? bestDiscount.get(item.medicineId) : undefined),
       item.manufacturer || 'N/A',
-    ];
-    for (const priority of priorities) {
-      cells.push(...dealCells(deals.find((deal) => deal.priority === priority)));
-    }
-    excelData.push(cells);
+      p1,
+      p2,
+      p3,
+    ]);
   });
 
   const wb = XLSX.utils.book_new();
@@ -124,13 +122,9 @@ export async function exportPurchaseListSummary(
     { wch: 16 },
     { wch: 36 },
     { wch: 28 },
-    ...priorities.flatMap(() => [
-      { wch: 28 },
-      { wch: 12 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-    ]),
+    { wch: 28 },
+    { wch: 28 },
+    { wch: 28 },
   ];
   XLSX.utils.book_append_sheet(wb, ws, 'Purchase list');
 
