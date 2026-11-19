@@ -5,8 +5,12 @@ import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
 import { istDateStampCompact } from './dateTime';
 import { appAlert } from './appDialog';
 import type { SoReceivableSummary } from './soReceivables';
+import { listCurrentLiveStockOffers } from '../services/liveStock';
+import { rankLiveStockVendors } from './liveStockDeals';
 import {
   buildBestDiscountVendorByMedicineId,
+  buildRankedPurchaseVendorsByMedicineId,
+  fillVendorSlots,
   formatBestDiscountVendorLabel,
   type BestDiscountVendorPurchase,
 } from './vendorLastPurchase';
@@ -179,11 +183,20 @@ export const exportPendingOrdersProductSummary = async (
   }
 
   let bestDiscountByMedicineId = new Map<string, BestDiscountVendorPurchase>();
+  let pastVendorsByMedicineId = new Map<string, string[]>();
   try {
     const purchaseInvoices = await getAllPurchaseInvoices();
     bestDiscountByMedicineId = buildBestDiscountVendorByMedicineId(purchaseInvoices);
+    pastVendorsByMedicineId = buildRankedPurchaseVendorsByMedicineId(purchaseInvoices);
   } catch (error) {
     console.warn('Failed to load purchase invoices for best-discount vendor column:', error);
+  }
+
+  let liveOffers: Awaited<ReturnType<typeof listCurrentLiveStockOffers>> = [];
+  try {
+    liveOffers = await listCurrentLiveStockOffers();
+  } catch (error) {
+    console.warn('Failed to load live stock for P1–P3 vendor columns:', error);
   }
 
   const productAggregate = new Map<
@@ -235,6 +248,9 @@ export const exportPendingOrdersProductSummary = async (
       'Total Quantity',
       'Best Discount Vendor',
       'Manufacturer',
+      'P1 Vendor',
+      'P2 Vendor',
+      'P3 Vendor',
     ],
   ];
 
@@ -242,6 +258,9 @@ export const exportPendingOrdersProductSummary = async (
     const best = row.medicineId
       ? bestDiscountByMedicineId.get(row.medicineId)
       : undefined;
+    const history = row.medicineId ? pastVendorsByMedicineId.get(row.medicineId) || [] : [];
+    const live = rankLiveStockVendors(row.medicineName, row.totalQty, liveOffers);
+    const [p1, p2, p3] = fillVendorSlots(live, history);
     excelData.push([
       index + 1,
       row.productId,
@@ -250,6 +269,9 @@ export const exportPendingOrdersProductSummary = async (
       row.totalQty,
       formatBestDiscountVendorLabel(best),
       row.manufacturer,
+      p1,
+      p2,
+      p3,
     ]);
   });
 
@@ -264,6 +286,9 @@ export const exportPendingOrdersProductSummary = async (
     { wch: 14 },
     { wch: 36 },
     { wch: 30 },
+    { wch: 28 },
+    { wch: 28 },
+    { wch: 28 },
   ];
 
   XLSX.utils.book_append_sheet(wb, ws, 'Product Summary');
