@@ -50,12 +50,13 @@ async function extractPdf(buffer) {
     const spaced = parseSpacedStockLines(text);
     if (spaced.length >= 5) {
         const hasRate = spaced.some((row) => row.rate != null);
+        const base = hasRate
+            ? `Loaded ${spaced.length} rows from the stock list.`
+            : `Loaded ${spaced.length} rows. This list has quantity but no rate, so deals show who has stock, not a price.`;
         return {
             rows: spaced,
             engine: 'columns',
-            message: hasRate
-                ? `Loaded ${spaced.length} rows from the stock list.`
-                : `Loaded ${spaced.length} rows. This list has quantity but no rate, so deals show who has stock, not a price.`,
+            message: sectionMessage(spaced, base),
         };
     }
     if (text.trim().length >= 40)
@@ -107,6 +108,15 @@ async function extractTable(table) {
                     : `Loaded ${rows.length} rows from the column headers.`,
             };
         }
+    }
+    // Company name on its own row (often bold), then the products under it.
+    const sectioned = parseSpacedStockLines(lines.join('\n'));
+    if (sectioned.length >= 5) {
+        return {
+            rows: sectioned,
+            engine: 'columns',
+            message: sectionMessage(sectioned, `Loaded ${sectioned.length} rows from the stock list.`),
+        };
     }
     const chunks = [];
     for (let i = 0; i < body.length && chunks.length < MAX_CHUNKS; i += CHUNK_ROWS) {
@@ -338,13 +348,19 @@ function dedupeRows(rows) {
     const seen = new Set();
     const out = [];
     for (const row of rows) {
-        const key = `${row.productName.toLowerCase()}|${row.pack || ''}|${(_a = row.rate) !== null && _a !== void 0 ? _a : ''}`;
+        const key = `${(row.manufacturer || '').toLowerCase()}|${row.productName.toLowerCase()}|${row.pack || ''}|${(_a = row.rate) !== null && _a !== void 0 ? _a : ''}`;
         if (seen.has(key))
             continue;
         seen.add(key);
         out.push(row);
     }
     return out;
+}
+function sectionMessage(rows, base) {
+    const companies = new Set(rows.map((row) => row.manufacturer).filter(Boolean));
+    if (!companies.size)
+        return base;
+    return `${base} Manufacturer names were taken from the section headings.`;
 }
 function parseScheme(raw) {
     if (!raw)
@@ -358,14 +374,54 @@ function parseScheme(raw) {
     return {};
 }
 const SPACED_STOCK_LINE = /^(\d+)\s+(.*)\s+(-?\d+)\s+([A-Za-z][A-Za-z0-9]{1,10})$/;
-/** Marg closing-stock PDFs: "1 AZTOR 10 TAB 1X10 28 STRP". Company headings do not match. */
+const HEADING_NOISE = /\b(stock|total|page|date|report|statement|particular|product|item|description|quantity|qty|rate|mrp|scheme|grand|continued|invoice|gst|opening|closing|balance|company|manufacturer|packing|pack|unit|s\.?\s*no|sr)\b/i;
+/**
+ * A company printed on its own row, usually in bold, covering the products until the next company.
+ * "ALLERGAN" / "ABBOTT HEALTHCARE". Product rows and report titles do not match.
+ */
+function manufacturerHeading(line) {
+    const cells = line
+        .split('\t')
+        .map((cell) => cell.trim())
+        .filter(Boolean);
+    if (cells.length !== 1)
+        return null;
+    const name = cells[0].replace(/\s+/g, ' ').trim();
+    if (name.length < 2 || name.length > 40)
+        return null;
+    if (/\d/.test(name))
+        return null;
+    if (!/^[A-Za-z][A-Za-z .&/'()-]*$/.test(name))
+        return null;
+    if (HEADING_NOISE.test(name))
+        return null;
+    if (name.split(' ').length > 6)
+        return null;
+    return name;
+}
+/**
+ * Marg-style stock lines: "2 COMBIGAIN DROP 5ML 25 DRP".
+ * A company heading above those lines is the manufacturer for each product until the next heading.
+ */
 function parseSpacedStockLines(text) {
     const rows = [];
+    let manufacturer = '';
     for (const line of text.split(/\r?\n/)) {
-        const match = line.trim().match(SPACED_STOCK_LINE);
+        const trimmed = line.trim();
+        if (!trimmed)
+            continue;
+        const heading = manufacturerHeading(trimmed);
+        if (heading) {
+            manufacturer = heading;
+            continue;
+        }
+        const match = trimmed.match(SPACED_STOCK_LINE);
         if (!match)
             continue;
-        rows.push(...normalizeRows([{ productName: match[2], stockQty: Number(match[3]) }]));
+        const raw = { productName: match[2], stockQty: match[3] };
+        if (manufacturer)
+            raw.manufacturer = manufacturer;
+        rows.push(...normalizeRows([raw]));
     }
     return dedupeRows(rows);
 }
@@ -376,11 +432,11 @@ function splitEmbeddedPack(name) {
         .map((part) => part.trim())
         .filter(Boolean);
     const last = (parts[parts.length - 1] || '').replace(/\s+/g, '');
-    if (parts.length >= 2 && /^(\d+x\d+|\d+(gm|g|ml|mg|s))$/i.test(last)) {
+    if (parts.length >= 2 && /^(\d+x\d+|\d+(gm|g|ml|mg|s)|\d+')$/i.test(last)) {
         return { productName: parts.slice(0, -1).join(' ').replace(/\s+/g, ' '), pack: last.toUpperCase() };
     }
     const collapsed = name.replace(/\s+/g, ' ').trim();
-    const peeled = collapsed.match(/^(.*\S)\s+(\d+\s*[*x]\s*\d+\s*(?:ml|mg)?|\d+\s*(?:gm|g|ml)|\d+'?s)$/i);
+    const peeled = collapsed.match(/^(.*\S)\s+(\d+\s*[*x]\s*\d+\s*(?:ml|mg)?|\d+\s*(?:gm|g|ml)|\d+'?s|\d+')$/i);
     if (peeled && peeled[1].trim().length >= 3) {
         return { productName: peeled[1].trim(), pack: peeled[2].replace(/\s+/g, '').toUpperCase() };
     }

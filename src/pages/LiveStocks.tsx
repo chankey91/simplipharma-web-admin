@@ -19,6 +19,7 @@ import { UploadFile } from '@mui/icons-material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAllVendors } from '../services/vendors';
 import {
+  deleteLiveStockUpload,
   listLiveStockOffers,
   listLiveStockUploads,
   uploadLiveStockFile,
@@ -35,11 +36,12 @@ function statusColor(status: string): 'default' | 'success' | 'warning' | 'error
 }
 
 export const LiveStocksPage: React.FC = () => {
-  const { alert } = useAppDialog();
+  const { alert, confirm } = useAppDialog();
   const queryClient = useQueryClient();
   const [vendorId, setVendorId] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState('');
   const [selected, setSelected] = useState<LiveStockUpload | null>(null);
   const [filter, setFilter] = useState('');
 
@@ -90,6 +92,26 @@ export const LiveStocksPage: React.FC = () => {
       await alert(message, { severity: 'error' });
     } finally {
       setBusy(false);
+    }
+  };
+
+  const removeUpload = async (upload: LiveStockUpload) => {
+    const ok = await confirm(
+      `Delete ${upload.vendorName}'s stock file ${upload.fileName}? Products from this file are removed from live stock. A newer file for the same vendor is kept.`,
+      { title: 'Delete stock list', confirmLabel: 'Delete', destructive: true }
+    );
+    if (!ok) return;
+    setDeletingId(upload.id);
+    try {
+      await deleteLiveStockUpload(upload.id);
+      if (selected?.id === upload.id) setSelected(null);
+      await queryClient.invalidateQueries({ queryKey: ['liveStockUploads'] });
+      await queryClient.invalidateQueries({ queryKey: ['liveStockOffers', upload.id] });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Could not delete this stock list';
+      await alert(message, { severity: 'error' });
+    } finally {
+      setDeletingId('');
     }
   };
 
@@ -170,6 +192,15 @@ export const LiveStocksPage: React.FC = () => {
                   <TableCell align="right">
                     <Button size="small" onClick={() => setSelected(upload)} disabled={upload.status !== 'ready'}>
                       View
+                    </Button>
+                    <Button
+                      size="small"
+                      color="error"
+                      sx={{ ml: 1 }}
+                      disabled={Boolean(deletingId)}
+                      onClick={() => void removeUpload(upload)}
+                    >
+                      {deletingId === upload.id ? 'Deleting…' : 'Delete'}
                     </Button>
                   </TableCell>
                 </TableRow>

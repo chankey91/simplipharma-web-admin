@@ -164,3 +164,67 @@ export const ingestLiveStockUpload = ff
       throw new functions.https.HttpsError('internal', message);
     }
   });
+
+async function deleteOfferDocs(docs: FirebaseFirestore.QueryDocumentSnapshot[]): Promise<number> {
+  const db = admin.firestore();
+  let removed = 0;
+  for (let i = 0; i < docs.length; i += 400) {
+    const batch = db.batch();
+    for (const doc of docs.slice(i, i + 400)) batch.delete(doc.ref);
+    await batch.commit();
+    removed += Math.min(400, docs.length - i);
+  }
+  return removed;
+}
+
+/** Remove one uploaded stock file and the products that came from it. */
+export const deleteLiveStockUpload = ff
+  .runWith({ minInstances: 0, timeoutSeconds: 120, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    if (!context.auth?.uid) {
+      throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+    }
+    const role = await getUserRole(context.auth.uid);
+    if (!isAdminOrOperationsRole(role)) {
+      throw new functions.https.HttpsError('permission-denied', 'Admin or operations required');
+    }
+
+    const uploadId = String(data?.uploadId || '').trim();
+    if (!uploadId) {
+      throw new functions.https.HttpsError('invalid-argument', 'uploadId required');
+    }
+
+    const db = admin.firestore();
+    const ref = db.collection(UPLOADS).doc(uploadId);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Stock list not found');
+    }
+    const upload = snap.data() || {};
+    const vendorId = String(upload.vendorId || '').trim();
+    const uploadedAtMs = Number(upload.uploadedAtMs || 0);
+    const storagePath = String(upload.storagePath || '').trim();
+
+    const offerSnap = vendorId
+      ? await db.collection(OFFERS).where('vendorId', '==', vendorId).get()
+      : await db.collection(OFFERS).where('uploadId', '==', uploadId).get();
+    const doomed = offerSnap.docs.filter((doc) => {
+      const row = doc.data();
+      if (String(row.uploadId || '') === uploadId) return true;
+      // Drop this file and anything older so an earlier list does not become current again.
+      // A newer file for the same vendor stays.
+      return uploadedAtMs > 0 && Number(row.uploadedAtMs || 0) <= uploadedAtMs;
+    });
+    const removedOffers = await deleteOfferDocs(doomed);
+
+    if (storagePath) {
+      try {
+        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+      } catch (error) {
+        console.warn('deleteLiveStockUpload: storage delete failed', storagePath, error);
+      }
+    }
+
+    await ref.delete();
+    return { ok: true, uploadId, removedOffers };
+  });
