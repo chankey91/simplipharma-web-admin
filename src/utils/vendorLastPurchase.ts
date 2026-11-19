@@ -308,6 +308,22 @@ export function buildRankedPurchaseVendorsByMedicineId(
   return out;
 }
 
+/** Live-stock names first. Past purchase vendors fill any empty P1–P3 slot. */
+export function fillVendorSlots(liveNames: string[], history: string[]): [string, string, string] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  const add = (name: string) => {
+    const trimmed = name.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key) || names.length >= 3) return;
+    seen.add(key);
+    names.push(trimmed);
+  };
+  for (const name of liveNames) add(name);
+  for (const name of history) add(name);
+  return [names[0] || '', names[1] || '', names[2] || ''];
+}
+
 /** Excel / UI label: "Vendor — 12%" */
 export function formatBestDiscountVendorLabel(
   row: BestDiscountVendorPurchase | undefined | null

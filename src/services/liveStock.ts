@@ -149,3 +149,47 @@ export async function listLiveStockOffers(uploadId: string): Promise<LiveStockOf
     .map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))
     .sort((a, b) => a.productName.localeCompare(b.productName));
 }
+
+export type CurrentLiveStockOffer = {
+  vendorId: string;
+  vendorName: string;
+  productName: string;
+  stockQty: number;
+  effectiveRate: number | null;
+};
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value == null || value === '') return null;
+  const n = parseFloat(String(value).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Latest uploaded file per vendor, skipping rows with no quantity. */
+export async function listCurrentLiveStockOffers(): Promise<CurrentLiveStockOffer[]> {
+  const snap = await getDocs(collection(db, 'liveStockOffers'));
+  const rows: Array<CurrentLiveStockOffer & { uploadedAtMs: number }> = [];
+  for (const item of snap.docs) {
+    const data = item.data();
+    const vendorId = String(data.vendorId || '').trim();
+    const productName = String(data.productName || '').trim();
+    const stockQty = asNumber(data.stockQty) ?? 0;
+    if (!vendorId || !productName || stockQty <= 0) continue;
+    rows.push({
+      vendorId,
+      vendorName: String(data.vendorName || ''),
+      productName,
+      stockQty,
+      effectiveRate: asNumber(data.effectiveRate),
+      uploadedAtMs: asNumber(data.uploadedAtMs) ?? 0,
+    });
+  }
+  const latest = new Map<string, number>();
+  for (const row of rows) {
+    const prev = latest.get(row.vendorId) ?? 0;
+    if (row.uploadedAtMs >= prev) latest.set(row.vendorId, row.uploadedAtMs);
+  }
+  return rows
+    .filter((row) => row.uploadedAtMs === (latest.get(row.vendorId) ?? 0))
+    .map(({ uploadedAtMs: _uploadedAtMs, ...offer }) => offer);
+}

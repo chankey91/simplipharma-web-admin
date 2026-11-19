@@ -7,6 +7,7 @@ import { appAlert } from './appDialog';
 import {
   buildBestDiscountVendorByMedicineId,
   buildRankedPurchaseVendorsByMedicineId,
+  fillVendorSlots,
   formatBestDiscountVendorLabel,
   type BestDiscountVendorPurchase,
 } from './vendorLastPurchase';
@@ -18,23 +19,6 @@ function packagingOf(med?: { unit?: string; description?: string } | null): stri
     if (match?.[1]) packaging = match[1].trim();
   }
   return packaging || '—';
-}
-
-/** Live-stock vendors first. Past purchase vendors fill any empty P1–P3 slot. */
-function vendorSuggestions(item: PurchaseListItem, history: string[]): [string, string, string] {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  const add = (name: string) => {
-    const trimmed = name.trim();
-    const key = trimmed.toLowerCase();
-    if (!trimmed || seen.has(key) || names.length >= 3) return;
-    seen.add(key);
-    names.push(trimmed);
-  };
-  const live = [...(item.deals || [])].sort((a, b) => a.priority.localeCompare(b.priority));
-  for (const deal of live) add(deal.vendorName);
-  for (const name of history) add(name);
-  return [names[0] || '', names[1] || '', names[2] || ''];
 }
 
 /**
@@ -97,7 +81,10 @@ export async function exportPurchaseListSummary(
   rows.forEach((item, index) => {
     const med = item.medicineId ? medicineById.get(item.medicineId) : undefined;
     const history = item.medicineId ? pastVendors.get(item.medicineId) || [] : [];
-    const [p1, p2, p3] = vendorSuggestions(item, history);
+    const live = [...(item.deals || [])]
+      .sort((a, b) => a.priority.localeCompare(b.priority))
+      .map((deal) => deal.vendorName);
+    const [p1, p2, p3] = fillVendorSlots(live, history);
     excelData.push([
       index + 1,
       med?.productId || '',
