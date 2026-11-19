@@ -45,6 +45,7 @@ export type LiveStockOffer = {
 };
 
 const ingestCallable = httpsCallable(functions, 'ingestLiveStockUpload', { timeout: 300000 });
+const deleteCallable = httpsCallable(functions, 'deleteLiveStockUpload', { timeout: 120000 });
 
 function contentTypeFor(file: File): string {
   if (file.type) return file.type;
@@ -105,6 +106,12 @@ export async function uploadLiveStockFile(args: {
     message: data.message || `Loaded ${data.rowCount} rows`,
     engine: data.engine || '',
   };
+}
+
+export async function deleteLiveStockUpload(uploadId: string): Promise<void> {
+  const result = await deleteCallable({ uploadId });
+  const data = result.data as { ok?: boolean; message?: string };
+  if (!data?.ok) throw new Error(data?.message || 'Could not delete this stock list');
 }
 
 export async function listLiveStockUploads(): Promise<LiveStockUpload[]> {
