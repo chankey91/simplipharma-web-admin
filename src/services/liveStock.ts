@@ -143,7 +143,7 @@ export async function listLiveStockUploads(): Promise<LiveStockUpload[]> {
 
 export async function listLiveStockOffers(uploadId: string): Promise<LiveStockOffer[]> {
   const snap = await getDocs(
-    query(collection(db, 'liveStockOffers'), where('uploadId', '==', uploadId), limit(500))
+    query(collection(db, 'liveStockOffers'), where('uploadId', '==', uploadId), limit(5000))
   );
   return snap.docs
     .map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))

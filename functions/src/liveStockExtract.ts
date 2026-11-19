@@ -77,6 +77,14 @@ export async function extractStockFromFile(
 
 async function extractPdf(buffer: Buffer): Promise<StockExtractResult> {
   const text = await extractTextFromPdf(buffer);
+  const catalog = parseItemCatalog(text);
+  if (catalog.length >= 5) {
+    return {
+      rows: catalog,
+      engine: 'columns',
+      message: `Loaded ${catalog.length} products. This file lists items and packs under each manufacturer, and it has no stock quantity.`,
+    };
+  }
   const spaced = parseSpacedStockLines(text);
   if (spaced.length >= 5) {
     const hasRate = spaced.some((row) => row.rate != null);
@@ -393,6 +401,87 @@ function parseScheme(raw?: string): {
 }
 
 const SPACED_STOCK_LINE = /^(\d+)\s+(.*)\s+(-?\d+)\s+([A-Za-z][A-Za-z0-9]{1,10})$/;
+
+const CATALOG_COMPANY = /^[A-Za-z][A-Za-z0-9 .&/'()-]*$/;
+const CATALOG_PACK =
+  /^(.*\S)\s+(\d+(?:\.\d+)?\s*(?:mml|ml|mg|gm|gms|g|kg)|\d+\s*[*x]\s*\d+|\d+\s*tabs?)$/i;
+
+/** Eyehouse-style item list: "SNo. ITEM CODE ITEM DESCRIPTION", company name, then "1 CUBRIM-T 5ML". */
+function parseItemCatalog(text: string): ExtractedStockRow[] {
+  if (!/item description/i.test(text) || !/s\s*no/i.test(text)) return [];
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const rows: ExtractedStockRow[] = [];
+  let manufacturer = '';
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (isCatalogNoise(line)) continue;
+    const company = catalogCompany(line);
+    if (company) {
+      manufacturer = company;
+      continue;
+    }
+    const numbered = line.match(/^(\d+)\s+(.+)$/);
+    if (!numbered) continue;
+    const body = numbered[2].replace(/\s+/g, ' ').trim();
+    if (isNumberedCompany(body, lines, i)) {
+      manufacturer = body;
+      continue;
+    }
+    const named = splitCatalogPack(body);
+    if (named.productName.length < 2) continue;
+    const raw: Record<string, string> = { productName: named.productName, stockQty: '0' };
+    if (named.pack) raw.pack = named.pack;
+    if (manufacturer) raw.manufacturer = manufacturer;
+    rows.push(...normalizeRows([raw]));
+  }
+  return dedupeRows(rows);
+}
+
+function isCatalogNoise(line: string): boolean {
+  if (/^-{3,}$/.test(line)) return true;
+  if (/^continued\b/i.test(line)) return true;
+  if (/^list of items\b/i.test(line)) return true;
+  if (/^s\s*no\b/i.test(line)) return true;
+  if (/^page\b/i.test(line)) return true;
+  if (/\bphone\b/i.test(line)) return true;
+  if (/\bgstin\b/i.test(line)) return true;
+  if (/e-?mail/i.test(line)) return true;
+  if (/^eye house pharma$/i.test(line)) return true;
+  return /[,\d]/.test(line) && /,/.test(line) && !/^\d+\s+\S/.test(line);
+}
+
+function catalogCompany(line: string): string | null {
+  if (isCatalogNoise(line) || /^\d+\s+/.test(line)) return null;
+  const name = line.replace(/\s+/g, ' ').trim();
+  if (name.length < 2 || name.length > 60) return null;
+  if (!CATALOG_COMPANY.test(name)) return null;
+  if (name.split(' ').length > 8) return null;
+  return name;
+}
+
+function isNumberedCompany(body: string, lines: string[], index: number): boolean {
+  if (/\d/.test(body) || splitCatalogPack(body).pack) return false;
+  for (let j = index + 1; j < lines.length && j < index + 8; j += 1) {
+    if (isCatalogNoise(lines[j])) continue;
+    return /^1\s+\S/.test(lines[j]);
+  }
+  return false;
+}
+
+function splitCatalogPack(description: string): { productName: string; pack: string } {
+  let name = description.replace(/\s+/g, ' ').trim();
+  const packs: string[] = [];
+  for (let n = 0; n < 3; n += 1) {
+    const match = name.match(CATALOG_PACK);
+    if (!match || match[1].trim().length < 2) break;
+    packs.unshift(match[2].replace(/\s+/g, '').toUpperCase());
+    name = match[1].trim();
+  }
+  return { productName: name, pack: packs.join(' ') };
+}
 
 const HEADING_NOISE =
   /\b(stock|total|page|date|report|statement|particular|product|item|description|quantity|qty|rate|mrp|scheme|grand|continued|invoice|gst|opening|closing|balance|company|manufacturer|packing|pack|unit|s\.?\s*no|sr)\b/i;
