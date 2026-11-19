@@ -39,7 +39,7 @@ export interface PurchaseListItem {
   status: PurchaseItemStatus;
   foundQty: number | null;
   deals?: Array<{
-    priority: 'P1' | 'P2' | 'P3';
+    priority: 'P1' | 'P2' | 'P3' | 'P4' | 'P5';
     vendorId: string;
     vendorName: string;
     productName: string;
