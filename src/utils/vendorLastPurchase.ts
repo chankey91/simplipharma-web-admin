@@ -260,6 +260,54 @@ export function buildBestDiscountVendorByMedicineId(
   return map;
 }
 
+/**
+ * Up to three vendors we have actually purchased this medicine from.
+ * Highest discount first, then the more recent bill. Used when live stock
+ * has no current offer.
+ */
+export function buildRankedPurchaseVendorsByMedicineId(
+  invoices: PurchaseInvoice[]
+): Map<string, string[]> {
+  type Row = { vendorName: string; discount: number; invoiceMs: number };
+  const byMedicine = new Map<string, Map<string, Row>>();
+
+  for (const inv of invoices) {
+    if (!inv?.id) continue;
+    const vendorName = (inv.vendorName || '').trim();
+    if (!vendorName) continue;
+    const invoiceMs = toDate(inv.invoiceDate).getTime();
+    for (const item of inv.items || []) {
+      const medicineId = (item.medicineId || '').trim();
+      if (!medicineId) continue;
+      const discount = toNum(item.discountPercentage);
+      const vendors = byMedicine.get(medicineId) || new Map<string, Row>();
+      const key = vendorName.toLowerCase();
+      const existing = vendors.get(key);
+      if (
+        !existing ||
+        discount > existing.discount ||
+        (discount === existing.discount && invoiceMs > existing.invoiceMs)
+      ) {
+        vendors.set(key, { vendorName, discount, invoiceMs });
+      }
+      byMedicine.set(medicineId, vendors);
+    }
+  }
+
+  const out = new Map<string, string[]>();
+  for (const [medicineId, vendors] of byMedicine) {
+    const ranked = [...vendors.values()].sort((a, b) => {
+      if (b.discount !== a.discount) return b.discount - a.discount;
+      return b.invoiceMs - a.invoiceMs;
+    });
+    out.set(
+      medicineId,
+      ranked.slice(0, 3).map((row) => row.vendorName)
+    );
+  }
+  return out;
+}
+
 /** Excel / UI label: "Vendor — 12%" */
 export function formatBestDiscountVendorLabel(
   row: BestDiscountVendorPurchase | undefined | null
