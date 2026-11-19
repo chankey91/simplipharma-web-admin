@@ -108,10 +108,30 @@ export async function uploadLiveStockFile(args: {
   };
 }
 
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { code?: string; message?: string };
+  const code = String(err?.code || '');
+  const message = String(err?.message || '').trim();
+  if (
+    code === 'functions/not-found' ||
+    code === 'functions/unavailable' ||
+    message === 'internal' ||
+    message === 'not-found'
+  ) {
+    return 'Delete is not available on the server yet. Deploy the live-stock function, then try again.';
+  }
+  return message || fallback;
+}
+
 export async function deleteLiveStockUpload(uploadId: string): Promise<void> {
-  const result = await deleteCallable({ uploadId });
-  const data = result.data as { ok?: boolean; message?: string };
-  if (!data?.ok) throw new Error(data?.message || 'Could not delete this stock list');
+  try {
+    const result = await deleteCallable({ uploadId });
+    const data = result.data as { ok?: boolean; message?: string };
+    if (!data?.ok) throw new Error(data?.message || 'Could not delete this stock list');
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message.startsWith('Delete is not available')) throw error;
+    throw new Error(callableErrorMessage(error, 'Could not delete this stock list'));
+  }
 }
 
 export async function listLiveStockUploads(): Promise<LiveStockUpload[]> {

@@ -196,35 +196,42 @@ export const deleteLiveStockUpload = ff
 
     const db = admin.firestore();
     const ref = db.collection(UPLOADS).doc(uploadId);
-    const snap = await ref.get();
-    if (!snap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Stock list not found');
-    }
-    const upload = snap.data() || {};
-    const vendorId = String(upload.vendorId || '').trim();
-    const uploadedAtMs = Number(upload.uploadedAtMs || 0);
-    const storagePath = String(upload.storagePath || '').trim();
-
-    const offerSnap = vendorId
-      ? await db.collection(OFFERS).where('vendorId', '==', vendorId).get()
-      : await db.collection(OFFERS).where('uploadId', '==', uploadId).get();
-    const doomed = offerSnap.docs.filter((doc) => {
-      const row = doc.data();
-      if (String(row.uploadId || '') === uploadId) return true;
-      // Drop this file and anything older so an earlier list does not become current again.
-      // A newer file for the same vendor stays.
-      return uploadedAtMs > 0 && Number(row.uploadedAtMs || 0) <= uploadedAtMs;
-    });
-    const removedOffers = await deleteOfferDocs(doomed);
-
-    if (storagePath) {
-      try {
-        await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
-      } catch (error) {
-        console.warn('deleteLiveStockUpload: storage delete failed', storagePath, error);
+    try {
+      const snap = await ref.get();
+      if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Stock list not found');
       }
-    }
+      const upload = snap.data() || {};
+      const vendorId = String(upload.vendorId || '').trim();
+      const uploadedAtMs = Number(upload.uploadedAtMs || 0);
+      const storagePath = String(upload.storagePath || '').trim();
 
-    await ref.delete();
-    return { ok: true, uploadId, removedOffers };
+      const offerSnap = vendorId
+        ? await db.collection(OFFERS).where('vendorId', '==', vendorId).get()
+        : await db.collection(OFFERS).where('uploadId', '==', uploadId).get();
+      const doomed = offerSnap.docs.filter((doc) => {
+        const row = doc.data();
+        if (String(row.uploadId || '') === uploadId) return true;
+        // Drop this file and anything older so an earlier list does not become current again.
+        // A newer file for the same vendor stays.
+        return uploadedAtMs > 0 && Number(row.uploadedAtMs || 0) <= uploadedAtMs;
+      });
+      const removedOffers = await deleteOfferDocs(doomed);
+
+      if (storagePath) {
+        try {
+          await admin.storage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+        } catch (error) {
+          console.warn('deleteLiveStockUpload: storage delete failed', storagePath, error);
+        }
+      }
+
+      await ref.delete();
+      return { ok: true, uploadId, removedOffers };
+    } catch (error: any) {
+      if (error instanceof functions.https.HttpsError) throw error;
+      const message = String(error?.message || error || 'Could not delete this stock list').slice(0, 300);
+      console.error('deleteLiveStockUpload failed', { uploadId, message });
+      throw new functions.https.HttpsError('internal', message);
+    }
   });
