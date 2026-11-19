@@ -155,7 +155,9 @@ export type CurrentLiveStockOffer = {
   vendorName: string;
   productName: string;
   stockQty: number;
+  rate: number | null;
   effectiveRate: number | null;
+  discountPercentage: number | null;
 };
 
 function asNumber(value: unknown): number | null {
@@ -180,7 +182,9 @@ export async function listCurrentLiveStockOffers(): Promise<CurrentLiveStockOffe
       vendorName: String(data.vendorName || ''),
       productName,
       stockQty,
+      rate: asNumber(data.rate),
       effectiveRate: asNumber(data.effectiveRate),
+      discountPercentage: asNumber(data.discountPercentage),
       uploadedAtMs: asNumber(data.uploadedAtMs) ?? 0,
     });
   }
