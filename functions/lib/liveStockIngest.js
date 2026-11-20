@@ -277,7 +277,24 @@ exports.onLiveStockUploadBatch = functionRegion_1.ff
     .runWith({ minInstances: 0, timeoutSeconds: 540, memory: '1GB' })
     .firestore.document(`${UPLOADS}/{uploadId}`)
     .onUpdate(async (change, context) => {
-    if (!shouldAdvanceLiveStock(change.before.data(), change.after.data()))
+    const before = change.before.data();
+    const after = change.after.data();
+    const storageJustSet = !String((before === null || before === void 0 ? void 0 : before.storagePath) || '').trim() && String((after === null || after === void 0 ? void 0 : after.storagePath) || '').trim();
+    if ((after === null || after === void 0 ? void 0 : after.status) === 'uploaded' && storageJustSet) {
+        await change.after.ref.set({
+            status: 'queued',
+            batchNonce: admin.firestore.FieldValue.increment(1),
+            writeCursor: 0,
+            savedCount: 0,
+            extractComplete: false,
+            leaseUntil: null,
+            error: null,
+            message: 'Queued',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return null;
+    }
+    if (!shouldAdvanceLiveStock(before, after))
         return null;
     const uploadId = String(context.params.uploadId || '');
     if (!uploadId)

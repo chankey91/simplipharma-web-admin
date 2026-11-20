@@ -1,5 +1,6 @@
 /**
  * Rank a medicine against the current live-stock repository.
+ * A file that lists the product is included even when the quantity is 0.
  * P1 is the best discount. Stock quantity breaks a tie.
  */
 import * as admin from 'firebase-admin';

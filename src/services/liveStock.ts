@@ -3,10 +3,13 @@ import {
   collection,
   doc,
   getDoc,
+  documentId,
   getDocs,
   limit,
   orderBy,
   query,
+  startAfter,
+  type QueryDocumentSnapshot,
   serverTimestamp,
   updateDoc,
   where,
@@ -192,12 +195,26 @@ export async function listLiveStockUploads(): Promise<LiveStockUpload[]> {
 }
 
 export async function listLiveStockOffers(uploadId: string): Promise<LiveStockOffer[]> {
-  const snap = await getDocs(
-    query(collection(db, 'liveStockOffers'), where('uploadId', '==', uploadId), limit(5000))
-  );
-  return snap.docs
-    .map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))
-    .sort((a, b) => a.productName.localeCompare(b.productName));
+  const pageSize = 2000;
+  const offers: LiveStockOffer[] = [];
+  let cursor: QueryDocumentSnapshot | null = null;
+  while (offers.length < 50000) {
+    const snap = await getDocs(
+      query(
+        collection(db, 'liveStockOffers'),
+        where('uploadId', '==', uploadId),
+        orderBy(documentId()),
+        ...(cursor ? [startAfter(cursor)] : []),
+        limit(pageSize)
+      )
+    );
+    offers.push(
+      ...snap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))
+    );
+    if (snap.size < pageSize) break;
+    cursor = snap.docs[snap.docs.length - 1] ?? null;
+  }
+  return offers.sort((a, b) => a.productName.localeCompare(b.productName));
 }
 
 export type CurrentLiveStockOffer = {

@@ -277,7 +277,7 @@ export const LiveStocksPage: React.FC = () => {
           </TableContainer>
           {visibleOffers.length > 2000 ? (
             <Typography variant="caption" color="text.secondary">
-              Showing the first 2000 matches. Use Find product to narrow the list.
+              Showing the first 2000 of {visibleOffers.length}. Use Find product to see the rest, including products from the right-hand column of a price list.
             </Typography>
           ) : null}
         </Paper>

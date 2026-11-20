@@ -321,9 +321,9 @@ export function buildRankedPurchaseVendorsByMedicineId(
 }
 
 /**
- * P1–P5. Higher discount first. Stock quantity is the tie-break.
- * Current stock keeps its quantity. Its discount is used when the file states one.
- * A past bill supplies the discount only when the stock file does not.
+ * P1–P5. A vendor whose live-stock file lists the product comes first, even when
+ * the quantity is 0. Discount, then quantity, ranks those vendors. Past bills fill
+ * any slot still open.
  */
 export function suggestVendors(live: VendorSuggestion[], history: VendorSuggestion[]): string[] {
   const byName = new Map<string, VendorSuggestion>();
@@ -336,10 +336,12 @@ export function suggestVendors(live: VendorSuggestion[], history: VendorSuggesti
       byName.set(key, { vendorName, discount: row.discount, stockQty: 0, discountKnown: true });
     }
   }
+  const liveKeys = new Set<string>();
   for (const row of live) {
     const vendorName = row.vendorName.trim();
     const key = vendorName.toLowerCase();
     if (!key) continue;
+    liveKeys.add(key);
     const existing = byName.get(key);
     const useLiveDiscount = row.discountKnown !== false;
     byName.set(key, {
@@ -350,6 +352,9 @@ export function suggestVendors(live: VendorSuggestion[], history: VendorSuggesti
     });
   }
   const ranked = [...byName.values()].sort((a, b) => {
+    const aListed = liveKeys.has(a.vendorName.trim().toLowerCase());
+    const bListed = liveKeys.has(b.vendorName.trim().toLowerCase());
+    if (aListed !== bListed) return aListed ? -1 : 1;
     if (b.discount !== a.discount) return b.discount - a.discount;
     return b.stockQty - a.stockQty;
   });

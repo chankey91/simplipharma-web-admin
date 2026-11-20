@@ -124,13 +124,16 @@ async function extractTable(table, options) {
         const rows = columnRows(header, body);
         if (rows.length > 0) {
             const missing = !mapped.has('stockQty') && !mapped.has('rate');
+            const namedDiscount = rows.some((row) => row.discountPercentage != null);
             return {
                 rows,
                 engine: 'columns',
                 message: missing
-                    ? mapped.has('mrp')
-                        ? `Loaded ${rows.length} products with MRP. This file has no purchase rate or stock quantity.`
-                        : `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
+                    ? namedDiscount
+                        ? `Loaded ${rows.length} products. The discount printed in the name was saved. This file has no purchase rate or stock quantity.`
+                        : mapped.has('mrp')
+                            ? `Loaded ${rows.length} products with MRP. This file has no purchase rate or stock quantity.`
+                            : `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
                     : `Loaded ${rows.length} rows from the column headers.`,
             };
         }
@@ -344,18 +347,19 @@ function parseRowsJson(text) {
     return parsed.rows.filter((row) => row && typeof row === 'object');
 }
 function normalizeRows(rawRows) {
-    var _a, _b;
+    var _a, _b, _c;
     const out = [];
     for (const raw of rawRows) {
         const named = splitEmbeddedPack(textOf(raw.productName));
-        const productName = named.productName;
+        const discounted = peelPrintedDiscount(named.productName);
+        const productName = discounted.productName;
         if (!productName || productName.length < 3)
             continue;
         const schemeText = textOf(raw.scheme);
         const parsedScheme = parseScheme(schemeText);
-        const discount = (_a = numberOf(raw.discountPercentage)) !== null && _a !== void 0 ? _a : parsedScheme.discountPercentage;
+        const discount = (_b = (_a = numberOf(raw.discountPercentage)) !== null && _a !== void 0 ? _a : parsedScheme.discountPercentage) !== null && _b !== void 0 ? _b : discounted.discountPercentage;
         const rate = numberOf(raw.rate);
-        const stockQty = Math.max(0, (_b = numberOf(raw.stockQty)) !== null && _b !== void 0 ? _b : 0);
+        const stockQty = Math.max(0, (_c = numberOf(raw.stockQty)) !== null && _c !== void 0 ? _c : 0);
         const row = { productName, stockQty };
         const pack = textOf(raw.pack) || named.pack;
         const manufacturer = textOf(raw.manufacturer);
@@ -708,11 +712,27 @@ function splitEmbeddedPack(name) {
         return { productName: parts.slice(0, -1).join(' ').replace(/\s+/g, ' '), pack: last.toUpperCase() };
     }
     const collapsed = name.replace(/\s+/g, ' ').trim();
-    const peeled = collapsed.match(/^(.*\S)\s+(\d+\s*[*x]\s*\d+\s*(?:ml|mg)?|\d+\s*(?:gm|g|ml)|\d+'?s|\d+')$/i);
-    if (peeled && peeled[1].trim().length >= 3) {
+    const peeled = collapsed.match(/^(.*\S)\s+(\d+\s*[*x]\s*\d*\.?\d+(?:\s*[*x]\s*\d+)?(?:\s*[A-Za-z]{1,6})?|\d+\s*(?:gm|g|ml)|\d+'?s|\d+')$/i);
+    if (peeled && peeled[1].trim().length >= 3 && /[*x]|gm|ml/i.test(peeled[2])) {
         return { productName: peeled[1].trim(), pack: peeled[2].replace(/\s+/g, '').toUpperCase() };
     }
     return { productName: collapsed, pack: '' };
+}
+/** "AMOX DISC 10% 1*10 TAB" stores 10 as the discount and drops that phrase from the name. */
+function peelPrintedDiscount(name) {
+    const match = name.match(/\b(?:DISC(?:OUNT)?|DISV|DSIC|DIS)\s*\(?\s*(?:NET\s*\)?\s*)?(\d+(?:\.\d+)?)\s*%?|\(\s*DPCO\s*\)\s*(?:DSIC|DISC|DIS|D)?\s*(\d+(?:\.\d+)?)\s*%?/i);
+    if (!match || match.index == null)
+        return { productName: name };
+    const discount = Number(match[1] || match[2]);
+    if (!Number.isFinite(discount) || discount <= 0 || discount >= 100)
+        return { productName: name };
+    const productName = `${name.slice(0, match.index)} ${name.slice(match.index + match[0].length)}`
+        .replace(/\(\s*DPCO\s*\)/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (productName.length < 3)
+        return { productName: name };
+    return { productName, discountPercentage: discount };
 }
 function textOf(value) {
     if (value == null)

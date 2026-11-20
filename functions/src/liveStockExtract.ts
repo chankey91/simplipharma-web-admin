@@ -166,13 +166,16 @@ async function extractTable(table: string, options?: StockExtractOptions): Promi
     const rows = columnRows(header, body);
     if (rows.length > 0) {
       const missing = !mapped.has('stockQty') && !mapped.has('rate');
+      const namedDiscount = rows.some((row) => row.discountPercentage != null);
       return {
         rows,
         engine: 'columns',
         message: missing
-          ? mapped.has('mrp')
-            ? `Loaded ${rows.length} products with MRP. This file has no purchase rate or stock quantity.`
-            : `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
+          ? namedDiscount
+            ? `Loaded ${rows.length} products. The discount printed in the name was saved. This file has no purchase rate or stock quantity.`
+            : mapped.has('mrp')
+              ? `Loaded ${rows.length} products with MRP. This file has no purchase rate or stock quantity.`
+              : `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
           : `Loaded ${rows.length} rows from the column headers.`,
       };
     }
@@ -387,11 +390,12 @@ function normalizeRows(rawRows: Array<Record<string, unknown>>): ExtractedStockR
   const out: ExtractedStockRow[] = [];
   for (const raw of rawRows) {
     const named = splitEmbeddedPack(textOf(raw.productName));
-    const productName = named.productName;
+    const discounted = peelPrintedDiscount(named.productName);
+    const productName = discounted.productName;
     if (!productName || productName.length < 3) continue;
     const schemeText = textOf(raw.scheme);
     const parsedScheme = parseScheme(schemeText);
-    const discount = numberOf(raw.discountPercentage) ?? parsedScheme.discountPercentage;
+    const discount = numberOf(raw.discountPercentage) ?? parsedScheme.discountPercentage ?? discounted.discountPercentage;
     const rate = numberOf(raw.rate);
     const stockQty = Math.max(0, numberOf(raw.stockQty) ?? 0);
     const row: ExtractedStockRow = { productName, stockQty };
@@ -716,11 +720,29 @@ function splitEmbeddedPack(name: string): { productName: string; pack: string } 
     return { productName: parts.slice(0, -1).join(' ').replace(/\s+/g, ' '), pack: last.toUpperCase() };
   }
   const collapsed = name.replace(/\s+/g, ' ').trim();
-  const peeled = collapsed.match(/^(.*\S)\s+(\d+\s*[*x]\s*\d+\s*(?:ml|mg)?|\d+\s*(?:gm|g|ml)|\d+'?s|\d+')$/i);
-  if (peeled && peeled[1].trim().length >= 3) {
+  const peeled = collapsed.match(
+    /^(.*\S)\s+(\d+\s*[*x]\s*\d*\.?\d+(?:\s*[*x]\s*\d+)?(?:\s*[A-Za-z]{1,6})?|\d+\s*(?:gm|g|ml)|\d+'?s|\d+')$/i
+  );
+  if (peeled && peeled[1].trim().length >= 3 && /[*x]|gm|ml/i.test(peeled[2])) {
     return { productName: peeled[1].trim(), pack: peeled[2].replace(/\s+/g, '').toUpperCase() };
   }
   return { productName: collapsed, pack: '' };
+}
+
+/** "AMOX DISC 10% 1*10 TAB" stores 10 as the discount and drops that phrase from the name. */
+function peelPrintedDiscount(name: string): { productName: string; discountPercentage?: number } {
+  const match = name.match(
+    /\b(?:DISC(?:OUNT)?|DISV|DSIC|DIS)\s*\(?\s*(?:NET\s*\)?\s*)?(\d+(?:\.\d+)?)\s*%?|\(\s*DPCO\s*\)\s*(?:DSIC|DISC|DIS|D)?\s*(\d+(?:\.\d+)?)\s*%?/i
+  );
+  if (!match || match.index == null) return { productName: name };
+  const discount = Number(match[1] || match[2]);
+  if (!Number.isFinite(discount) || discount <= 0 || discount >= 100) return { productName: name };
+  const productName = `${name.slice(0, match.index)} ${name.slice(match.index + match[0].length)}`
+    .replace(/\(\s*DPCO\s*\)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (productName.length < 3) return { productName: name };
+  return { productName, discountPercentage: discount };
 }
 
 function textOf(value: unknown): string {
