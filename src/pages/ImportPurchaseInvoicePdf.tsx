@@ -27,6 +27,12 @@ import { auth, isFirestoreInternalAssertion, purchaseInvoiceAssertionMessage } f
 import { useVendors } from '../hooks/useVendors';
 import { useCreatePurchaseInvoice } from '../hooks/usePurchaseInvoices';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
+import { SellingFirmField } from '../components/SellingFirmField';
+import {
+  DEFAULT_SELLING_FIRM_ID,
+  isGeneratedPurchaseNumber,
+  sellingNumberPrefix,
+} from '../constants/sellingFirms';
 import {
   extractTextFromPdfFile,
   findGstinsInText,
@@ -177,6 +183,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   const { pendingOrderMedicineIds } = useMedicineResolutionContext();
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [purchaseFirmId, setPurchaseFirmId] = useState(DEFAULT_SELLING_FIRM_ID);
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
   const [vendorId, setVendorId] = useState('');
   const [additionalDiscount, setAdditionalDiscount] = useState('');
@@ -191,8 +198,13 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const n = await generatePurchaseInvoiceNumber();
-        setInvoiceNumber(n);
+        const generated = await generatePurchaseInvoiceNumber();
+        setInvoiceNumber((current) => {
+          if (!current.trim()) return generated;
+          if (!isGeneratedPurchaseNumber(current)) return current;
+          if (current.slice(0, 3) !== generated.slice(0, 3)) return current;
+          return generated;
+        });
       } catch (e) {
         console.error(e);
       }
@@ -384,6 +396,7 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
           createdBy: user.uid,
           createdAt: new Date(),
           notes: `Imported from PDF (${format(new Date(), 'yyyy-MM-dd')})`,
+          sellingFirmId: purchaseFirmId,
         } as any,
         updateStock: true,
       });
@@ -437,6 +450,19 @@ export const ImportPurchaseInvoicePdfPage: React.FC = () => {
                 }}
               />
             </Button>
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <SellingFirmField
+              label="Buying firm"
+              value={purchaseFirmId}
+              onChange={(nextId) => {
+                setPurchaseFirmId(nextId);
+                if (invoiceNumber.trim() && !isGeneratedPurchaseNumber(invoiceNumber)) return;
+                void generatePurchaseInvoiceNumber(sellingNumberPrefix(nextId, 'purchase'))
+                  .then(setInvoiceNumber)
+                  .catch(() => undefined);
+              }}
+            />
           </Grid>
           <Grid item xs={12} md={4}>
             <TextField

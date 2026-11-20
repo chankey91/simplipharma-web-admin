@@ -16,6 +16,7 @@ import {
 import { PurchaseReturn, PurchaseReturnItem } from '../types';
 import { reduceStockBatchesFromMedicine } from './inventory';
 import { generatePurchaseReturnNumber } from '../utils/invoiceNumber';
+import { isAlternateSellingFirm, sellingNumberPrefix } from '../constants/sellingFirms';
 import { createInwardGstSnapshot } from './gstDocuments';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromPurchaseItems } from '../utils/gstLineSnapshot';
@@ -223,7 +224,9 @@ export const createPurchaseReturn = async (
     }
   }
 
-  const returnNumber = input.returnNumber?.trim() || (await generatePurchaseReturnNumber());
+  const returnNumber =
+    input.returnNumber?.trim() ||
+    (await generatePurchaseReturnNumber(sellingNumberPrefix(input.sellingFirmId, 'purchaseReturn')));
   const returnRef = doc(collection(db, 'purchaseReturns'));
   const items = input.items.map((item) =>
     serializeItem({
@@ -252,6 +255,7 @@ export const createPurchaseReturn = async (
   if (input.notes?.trim()) payload.notes = input.notes.trim();
   if (input.reason?.trim()) payload.reason = input.reason.trim();
   if (input.vendorGstin?.trim()) payload.vendorGstin = input.vendorGstin.trim();
+  if (isAlternateSellingFirm(input.sellingFirmId)) payload.sellingFirmId = input.sellingFirmId;
 
   try {
     payload.gst = await createInwardGstSnapshot({
@@ -259,6 +263,7 @@ export const createPurchaseReturn = async (
       taxableValue: Number(payload.subTotal) || 0,
       vendorGstin: input.vendorGstin,
       vendorName: input.vendorName,
+      firmId: input.sellingFirmId,
       lines: gstLinesFromPurchaseItems(
         input.items,
         Number(payload.subTotal) || 0,

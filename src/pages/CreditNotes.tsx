@@ -40,6 +40,8 @@ import {
 } from '../services/creditNoteSearch';
 import { Loading } from '../components/Loading';
 import { IstDateField } from '../components/IstDateField';
+import { SellingFirmFilterField } from '../components/SellingFirmField';
+import { matchesSellingFirmFilter } from '../constants/sellingFirms';
 import { generateCreditNotePdf, generateCreditNotePdfBlob } from '../utils/creditNote';
 import { generateDebitNotePdf, generateDebitNotePdfBlob } from '../utils/debitNote';
 import { shareCreditNoteOnWhatsApp, shareDebitNoteOnWhatsApp } from '../utils/noteWhatsApp';
@@ -112,6 +114,7 @@ const mapSortField = (key: string, isCredit: boolean): string => {
 export const CreditNotesPage: React.FC = () => {
   const [tab, setTab] = useState<NoteTab>('credit');
   const [searchTerm, setSearchTerm] = useState('');
+  const [firmFilter, setFirmFilter] = useState('All');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [fromDateFilter, setFromDateFilter] = useState('');
   const [toDateFilter, setToDateFilter] = useState('');
@@ -152,7 +155,8 @@ export const CreditNotesPage: React.FC = () => {
   const dateDraftDirty =
     draftFromDateFilter !== fromDateFilter || draftToDateFilter !== toDateFilter;
   const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
-  const useLocalList = typesenseDisabled || hasDateFilter;
+  const hasFirmFilter = firmFilter !== 'All';
+  const useLocalList = typesenseDisabled || hasDateFilter || hasFirmFilter;
 
   const applyDateRange = useCallback((from: string, to: string) => {
     setDraftFromDateFilter(from);
@@ -183,7 +187,7 @@ export const CreditNotesPage: React.FC = () => {
       page,
       perPage: ROWS_PER_PAGE,
     },
-    { enabled: !typesenseDisabled && !hasDateFilter }
+    { enabled: !typesenseDisabled && !hasDateFilter && !hasFirmFilter }
   );
   const debitSearch = useDebitNotesSearch(
     {
@@ -193,7 +197,7 @@ export const CreditNotesPage: React.FC = () => {
       page,
       perPage: ROWS_PER_PAGE,
     },
-    { enabled: !typesenseDisabled && !hasDateFilter }
+    { enabled: !typesenseDisabled && !hasDateFilter && !hasFirmFilter }
   );
 
   useEffect(() => {
@@ -206,13 +210,13 @@ export const CreditNotesPage: React.FC = () => {
     isLoading: creditLoading,
     error: creditError,
     refetch: refetchCreditAll,
-  } = useCreditNotes({ enabled: typesenseDisabled && !hasDateFilter });
+  } = useCreditNotes({ enabled: (typesenseDisabled || hasFirmFilter) && !hasDateFilter });
   const {
     data: debitNotes,
     isLoading: debitLoading,
     error: debitError,
     refetch: refetchDebitAll,
-  } = useDebitNotes({ enabled: typesenseDisabled && !hasDateFilter });
+  } = useDebitNotes({ enabled: (typesenseDisabled || hasFirmFilter) && !hasDateFilter });
 
   const creditRange = useCreditNotesInDateRange(fromFilterMs, toFilterMs, {
     enabled: hasDateFilter,
@@ -235,6 +239,7 @@ export const CreditNotesPage: React.FC = () => {
       ) {
         return false;
       }
+      if (!matchesSellingFirmFilter(n.sellingFirmId, firmFilter)) return false;
       return (
         !term ||
         n.creditNoteNumber.toLowerCase().includes(term) ||
@@ -280,6 +285,7 @@ export const CreditNotesPage: React.FC = () => {
     creditRange.data,
     creditNotes,
     debouncedTerm,
+    firmFilter,
     fromDateFilter,
     toDateFilter,
     sortKey,
@@ -300,6 +306,7 @@ export const CreditNotesPage: React.FC = () => {
       ) {
         return false;
       }
+      if (!matchesSellingFirmFilter(n.sellingFirmId, firmFilter)) return false;
       return (
         !term ||
         n.debitNoteNumber.toLowerCase().includes(term) ||
@@ -345,6 +352,7 @@ export const CreditNotesPage: React.FC = () => {
     debitRange.data,
     debitNotes,
     debouncedTerm,
+    firmFilter,
     fromDateFilter,
     toDateFilter,
     sortKey,
@@ -595,7 +603,7 @@ export const CreditNotesPage: React.FC = () => {
     if (hasDateFilter) {
       if (isCredit) void creditRange.refetch();
       else void debitRange.refetch();
-    } else if (typesenseDisabled) {
+    } else if (typesenseDisabled || hasFirmFilter) {
       if (isCredit) void refetchCreditAll();
       else void refetchDebitAll();
     } else if (isCredit) {
@@ -752,6 +760,13 @@ export const CreditNotesPage: React.FC = () => {
                   <Search fontSize="small" />
                 </InputAdornment>
               ),
+            }}
+          />
+          <SellingFirmFilterField
+            value={firmFilter}
+            onChange={(next) => {
+              setFirmFilter(next);
+              setPage(1);
             }}
           />
           <IstDateField

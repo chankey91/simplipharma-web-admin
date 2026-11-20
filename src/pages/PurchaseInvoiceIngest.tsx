@@ -51,6 +51,12 @@ import { useCreatePurchaseInvoice, useVendorLastPurchases } from '../hooks/usePu
 import { useCreateMedicine } from '../hooks/useInventory';
 import { createMedicine, ensureMedicineNonReturnable, getMedicineById, setMedicineNonReturnable } from '../services/inventory';
 import { generatePurchaseInvoiceNumber } from '../utils/invoiceNumber';
+import { SellingFirmField } from '../components/SellingFirmField';
+import {
+  DEFAULT_SELLING_FIRM_ID,
+  isGeneratedPurchaseNumber,
+  sellingNumberPrefix,
+} from '../constants/sellingFirms';
 import { getTodayDateStringIST } from '../utils/dateTime';
 import { normalizeAdditionalDiscount, roundPurchaseInvoicePayable } from '../utils/purchaseInvoiceTotals';
 import { auth } from '../services/firebase';
@@ -1075,6 +1081,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [purchaseFirmId, setPurchaseFirmId] = useState(DEFAULT_SELLING_FIRM_ID);
   const [invoiceDate, setInvoiceDate] = useState(getTodayDateStringIST());
   const [notes, setNotes] = useState('');
   const [additionalDiscount, setAdditionalDiscount] = useState('');
@@ -1135,7 +1142,14 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
 
   useEffect(() => {
     void generatePurchaseInvoiceNumber()
-      .then(setInvoiceNumber)
+      .then((generated) => {
+        setInvoiceNumber((current) => {
+          if (!current.trim()) return generated;
+          if (!isGeneratedPurchaseNumber(current)) return current;
+          if (current.slice(0, 3) !== generated.slice(0, 3)) return current;
+          return generated;
+        });
+      })
       .catch(() => undefined);
   }, []);
 
@@ -1787,6 +1801,7 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
           createdBy: auth.currentUser?.uid || '',
           createdAt: new Date(),
           notes: mergedNotes || undefined,
+          sellingFirmId: purchaseFirmId,
         },
         updateStock: true,
         onProgress: (p) => {
@@ -2125,6 +2140,19 @@ export const PurchaseInvoiceIngestPage: React.FC = () => {
                           : ''}
                     </Typography>
                   )}
+                </Grid>
+                <Grid item xs={12} sm={3}>
+                  <SellingFirmField
+                    label="Buying firm"
+                    value={purchaseFirmId}
+                    onChange={(nextId) => {
+                      setPurchaseFirmId(nextId);
+                      if (invoiceNumber.trim() && !isGeneratedPurchaseNumber(invoiceNumber)) return;
+                      void generatePurchaseInvoiceNumber(sellingNumberPrefix(nextId, 'purchase'))
+                        .then(setInvoiceNumber)
+                        .catch(() => undefined);
+                    }}
+                  />
                 </Grid>
                 <Grid item xs={12} sm={3}>
                   <TextField

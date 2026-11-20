@@ -1,6 +1,11 @@
 import { loadGstPeriodBooks, gstDocDate, taxableFrom } from './gstPeriodBooks';
 import { getGstPeriod } from './gstPeriods';
 import { hasGstSnapshot } from '../utils/gstSnapshot';
+import {
+  isAlternateSellingFirm,
+  outwardBelongsToFirm,
+  resolveSellingFirm,
+} from '../constants/sellingFirms';
 import { isCancelledOrderStatus } from '../utils/orderStatus';
 import {
   attachGstr1Integrity,
@@ -106,13 +111,14 @@ function noteProductLines(
   }));
 }
 
-export async function loadGstOutwardDocuments(date = new Date()) {
+export async function loadGstOutwardDocuments(date = new Date(), firmId?: string | null) {
   const books = await loadGstPeriodBooks(date);
   const documents: Gstr1SourceDocument[] = [];
   let skippedNoSnapshot = 0;
 
   for (const order of books.orders) {
     if (!order.invoiceNumber || order.status === 'Pending' || isCancelledOrderStatus(order.status)) continue;
+    if (!outwardBelongsToFirm(order, firmId)) continue;
     if (!hasGstSnapshot(order) || !order.gst) {
       skippedNoSnapshot += 1;
       continue;
@@ -132,6 +138,7 @@ export async function loadGstOutwardDocuments(date = new Date()) {
 
   for (const note of books.creditNotes) {
     if (String(note.status || '').toLowerCase() === 'cancelled') continue;
+    if (!outwardBelongsToFirm(note, firmId)) continue;
     if (!hasGstSnapshot(note) || !note.gst) {
       skippedNoSnapshot += 1;
       continue;
@@ -152,6 +159,7 @@ export async function loadGstOutwardDocuments(date = new Date()) {
 
   for (const note of books.debitNotes) {
     if (String(note.status || '').toLowerCase() === 'cancelled') continue;
+    if (!outwardBelongsToFirm(note, firmId)) continue;
     if (!hasGstSnapshot(note) || !note.gst) {
       skippedNoSnapshot += 1;
       continue;
@@ -175,16 +183,20 @@ export async function loadGstOutwardDocuments(date = new Date()) {
 
 export async function buildGstr1Export(
   date = new Date(),
-  mode: 'original' | 'amendment' = 'original'
+  mode: 'original' | 'amendment' = 'original',
+  firmId?: string | null
 ): Promise<Gstr1ExportResult> {
   const [{ books, documents, skippedNoSnapshot }, period] = await Promise.all([
-    loadGstOutwardDocuments(date),
+    loadGstOutwardDocuments(date, firmId),
     getGstPeriod(date),
   ]);
+  const gstin = isAlternateSellingFirm(firmId)
+    ? resolveSellingFirm(firmId).gstin
+    : books.settings.gstin;
 
   return attachGstr1Integrity(
     buildGstr1Payload({
-      gstin: books.settings.gstin,
+      gstin,
       filingFrequency: books.settings.filingFrequency,
       documents,
       skippedNoSnapshot,
@@ -192,13 +204,13 @@ export async function buildGstr1Export(
       mode,
       previousFingerprints: mode === 'amendment' ? period.outwardFingerprints : undefined,
       issuedInvoices: books.orders
-        .filter((o) => o.invoiceNumber && o.status !== 'Pending')
+        .filter((o) => o.invoiceNumber && o.status !== 'Pending' && outwardBelongsToFirm(o, firmId))
         .map((o) => ({ number: o.invoiceNumber as string, cancelled: isCancelledOrderStatus(o.status) })),
       issuedCreditNotes: books.creditNotes
-        .filter((n) => String(n.status || '').toLowerCase() !== 'cancelled')
+        .filter((n) => String(n.status || '').toLowerCase() !== 'cancelled' && outwardBelongsToFirm(n, firmId))
         .map((n) => ({ number: n.creditNoteNumber })),
       issuedDebitNotes: books.debitNotes
-        .filter((n) => String(n.status || '').toLowerCase() !== 'cancelled')
+        .filter((n) => String(n.status || '').toLowerCase() !== 'cancelled' && outwardBelongsToFirm(n, firmId))
         .map((n) => ({ number: n.debitNoteNumber })),
     })
   );

@@ -61,6 +61,8 @@ import {
   permissionDeniedUserMessage,
 } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
+import { SellingFirmField } from '../components/SellingFirmField';
+import { DEFAULT_SELLING_FIRM_ID } from '../constants/sellingFirms';
 import { Loading } from '../components/Loading';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import QRCode from 'qrcode';
@@ -223,6 +225,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     [rememberMedicines]
   );
 
+  const [purchaseFirmId, setPurchaseFirmId] = useState(DEFAULT_SELLING_FIRM_ID);
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: '',
     vendorId: '',
@@ -409,6 +412,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       existingInvoice.invoiceDate instanceof Date
         ? existingInvoice.invoiceDate
         : new Date(existingInvoice.invoiceDate);
+    setPurchaseFirmId(existingInvoice.sellingFirmId || DEFAULT_SELLING_FIRM_ID);
     setInvoiceData({
       invoiceNumber: existingInvoice.invoiceNumber || '',
       vendorId: existingInvoice.vendorId || '',
@@ -1307,6 +1311,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
             additionalDiscount: additionalDiscount > 0 ? additionalDiscount : 0,
             totalAmount: grandTotal,
             notes: invoiceData.notes || undefined,
+            sellingFirmId: purchaseFirmId,
           },
         });
         if (result.stockSyncErrors.some((msg) => isFirestoreInternalAssertion(new Error(msg)))) {
@@ -1340,6 +1345,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
           totalAmount: grandTotal,
           paymentStatus: 'Unpaid',
           notes: invoiceData.notes || undefined,
+          sellingFirmId: purchaseFirmId,
           createdBy: user.uid,
           createdAt: new Date(),
         },
@@ -1500,6 +1506,11 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
         <Grid item xs={12} md={4}>
           <Paper sx={{ p: 3, mb: 3 }}>
             <Typography variant="h6" gutterBottom>Invoice Details</Typography>
+            <SellingFirmField
+              label="Buying firm"
+              value={purchaseFirmId}
+              onChange={setPurchaseFirmId}
+            />
             <TextField
               fullWidth
               label="Invoice Number"

@@ -28,6 +28,7 @@ const SORT_KEYS = new Set([
 export type OrdersListViewState = {
   searchTerm: string;
   statusFilter: OrderStatus | 'All';
+  firmFilter: string;
   fromDateFilter: string;
   toDateFilter: string;
   page: number;
@@ -47,6 +48,9 @@ export function loadOrdersListView(): Partial<OrdersListViewState> {
     if (typeof parsed.searchTerm === 'string') out.searchTerm = parsed.searchTerm;
     if (parsed.statusFilter && STATUSES.has(parsed.statusFilter)) {
       out.statusFilter = parsed.statusFilter;
+    }
+    if (parsed.firmFilter === 'All' || parsed.firmFilter === 'sumukh' || parsed.firmFilter === 'sanchet-dawa') {
+      out.firmFilter = parsed.firmFilter;
     }
     if (typeof parsed.fromDateFilter === 'string') out.fromDateFilter = parsed.fromDateFilter;
     if (typeof parsed.toDateFilter === 'string') out.toDateFilter = parsed.toDateFilter;

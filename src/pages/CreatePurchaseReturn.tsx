@@ -53,6 +53,8 @@ import {
 import { exportVendorWiseReturnList } from '../utils/purchaseReturnVendorListExport';
 import { Medicine, PurchaseReturnItem, Vendor } from '../types';
 import type { CreatePurchaseReturnInput } from '../services/purchaseReturns';
+import { SellingFirmField } from '../components/SellingFirmField';
+import { DEFAULT_SELLING_FIRM_ID } from '../constants/sellingFirms';
 
 const UNKNOWN_VENDOR_ID = '';
 
@@ -128,6 +130,7 @@ export const CreatePurchaseReturnPage: React.FC = () => {
   const createMutation = useCreatePurchaseReturnsMultiVendor();
 
   const [returnDate, setReturnDate] = useState(toInputDate(new Date()));
+  const [purchaseFirmId, setPurchaseFirmId] = useState(DEFAULT_SELLING_FIRM_ID);
   const [notes, setNotes] = useState('');
   const [reason, setReason] = useState('');
   const [items, setItems] = useState<DraftLine[]>([]);
@@ -555,6 +558,7 @@ export const CreatePurchaseReturnPage: React.FC = () => {
           taxAmount: Math.round(groupTax * 100) / 100,
           totalAmount: Math.round((groupSub + groupTax) * 100) / 100,
           notes: notes.trim() || undefined,
+          sellingFirmId: purchaseFirmId,
           reason: reason.trim() || undefined,
         };
       });
@@ -632,6 +636,11 @@ export const CreatePurchaseReturnPage: React.FC = () => {
             <Typography variant="h6" gutterBottom>
               Return details
             </Typography>
+            <SellingFirmField
+              label="Firm"
+              value={purchaseFirmId}
+              onChange={setPurchaseFirmId}
+            />
             <TextField
               fullWidth
               label="Return date"

@@ -18,6 +18,7 @@ import { getOrderById } from './orders';
 import { getMedicineById } from './inventory';
 import { addStockBatch, restoreStockToBatch } from './inventory';
 import { generateCreditNoteNumber } from '../utils/invoiceNumber';
+import { isAlternateSellingFirm, sellingNumberPrefix } from '../constants/sellingFirms';
 import { getTodayStartIST } from '../utils/dateTime';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
 import { recalculateOrderReturnItemPricing } from '../utils/orderReturnPricing';
@@ -327,7 +328,9 @@ export async function issueCreditNoteForOrderReturn(
     defaultTaxPercentage
   );
 
-  const creditNoteNumber = await generateCreditNoteNumber();
+  const creditNoteNumber = await generateCreditNoteNumber(
+    sellingNumberPrefix(order?.sellingFirmId, 'credit')
+  );
   const creditNoteRef = doc(collection(db, 'credit_notes'));
   const creditNoteDate = options?.creditNoteDate
     ? Timestamp.fromDate(options.creditNoteDate)
@@ -360,6 +363,9 @@ export async function issueCreditNoteForOrderReturn(
     status: 'issued',
     createdBy: returnRequest.approvedBy || auth.currentUser?.uid,
     createdAt: serverTimestamp(),
+    ...(isAlternateSellingFirm(order?.sellingFirmId)
+      ? { sellingFirmId: order?.sellingFirmId }
+      : {}),
   };
 
   try {
@@ -372,6 +378,7 @@ export async function issueCreditNoteForOrderReturn(
       taxAmount: note.taxAmount,
       taxableValue: note.subTotal,
       totalAmount: note.totalAmount,
+      firmId: order?.sellingFirmId,
       buyerGstin,
       buyerLegalName: retailer?.shopName || note.retailerName,
       documentKind: 'credit_note',
