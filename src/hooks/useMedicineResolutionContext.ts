@@ -11,15 +11,16 @@ import {
 import type { Medicine } from '../types';
 
 /**
- * Prefetch pending-order medicine masters + pending product demands once (cached).
+ * Prefetch medicine masters from Pending and Picked up orders, plus pending product demands (cached).
  * Search keystrokes only filter in memory + existing Typesense medicine search.
  */
 export function useMedicineResolutionContext(options?: { enabled?: boolean }) {
   const enabled = options?.enabled !== false;
 
-  const { data: pendingOrders, isLoading: ordersLoading } = useOrdersByStatuses(['Pending'], {
-    enabled,
-  });
+  const { data: pendingOrders, isLoading: ordersLoading } = useOrdersByStatuses(
+    ['Pending', 'Picked up'],
+    { enabled }
+  );
 
   const pendingIds = useMemo(
     () => collectPendingOrderMedicineIds(pendingOrders),

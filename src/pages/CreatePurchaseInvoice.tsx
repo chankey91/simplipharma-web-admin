@@ -1681,7 +1681,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                       {...params}
                       inputRef={medicineSearchInputElRef}
                       label="Search Medicine"
-                      placeholder="Pending orders · demands · inventory…"
+                      placeholder="Pending & picked up · demands · inventory…"
                       size="small"
                       sx={{ minWidth: 300 }}
                       InputProps={{
