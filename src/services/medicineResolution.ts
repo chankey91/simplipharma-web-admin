@@ -49,7 +49,7 @@ export function collectPendingOrderMedicineIds(orders: Order[] | undefined | nul
 }
 
 function haystackMedicine(m: Medicine): string {
-  return [m.name, m.productId, m.code, m.manufacturer, m.company]
+  return [m.name, m.productId, m.code, m.manufacturer, m.company, getMedicinePickerLabel(m)]
     .map((x) => String(x || '').toLowerCase())
     .join(' ');
 }
