@@ -1,5 +1,6 @@
 /**
  * Rank a medicine against the current live-stock repository.
+ * A file that lists the product is included even when the quantity is 0.
  * P1 is the best discount. Stock quantity breaks a tie.
  */
 import * as admin from 'firebase-admin';
@@ -105,22 +106,29 @@ function asNumber(value: unknown): number | null {
 export async function loadLiveStockOffers(
   db: admin.firestore.Firestore
 ): Promise<LiveStockOffer[]> {
-  const snap = await db.collection('liveStockOffers').select(
-    'vendorId',
-    'vendorName',
-    'productName',
-    'manufacturer',
-    'pack',
-    'stockQty',
-    'rate',
-    'effectiveRate',
-    'discountPercentage',
-    'scheme',
-    'uploadedAtMs'
-  ).get();
+  const [snap, readySnap] = await Promise.all([
+    db.collection('liveStockOffers').select(
+      'uploadId',
+      'vendorId',
+      'vendorName',
+      'productName',
+      'manufacturer',
+      'pack',
+      'stockQty',
+      'rate',
+      'effectiveRate',
+      'discountPercentage',
+      'scheme',
+      'uploadedAtMs'
+    ).get(),
+    db.collection('liveStockUploads').where('status', '==', 'ready').select('rowCount').get(),
+  ]);
+  const readyUploadIds = new Set(readySnap.docs.map((doc) => doc.id));
   const rows: LiveStockOffer[] = [];
   for (const doc of snap.docs) {
     const d = doc.data();
+    const uploadId = String(d.uploadId || '').trim();
+    if (!uploadId || !readyUploadIds.has(uploadId)) continue;
     const vendorId = String(d.vendorId || '').trim();
     const productName = String(d.productName || '').trim();
     if (!vendorId || !productName) continue;
