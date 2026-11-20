@@ -131,22 +131,29 @@ export async function uploadLiveStockFile(
   onProgress?.('Reading the file…');
   const watched = waitForLiveStockResult(uploadRef.id, onProgress);
   void watched.catch(() => undefined);
-  const result = await ingestCallable({ uploadId: uploadRef.id });
-  const data = result.data as {
-    ok: boolean;
-    started?: boolean;
-    rowCount: number;
-    message?: string;
-    engine?: string;
-  };
-  if (!data.ok) throw new Error(data.message || 'No stock rows found');
-  if (!data.started) {
-    return {
-      uploadId: uploadRef.id,
-      rowCount: data.rowCount,
-      message: data.message || `Loaded ${data.rowCount} rows`,
-      engine: data.engine || '',
+  try {
+    const result = await ingestCallable({ uploadId: uploadRef.id });
+    const data = result.data as {
+      ok: boolean;
+      started?: boolean;
+      rowCount: number;
+      message?: string;
+      engine?: string;
     };
+    if (!data.ok) throw new Error(data.message || 'No stock rows found');
+    if (!data.started) {
+      return {
+        uploadId: uploadRef.id,
+        rowCount: data.rowCount,
+        message: data.message || `Loaded ${data.rowCount} rows`,
+        engine: data.engine || '',
+      };
+    }
+  } catch (error: unknown) {
+    const code = String((error as { code?: string })?.code || '');
+    const message = error instanceof Error ? error.message : '';
+    const timedOut = /deadline|timeout|unavailable/i.test(`${code} ${message}`);
+    if (!timedOut) throw error instanceof Error ? error : new Error('Could not load this stock file');
   }
   return watched;
 }

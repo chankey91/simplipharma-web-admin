@@ -71,7 +71,8 @@ export const ingestLiveStockUpload = ff
 
     try {
       await queueLiveStockUpload(ref);
-      const outcome = await waitForLiveStockUpload(ref, Date.now() + 240_000);
+      // Return before the browser's callable deadline. Large files keep saving in later batches.
+      const outcome = await waitForLiveStockUpload(ref, Date.now() + 45_000);
       if (!outcome.done) {
         return {
           ok: true,

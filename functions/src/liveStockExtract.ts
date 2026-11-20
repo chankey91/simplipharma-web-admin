@@ -170,7 +170,9 @@ async function extractTable(table: string, options?: StockExtractOptions): Promi
         rows,
         engine: 'columns',
         message: missing
-          ? `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
+          ? mapped.has('mrp')
+            ? `Loaded ${rows.length} products with MRP. This file has no purchase rate or stock quantity.`
+            : `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
           : `Loaded ${rows.length} rows from the column headers.`,
       };
     }
@@ -342,7 +344,7 @@ function splitCsv(line: string): string[] {
 }
 
 const HEADER_FIELDS: Array<{ field: keyof ExtractedStockRow | 'discount'; pattern: RegExp }> = [
-  { field: 'productName', pattern: /product|medicine|item name|description|particular|^name$|^item$/i },
+  { field: 'productName', pattern: /product|medicine|item name|description|particular|^name$|^item$|name\s*to\s*display|nametodisplay/i },
   { field: 'stockQty', pattern: /stock|qty|quantity|balance|closing|available|qoh/i },
   { field: 'rate', pattern: /ptr|rate|price|net/i },
   { field: 'mrp', pattern: /\bmrp\b/i },
@@ -417,7 +419,7 @@ function dedupeRows(rows: ExtractedStockRow[]): ExtractedStockRow[] {
   const seen = new Set<string>();
   const out: ExtractedStockRow[] = [];
   for (const row of rows) {
-    const key = `${(row.manufacturer || '').toLowerCase()}|${row.productName.toLowerCase()}|${row.pack || ''}|${row.rate ?? ''}`;
+    const key = `${(row.manufacturer || '').toLowerCase()}|${row.productName.toLowerCase()}|${row.pack || ''}|${row.rate ?? ''}|${row.mrp ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(row);
