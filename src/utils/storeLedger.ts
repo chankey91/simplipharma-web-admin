@@ -1,5 +1,5 @@
 import { endOfDay, startOfDay } from 'date-fns';
-import { isCancelledOrderStatus } from './orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from './orderStatus';
 import { CreditNote, DebitNote, Order, Payment, User } from '../types';
 import { formatOrderInvoiceLabel } from './orderDisplay';
 import { resolveOrderInvoiceGrandTotal } from './orderTotals';
@@ -77,9 +77,9 @@ export function resolvePaymentVchNo(
   return pay.transactionId || order?.transactionId || '-';
 }
 
-/** Billable sales orders (fulfilled / in pipeline, not cancelled or pending). */
+/** Billable sales orders (fulfilled / in pipeline). Pending and Picked up are not invoiced yet. */
 export function isLedgerBillableOrder(o: Order): boolean {
-  return !isCancelledOrderStatus(o.status) && o.status !== 'Pending';
+  return !isCancelledOrderStatus(o.status) && !isAwaitingFulfillmentStatus(o.status);
 }
 
 /** Resolve credit lines from payment subcollection, payments array, or legacy paidAmount. */

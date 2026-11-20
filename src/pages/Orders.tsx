@@ -648,7 +648,7 @@ export const OrdersPage: React.FC = () => {
     [selectedIds, selectedById]
   );
   const selectedPendingIds = useMemo(
-    () => selectedIds.filter((id) => selectedById[id]?.status === 'Pending'),
+    () => selectedIds.filter((id) => isAwaitingFulfillmentStatus(selectedById[id]?.status)),
     [selectedIds, selectedById]
   );
   const pendingMergeRetailerId = useMemo(() => {
@@ -943,12 +943,12 @@ export const OrdersPage: React.FC = () => {
       await queryClient.invalidateQueries({ queryKey: ['productDemands'] });
       await refreshListsAfterBulk();
       if (result.pendingBeforeCutoff === 0) {
-        await alert('No pending orders were placed before that time.', { severity: 'info' });
+        await alert('No pending or picked up orders were placed before that time.', { severity: 'info' });
         return;
       }
       if (result.retailersMerged === 0 && result.failures.length === 0) {
         await alert(
-          `${result.pendingBeforeCutoff} pending order(s) were before that time, and each retailer had only one. Nothing was merged.`,
+          `${result.pendingBeforeCutoff} pending or picked up order(s) were before that time, and each retailer had only one. Nothing was merged.`,
           { severity: 'info' }
         );
         return;
@@ -958,7 +958,7 @@ export const OrdersPage: React.FC = () => {
           ? `\n${result.failures.length} retailer(s) could not be merged:\n${result.failures.slice(0, 5).join('\n')}`
           : '';
       await alert(
-        `Merged pending orders for ${result.retailersMerged} retailer(s) (${result.ordersCombined} orders combined into one order each). ${result.retailersLeftSingle} retailer(s) had only one order and were left as they are.${failureNote}`,
+        `Merged pending and picked up orders for ${result.retailersMerged} retailer(s) (${result.ordersCombined} orders combined into one order each). ${result.retailersLeftSingle} retailer(s) had only one order and were left as they are.${failureNote}`,
         { severity: result.failures.length > 0 ? 'warning' : 'success' }
       );
     } catch (e) {
@@ -1040,9 +1040,9 @@ export const OrdersPage: React.FC = () => {
     setIsExporting(true);
     try {
       const ordersInRange = await getOrdersInRange(range.startMs, range.endMs);
-      const pendingOrders = ordersInRange.filter((o) => o.status === 'Pending');
+      const pendingOrders = ordersInRange.filter((o) => isAwaitingFulfillmentStatus(o.status));
       if (pendingOrders.length === 0) {
-        await alert('No pending orders found in the selected date & time range', {
+        await alert('No pending or picked up orders found in the selected date & time range', {
           severity: 'warning',
         });
         return;
@@ -1409,7 +1409,7 @@ export const OrdersPage: React.FC = () => {
               <>
             <Typography variant="body2" sx={{ mr: 1 }}>
               {selectedIds.length} selected
-              {selectedPendingIds.length > 0 ? ` · ${selectedPendingIds.length} pending` : ''}
+              {selectedPendingIds.length > 0 ? ` · ${selectedPendingIds.length} pending / picked up` : ''}
               {selectedFulfillmentIds.length > 0
                 ? ` · ${selectedFulfillmentIds.length} fulfillment`
                 : ''}
@@ -1426,7 +1426,7 @@ export const OrdersPage: React.FC = () => {
               disabled={bulkBusy || !canMergePending || mergePendingMutation.isPending}
               onClick={() => setMergePendingDialog({ open: true })}
             >
-              Merge Pending ({selectedPendingIds.length})
+              Merge ({selectedPendingIds.length})
             </Button>
               </>
             )}
@@ -1509,7 +1509,7 @@ export const OrdersPage: React.FC = () => {
             </Button>
             {selectedPendingIds.length >= 2 && !canMergePending && (
               <Typography variant="caption" color="warning.main" sx={{ width: '100%' }}>
-                Merge needs 2+ Pending orders for the same retailer (check Town / store).
+                Merge needs 2+ Pending or Picked up orders for the same retailer (check Town / store).
               </Typography>
             )}
             </>
@@ -1837,13 +1837,13 @@ export const OrdersPage: React.FC = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Merge pending orders by retailer</DialogTitle>
+        <DialogTitle>Merge pending and picked up orders by retailer</DialogTitle>
         <DialogContent>
           <Typography gutterBottom>
-            Choose a cutoff. Every pending order placed before that time is combined per retailer
-            into that retailer&apos;s latest order. Same medicines add their quantities. A retailer
-            with only one pending order is left unchanged, and orders placed at or after this time
-            stay separate.
+            Choose a cutoff. Every pending or picked up order placed before that time is combined per
+            retailer into that retailer&apos;s latest order. Same medicines add their quantities. A
+            retailer with only one such order is left unchanged, and orders placed at or after this
+            time stay separate. The surviving order keeps its own status.
           </Typography>
           <Box sx={{ mt: 2 }}>
             <IstDateTimeField
@@ -1884,12 +1884,13 @@ export const OrdersPage: React.FC = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Merge Pending orders</DialogTitle>
+        <DialogTitle>Merge orders</DialogTitle>
         <DialogContent>
           <Typography gutterBottom>
-            Merge {selectedPendingIds.length} Pending orders for <strong>{mergePendingStoreName}</strong>{' '}
+            Merge {selectedPendingIds.length} Pending or Picked up orders for <strong>{mergePendingStoreName}</strong>{' '}
             into the latest order. Same medicines combine quantities; source orders are Cancelled-Merged for
-            admin audit but are hidden from the retailer (they only see the combined order).
+            admin audit but are hidden from the retailer (they only see the combined order). The surviving
+            order keeps its own status.
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             Orders:{' '}
@@ -1925,6 +1926,7 @@ export const OrdersPage: React.FC = () => {
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Choose the order date &amp; time range (IST). Defaults to one day from 12:00 to 12:00.
+            Pending and Picked up orders in that range are included.
           </Typography>
           <Box display="flex" gap={2} flexWrap="wrap" sx={{ pt: 1 }}>
             <IstDateTimeField

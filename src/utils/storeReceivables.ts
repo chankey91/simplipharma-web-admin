@@ -1,5 +1,5 @@
 import { Order, User } from '../types';
-import { isCancelledOrderStatus } from './orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from './orderStatus';
 import { resolveOrderInvoiceGrandTotal } from './orderTotals';
 import { formatOrderInvoiceLabel } from './orderDisplay';
 
@@ -19,9 +19,9 @@ export type StoreReceivableSummary = {
   orders: ReceivableOrder[];
 };
 
-/** Billable = fulfilled, not cancelled, money still owed */
+/** Billable = fulfilled, not cancelled, money still owed. Pending and Picked up are not invoiced yet. */
 export function isReceivableOrder(o: Order): boolean {
-  if (isCancelledOrderStatus(o.status) || o.status === 'Pending') return false;
+  if (isCancelledOrderStatus(o.status) || isAwaitingFulfillmentStatus(o.status)) return false;
   const ps = o.paymentStatus;
   return ps === 'Unpaid' || ps === 'Partial' || !ps;
 }
