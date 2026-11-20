@@ -39,7 +39,7 @@ async function collectPendingMedicineIds(db) {
     var _a;
     const snap = await db
         .collection('orders')
-        .where('status', '==', 'Pending')
+        .where('status', 'in', ['Pending', 'Picked up'])
         .select('medicines')
         .get();
     const ids = new Set();

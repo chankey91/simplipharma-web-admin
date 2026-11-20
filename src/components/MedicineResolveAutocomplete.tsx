@@ -58,7 +58,7 @@ export function renderMedicineResolveOption(
               <Chip label={option.packaging} size="small" variant="outlined" sx={{ height: 20 }} />
             ) : null}
             {option.group === 'pending_order' ? (
-              <Chip label="Pending order" size="small" color="warning" sx={{ height: 20 }} />
+              <Chip label="Pending / picked up" size="small" color="warning" sx={{ height: 20 }} />
             ) : null}
             {option.group === 'product_demand' ? (
               <Chip

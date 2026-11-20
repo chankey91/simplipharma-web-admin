@@ -534,7 +534,7 @@ const LineMedicinePicker: React.FC<{
         <TextField
           {...params}
           label="Match medicine"
-          placeholder="Pending orders · demands · inventory…"
+          placeholder="Pending & picked up · demands · inventory…"
           InputProps={{
             ...params.InputProps,
             startAdornment: (
@@ -642,7 +642,7 @@ const StackLines: React.FC<{
                     }
                   />
                   {line.matchReason === 'pending_order' && (
-                    <Chip size="small" color="warning" label="pending order" />
+                    <Chip size="small" color="warning" label="pending / picked up" />
                   )}
                 </Box>
               </Box>

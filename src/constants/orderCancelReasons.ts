@@ -10,4 +10,5 @@ export const ORDER_CANCEL_REASONS = [
   'Retailer shop closed',
   'Placed by mistake',
   'Cannot deliver',
+  'Non serviceable',
 ] as const;
