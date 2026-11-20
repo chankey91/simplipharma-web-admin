@@ -9,7 +9,9 @@ import {
   orderBy,
   query,
   startAfter,
+  type Query,
   type QueryDocumentSnapshot,
+  type QuerySnapshot,
   serverTimestamp,
   updateDoc,
   where,
@@ -197,17 +199,19 @@ export async function listLiveStockUploads(): Promise<LiveStockUpload[]> {
 export async function listLiveStockOffers(uploadId: string): Promise<LiveStockOffer[]> {
   const pageSize = 2000;
   const offers: LiveStockOffer[] = [];
+  const offersCol = collection(db, 'liveStockOffers');
   let cursor: QueryDocumentSnapshot | null = null;
   while (offers.length < 50000) {
-    const snap = await getDocs(
-      query(
-        collection(db, 'liveStockOffers'),
-        where('uploadId', '==', uploadId),
-        orderBy(documentId()),
-        ...(cursor ? [startAfter(cursor)] : []),
-        limit(pageSize)
-      )
-    );
+    const pageQuery: Query = cursor
+      ? query(
+          offersCol,
+          where('uploadId', '==', uploadId),
+          orderBy(documentId()),
+          startAfter(cursor),
+          limit(pageSize)
+        )
+      : query(offersCol, where('uploadId', '==', uploadId), orderBy(documentId()), limit(pageSize));
+    const snap: QuerySnapshot = await getDocs(pageQuery);
     offers.push(
       ...snap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))
     );
