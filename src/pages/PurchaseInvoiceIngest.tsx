@@ -522,10 +522,11 @@ const LineMedicinePicker: React.FC<{
           return;
         }
         if (!newValue.selectable || !newValue.medicine) return;
-        void resolveMedicineAfterPickerSelection(newValue.medicine, undefined).then((m) => {
+        const picked = newValue.medicine;
+        onPick(picked.id, picked.name, picked.productId, picked.gstRate);
+        setInput(getMedicinePickerLabel(picked));
+        void resolveMedicineAfterPickerSelection(picked, undefined).then((m) => {
           rememberMedicine(m);
-          onPick(m.id, m.name, m.productId, m.gstRate);
-          setInput(getMedicinePickerLabel(m));
         });
       }}
       renderGroup={renderMedicineResolveGroup}

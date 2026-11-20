@@ -302,6 +302,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
   const [medicineSearchInput, setMedicineSearchInput] = useState('');
   const medicineSearchInputElRef = useRef<HTMLInputElement | null>(null);
+  const pickerSelectionRef = useRef(0);
   const invoiceBatchInputElRef = useRef<HTMLInputElement | null>(null);
   const savingInvoiceRef = useRef(false);
 
@@ -498,6 +499,32 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
       }
     );
   }, [selectedMedicine, purchaseMedicineOptions]);
+
+  const exactInputMatch = useMemo(() => {
+    const q = medicineSearchInput.trim();
+    if (q.length < 2) return null;
+    return (
+      purchaseMedicineOptions.find(
+        (option) =>
+          option.selectable &&
+          option.medicine &&
+          getMedicinePickerLabel(option.medicine).trim() === q
+      )?.medicine ?? null
+    );
+  }, [medicineSearchInput, purchaseMedicineOptions]);
+
+  const medicineReadyToAdd = selectedMedicine ?? exactInputMatch;
+
+  const commitPickedMedicine = (medicine: Medicine) => {
+    const generation = ++pickerSelectionRef.current;
+    setSelectedMedicine(medicine);
+    setMedicineSearchInput(getMedicinePickerLabel(medicine));
+    void resolveMedicineAfterPickerSelection(medicine, undefined).then((merged) => {
+      if (pickerSelectionRef.current !== generation) return;
+      rememberMedicine(merged);
+      setSelectedMedicine((current) => (current?.id === medicine.id ? merged : current));
+    });
+  };
 
   const {
     medicines: addMedicineSearchHits,
@@ -729,29 +756,40 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
   };
 
   const handleAddItem = async () => {
-    if (!selectedMedicine) {
+    const medicine = medicineReadyToAdd;
+    if (!medicine) {
       await alert('Please select a medicine', { severity: 'warning' });
       return;
     }
+    if (!selectedMedicine || selectedMedicine.id !== medicine.id) {
+      setSelectedMedicine(medicine);
+    }
     setExpiryDateError(''); // Clear error when opening dialog
     const priorNrNrx = resolveMedicineNrNrxFlags({
-      medicineId: selectedMedicine.id,
+      medicineId: medicine.id,
       fromInvoices: nrNrxByMedicineId,
       invoiceItems: items,
-      stockBatches: selectedMedicine.stockBatches,
+      stockBatches: medicine.stockBatches,
     });
     let nonReturnable = false;
-    let batches = selectedMedicine.stockBatches;
-    let gstRate = resolveGstRate(selectedMedicine.gstRate);
+    let batches = medicine.stockBatches;
+    let gstRate = resolveGstRate(medicine.gstRate);
     try {
-      const full = await getMedicineById(selectedMedicine.id);
-      nonReturnable = full
-        ? await ensureMedicineNonReturnable(full)
-        : false;
-      if (full) {
-        rememberMedicine({ ...full, nonReturnable });
-        batches = full.stockBatches ?? batches;
-        gstRate = resolveGstRate(full.gstRate);
+      const enriched = await Promise.race([
+        (async () => {
+          const full = await getMedicineById(medicine.id);
+          const flag = full ? await ensureMedicineNonReturnable(full) : false;
+          return { full, flag };
+        })(),
+        new Promise<null>((resolve) => {
+          window.setTimeout(() => resolve(null), 2500);
+        }),
+      ]);
+      if (enriched?.full) {
+        nonReturnable = enriched.flag;
+        rememberMedicine({ ...enriched.full, nonReturnable });
+        batches = enriched.full.stockBatches ?? batches;
+        gstRate = resolveGstRate(enriched.full.gstRate);
       }
     } catch (error) {
       console.warn('Failed to read non-returnable from medicine master', error);
@@ -762,9 +800,9 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
 
     const priorOnThisInvoice = [...items]
       .reverse()
-      .find((item) => item.medicineId === selectedMedicine.id);
+      .find((item) => item.medicineId === medicine.id);
     const latestBatch = pickLatestBatch(batches);
-    const lastPurchase = lastPurchaseByMedicineId.get(selectedMedicine.id);
+    const lastPurchase = lastPurchaseByMedicineId.get(medicine.id);
 
     let batchNumber = '';
     let receivedBatchNumber = '';
@@ -872,8 +910,8 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
     }
 
     setCurrentItem({
-      medicineId: selectedMedicine.id,
-      medicineName: selectedMedicine.name,
+      medicineId: medicine.id,
+      medicineName: medicine.name,
       batchNumber,
       receivedBatchNumber,
       expiryDate,
@@ -1630,6 +1668,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   inputValue={medicineSearchInput}
                   onInputChange={(_, newInputValue, reason) => {
                     if (reason === 'clear') {
+                      pickerSelectionRef.current += 1;
                       setMedicineSearchInput('');
                       setSelectedMedicine(null);
                       return;
@@ -1640,6 +1679,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                         selectedMedicine &&
                         newInputValue !== getMedicinePickerLabel(selectedMedicine)
                       ) {
+                        pickerSelectionRef.current += 1;
                         setSelectedMedicine(null);
                       }
                       return;
@@ -1648,6 +1688,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   }}
                   onChange={(_, newValue) => {
                     if (!newValue) {
+                      pickerSelectionRef.current += 1;
                       setSelectedMedicine(null);
                       setMedicineSearchInput('');
                       return;
@@ -1664,13 +1705,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                     if (!newValue.selectable || !newValue.medicine) {
                       return;
                     }
-                    void resolveMedicineAfterPickerSelection(newValue.medicine, undefined).then(
-                      (merged) => {
-                        rememberMedicine(merged);
-                        setSelectedMedicine(merged);
-                        setMedicineSearchInput(getMedicinePickerLabel(merged));
-                      }
-                    );
+                    commitPickedMedicine(newValue.medicine);
                   }}
                   filterOptions={(options) => options}
                   isOptionEqualToValue={(a, b) => a.id === b.id}
@@ -1695,7 +1730,7 @@ export const CreatePurchaseInvoicePage: React.FC = () => {
                   variant="contained"
                   startIcon={<Add />}
                   onClick={handleAddItem}
-                  disabled={!selectedMedicine}
+                  disabled={!medicineReadyToAdd}
                 >
                   Add Item
                 </Button>
