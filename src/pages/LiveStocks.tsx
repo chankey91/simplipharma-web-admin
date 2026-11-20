@@ -32,7 +32,7 @@ import { VendorFormDialog } from '../components/VendorFormDialog';
 function statusColor(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {
   if (status === 'ready') return 'success';
   if (status === 'failed') return 'error';
-  if (status === 'extracting' || status === 'uploaded') return 'info';
+  if (status === 'extracting' || status === 'uploaded' || status === 'queued' || status === 'writing') return 'info';
   return 'default';
 }
 
@@ -42,6 +42,7 @@ export const LiveStocksPage: React.FC = () => {
   const [vendorId, setVendorId] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
   const [deletingId, setDeletingId] = useState('');
   const [selected, setSelected] = useState<LiveStockUpload | null>(null);
   const [filter, setFilter] = useState('');
@@ -81,12 +82,19 @@ export const LiveStocksPage: React.FC = () => {
       return;
     }
     setBusy(true);
+    setProgress('Reading the file…');
     try {
-      const result = await uploadLiveStockFile({
-        vendorId: vendor.id,
-        vendorName: vendor.vendorName,
-        file,
-      });
+      const result = await uploadLiveStockFile(
+        {
+          vendorId: vendor.id,
+          vendorName: vendor.vendorName,
+          file,
+        },
+        (message) => {
+          setProgress(message);
+          void queryClient.invalidateQueries({ queryKey: ['liveStockUploads'] });
+        }
+      );
       setFile(null);
       await queryClient.invalidateQueries({ queryKey: ['liveStockUploads'] });
       await alert(result.message || `Loaded ${result.rowCount} rows.`, { severity: 'success' });
@@ -95,6 +103,7 @@ export const LiveStocksPage: React.FC = () => {
       await alert(message, { severity: 'error' });
     } finally {
       setBusy(false);
+      setProgress('');
     }
   };
 
@@ -161,6 +170,11 @@ export const LiveStocksPage: React.FC = () => {
           </Button>
         </Box>
         {busy ? <LinearProgress sx={{ mt: 2 }} /> : null}
+        {progress ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            {progress}
+          </Typography>
+        ) : null}
       </Paper>
 
       <TableContainer component={Paper} sx={{ mb: 2 }}>
