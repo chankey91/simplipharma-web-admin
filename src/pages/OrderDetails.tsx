@@ -1498,7 +1498,7 @@ export const OrderDetailsPage: React.FC = () => {
         void (async () => {
           if (batchStockConflicts.length > 0) {
             await alert(
-              `Cannot fulfill — batch assignments exceed available stock (other pending orders may have reserved the same batches).\n\n${formatBatchStockConflictMessage(batchStockConflicts)}`,
+              `Cannot fulfill — batch assignments exceed available stock (other pending or picked up orders may have reserved the same batches).\n\n${formatBatchStockConflictMessage(batchStockConflicts)}`,
               { severity: 'error', title: 'Stock conflict' }
             );
             return;
@@ -2347,7 +2347,7 @@ export const OrderDetailsPage: React.FC = () => {
       if (phys > 0 && phys > allocation.availableQuantity) {
         const reservedNote =
           (allocation.reservedElsewhere ?? 0) > 0
-            ? ` (${allocation.reservedElsewhere} reserved in other pending orders)`
+            ? ` (${allocation.reservedElsewhere} reserved in other pending or picked up orders)`
             : '';
         await alert(
           `Batch ${allocation.batchNumber} only has ${allocation.availableQuantity} units available for this order${reservedNote}, but ${phys} were allocated`,
@@ -3524,7 +3524,7 @@ export const OrderDetailsPage: React.FC = () => {
             >
               <Typography variant="subtitle2" gutterBottom>
                 {batchStockConflicts.some((c) => (c.reservedElsewhere || 0) > 0)
-                  ? 'Batch assignments exceed available stock — some units are reserved on other pending orders'
+                  ? 'Batch assignments exceed available stock — some units are reserved on other pending or picked up orders'
                   : 'Batch assignments exceed inventory — stock was not returned after un-fulfill'}
               </Typography>
               {batchStockConflicts.map((c) => (

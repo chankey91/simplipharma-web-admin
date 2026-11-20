@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
 import { Order, OrderMedicine, OrderStatus } from '../types';
-import { isCancelledOrderStatus } from './orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from './orderStatus';
 import { hasBatchAssignment } from './orderTotals';
 import { coerceToDate, istDateStampCompact } from './dateTime';
 
@@ -40,7 +40,11 @@ export const SHORTFALL_REASON_LABELS: Record<OrderShortfallReason, string> = {
 };
 
 function isOpenOrderStatus(status: OrderStatus): boolean {
-  return status === 'Pending' || status === 'Order Fulfillment' || status === 'In Transit';
+  return (
+    isAwaitingFulfillmentStatus(status) ||
+    status === 'Order Fulfillment' ||
+    status === 'In Transit'
+  );
 }
 
 function resolveRetailerName(order: Order): string {
@@ -67,7 +71,7 @@ function lineFulfilledQty(line: OrderMedicine): number {
 /**
  * Extract shortfall lines from an order:
  * - product_demand never converted
- * - medicine line past Pending with no batch (skipped from invoice)
+ * - medicine line past Pending / Picked up with no batch (skipped from invoice)
  * - partial ship (originalQuantity > fulfilled quantity)
  */
 export function extractOrderShortfalls(order: Order): OrderShortfallRow[] {
@@ -110,8 +114,8 @@ export function extractOrderShortfalls(order: Order): OrderShortfallRow[] {
       return;
     }
 
-    // Pending medicine lines are still being worked — not a shortfall yet.
-    if (order.status === 'Pending') return;
+    // Pending and Picked up lines are still being worked — not a shortfall yet.
+    if (isAwaitingFulfillmentStatus(order.status)) return;
 
     if (!hasBatchAssignment(line)) {
       const orderedQty = lineOrderedQty(line);

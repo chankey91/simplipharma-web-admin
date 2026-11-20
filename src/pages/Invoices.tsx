@@ -43,7 +43,7 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
 import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
-import { isCancelledOrderStatus } from '../utils/orderStatus';
+import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from '../utils/orderStatus';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import { Order, PurchaseInvoice } from '../types';
@@ -329,7 +329,7 @@ export const InvoicesPage: React.FC = () => {
     let list: InvoiceRow[] = [];
     if (isOrder) {
       list = (allOrders ?? [])
-        .filter((o) => o.status !== 'Pending' && !isCancelledOrderStatus(o.status))
+        .filter((o) => !isAwaitingFulfillmentStatus(o.status) && !isCancelledOrderStatus(o.status))
         .map((o) => ({
           id: o.id,
           invoiceNumber: o.invoiceNumber || orderReferenceWithoutInvoice(o.id),
@@ -416,7 +416,7 @@ export const InvoicesPage: React.FC = () => {
   // Global counts (independent of search/filter) for the KPI cards.
   const orderStatusCounts = orderSearch.data?.statusCounts;
   const orderInvoicedCount = typesenseDisabled
-    ? (allOrders ?? []).filter((o) => o.status !== 'Pending' && !isCancelledOrderStatus(o.status)).length
+    ? (allOrders ?? []).filter((o) => !isAwaitingFulfillmentStatus(o.status) && !isCancelledOrderStatus(o.status)).length
     : (orderStatusCounts?.['Order Fulfillment'] ?? 0) +
       (orderStatusCounts?.['In Transit'] ?? 0) +
       (orderStatusCounts?.['Delivered'] ?? 0);
@@ -426,7 +426,7 @@ export const InvoicesPage: React.FC = () => {
   const totalInvoices = orderInvoicedCount + purchaseCount;
   const totalAmount = typesenseDisabled
     ? (allOrders ?? [])
-        .filter((o) => o.status !== 'Pending' && !isCancelledOrderStatus(o.status))
+        .filter((o) => !isAwaitingFulfillmentStatus(o.status) && !isCancelledOrderStatus(o.status))
         .reduce((s, o) => s + (o.totalAmount || 0), 0) +
       (allPurchases ?? []).reduce((s, inv) => s + (inv.totalAmount || 0), 0)
     : (orderAmount ?? 0) + (purchaseAmount ?? 0);

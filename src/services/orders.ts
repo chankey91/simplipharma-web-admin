@@ -352,7 +352,7 @@ export const getOrdersByStatuses = async (statuses: OrderStatus[]): Promise<Orde
  * Orders with money still owed (Unpaid / Partial, or paymentStatus unset).
  * Order Details treats a missing paymentStatus as Unpaid, so receivables must
  * include those docs too — Firestore `in` queries skip missing fields.
- * Cancelled / Pending are excluded client-side.
+ * Cancelled, Pending, and Picked up are excluded client-side.
  */
 export const getReceivableOrders = async (): Promise<Order[]> => {
   const ordersCol = collection(db, 'orders');
@@ -734,8 +734,9 @@ export type MergePendingOrdersResult = {
 };
 
 /**
- * Manual merge: combine selected Pending orders for one retailer into the latest
+ * Manual merge: combine selected Pending and Picked up orders for one retailer into the latest
  * (or explicit target). Same catalog/demand item → summed quantity. Sources cancelled.
+ * The surviving order keeps its own status.
  */
 export const mergePendingOrders = async (args: {
   orderIds: string[];
@@ -745,7 +746,7 @@ export const mergePendingOrders = async (args: {
 }): Promise<MergePendingOrdersResult> => {
   const uniqueIds = [...new Set(args.orderIds.map((id) => String(id || '').trim()).filter(Boolean))];
   if (uniqueIds.length < 2) {
-    throw new Error('Select at least two Pending orders to merge');
+    throw new Error('Select at least two Pending or Picked up orders to merge');
   }
 
   const loaded: Order[] = [];
@@ -756,8 +757,8 @@ export const mergePendingOrders = async (args: {
   }
 
   for (const o of loaded) {
-    if (o.status !== 'Pending') {
-      throw new Error(`Only Pending orders can be merged (found ${o.status} on ${o.id})`);
+    if (!isAwaitingFulfillmentStatus(o.status)) {
+      throw new Error(`Only Pending or Picked up orders can be merged (found ${o.status} on ${o.id})`);
     }
   }
 
@@ -788,11 +789,11 @@ export const mergePendingOrders = async (args: {
   }, 0);
 
   const sourceIdsLabel = sources.map((o) => o.id).join(', ');
-  const mergeNote = `Merged Pending orders ${sourceIdsLabel} into this order (same items combined)`;
+  const mergeNote = `Merged orders ${sourceIdsLabel} into this order (same items combined)`;
 
   const targetRef = doc(db, 'orders', targetId);
   const targetTimeline = Array.isArray(target.timeline) ? [...target.timeline] : [];
-  targetTimeline.push(createTimelineEvent('Pending', args.mergedBy, mergeNote));
+  targetTimeline.push(createTimelineEvent(target.status, args.mergedBy, mergeNote));
 
   const sourceIds = sources.map((o) => o.id);
   const priorMergedFrom = Array.isArray(target.mergedFromOrderIds)
@@ -889,24 +890,24 @@ export type MergePendingOrdersByRetailerResult = {
 };
 
 /**
- * Combine every Pending order placed before cutoff, one merged order per retailer.
- * A retailer with a single pending order is left unchanged.
+ * Combine every Pending and Picked up order placed before cutoff, one merged order per retailer.
+ * A retailer with a single such order is left unchanged.
  */
 export const mergePendingOrdersBefore = async (
   cutoffMs: number,
   mergedBy: string
 ): Promise<MergePendingOrdersByRetailerResult> => {
   const ordersCol = collection(db, 'orders');
-  const snapshot = await getDocs(
-    query(
-      ordersCol,
-      where('status', '==', 'Pending'),
-      where('orderDate', '<', Timestamp.fromMillis(cutoffMs))
+  const cutoff = Timestamp.fromMillis(cutoffMs);
+  const snapshots = await Promise.all(
+    (['Pending', 'Picked up'] as const).map((status) =>
+      getDocs(query(ordersCol, where('status', '==', status), where('orderDate', '<', cutoff)))
     )
   );
+  const docs = snapshots.flatMap((snapshot) => snapshot.docs);
 
   const byRetailer = new Map<string, string[]>();
-  for (const docSnap of snapshot.docs) {
+  for (const docSnap of docs) {
     const retailerId = String(docSnap.data().retailerId || '').trim();
     if (!retailerId) continue;
     const ids = byRetailer.get(retailerId) || [];
@@ -938,7 +939,7 @@ export const mergePendingOrdersBefore = async (
     retailersMerged,
     ordersCombined,
     retailersLeftSingle,
-    pendingBeforeCutoff: snapshot.size,
+    pendingBeforeCutoff: docs.length,
     failures,
   };
 };

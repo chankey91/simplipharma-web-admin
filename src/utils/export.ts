@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Order, User } from '../types';
+import { isAwaitingFulfillmentStatus } from './orderStatus';
 import { getMedicineById, getMedicinesByIdsWithBatches } from '../services/inventory';
 import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
 import { istDateStampCompact } from './dateTime';
@@ -47,10 +48,10 @@ export const exportPendingOrdersByStore = async (
   stores: User[],
   filename: string = 'pending-orders-by-store'
 ) => {
-  const pendingOrders = orders.filter((order) => order.status === 'Pending');
+  const pendingOrders = orders.filter((order) => isAwaitingFulfillmentStatus(order.status));
 
   if (pendingOrders.length === 0) {
-    await appAlert('No pending orders found', { severity: 'warning' });
+    await appAlert('No pending or picked up orders found', { severity: 'warning' });
     return;
   }
 
