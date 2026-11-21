@@ -37,6 +37,8 @@ export interface PurchaseListItem {
   orderCount: number;
   orderNumbers: string[];
   orderIds?: string[];
+  /** Product-demand docs whose retailer photo belongs on this row. */
+  productDemandIds?: string[];
   status: PurchaseItemStatus;
   foundQty: number | null;
   deals?: Array<{

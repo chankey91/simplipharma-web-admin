@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import { httpsCallable } from 'firebase/functions';
-import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, documentId, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { db, functions } from '../services/firebase';
 import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
 import { rankLiveStockForNames } from '../services/liveStock';
@@ -63,26 +63,201 @@ function chunksOf(ids: string[], size: number): string[][] {
   return chunks;
 }
 
-/** Demand photos only. Order documents are skipped because they carry every line photo. */
-async function loadDemandPhotos(items: PurchaseListItem[]): Promise<Map<string, string>> {
-  const photos = new Map<string, string>();
-  const wantedIds = new Set(items.map((item) => item.medicineId).filter(Boolean));
-  const wantedNames = new Set(items.map((item) => item.medicineName.trim().toLowerCase()).filter(Boolean));
-  const orderIds = [...new Set(items.flatMap((item) => item.orderIds || []).filter(Boolean))];
-  const medicineIds = [...wantedIds];
+type DemandHit = {
+  id: string;
+  imageUrl: string;
+  productName: string;
+  fulfilledName: string;
+  fulfilledMedicineId: string;
+  orderId: string;
+};
 
-  const take = (data: Record<string, unknown>) => {
-    const imageUrl = String(data.imageUrl || '').trim();
+function looseProductName(a: string, b: string): boolean {
+  const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const left = norm(a);
+  const right = norm(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  if (shorter.length < 6 || !longer.startsWith(shorter)) return false;
+  return longer.length === shorter.length || longer[shorter.length] === ' ';
+}
+
+function imageFromDemand(data: Record<string, unknown>): string {
+  const raw = data.imageUrl ?? data.image ?? data.photoUrl;
+  if (typeof raw === 'string') return raw.trim();
+  if (raw && typeof raw === 'object' && 'url' in raw) {
+    return String((raw as { url?: unknown }).url || '').trim();
+  }
+  return '';
+}
+
+async function demandImagesById(ids: string[]): Promise<Map<string, DemandHit>> {
+  const hits = new Map<string, DemandHit>();
+  const unique = [...new Set(ids.filter(Boolean))];
+  for (const chunk of chunksOf(unique, 10)) {
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'product_demands'), where(documentId(), 'in', chunk))
+      );
+      for (const item of snap.docs) {
+        const data = item.data() as Record<string, unknown>;
+        const imageUrl = imageFromDemand(data);
+        if (!imageUrl) continue;
+        hits.set(item.id, {
+          id: item.id,
+          imageUrl,
+          productName: String(data.productName || ''),
+          fulfilledName: String(data.fulfilledMedicineName || ''),
+          fulfilledMedicineId: String(data.fulfilledMedicineId || ''),
+          orderId: String(data.orderId || ''),
+        });
+      }
+    } catch (error) {
+      console.warn('purchase list summary: product photo lookup failed', error);
+    }
+  }
+  return hits;
+}
+
+function assignPhoto(photos: Map<string, string>, item: PurchaseListItem, imageUrl: string) {
+  if (item.medicineId) photos.set(item.medicineId, imageUrl);
+  const name = item.medicineName.trim().toLowerCase();
+  if (name) photos.set(`name:${name}`, imageUrl);
+}
+
+/** Demand photos for this list. The picture often still sits on the order line after a merge. */
+async function loadDemandPhotos(
+  items: PurchaseListItem[],
+  photoLinks: SummaryFacts['photoLinks']
+): Promise<Map<string, string>> {
+  const [linked, local, fromOrders] = await Promise.all([
+    Array.isArray(photoLinks) && photoLinks.length > 0 ? photosFromLinks(items, photoLinks) : Promise.resolve(new Map<string, string>()),
+    loadDemandPhotosLocally(items),
+    photosFromOrderLines(items),
+  ]);
+  const photos = new Map<string, string>();
+  for (const source of [local, linked, fromOrders]) {
+    for (const [key, image] of source) photos.set(key, image);
+  }
+  return photos;
+}
+
+async function photosFromLinks(
+  items: PurchaseListItem[],
+  photoLinks: NonNullable<SummaryFacts['photoLinks']>
+): Promise<Map<string, string>> {
+  const photos = new Map<string, string>();
+  const hits = await demandImagesById(photoLinks.map((link) => link.demandId));
+  for (const link of photoLinks) {
+    const hit = hits.get(link.demandId);
+    if (!hit) continue;
+    const item = items.find(
+      (row) =>
+        (link.medicineId && row.medicineId === link.medicineId) ||
+        row.medicineName.trim().toLowerCase() === link.medicineName.trim().toLowerCase()
+    );
+    if (item) assignPhoto(photos, item, hit.imageUrl);
+  }
+  return photos;
+}
+
+type OrderLinePhoto = { name: string; medicineId: string; demandId: string; imageUrl: string };
+
+function lineMatchesItem(item: PurchaseListItem, line: OrderLinePhoto): boolean {
+  if (line.demandId && item.productDemandIds?.includes(line.demandId)) return true;
+  if (item.medicineId && line.medicineId && item.medicineId === line.medicineId) return true;
+  return looseProductName(item.medicineName, line.name);
+}
+
+/** Retailer photo copied onto the order line. Survives after the demand is moved to a merged order. */
+async function photosFromOrderLines(items: PurchaseListItem[]): Promise<Map<string, string>> {
+  const photos = new Map<string, string>();
+  const orderIds = [...new Set(items.flatMap((item) => item.orderIds || []).filter(Boolean))];
+  const linesByOrder = new Map<string, OrderLinePhoto[]>();
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < orderIds.length) {
+      const orderId = orderIds[cursor];
+      cursor += 1;
+      try {
+        const snap = await getDoc(doc(db, 'orders', orderId));
+        if (!snap.exists()) continue;
+        const medicines = snap.data().medicines;
+        if (!Array.isArray(medicines)) continue;
+        linesByOrder.set(
+          orderId,
+          medicines.map((line) => {
+            const raw = line?.imageUrl;
+            return {
+              name: String(line?.name || ''),
+              medicineId: String(line?.medicineId || '').trim(),
+              demandId: String(line?.productDemandId || '').trim(),
+              imageUrl: typeof raw === 'string' ? raw.trim() : '',
+            };
+          })
+        );
+      } catch (error) {
+        console.warn('purchase list summary: order photo lookup failed', error);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, orderIds.length) }, () => worker()));
+
+  const needDemand = new Map<string, PurchaseListItem>();
+  for (const item of items) {
+    let image = '';
+    let demandId = '';
+    for (const orderId of item.orderIds || []) {
+      for (const line of linesByOrder.get(orderId) || []) {
+        if (!lineMatchesItem(item, line)) continue;
+        if (line.imageUrl) image = line.imageUrl;
+        if (!demandId && line.demandId) demandId = line.demandId;
+      }
+    }
+    if (image) assignPhoto(photos, item, image);
+    else if (demandId) needDemand.set(demandId, item);
+  }
+
+  if (needDemand.size > 0) {
+    const hits = await demandImagesById([...needDemand.keys()]);
+    for (const [demandId, item] of needDemand) {
+      const hit = hits.get(demandId);
+      if (hit && !photos.get(`name:${item.medicineName.trim().toLowerCase()}`)) {
+        assignPhoto(photos, item, hit.imageUrl);
+      }
+    }
+  }
+  return photos;
+}
+
+async function loadDemandPhotosLocally(items: PurchaseListItem[]): Promise<Map<string, string>> {
+  const photos = new Map<string, string>();
+  const demands: DemandHit[] = [];
+  const seen = new Set<string>();
+  const take = (id: string, data: Record<string, unknown>) => {
+    if (seen.has(id)) return;
+    const imageUrl = imageFromDemand(data);
     if (!imageUrl) return;
-    const medicineId = String(data.fulfilledMedicineId || '').trim();
-    const name = String(data.productName || '').trim().toLowerCase();
-    if (medicineId && wantedIds.has(medicineId) && !photos.has(medicineId)) photos.set(medicineId, imageUrl);
-    if (name && wantedNames.has(name) && !photos.has(`name:${name}`)) photos.set(`name:${name}`, imageUrl);
+    seen.add(id);
+    demands.push({
+      id,
+      imageUrl,
+      productName: String(data.productName || ''),
+      fulfilledName: String(data.fulfilledMedicineName || ''),
+      fulfilledMedicineId: String(data.fulfilledMedicineId || ''),
+      orderId: String(data.orderId || ''),
+    });
   };
 
+  const orderIds = [...new Set(items.flatMap((item) => item.orderIds || []).filter(Boolean))];
+  const medicineIds = [...new Set(items.map((item) => item.medicineId).filter(Boolean))];
+  const demandIds = [...new Set(items.flatMap((item) => item.productDemandIds || []).filter(Boolean))];
   const jobs = [
     ...chunksOf(orderIds, 10).map((chunk) => ({ field: 'orderId', chunk })),
     ...chunksOf(medicineIds, 10).map((chunk) => ({ field: 'fulfilledMedicineId', chunk })),
+    ...chunksOf(demandIds, 10).map((chunk) => ({ field: documentId(), chunk })),
   ];
   let cursor = 0;
   const worker = async () => {
@@ -93,13 +268,28 @@ async function loadDemandPhotos(items: PurchaseListItem[]): Promise<Map<string, 
         const snap = await getDocs(
           query(collection(db, 'product_demands'), where(job.field, 'in', job.chunk))
         );
-        snap.docs.forEach((item) => take(item.data() as Record<string, unknown>));
+        snap.docs.forEach((item) => take(item.id, item.data() as Record<string, unknown>));
       } catch (error) {
         console.warn('purchase list summary: product photo lookup failed', error);
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, () => worker()));
+
+  for (const item of items) {
+    const orders = new Set(item.orderIds || []);
+    const chosen = demands.find((demand) => {
+      if (item.productDemandIds?.includes(demand.id)) return true;
+      if (item.medicineId && demand.fulfilledMedicineId === item.medicineId) return true;
+      if (demand.orderId && orders.size > 0 && !orders.has(demand.orderId)) return false;
+      if (!demand.orderId && orders.size > 0 && !item.productDemandIds?.includes(demand.id)) return false;
+      return (
+        looseProductName(item.medicineName, demand.productName) ||
+        looseProductName(item.medicineName, demand.fulfilledName)
+      );
+    });
+    if (chosen) assignPhoto(photos, item, chosen.imageUrl);
+  }
   return photos;
 }
 
@@ -114,14 +304,36 @@ function photoFor(
 }
 
 /** Shrink a retailer photo so the workbook stays small enough to send to a vendor. */
-async function jpegThumbnail(src: string): Promise<string | null> {
+async function jpegThumbnail(src: string): Promise<{ base64: string; extension: 'jpeg' | 'png' } | null> {
+  const raw = src.trim();
+  if (!raw) return null;
+  let url = raw;
+  if (!url.startsWith('data:') && !/^https?:/i.test(url)) {
+    url = `data:image/jpeg;base64,${url}`;
+  }
+  if (/^https?:/i.test(url)) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const blob = await response.blob();
+        url = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('photo'));
+          reader.readAsDataURL(blob);
+        });
+      }
+    } catch {
+      // The image element can still decode a URL the bucket allows.
+    }
+  }
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const el = new Image();
       el.onload = () => resolve(el);
       el.onerror = () => reject(new Error('photo'));
-      if (!src.startsWith('data:')) el.crossOrigin = 'anonymous';
-      el.src = src;
+      if (!url.startsWith('data:')) el.crossOrigin = 'anonymous';
+      el.src = url;
     });
     const max = 96;
     const scale = Math.min(max / img.width, max / img.height, 1);
@@ -131,14 +343,22 @@ async function jpegThumbnail(src: string): Promise<string | null> {
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
+    if (!ctx) return embeddedOriginal(url);
     ctx.drawImage(img, 0, 0, width, height);
-    const url = canvas.toDataURL('image/jpeg', 0.72);
-    const comma = url.indexOf(',');
-    return comma >= 0 ? url.slice(comma + 1) : null;
+    const encoded = canvas.toDataURL('image/jpeg', 0.72);
+    const comma = encoded.indexOf(',');
+    return comma >= 0 ? { base64: encoded.slice(comma + 1), extension: 'jpeg' } : null;
   } catch {
-    return null;
+    return embeddedOriginal(url);
   }
+}
+
+function embeddedOriginal(url: string): { base64: string; extension: 'jpeg' | 'png' } | null {
+  const match = url.match(/^data:image\/(jpeg|jpg|png);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) return null;
+  const base64 = match[2].replace(/\s+/g, '');
+  if (base64.length < 20) return null;
+  return { base64, extension: match[1].toLowerCase() === 'png' ? 'png' : 'jpeg' };
 }
 
 type SummaryFacts = {
@@ -155,6 +375,7 @@ type SummaryFacts = {
     name: string;
     vendors: Array<{ vendorName: string; discount: number; stockQty: number; discountKnown: boolean }>;
   }> | null;
+  photoLinks?: Array<{ medicineId: string; medicineName: string; demandId: string }>;
 };
 
 /** Pack size and past vendors for this list only. The server does not send the invoices. */
@@ -180,21 +401,37 @@ function toLiveMap(
 }
 
 async function loadSummaryFacts(
-  medicineIds: string[],
-  names: string[]
+  items: PurchaseListItem[]
 ): Promise<{
   medicineById: Map<string, MedicineLabel>;
   bestDiscount: Map<string, BestDiscountVendorPurchase>;
   pastVendors: Map<string, VendorSuggestion[]>;
   liveByName: Map<string, VendorSuggestion[]> | null;
+  photoLinks?: SummaryFacts['photoLinks'];
 } | null> {
+  const medicineIds = items.map((item) => item.medicineId).filter(Boolean);
+  const names = [...new Set(items.map((item) => item.medicineName.trim()).filter(Boolean))];
+  const rows = items.map((item) => ({
+    medicineId: item.medicineId || '',
+    medicineName: item.medicineName || '',
+    orderIds: item.orderIds || [],
+    productDemandIds: item.productDemandIds || [],
+  }));
   try {
-    const fn = httpsCallable<{ medicineIds: string[]; names: string[] }, SummaryFacts>(
-      functions,
-      'purchaseListSummaryFacts',
-      { timeout: 120000 }
-    );
-    const data = (await fn({ medicineIds, names })).data || {};
+    const fn = httpsCallable<
+      {
+        medicineIds: string[];
+        names: string[];
+        rows: Array<{
+          medicineId: string;
+          medicineName: string;
+          orderIds: string[];
+          productDemandIds: string[];
+        }>;
+      },
+      SummaryFacts
+    >(functions, 'purchaseListSummaryFacts', { timeout: 120000 });
+    const data = (await fn({ medicineIds, names, rows })).data || {};
     const medicineById = new Map<string, MedicineLabel>();
     for (const row of data.labels || []) {
       medicineById.set(row.id, { productId: row.productId || '', packaging: row.packaging || '—' });
@@ -221,7 +458,13 @@ async function loadSummaryFacts(
         }))
       );
     }
-    return { medicineById, bestDiscount, pastVendors, liveByName: toLiveMap(data.live || undefined) };
+    return {
+      medicineById,
+      bestDiscount,
+      pastVendors,
+      liveByName: toLiveMap(data.live || undefined),
+      photoLinks: data.photoLinks,
+    };
   } catch (error) {
     console.warn('purchase list summary: server facts failed', error);
     return null;
@@ -274,7 +517,8 @@ export async function exportPurchaseListSummary(
 
   const medicineIds = items.map((item) => item.medicineId).filter(Boolean);
   const names = [...new Set(items.map((item) => item.medicineName.trim()).filter(Boolean))];
-  const [facts, photos] = await Promise.all([loadSummaryFacts(medicineIds, names), loadDemandPhotos(items)]);
+  const facts = await loadSummaryFacts(items);
+  const photos = await loadDemandPhotos(items, facts?.photoLinks);
   let medicineById: Map<string, MedicineLabel>;
   let bestDiscount: Map<string, BestDiscountVendorPurchase>;
   let pastVendors: Map<string, VendorSuggestion[]>;
@@ -348,13 +592,14 @@ export async function exportPurchaseListSummary(
     const src = photoFor(item, photos, med);
     const thumb = src ? await jpegThumbnail(src) : null;
     if (!thumb) continue;
-    const imageId = wb.addImage({ base64: thumb, extension: 'jpeg' });
+    const imageId = wb.addImage({ base64: thumb.base64, extension: thumb.extension });
+    const rowIndex = excelRow.number - 1;
     ws.addImage(imageId, {
-      tl: { col: photoColumn + 0.15, row: excelRow.number - 1 + 0.1 },
-      ext: { width: 52, height: 52 },
+      tl: { col: photoColumn, row: rowIndex },
+      ext: { width: 60, height: 60 },
       editAs: 'oneCell',
     });
-    excelRow.height = 46;
+    excelRow.height = 48;
   }
 
   const stamp = `${list.fromDate}_${list.toDate}`.replace(/[^\d-]+/g, '');

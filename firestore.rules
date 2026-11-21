@@ -201,6 +201,7 @@ service cloud.firestore {
         || isAdminOrOperations()
         || isOffice()
         || isSalesOfficer()
+        || isPurchaseOfficer()
         || retailerAssignedToSO(resource.data.retailerId)
       );
 
@@ -502,6 +503,7 @@ service cloud.firestore {
       allow read: if signedIn() && (
         isAdminOrOperations()
         || isOffice()
+        || isPurchaseOfficer()
         || resource.data.retailerId == request.auth.uid
         || (
           isSalesOfficer()
