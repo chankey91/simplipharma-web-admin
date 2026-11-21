@@ -1,36 +1,32 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useOrdersByStatuses } from './useOrders';
-import { useMedicinesByIds } from './useInventory';
+import { loadAwaitingFulfillmentMedicines } from '../services/awaitingOrderMedicines';
 import { searchProductDemandsTypesense } from '../services/productDemandSearch';
 import {
-  collectPendingOrderMedicineIds,
   type MedicineResolveOption,
   buildMedicineResolveOptions,
 } from '../services/medicineResolution';
 import type { Medicine } from '../types';
 
 /**
- * Prefetch medicine masters from Pending and Picked up orders, plus pending product demands (cached).
- * Search keystrokes only filter in memory + existing Typesense medicine search.
+ * Prefetch product labels from Pending and Picked up orders, plus pending product demands.
+ * Search keystrokes only filter those labels in memory and run the Typesense medicine search.
+ * Order documents and stock batches stay off this path.
  */
 export function useMedicineResolutionContext(options?: { enabled?: boolean }) {
   const enabled = options?.enabled !== false;
 
-  const { data: pendingOrders, isLoading: ordersLoading } = useOrdersByStatuses(
-    ['Pending', 'Picked up'],
-    { enabled }
-  );
+  const { data: pendingMedicines, isLoading: medicinesLoading } = useQuery({
+    queryKey: ['medicineResolve', 'pendingAndPickedUp'],
+    queryFn: loadAwaitingFulfillmentMedicines,
+    enabled,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
 
   const pendingIds = useMemo(
-    () => collectPendingOrderMedicineIds(pendingOrders),
-    [pendingOrders]
-  );
-
-  const idsReady = enabled && pendingOrders !== undefined;
-  const { data: pendingMedicines, isLoading: medicinesLoading } = useMedicinesByIds(
-    idsReady ? pendingIds : undefined,
-    { enabled: idsReady }
+    () => (pendingMedicines ?? []).map((medicine) => medicine.id).filter(Boolean),
+    [pendingMedicines]
   );
 
   const { data: demandsPage, isLoading: demandsLoading } = useQuery({
@@ -62,7 +58,7 @@ export function useMedicineResolutionContext(options?: { enabled?: boolean }) {
     pendingDemands: demandsPage?.rows ?? [],
     preferredMedicineIds,
     pendingOrderMedicineIds: pendingIds,
-    loading: enabled && (ordersLoading || medicinesLoading || demandsLoading),
+    loading: enabled && (medicinesLoading || demandsLoading),
   };
 }
 

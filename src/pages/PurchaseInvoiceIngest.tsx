@@ -399,7 +399,10 @@ const LineMedicinePicker: React.FC<{
       const next = { ...prev };
       for (const m of rows) {
         if (!m?.id) continue;
-        if (!next[m.id]) {
+        const cached = next[m.id];
+        const incomingHasBatches = (m.stockBatches?.length ?? 0) > 0;
+        const cachedHasBatches = (cached?.stockBatches?.length ?? 0) > 0;
+        if (!cached || (incomingHasBatches && !cachedHasBatches)) {
           next[m.id] = m;
           changed = true;
         }
