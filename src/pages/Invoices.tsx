@@ -43,7 +43,6 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
 import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
-import { isCancelledOrderStatus } from '../utils/orderStatus';
 import { SellingFirmFilterField } from '../components/SellingFirmField';
 import { matchesSellingFirmFilter } from '../constants/sellingFirms';
 import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from '../utils/orderStatus';
