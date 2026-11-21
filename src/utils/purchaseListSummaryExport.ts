@@ -1,7 +1,9 @@
 import ExcelJS from 'exceljs';
+import { httpsCallable } from 'firebase/functions';
 import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { db, functions } from '../services/firebase';
 import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
+import { rankLiveStockForNames } from '../services/liveStock';
 import type { PurchaseList, PurchaseListItem } from '../services/purchaseLists';
 import { istDateStampCompact } from './dateTime';
 import { appAlert } from './appDialog';
@@ -55,71 +57,49 @@ async function loadMedicineLabels(medicineIds: string[]): Promise<Map<string, Me
   return medicineById;
 }
 
-type OrderLine = {
-  medicineId?: string;
-  name?: string;
-  productDemandId?: string;
-  imageUrl?: string;
-};
-
-function lineKeys(line: OrderLine): string[] {
-  const keys: string[] = [];
-  const medicineId = String(line.medicineId || '').trim();
-  const name = String(line.name || '').trim().toLowerCase();
-  if (medicineId) keys.push(medicineId);
-  if (name) keys.push(`name:${name}`);
-  return keys;
+function chunksOf(ids: string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
+  return chunks;
 }
 
-/** Retailer photos from the orders on this list, then from the product demand itself. */
+/** Demand photos only. Order documents are skipped because they carry every line photo. */
 async function loadDemandPhotos(items: PurchaseListItem[]): Promise<Map<string, string>> {
   const photos = new Map<string, string>();
-  const demandKeys = new Map<string, string[]>();
+  const wantedIds = new Set(items.map((item) => item.medicineId).filter(Boolean));
+  const wantedNames = new Set(items.map((item) => item.medicineName.trim().toLowerCase()).filter(Boolean));
   const orderIds = [...new Set(items.flatMap((item) => item.orderIds || []).filter(Boolean))];
+  const medicineIds = [...wantedIds];
 
-  const remember = (keys: string[], imageUrl: string | undefined, overwrite = false) => {
-    const src = imageUrl?.trim();
-    if (!src) return;
-    for (const key of keys) {
-      if (!overwrite && photos.has(key)) continue;
-      photos.set(key, src);
-    }
+  const take = (data: Record<string, unknown>) => {
+    const imageUrl = String(data.imageUrl || '').trim();
+    if (!imageUrl) return;
+    const medicineId = String(data.fulfilledMedicineId || '').trim();
+    const name = String(data.productName || '').trim().toLowerCase();
+    if (medicineId && wantedIds.has(medicineId) && !photos.has(medicineId)) photos.set(medicineId, imageUrl);
+    if (name && wantedNames.has(name) && !photos.has(`name:${name}`)) photos.set(`name:${name}`, imageUrl);
   };
 
-  try {
-    for (let i = 0; i < orderIds.length; i += 10) {
-      const chunk = orderIds.slice(i, i + 10);
-      const snap = await getDocs(query(collection(db, 'orders'), where(documentId(), 'in', chunk)));
-      for (const order of snap.docs) {
-        const medicines = (order.data().medicines || []) as OrderLine[];
-        for (const line of medicines) {
-          const keys = lineKeys(line);
-          if (!keys.length) continue;
-          remember(keys, line.imageUrl);
-          const demandId = String(line.productDemandId || '').trim();
-          if (!demandId) continue;
-          const linked = demandKeys.get(demandId) || [];
-          for (const key of keys) {
-            if (!linked.includes(key)) linked.push(key);
-          }
-          demandKeys.set(demandId, linked);
-        }
+  const jobs = [
+    ...chunksOf(orderIds, 10).map((chunk) => ({ field: 'orderId', chunk })),
+    ...chunksOf(medicineIds, 10).map((chunk) => ({ field: 'fulfilledMedicineId', chunk })),
+  ];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < jobs.length) {
+      const job = jobs[cursor];
+      cursor += 1;
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'product_demands'), where(job.field, 'in', job.chunk))
+        );
+        snap.docs.forEach((item) => take(item.data() as Record<string, unknown>));
+      } catch (error) {
+        console.warn('purchase list summary: product photo lookup failed', error);
       }
     }
-
-    const demandIds = [...demandKeys.keys()];
-    for (let i = 0; i < demandIds.length; i += 10) {
-      const chunk = demandIds.slice(i, i + 10);
-      const snap = await getDocs(query(collection(db, 'product_demands'), where(documentId(), 'in', chunk)));
-      for (const demand of snap.docs) {
-        const imageUrl = String(demand.data().imageUrl || '').trim();
-        if (!imageUrl) continue;
-        remember(demandKeys.get(demand.id) || [], imageUrl, true);
-      }
-    }
-  } catch (error) {
-    console.warn('purchase list summary: product photo lookup failed', error);
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, () => worker()));
   return photos;
 }
 
@@ -161,6 +141,93 @@ async function jpegThumbnail(src: string): Promise<string | null> {
   }
 }
 
+type SummaryFacts = {
+  labels?: Array<{ id: string; productId: string; packaging: string }>;
+  best?: Array<{
+    medicineId: string;
+    vendorName: string;
+    discountPercentage: number;
+    invoiceNumber?: string;
+    invoiceDateMs: number;
+  }>;
+  past?: Array<{ medicineId: string; vendors: Array<{ vendorName: string; discount: number }> }>;
+  live?: Array<{
+    name: string;
+    vendors: Array<{ vendorName: string; discount: number; stockQty: number; discountKnown: boolean }>;
+  }> | null;
+};
+
+/** Pack size and past vendors for this list only. The server does not send the invoices. */
+function toLiveMap(
+  rows: Array<{ name: string; vendors: VendorSuggestion[] }> | undefined
+): Map<string, VendorSuggestion[]> | null {
+  if (!rows) return null;
+  const live = new Map<string, VendorSuggestion[]>();
+  for (const row of rows) {
+    const key = row.name.trim().toLowerCase();
+    if (!key) continue;
+    live.set(
+      key,
+      (row.vendors || []).map((vendor) => ({
+        vendorName: vendor.vendorName,
+        discount: vendor.discount,
+        stockQty: vendor.stockQty,
+        discountKnown: vendor.discountKnown,
+      }))
+    );
+  }
+  return live;
+}
+
+async function loadSummaryFacts(
+  medicineIds: string[],
+  names: string[]
+): Promise<{
+  medicineById: Map<string, MedicineLabel>;
+  bestDiscount: Map<string, BestDiscountVendorPurchase>;
+  pastVendors: Map<string, VendorSuggestion[]>;
+  liveByName: Map<string, VendorSuggestion[]> | null;
+} | null> {
+  try {
+    const fn = httpsCallable<{ medicineIds: string[]; names: string[] }, SummaryFacts>(
+      functions,
+      'purchaseListSummaryFacts',
+      { timeout: 120000 }
+    );
+    const data = (await fn({ medicineIds, names })).data || {};
+    const medicineById = new Map<string, MedicineLabel>();
+    for (const row of data.labels || []) {
+      medicineById.set(row.id, { productId: row.productId || '', packaging: row.packaging || '—' });
+    }
+    const bestDiscount = new Map<string, BestDiscountVendorPurchase>();
+    for (const row of data.best || []) {
+      bestDiscount.set(row.medicineId, {
+        medicineId: row.medicineId,
+        vendorName: row.vendorName,
+        discountPercentage: row.discountPercentage,
+        invoiceNumber: row.invoiceNumber,
+        invoiceDate: new Date(row.invoiceDateMs || 0),
+      });
+    }
+    const pastVendors = new Map<string, VendorSuggestion[]>();
+    for (const row of data.past || []) {
+      pastVendors.set(
+        row.medicineId,
+        (row.vendors || []).map((vendor) => ({
+          vendorName: vendor.vendorName,
+          discount: vendor.discount,
+          stockQty: 0,
+          discountKnown: true,
+        }))
+      );
+    }
+    return { medicineById, bestDiscount, pastVendors, liveByName: toLiveMap(data.live || undefined) };
+  } catch (error) {
+    console.warn('purchase list summary: server facts failed', error);
+    return null;
+  }
+}
+
 async function loadPurchaseHistory(): Promise<{
   bestDiscount: Map<string, BestDiscountVendorPurchase>;
   pastVendors: Map<string, VendorSuggestion[]>;
@@ -194,7 +261,7 @@ function liveVendorsFromDeals(item: PurchaseListItem): VendorSuggestion[] {
 
 /**
  * Same columns as Orders → Summary, including P1–P5.
- * Live vendors come from the list itself. Past bills fill any slot still open.
+ * Live vendors are ranked from the current Typesense stock. Past bills fill any slot still open.
  */
 export async function exportPurchaseListSummary(
   list: PurchaseList,
@@ -206,12 +273,29 @@ export async function exportPurchaseListSummary(
   }
 
   const medicineIds = items.map((item) => item.medicineId).filter(Boolean);
-  const [medicineById, history, photos] = await Promise.all([
-    loadMedicineLabels(medicineIds),
-    loadPurchaseHistory(),
-    loadDemandPhotos(items),
-  ]);
-  const { bestDiscount, pastVendors } = history;
+  const names = [...new Set(items.map((item) => item.medicineName.trim()).filter(Boolean))];
+  const [facts, photos] = await Promise.all([loadSummaryFacts(medicineIds, names), loadDemandPhotos(items)]);
+  let medicineById: Map<string, MedicineLabel>;
+  let bestDiscount: Map<string, BestDiscountVendorPurchase>;
+  let pastVendors: Map<string, VendorSuggestion[]>;
+  let liveByName = facts?.liveByName ?? null;
+  if (facts) {
+    medicineById = facts.medicineById;
+    bestDiscount = facts.bestDiscount;
+    pastVendors = facts.pastVendors;
+  } else {
+    const [labels, history, ranked] = await Promise.all([
+      loadMedicineLabels(medicineIds),
+      loadPurchaseHistory(),
+      rankLiveStockForNames(names).catch(() => new Map<string, VendorSuggestion[]>()),
+    ]);
+    medicineById = labels;
+    bestDiscount = history.bestDiscount;
+    pastVendors = history.pastVendors;
+    liveByName = new Map(
+      [...ranked.entries()].map(([name, vendors]) => [name.trim().toLowerCase(), vendors])
+    );
+  }
 
   const rows = [...items].sort((a, b) => {
     const manufacturer = (a.manufacturer || '').localeCompare(b.manufacturer || '');
@@ -243,7 +327,9 @@ export async function exportPurchaseListSummary(
     const item = rows[index];
     const med = item.medicineId ? medicineById.get(item.medicineId) : undefined;
     const past = item.medicineId ? pastVendors.get(item.medicineId) || [] : [];
-    const [p1, p2, p3, p4, p5] = suggestVendors(liveVendorsFromDeals(item), past);
+    const liveKey = item.medicineName.trim().toLowerCase();
+    const live = liveByName?.has(liveKey) ? liveByName.get(liveKey) || [] : liveVendorsFromDeals(item);
+    const [p1, p2, p3, p4, p5] = suggestVendors(live, past);
     const excelRow = ws.addRow([
       index + 1,
       med?.productId || '',

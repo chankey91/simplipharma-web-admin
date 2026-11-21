@@ -1701,6 +1701,7 @@ export const onSupportThreadAdminMessageCreated = ff.firestore
     return null;
   });
 
+export { purchaseListSummaryFacts } from './purchaseListSummary';
 export { onBulkMedicineJobCreated } from './bulkMedicineJob';
 export { adminZeroAllStock } from './zeroAllStock';
 export { processPurchaseInvoiceDraft } from './purchaseInvoiceIngest';
