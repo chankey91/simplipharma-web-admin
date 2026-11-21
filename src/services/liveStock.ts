@@ -2,10 +2,16 @@ import {
   addDoc,
   collection,
   doc,
+  getDoc,
+  documentId,
   getDocs,
   limit,
   orderBy,
   query,
+  startAfter,
+  type Query,
+  type QueryDocumentSnapshot,
+  type QuerySnapshot,
   serverTimestamp,
   updateDoc,
   where,
@@ -22,6 +28,7 @@ export type LiveStockUpload = {
   contentType: string;
   status: 'uploaded' | 'extracting' | 'ready' | 'failed';
   rowCount?: number;
+  savedCount?: number;
   engine?: string;
   message?: string;
   error?: string;
@@ -61,11 +68,45 @@ export function isLiveStockFile(file: File): boolean {
   return name.endsWith('.csv') || name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.pdf');
 }
 
-export async function uploadLiveStockFile(args: {
-  vendorId: string;
-  vendorName: string;
-  file: File;
-}): Promise<{ uploadId: string; rowCount: number; message: string; engine: string }> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForLiveStockResult(
+  uploadId: string,
+  onProgress?: (message: string) => void
+): Promise<{ uploadId: string; rowCount: number; message: string; engine: string }> {
+  const deadline = Date.now() + 20 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const snap = await getDoc(doc(db, 'liveStockUploads', uploadId));
+    const data = snap.data() || {};
+    const status = String(data.status || '');
+    const saved = Number(data.savedCount || 0);
+    const total = Number(data.rowCount || 0);
+    if (data.message) onProgress?.(String(data.message));
+    else if (total > 0) onProgress?.(`Saving ${saved} of ${total} products`);
+    if (status === 'ready') {
+      return {
+        uploadId,
+        rowCount: total,
+        message: String(data.message || `Loaded ${total} rows`),
+        engine: String(data.engine || ''),
+      };
+    }
+    if (status === 'failed') throw new Error(String(data.error || data.message || 'Could not load this stock file'));
+    await sleep(2000);
+  }
+  throw new Error('This file is still saving. Refresh Live stock in a few minutes.');
+}
+
+export async function uploadLiveStockFile(
+  args: {
+    vendorId: string;
+    vendorName: string;
+    file: File;
+  },
+  onProgress?: (message: string) => void
+): Promise<{ uploadId: string; rowCount: number; message: string; engine: string }> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error('Sign in required');
   if (!isLiveStockFile(args.file)) throw new Error('Upload a CSV, Excel, or PDF stock file');
@@ -92,20 +133,34 @@ export async function uploadLiveStockFile(args: {
     updatedAt: serverTimestamp(),
   });
 
-  const result = await ingestCallable({ uploadId: uploadRef.id });
-  const data = result.data as {
-    ok: boolean;
-    rowCount: number;
-    message?: string;
-    engine?: string;
-  };
-  if (!data.ok) throw new Error(data.message || 'No stock rows found');
-  return {
-    uploadId: uploadRef.id,
-    rowCount: data.rowCount,
-    message: data.message || `Loaded ${data.rowCount} rows`,
-    engine: data.engine || '',
-  };
+  onProgress?.('Reading the file…');
+  const watched = waitForLiveStockResult(uploadRef.id, onProgress);
+  void watched.catch(() => undefined);
+  try {
+    const result = await ingestCallable({ uploadId: uploadRef.id });
+    const data = result.data as {
+      ok: boolean;
+      started?: boolean;
+      rowCount: number;
+      message?: string;
+      engine?: string;
+    };
+    if (!data.ok) throw new Error(data.message || 'No stock rows found');
+    if (!data.started) {
+      return {
+        uploadId: uploadRef.id,
+        rowCount: data.rowCount,
+        message: data.message || `Loaded ${data.rowCount} rows`,
+        engine: data.engine || '',
+      };
+    }
+  } catch (error: unknown) {
+    const code = String((error as { code?: string })?.code || '');
+    const message = error instanceof Error ? error.message : '';
+    const timedOut = /deadline|timeout|unavailable/i.test(`${code} ${message}`);
+    if (!timedOut) throw error instanceof Error ? error : new Error('Could not load this stock file');
+  }
+  return watched;
 }
 
 function callableErrorMessage(error: unknown, fallback: string): string {
@@ -142,12 +197,28 @@ export async function listLiveStockUploads(): Promise<LiveStockUpload[]> {
 }
 
 export async function listLiveStockOffers(uploadId: string): Promise<LiveStockOffer[]> {
-  const snap = await getDocs(
-    query(collection(db, 'liveStockOffers'), where('uploadId', '==', uploadId), limit(5000))
-  );
-  return snap.docs
-    .map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))
-    .sort((a, b) => a.productName.localeCompare(b.productName));
+  const pageSize = 2000;
+  const offers: LiveStockOffer[] = [];
+  const offersCol = collection(db, 'liveStockOffers');
+  let cursor: QueryDocumentSnapshot | null = null;
+  while (offers.length < 50000) {
+    const pageQuery: Query = cursor
+      ? query(
+          offersCol,
+          where('uploadId', '==', uploadId),
+          orderBy(documentId()),
+          startAfter(cursor),
+          limit(pageSize)
+        )
+      : query(offersCol, where('uploadId', '==', uploadId), orderBy(documentId()), limit(pageSize));
+    const snap: QuerySnapshot = await getDocs(pageQuery);
+    offers.push(
+      ...snap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))
+    );
+    if (snap.size < pageSize) break;
+    cursor = snap.docs[snap.docs.length - 1] ?? null;
+  }
+  return offers.sort((a, b) => a.productName.localeCompare(b.productName));
 }
 
 export type CurrentLiveStockOffer = {
@@ -169,10 +240,16 @@ function asNumber(value: unknown): number | null {
 
 /** Latest uploaded file per vendor, including rows that list the product with no quantity. */
 export async function listCurrentLiveStockOffers(): Promise<CurrentLiveStockOffer[]> {
-  const snap = await getDocs(collection(db, 'liveStockOffers'));
+  const [snap, readySnap] = await Promise.all([
+    getDocs(collection(db, 'liveStockOffers')),
+    getDocs(query(collection(db, 'liveStockUploads'), where('status', '==', 'ready'))),
+  ]);
+  const readyUploadIds = new Set(readySnap.docs.map((item) => item.id));
   const rows: Array<CurrentLiveStockOffer & { uploadedAtMs: number }> = [];
   for (const item of snap.docs) {
     const data = item.data();
+    const uploadId = String(data.uploadId || '').trim();
+    if (!uploadId || !readyUploadIds.has(uploadId)) continue;
     const vendorId = String(data.vendorId || '').trim();
     const productName = String(data.productName || '').trim();
     const stockQty = asNumber(data.stockQty) ?? 0;

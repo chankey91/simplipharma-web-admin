@@ -74,17 +74,22 @@ function asNumber(value) {
 }
 async function loadLiveStockOffers(db) {
     var _a, _b, _c;
-    const snap = await db.collection('liveStockOffers').select('vendorId', 'vendorName', 'productName', 'manufacturer', 'pack', 'stockQty', 'rate', 'effectiveRate', 'scheme', 'uploadedAtMs').get();
+    const [snap, readySnap] = await Promise.all([
+        db.collection('liveStockOffers').select('uploadId', 'vendorId', 'vendorName', 'productName', 'manufacturer', 'pack', 'stockQty', 'rate', 'effectiveRate', 'discountPercentage', 'scheme', 'uploadedAtMs').get(),
+        db.collection('liveStockUploads').where('status', '==', 'ready').select('rowCount').get(),
+    ]);
+    const readyUploadIds = new Set(readySnap.docs.map((doc) => doc.id));
     const rows = [];
     for (const doc of snap.docs) {
         const d = doc.data();
+        const uploadId = String(d.uploadId || '').trim();
+        if (!uploadId || !readyUploadIds.has(uploadId))
+            continue;
         const vendorId = String(d.vendorId || '').trim();
         const productName = String(d.productName || '').trim();
         if (!vendorId || !productName)
             continue;
         const stockQty = (_a = asNumber(d.stockQty)) !== null && _a !== void 0 ? _a : 0;
-        if (stockQty <= 0)
-            continue;
         rows.push({
             vendorId,
             vendorName: String(d.vendorName || ''),
@@ -94,6 +99,7 @@ async function loadLiveStockOffers(db) {
             stockQty,
             rate: asNumber(d.rate),
             effectiveRate: asNumber(d.effectiveRate),
+            discountPercentage: asNumber(d.discountPercentage),
             scheme: String(d.scheme || ''),
             uploadedAtMs: (_b = asNumber(d.uploadedAtMs)) !== null && _b !== void 0 ? _b : 0,
         });
@@ -111,12 +117,12 @@ function rankDeals(productName, needQty, offers) {
     const byVendor = new Map();
     for (const offer of matched) {
         const current = byVendor.get(offer.vendorId);
-        if (!current || betterOffer(offer, current, needQty))
+        if (!current || betterOffer(offer, current))
             byVendor.set(offer.vendorId, offer);
     }
-    const ranked = [...byVendor.values()].sort((a, b) => compareOffers(a, b, needQty));
-    const labels = ['P1', 'P2', 'P3'];
-    return ranked.slice(0, 3).map((offer, index) => ({
+    const ranked = [...byVendor.values()].sort((a, b) => compareOffers(a, b));
+    const labels = ['P1', 'P2', 'P3', 'P4', 'P5'];
+    return ranked.slice(0, 5).map((offer, index) => ({
         priority: labels[index],
         vendorId: offer.vendorId,
         vendorName: offer.vendorName,
@@ -129,20 +135,24 @@ function rankDeals(productName, needQty, offers) {
         coversNeed: offer.stockQty >= Math.max(1, needQty),
     }));
 }
-function betterOffer(next, current, needQty) {
-    return compareOffers(next, current, needQty) < 0;
+function discountPercent(offer) {
+    const rate = offer.rate;
+    const effective = offer.effectiveRate;
+    if (rate != null && rate > 0 && effective != null && effective >= 0 && effective <= rate) {
+        return Math.round(((rate - effective) / rate) * 10000) / 100;
+    }
+    if (offer.discountPercentage != null && offer.discountPercentage > 0)
+        return offer.discountPercentage;
+    return 0;
 }
-function compareOffers(a, b, needQty) {
-    var _a, _b;
-    const need = Math.max(1, needQty);
-    const coverA = a.stockQty >= need ? 0 : 1;
-    const coverB = b.stockQty >= need ? 0 : 1;
-    if (coverA !== coverB)
-        return coverA - coverB;
-    const priceA = (_a = a.effectiveRate) !== null && _a !== void 0 ? _a : Number.POSITIVE_INFINITY;
-    const priceB = (_b = b.effectiveRate) !== null && _b !== void 0 ? _b : Number.POSITIVE_INFINITY;
-    if (priceA !== priceB)
-        return priceA - priceB;
+function betterOffer(next, current) {
+    return compareOffers(next, current) < 0;
+}
+function compareOffers(a, b) {
+    const discountA = discountPercent(a);
+    const discountB = discountPercent(b);
+    if (discountA !== discountB)
+        return discountB - discountA;
     return b.stockQty - a.stockQty;
 }
 //# sourceMappingURL=liveStockRank.js.map

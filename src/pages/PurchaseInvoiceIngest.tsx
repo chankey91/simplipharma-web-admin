@@ -528,10 +528,11 @@ const LineMedicinePicker: React.FC<{
           return;
         }
         if (!newValue.selectable || !newValue.medicine) return;
-        void resolveMedicineAfterPickerSelection(newValue.medicine, undefined).then((m) => {
+        const picked = newValue.medicine;
+        onPick(picked.id, picked.name, picked.productId, picked.gstRate);
+        setInput(getMedicinePickerLabel(picked));
+        void resolveMedicineAfterPickerSelection(picked, undefined).then((m) => {
           rememberMedicine(m);
-          onPick(m.id, m.name, m.productId, m.gstRate);
-          setInput(getMedicinePickerLabel(m));
         });
       }}
       renderGroup={renderMedicineResolveGroup}
@@ -540,7 +541,7 @@ const LineMedicinePicker: React.FC<{
         <TextField
           {...params}
           label="Match medicine"
-          placeholder="Pending orders · demands · inventory…"
+          placeholder="Pending & picked up · demands · inventory…"
           InputProps={{
             ...params.InputProps,
             startAdornment: (
@@ -648,7 +649,7 @@ const StackLines: React.FC<{
                     }
                   />
                   {line.matchReason === 'pending_order' && (
-                    <Chip size="small" color="warning" label="pending order" />
+                    <Chip size="small" color="warning" label="pending / picked up" />
                   )}
                 </Box>
               </Box>

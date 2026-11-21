@@ -1,17 +1,18 @@
 /**
  * Shared medicine resolution for purchase-invoice pickers and future auto-ingest.
- * Priority: pending-order masters → product demands (name hint) → inventory Typesense hits.
+ * Priority: Pending and Picked up order masters → product demands (name hint) → inventory Typesense hits.
  */
 import type { Medicine, Order } from '../types';
 import type { ProductDemandRow } from './productDemandSearch';
 import { deriveSearchMatchTokens } from './medicineSearch';
 import { getMedicinePackaging, getMedicinePickerLabel } from '../utils/medicinePickerLabel';
+import { isAwaitingFulfillmentStatus } from '../utils/orderStatus';
 
 export type MedicineResolveGroup = 'pending_order' | 'product_demand' | 'inventory';
 
 /** Sortable group keys so MUI Autocomplete keeps section order. */
 export const MEDICINE_RESOLVE_GROUP_LABEL: Record<MedicineResolveGroup, string> = {
-  pending_order: '1 · On pending orders',
+  pending_order: '1 · On pending & picked up orders',
   product_demand: '2 · Product demands',
   inventory: '3 · Inventory',
 };
@@ -33,10 +34,11 @@ export type MedicineResolveOption = {
   demand?: ProductDemandRow;
 };
 
+/** Medicine ids still to buy: Pending and Picked up (not yet fulfilled). */
 export function collectPendingOrderMedicineIds(orders: Order[] | undefined | null): string[] {
   const ids = new Set<string>();
   for (const order of orders || []) {
-    if (String(order.status || '') !== 'Pending') continue;
+    if (!isAwaitingFulfillmentStatus(order.status)) continue;
     for (const line of order.medicines || []) {
       const id = String(line.medicineId || '').trim();
       if (!id) continue;
@@ -47,7 +49,7 @@ export function collectPendingOrderMedicineIds(orders: Order[] | undefined | nul
 }
 
 function haystackMedicine(m: Medicine): string {
-  return [m.name, m.productId, m.code, m.manufacturer, m.company]
+  return [m.name, m.productId, m.code, m.manufacturer, m.company, getMedicinePickerLabel(m)]
     .map((x) => String(x || '').toLowerCase())
     .join(' ');
 }

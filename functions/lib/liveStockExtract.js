@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.mergeStockRows = mergeStockRows;
 exports.extractStockFromFile = extractStockFromFile;
 /**
  * Turn a vendor stock file (CSV, Excel, or PDF) into stock rows.
@@ -38,14 +39,18 @@ Rules:
 - Ignore page headers, GST summaries, and grand totals.`;
 const CHUNK_ROWS = 40;
 const MAX_CHUNKS = 12;
-async function extractStockFromFile(buffer, contentType, fileName) {
+const MAX_TABLE_LINES = 40000;
+function mergeStockRows(current, extra) {
+    return dedupeRows([...current, ...extra]);
+}
+async function extractStockFromFile(buffer, contentType, fileName, options) {
     const kind = fileKind(contentType, fileName);
     if (kind === 'pdf')
-        return extractPdf(buffer);
+        return extractPdf(buffer, options);
     const table = kind === 'sheet' ? workbookToTable(buffer) : buffer.toString('utf8');
-    return extractTable(table);
+    return extractTable(table, options);
 }
-async function extractPdf(buffer) {
+async function extractPdf(buffer, options) {
     const text = await (0, purchaseInvoiceExtract_1.extractTextFromPdf)(buffer);
     const catalog = parseItemCatalog(text);
     if (catalog.length >= 5) {
@@ -68,7 +73,7 @@ async function extractPdf(buffer) {
         };
     }
     if (text.trim().length >= 40)
-        return extractTable(text);
+        return extractTable(text, options);
     try {
         const { text: raw, model } = await (0, purchaseInvoiceExtract_1.askGeminiPdf)(STOCK_PROMPT, buffer);
         const rows = normalizeRows(parseRowsJson(raw));
@@ -89,14 +94,25 @@ async function extractPdf(buffer) {
         };
     }
 }
-async function extractTable(table) {
-    const lines = table
+async function extractTable(table, options) {
+    const paddedLines = table
         .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .slice(0, 8000);
+        .map((line) => line.replace(/\s+$/, ''))
+        .filter((line) => line.trim().length > 0)
+        .slice(0, MAX_TABLE_LINES);
+    const lines = paddedLines.map((line) => line.trim());
     if (lines.length < 2) {
         return { rows: [], engine: 'none', message: 'The file has no stock rows.' };
+    }
+    if (!(options === null || options === void 0 ? void 0 : options.geminiOnly)) {
+        const priced = parseTwoColumnPriceList(paddedLines.join('\n'));
+        if (priced.length >= 5 && priced.some((row) => row.rate != null)) {
+            return {
+                rows: priced,
+                engine: 'columns',
+                message: `Loaded ${priced.length} products from a two-column price list. Rates are saved. This file has no stock quantity, so purchase ranking can use the price only.`,
+            };
+        }
     }
     const headerIndex = detectHeaderIndex(lines);
     const header = lines[headerIndex];
@@ -104,21 +120,26 @@ async function extractTable(table) {
     const body = lines.slice(headerIndex + 1);
     // A recognised product column is more reliable than asking Gemini to redraw the sheet.
     // Gemini is reserved for files whose header row cannot be mapped.
-    if (mapped.has('productName')) {
+    if (!(options === null || options === void 0 ? void 0 : options.geminiOnly) && mapped.has('productName')) {
         const rows = columnRows(header, body);
         if (rows.length > 0) {
             const missing = !mapped.has('stockQty') && !mapped.has('rate');
+            const namedDiscount = rows.some((row) => row.discountPercentage != null);
             return {
                 rows,
                 engine: 'columns',
                 message: missing
-                    ? `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
+                    ? namedDiscount
+                        ? `Loaded ${rows.length} products. The discount printed in the name was saved. This file has no purchase rate or stock quantity.`
+                        : mapped.has('mrp')
+                            ? `Loaded ${rows.length} products with MRP. This file has no purchase rate or stock quantity.`
+                            : `Loaded ${rows.length} product names. This file has no stock or rate column, so these rows cannot be ranked on the purchase list.`
                     : `Loaded ${rows.length} rows from the column headers.`,
             };
         }
     }
     // Company name on its own row (often bold), then the products under it.
-    const sectioned = parseSpacedStockLines(lines.join('\n'));
+    const sectioned = !(options === null || options === void 0 ? void 0 : options.geminiOnly) ? parseSpacedStockLines(lines.join('\n')) : [];
     if (sectioned.length >= 5) {
         return {
             rows: sectioned,
@@ -126,35 +147,52 @@ async function extractTable(table) {
             message: sectionMessage(sectioned, `Loaded ${sectioned.length} rows from the stock list.`),
         };
     }
+    const chunkOffset = Math.max(0, (options === null || options === void 0 ? void 0 : options.geminiOffset) || 0);
+    const chunkLimit = Math.max(1, (options === null || options === void 0 ? void 0 : options.geminiChunkLimit) || MAX_CHUNKS);
+    const startLine = chunkOffset * CHUNK_ROWS;
+    const window = body.slice(startLine, startLine + chunkLimit * CHUNK_ROWS);
     const chunks = [];
-    for (let i = 0; i < body.length && chunks.length < MAX_CHUNKS; i += CHUNK_ROWS) {
-        chunks.push(body.slice(i, i + CHUNK_ROWS));
-    }
+    for (let i = 0; i < window.length; i += CHUNK_ROWS)
+        chunks.push(window.slice(i, i + CHUNK_ROWS));
     const geminiRows = [];
     let model = '';
     let geminiError = '';
+    let processed = 0;
     for (const chunk of chunks) {
+        if ((options === null || options === void 0 ? void 0 : options.geminiDeadlineMs) && Date.now() > options.geminiDeadlineMs)
+            break;
         try {
             const prompt = `${STOCK_PROMPT}\n\n--- STOCK FILE ---\n${header}\n${chunk.join('\n')}`;
             const result = await (0, purchaseInvoiceExtract_1.askGeminiText)(prompt);
             model = result.model;
             geminiRows.push(...normalizeRows(parseRowsJson(result.text)));
+            processed += 1;
         }
         catch (error) {
             geminiError = String((error === null || error === void 0 ? void 0 : error.message) || error);
             break;
         }
     }
+    const consumedLines = startLine + processed * CHUNK_ROWS;
+    const remaining = Math.max(0, body.length - consumedLines);
+    if (processed > 0 && remaining > 0 && !geminiError) {
+        return {
+            rows: dedupeRows(geminiRows),
+            engine: 'gemini',
+            model,
+            geminiContinue: { offset: chunkOffset + processed },
+            message: `Read ${consumedLines} of ${body.length} lines. The rest continues in the next batch.`,
+        };
+    }
     if (geminiRows.length > 0) {
-        const untouched = Math.max(0, body.length - chunks.length * CHUNK_ROWS);
-        const extra = untouched > 0 ? columnRows(header, body.slice(chunks.length * CHUNK_ROWS)) : [];
+        const extra = remaining > 0 ? columnRows(header, body.slice(consumedLines)) : [];
         return {
             rows: dedupeRows([...geminiRows, ...extra]),
             engine: 'gemini',
             model,
-            message: untouched > 0
-                ? `Gemini read the first ${chunks.length * CHUNK_ROWS} rows. The rest were read from the columns.`
-                : undefined,
+            message: remaining > 0
+                ? `Gemini read ${consumedLines} lines. The rest were read from the columns.`
+                : `Gemini read ${consumedLines} lines.`,
         };
     }
     const fallback = columnRows(header, body);
@@ -266,7 +304,7 @@ function splitCsv(line) {
     return cells;
 }
 const HEADER_FIELDS = [
-    { field: 'productName', pattern: /product|medicine|item name|description|particular|^name$|^item$/i },
+    { field: 'productName', pattern: /product|medicine|item name|description|particular|^name$|^item$|name\s*to\s*display|nametodisplay/i },
     { field: 'stockQty', pattern: /stock|qty|quantity|balance|closing|available|qoh/i },
     { field: 'rate', pattern: /ptr|rate|price|net/i },
     { field: 'mrp', pattern: /\bmrp\b/i },
@@ -309,18 +347,19 @@ function parseRowsJson(text) {
     return parsed.rows.filter((row) => row && typeof row === 'object');
 }
 function normalizeRows(rawRows) {
-    var _a, _b;
+    var _a, _b, _c;
     const out = [];
     for (const raw of rawRows) {
         const named = splitEmbeddedPack(textOf(raw.productName));
-        const productName = named.productName;
+        const discounted = peelPrintedDiscount(named.productName);
+        const productName = discounted.productName;
         if (!productName || productName.length < 3)
             continue;
         const schemeText = textOf(raw.scheme);
         const parsedScheme = parseScheme(schemeText);
-        const discount = (_a = numberOf(raw.discountPercentage)) !== null && _a !== void 0 ? _a : parsedScheme.discountPercentage;
+        const discount = (_b = (_a = numberOf(raw.discountPercentage)) !== null && _a !== void 0 ? _a : parsedScheme.discountPercentage) !== null && _b !== void 0 ? _b : discounted.discountPercentage;
         const rate = numberOf(raw.rate);
-        const stockQty = Math.max(0, (_b = numberOf(raw.stockQty)) !== null && _b !== void 0 ? _b : 0);
+        const stockQty = Math.max(0, (_c = numberOf(raw.stockQty)) !== null && _c !== void 0 ? _c : 0);
         const row = { productName, stockQty };
         const pack = textOf(raw.pack) || named.pack;
         const manufacturer = textOf(raw.manufacturer);
@@ -352,11 +391,11 @@ function normalizeRows(rawRows) {
     return out;
 }
 function dedupeRows(rows) {
-    var _a;
+    var _a, _b;
     const seen = new Set();
     const out = [];
     for (const row of rows) {
-        const key = `${(row.manufacturer || '').toLowerCase()}|${row.productName.toLowerCase()}|${row.pack || ''}|${(_a = row.rate) !== null && _a !== void 0 ? _a : ''}`;
+        const key = `${(row.manufacturer || '').toLowerCase()}|${row.productName.toLowerCase()}|${row.pack || ''}|${(_a = row.rate) !== null && _a !== void 0 ? _a : ''}|${(_b = row.mrp) !== null && _b !== void 0 ? _b : ''}`;
         if (seen.has(key))
             continue;
         seen.add(key);
@@ -382,6 +421,139 @@ function parseScheme(raw) {
     return {};
 }
 const SPACED_STOCK_LINE = /^(\d+)\s+(.*)\s+(-?\d+)\s+([A-Za-z][A-Za-z0-9]{1,10})$/;
+/**
+ * Marg-style printed price list: each Excel/PDF line is two fixed columns,
+ * and each column is name, pack, then a rate. Company names sit in a column
+ * until the next company in that same reading order (down the left column of
+ * a page, then down the right).
+ */
+function parseTwoColumnPriceList(text) {
+    const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.replace(/\s+$/, ''))
+        .filter((line) => line.trim().length > 0);
+    const split = detectPriceColumnSplit(lines);
+    if (!split)
+        return [];
+    const pages = [[]];
+    for (const line of lines) {
+        if (/^\s*price list\b/i.test(line)) {
+            pages.push([]);
+            continue;
+        }
+        pages[pages.length - 1].push(line);
+    }
+    let manufacturer = '';
+    const rows = [];
+    for (const page of pages) {
+        const left = [];
+        const right = [];
+        for (const line of page) {
+            if (line.length >= split - 2) {
+                left.push(line.slice(0, split));
+                right.push(line.slice(split));
+            }
+            else {
+                left.push(line);
+            }
+        }
+        for (const cell of [...left, ...right]) {
+            const parsed = classifyPriceCell(cell);
+            if (parsed.kind === 'company') {
+                manufacturer = parsed.name;
+                continue;
+            }
+            if (parsed.kind !== 'product')
+                continue;
+            const raw = {
+                productName: parsed.name,
+                stockQty: '0',
+                rate: String(parsed.rate),
+            };
+            if (parsed.pack)
+                raw.pack = parsed.pack;
+            if (manufacturer)
+                raw.manufacturer = manufacturer;
+            rows.push(...normalizeRows([raw]));
+        }
+    }
+    return rows.length >= 5 ? dedupeRows(rows) : [];
+}
+function detectPriceColumnSplit(lines) {
+    const votes = new Map();
+    for (const line of lines) {
+        if (line.length < 110)
+            continue;
+        const from = Math.floor(line.length * 0.45);
+        const to = Math.floor(line.length * 0.62);
+        const region = line.slice(from, to);
+        const gapPattern = / {3,}/g;
+        let best = null;
+        let gap;
+        while ((gap = gapPattern.exec(region))) {
+            if (gap.index == null)
+                continue;
+            if (!best || gap[0].length > best.len)
+                best = { at: from + gap.index + gap[0].length, len: gap[0].length };
+        }
+        if (!best)
+            continue;
+        votes.set(best.at, (votes.get(best.at) || 0) + 1);
+    }
+    let split = 0;
+    let count = 0;
+    for (const [at, votesAt] of votes) {
+        if (votesAt > count) {
+            count = votesAt;
+            split = at;
+        }
+    }
+    return split >= 40 && count >= 20 ? split : 0;
+}
+function classifyPriceCell(raw) {
+    var _a;
+    const trimmed = raw.trim();
+    if (!trimmed)
+        return { kind: 'skip' };
+    if (/^price list$/i.test(trimmed) || /^page\b/i.test(trimmed) || /^no\.\./i.test(trimmed) || /^continued/i.test(trimmed)) {
+        return { kind: 'skip' };
+    }
+    if (/^-{6,}$/.test(trimmed.replace(/\s/g, '')))
+        return { kind: 'skip' };
+    if (/phone|gstin|e-?mail|branch office|head office|\bpin\b|medicine chamber/i.test(trimmed))
+        return { kind: 'skip' };
+    const price = trimmed.match(/(\d{1,7}(?:,\d{3})*\.\d{2})\s*$/);
+    if (price) {
+        const rate = Number(price[1].replace(/,/g, ''));
+        const rest = trimmed.slice(0, (_a = price.index) !== null && _a !== void 0 ? _a : trimmed.length).replace(/\s+$/, '');
+        const parts = rest.split(/\s{2,}/).map((part) => part.trim()).filter(Boolean);
+        let name = rest.trim();
+        let pack = '';
+        if (parts.length >= 2) {
+            pack = parts[parts.length - 1];
+            name = parts.slice(0, -1).join(' ');
+        }
+        if (name.length < 2 || /^rate$/i.test(name) || !Number.isFinite(rate))
+            return { kind: 'skip' };
+        return { kind: 'product', name, pack, rate };
+    }
+    const company = trimmed
+        .replace(/\bRATE\b/gi, '')
+        .replace(/-{3,}/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\.\d{1,3}$/, '')
+        .trim();
+    if (company &&
+        company.length >= 2 &&
+        company.length <= 60 &&
+        /[A-Za-z]/.test(company) &&
+        !/\d+\.\d{2}/.test(company) &&
+        !/\d{5,}/.test(company)) {
+        return { kind: 'company', name: company };
+    }
+    return { kind: 'skip' };
+}
 const CATALOG_COMPANY = /^[A-Za-z][A-Za-z0-9 .&/'()-]*$/;
 const CATALOG_PACK = /^(.*\S)\s+(\d+(?:\.\d+)?\s*(?:mml|ml|mg|gm|gms|g|kg)|\d+\s*[*x]\s*\d+|\d+\s*tabs?)$/i;
 /** Eyehouse-style item list: "SNo. ITEM CODE ITEM DESCRIPTION", company name, then "1 CUBRIM-T 5ML". */
@@ -540,11 +712,27 @@ function splitEmbeddedPack(name) {
         return { productName: parts.slice(0, -1).join(' ').replace(/\s+/g, ' '), pack: last.toUpperCase() };
     }
     const collapsed = name.replace(/\s+/g, ' ').trim();
-    const peeled = collapsed.match(/^(.*\S)\s+(\d+\s*[*x]\s*\d+\s*(?:ml|mg)?|\d+\s*(?:gm|g|ml)|\d+'?s|\d+')$/i);
-    if (peeled && peeled[1].trim().length >= 3) {
+    const peeled = collapsed.match(/^(.*\S)\s+(\d+\s*[*x]\s*\d*\.?\d+(?:\s*[*x]\s*\d+)?(?:\s*[A-Za-z]{1,6})?|\d+\s*(?:gm|g|ml)|\d+'?s|\d+')$/i);
+    if (peeled && peeled[1].trim().length >= 3 && /[*x]|gm|ml/i.test(peeled[2])) {
         return { productName: peeled[1].trim(), pack: peeled[2].replace(/\s+/g, '').toUpperCase() };
     }
     return { productName: collapsed, pack: '' };
+}
+/** "AMOX DISC 10% 1*10 TAB" stores 10 as the discount and drops that phrase from the name. */
+function peelPrintedDiscount(name) {
+    const match = name.match(/\b(?:DISC(?:OUNT)?|DISV|DSIC|DIS)\s*\(?\s*(?:NET\s*\)?\s*)?(\d+(?:\.\d+)?)\s*%?|\(\s*DPCO\s*\)\s*(?:DSIC|DISC|DIS|D)?\s*(\d+(?:\.\d+)?)\s*%?/i);
+    if (!match || match.index == null)
+        return { productName: name };
+    const discount = Number(match[1] || match[2]);
+    if (!Number.isFinite(discount) || discount <= 0 || discount >= 100)
+        return { productName: name };
+    const productName = `${name.slice(0, match.index)} ${name.slice(match.index + match[0].length)}`
+        .replace(/\(\s*DPCO\s*\)/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (productName.length < 3)
+        return { productName: name };
+    return { productName, discountPercentage: discount };
 }
 function textOf(value) {
     if (value == null)

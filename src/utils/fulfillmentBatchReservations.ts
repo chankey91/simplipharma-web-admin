@@ -1,4 +1,5 @@
 import type { Order } from '../types';
+import { isAwaitingFulfillmentStatus } from './orderStatus';
 import { orderedUnitsFromAllocation } from './schemeFulfillment';
 import { pickFulfillmentDraft } from './orderFulfillmentDraft';
 
@@ -48,7 +49,7 @@ export function accumulateFulfillmentReservationsFromLines(
   }
 }
 
-/** Soft holds from other pending orders' in-progress fulfillment drafts. */
+/** Soft holds from other Pending and Picked up orders' in-progress fulfillment drafts. */
 export function buildExternalPendingReservations(
   orders: Order[] | undefined,
   excludeOrderId: string
@@ -56,7 +57,7 @@ export function buildExternalPendingReservations(
   const map = new Map<string, number>();
   if (!orders?.length) return map;
   for (const o of orders) {
-    if (o.status !== 'Pending' || o.id === excludeOrderId) continue;
+    if (!isAwaitingFulfillmentStatus(o.status) || o.id === excludeOrderId) continue;
     const draft = pickFulfillmentDraft(o.id, o.fulfillmentDraft);
     if (draft?.medicines?.length) {
       accumulateFulfillmentReservationsFromLines(draft.medicines, map);
@@ -193,7 +194,7 @@ export function formatBatchStockConflictMessage(conflicts: BatchStockConflict[])
       (c) =>
         `${c.medicineName} / batch ${c.batchNumber}: ${c.allocatedOnThisOrder} allocated here, ` +
         `but only ${c.effectiveAvailable} available (${c.stockQuantity} in stock, ` +
-        `${c.reservedElsewhere} reserved in other pending orders).`
+        `${c.reservedElsewhere} reserved in other open orders).`
     )
     .join('\n');
 }

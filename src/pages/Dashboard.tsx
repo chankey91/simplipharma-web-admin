@@ -192,7 +192,7 @@ export const DashboardPage: React.FC = () => {
 
   const stats = useMemo(() => {
     const statusCounts = orderStats?.statusCounts;
-    const pending = statusCounts?.['Pending'] ?? 0;
+    const pending = (statusCounts?.['Pending'] ?? 0) + (statusCounts?.['Picked up'] ?? 0);
     const inFulfillment = statusCounts?.['Order Fulfillment'] ?? 0;
     const inTransit = statusCounts?.['In Transit'] ?? 0;
     const delivered = statusCounts?.['Delivered'] ?? 0;
@@ -390,7 +390,7 @@ export const DashboardPage: React.FC = () => {
           <StatCard
             title="Pending"
             value={stats.pending}
-            caption="Needs processing"
+            caption="Pending and picked up"
             accent={accent.warning}
             icon={<ShoppingCart sx={{ fontSize: 40 }} />}
             onClick={() => navigate('/orders')}
