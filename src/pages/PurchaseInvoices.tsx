@@ -43,6 +43,8 @@ import {
 } from '../hooks/usePurchaseInvoices';
 import { useVendors } from '../hooks/useVendors';
 import { IstDateField } from '../components/IstDateField';
+import { SellingFirmFilterField } from '../components/SellingFirmField';
+import { matchesSellingFirmFilter } from '../constants/sellingFirms';
 import { DailyPurchaseDialog } from '../components/DailyPurchaseDialog';
 import {
   getDefaultNotesFilterRangeIST,
@@ -110,6 +112,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [firmFilter, setFirmFilter] = useState('All');
   const [vendorId, setVendorId] = useState('');
   const [fromDateFilter, setFromDateFilter] = useState('');
   const [toDateFilter, setToDateFilter] = useState('');
@@ -144,7 +147,8 @@ export const PurchaseInvoicesPage: React.FC = () => {
     draftFromDateFilter !== fromDateFilter || draftToDateFilter !== toDateFilter;
   const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
   const hasVendorFilter = Boolean(vendorId);
-  const useLocalList = typesenseDisabled || hasDateFilter || hasVendorFilter;
+  const hasFirmFilter = firmFilter !== 'All';
+  const useLocalList = typesenseDisabled || hasDateFilter || hasVendorFilter || hasFirmFilter;
 
   const applyDateRange = useCallback((from: string, to: string) => {
     setDraftFromDateFilter(from);
@@ -201,7 +205,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const { data: amountTotal } = usePurchaseInvoiceAmountTotal();
 
   const { data: invoices, isLoading: allLoading } = usePurchaseInvoices({
-    enabled: typesenseDisabled && !hasDateFilter && !hasVendorFilter,
+    enabled: (typesenseDisabled || hasFirmFilter) && !hasDateFilter && !hasVendorFilter,
   });
   const invoiceRange = usePurchaseInvoicesInDateRange(fromFilterMs, toFilterMs, {
     enabled: hasDateFilter,
@@ -236,7 +240,8 @@ export const PurchaseInvoicesPage: React.FC = () => {
         (invoice.vendorInvoiceNumber || '').toLowerCase().includes(term) ||
         invoice.items.some((item) => item.medicineName.toLowerCase().includes(term));
       const matchesStatus = statusFilter === 'All' || invoice.paymentStatus === statusFilter;
-      return matchesSearch && matchesStatus;
+      const matchesFirm = matchesSellingFirmFilter(invoice.sellingFirmId, firmFilter);
+      return matchesSearch && matchesStatus && matchesFirm;
     });
     const sorted = [...filtered];
     sorted.sort((a, b) => {
@@ -277,6 +282,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
     toDateFilter,
     debouncedTerm,
     statusFilter,
+    firmFilter,
     sortKey,
     sortDirection,
   ]);
@@ -309,11 +315,9 @@ export const PurchaseInvoicesPage: React.FC = () => {
   const totalCount = useLocalList ? fallbackSorted.length : searchData?.found ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage));
 
-  const scopedForCounts = hasDateFilter
-    ? invoiceRange.data
-    : hasVendorFilter
-      ? vendorInvoices.data
-      : invoices;
+  const scopedForCounts = (
+    hasDateFilter ? invoiceRange.data : hasVendorFilter ? vendorInvoices.data : invoices
+  )?.filter((invoice) => matchesSellingFirmFilter(invoice.sellingFirmId, firmFilter));
   const totalInvoices = useLocalList
     ? (scopedForCounts?.length ?? 0)
     : searchData?.totalAll ?? 0;
@@ -409,10 +413,11 @@ export const PurchaseInvoicesPage: React.FC = () => {
     }
     setExtractingDiscountList(true);
     try {
-      const scoped =
+      const scoped = (
         hasDateFilter || hasVendorFilter
           ? (hasDateFilter ? invoiceRange.data : vendorInvoices.data) ?? []
-          : await getAllPurchaseInvoices();
+          : await getAllPurchaseInvoices()
+      ).filter((invoice) => matchesSellingFirmFilter(invoice.sellingFirmId, firmFilter));
       const count = await exportPurchaseDiscountList(scoped, minPct);
       if (count === 0) {
         await alert(`No medicines found with vendor discount of ${minPct}% or more.`, {
@@ -575,6 +580,13 @@ export const PurchaseInvoicesPage: React.FC = () => {
             <MenuItem value="Partial">Partial</MenuItem>
           </Select>
         </FormControl>
+        <SellingFirmFilterField
+          value={firmFilter}
+          onChange={(next) => {
+            setFirmFilter(next);
+            setPage(1);
+          }}
+        />
         <FormControl size="small" sx={{ minWidth: 180 }}>
           <InputLabel>Vendor</InputLabel>
           <Select

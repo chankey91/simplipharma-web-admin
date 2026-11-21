@@ -8,6 +8,7 @@ import {
   getMedicineById,
 } from './inventory';
 import { generateOrderInvoiceNumber } from '../utils/invoiceNumber';
+import { isAlternateSellingFirm, sellingNumberPrefix } from '../constants/sellingFirms';
 import { paidFreeFromAllocation, physicalQtyFromAllocation } from '../utils/schemeFulfillment';
 import {
   collectOrderInventoryDeltas,
@@ -982,6 +983,8 @@ export type FulfillOrderOptions = {
   purchaseInvoices?: PurchaseInvoice[];
   /** Apply retailer wallet (credit notes) against this invoice total. */
   applyWallet?: boolean;
+  /** Second selling firm. Omit or Sumukh to keep the current invoice series and GSTIN. */
+  sellingFirmId?: string | null;
 };
 
 export const fulfillOrder = async (
@@ -1125,7 +1128,7 @@ export const fulfillOrder = async (
     let invoiceNumber = order.invoiceNumber;
     if (invoiceNumber) return invoiceNumber;
     try {
-      invoiceNumber = await generateOrderInvoiceNumber();
+      invoiceNumber = await generateOrderInvoiceNumber(sellingNumberPrefix(options?.sellingFirmId, 'sales'));
       console.log(`Generated invoice number for order ${orderId}: ${invoiceNumber}`);
       return invoiceNumber;
     } catch (error) {
@@ -1608,6 +1611,11 @@ export const fulfillOrder = async (
   if (invoiceNumber) {
     updateData.invoiceNumber = invoiceNumber;
   }
+  if (isAlternateSellingFirm(options?.sellingFirmId)) {
+    updateData.sellingFirmId = options?.sellingFirmId;
+  } else if (order.sellingFirmId) {
+    updateData.sellingFirmId = deleteField();
+  }
   
   // Add tray number and processed by if provided
   if (fulfillmentData.trayNumber) {
@@ -1627,6 +1635,7 @@ export const fulfillOrder = async (
       taxAmount: cleanFulfillmentData.taxAmount,
       taxableValue,
       totalAmount: cleanFulfillmentData.totalAmount,
+      firmId: options?.sellingFirmId,
       buyerGstin: retailer?.gst,
       buyerLegalName: retailer?.shopName || retailer?.displayName || order.retailerName,
       documentKind: 'invoice',

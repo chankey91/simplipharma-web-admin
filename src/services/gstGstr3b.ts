@@ -1,5 +1,11 @@
 import { loadGstPeriodBooks } from './gstPeriodBooks';
 import { hasGstSnapshot } from '../utils/gstSnapshot';
+import {
+  inwardBelongsToFirm,
+  isAlternateSellingFirm,
+  outwardBelongsToFirm,
+  resolveSellingFirm,
+} from '../constants/sellingFirms';
 import { isCancelledOrderStatus } from '../utils/orderStatus';
 import { normalizeStateCode } from '../utils/gstin';
 import {
@@ -16,7 +22,10 @@ function empty(): Gstr3bBucket {
   return { txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
 }
 
-export async function buildGstr3bExport(date = new Date()): Promise<Gstr3bExportResult> {
+export async function buildGstr3bExport(
+  date = new Date(),
+  firmId?: string | null
+): Promise<Gstr3bExportResult> {
   const books = await loadGstPeriodBooks(date);
   const warnings: string[] = [];
   let outward = empty();
@@ -35,6 +44,7 @@ export async function buildGstr3bExport(date = new Date()): Promise<Gstr3bExport
 
   for (const order of books.orders) {
     if (!order.invoiceNumber || order.status === 'Pending' || isCancelledOrderStatus(order.status)) continue;
+    if (!outwardBelongsToFirm(order, firmId)) continue;
     if (!hasGstSnapshot(order) || !order.gst) {
       warnings.push(`Sales invoice ${order.invoiceNumber} has no GST snapshot.`);
       continue;
@@ -47,6 +57,7 @@ export async function buildGstr3bExport(date = new Date()): Promise<Gstr3bExport
   }
 
   for (const note of books.creditNotes) {
+    if (!outwardBelongsToFirm(note, firmId)) continue;
     if (!hasGstSnapshot(note) || !note.gst) {
       warnings.push(`Credit note ${note.creditNoteNumber} has no GST snapshot.`);
       continue;
@@ -56,6 +67,7 @@ export async function buildGstr3bExport(date = new Date()): Promise<Gstr3bExport
   }
 
   for (const note of books.debitNotes) {
+    if (!outwardBelongsToFirm(note, firmId)) continue;
     if (!hasGstSnapshot(note) || !note.gst) {
       warnings.push(`Debit note ${note.debitNoteNumber} has no GST snapshot.`);
       continue;
@@ -65,6 +77,7 @@ export async function buildGstr3bExport(date = new Date()): Promise<Gstr3bExport
   }
 
   for (const invoice of books.purchases) {
+    if (!inwardBelongsToFirm(invoice, firmId)) continue;
     if (!hasGstSnapshot(invoice) || !invoice.gst) {
       warnings.push(`Purchase ${invoice.invoiceNumber} has no GST snapshot.`);
       continue;
@@ -78,12 +91,13 @@ export async function buildGstr3bExport(date = new Date()): Promise<Gstr3bExport
   }
 
   for (const ret of books.purchaseReturns) {
+    if (!inwardBelongsToFirm(ret, firmId)) continue;
     if (!hasGstSnapshot(ret) || !ret.gst) continue;
     itc = addSnapshot(itc, ret.gst, -1);
   }
 
   return buildGstr3bPayload({
-    gstin: books.settings.gstin,
+    gstin: isAlternateSellingFirm(firmId) ? resolveSellingFirm(firmId).gstin : books.settings.gstin,
     date,
     outward,
     itc,

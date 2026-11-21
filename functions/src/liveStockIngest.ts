@@ -1,42 +1,27 @@
 /**
- * Load a vendor live-stock file (CSV, Excel, or PDF) into liveStockOffers.
- * The latest successful file for a vendor replaces that vendor's previous rows.
+ * Load a vendor live-stock file (CSV, Excel, or PDF) into Typesense.
+ * Firestore keeps one upload record. The latest successful file replaces that vendor's previous rows.
  */
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { ff } from './functionRegion';
-import { getUserRole, isAdminOrOperationsRole } from './panelAuth';
+import { getUserRole, isAdminOrOperationsRole, isPurchaseOfficerRole } from './panelAuth';
 import { extractStockFromFile, mergeStockRows, type ExtractedStockRow } from './liveStockExtract';
+import { loadLiveStockOffers, rankDeals } from './liveStockRank';
+import {
+  deleteLiveStockFile,
+  deleteLiveStockForUpload,
+  deleteOlderVendorStock,
+  importLiveStockDocuments,
+  liveStockDocument,
+  migrateFirestoreLiveStock,
+  searchLiveStockHits,
+} from './liveStockTypesense';
 
 const UPLOADS = 'liveStockUploads';
-const OFFERS = 'liveStockOffers';
 
-function stripUndefined<T>(value: T): T {
-  if (value === undefined || value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map((item) => stripUndefined(item)) as T;
-  const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (item === undefined) continue;
-    out[key] = stripUndefined(item);
-  }
-  return out as T;
-}
-
-async function deleteStaleVendorOffers(
-  db: admin.firestore.Firestore,
-  vendorId: string,
-  uploadedAtMs: number
-): Promise<number> {
-  const snap = await db.collection(OFFERS).where('vendorId', '==', vendorId).get();
-  const stale = snap.docs.filter((doc) => Number(doc.data().uploadedAtMs || 0) < uploadedAtMs);
-  let removed = 0;
-  for (let i = 0; i < stale.length; i += 400) {
-    const batch = db.batch();
-    for (const doc of stale.slice(i, i + 400)) batch.delete(doc.ref);
-    await batch.commit();
-    removed += Math.min(400, stale.length - i);
-  }
-  return removed;
+async function deleteStaleVendorOffers(vendorId: string, uploadedAtMs: number): Promise<number> {
+  return deleteOlderVendorStock(vendorId, uploadedAtMs);
 }
 
 export const ingestLiveStockUpload = ff
@@ -259,9 +244,7 @@ async function deleteParsedRows(path: string): Promise<void> {
 }
 
 async function deleteOffersForUpload(uploadId: string): Promise<void> {
-  const db = admin.firestore();
-  const snap = await db.collection(OFFERS).where('uploadId', '==', uploadId).get();
-  await deleteOfferDocs(snap.docs);
+  await deleteLiveStockForUpload(uploadId);
 }
 
 async function writeOfferSlice(
@@ -274,37 +257,13 @@ async function writeOfferSlice(
     uploadedAtMs: number;
   }
 ): Promise<number> {
-  const db = admin.firestore();
   const slice = rows.slice(from, from + WRITE_CHUNK);
   if (!slice.length) return from;
-  const batch = db.batch();
-  slice.forEach((row, offset) => {
-    const docRef = db.collection(OFFERS).doc(`${upload.uploadId}_${from + offset}`);
-    batch.set(
-      docRef,
-      stripUndefined({
-        uploadId: upload.uploadId,
-        vendorId: upload.vendorId,
-        vendorName: upload.vendorName,
-        productName: row.productName,
-        productNameKey: row.productName.toLowerCase(),
-        pack: row.pack || null,
-        manufacturer: row.manufacturer || null,
-        stockQty: row.stockQty,
-        rate: row.rate ?? null,
-        mrp: row.mrp ?? null,
-        scheme: row.scheme || null,
-        schemePaidQty: row.schemePaidQty ?? null,
-        schemeFreeQty: row.schemeFreeQty ?? null,
-        discountPercentage: row.discountPercentage ?? null,
-        expiry: row.expiry || null,
-        effectiveRate: row.effectiveRate ?? null,
-        uploadedAtMs: upload.uploadedAtMs,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      })
-    );
-  });
-  await batch.commit();
+  await importLiveStockDocuments(
+    slice.map((row, offset) =>
+      liveStockDocument(`${upload.uploadId}_${from + offset}`, row, upload)
+    )
+  );
   return from + slice.length;
 }
 
@@ -483,7 +442,7 @@ async function runLiveStockBatch(uploadId: string): Promise<void> {
       return;
     }
 
-    const replaced = await deleteStaleVendorOffers(db, vendorId, uploadedAtMs);
+    const replaced = await deleteStaleVendorOffers(vendorId, uploadedAtMs);
     await deleteParsedRows(parsedPath);
     await ref.set(
       {
@@ -517,18 +476,6 @@ async function runLiveStockBatch(uploadId: string): Promise<void> {
   }
 }
 
-async function deleteOfferDocs(docs: FirebaseFirestore.QueryDocumentSnapshot[]): Promise<number> {
-  const db = admin.firestore();
-  let removed = 0;
-  for (let i = 0; i < docs.length; i += 400) {
-    const batch = db.batch();
-    for (const doc of docs.slice(i, i + 400)) batch.delete(doc.ref);
-    await batch.commit();
-    removed += Math.min(400, docs.length - i);
-  }
-  return removed;
-}
-
 /** Remove one uploaded stock file and the products that came from it. */
 export const deleteLiveStockUpload = ff
   .runWith({ minInstances: 0, timeoutSeconds: 120, memory: '512MB' })
@@ -558,17 +505,7 @@ export const deleteLiveStockUpload = ff
       const uploadedAtMs = Number(upload.uploadedAtMs || 0);
       const storagePath = String(upload.storagePath || '').trim();
 
-      const offerSnap = vendorId
-        ? await db.collection(OFFERS).where('vendorId', '==', vendorId).get()
-        : await db.collection(OFFERS).where('uploadId', '==', uploadId).get();
-      const doomed = offerSnap.docs.filter((doc) => {
-        const row = doc.data();
-        if (String(row.uploadId || '') === uploadId) return true;
-        // Drop this file and anything older so an earlier list does not become current again.
-        // A newer file for the same vendor stays.
-        return uploadedAtMs > 0 && Number(row.uploadedAtMs || 0) <= uploadedAtMs;
-      });
-      const removedOffers = await deleteOfferDocs(doomed);
+      const removedOffers = await deleteLiveStockFile(vendorId, uploadId, uploadedAtMs);
 
       if (storagePath) {
         try {
@@ -586,4 +523,74 @@ export const deleteLiveStockUpload = ff
       console.error('deleteLiveStockUpload failed', { uploadId, message });
       throw new functions.https.HttpsError('internal', message);
     }
+  });
+
+async function requireStockReader(uid: string | undefined): Promise<void> {
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+  const role = await getUserRole(uid);
+  if (!isAdminOrOperationsRole(role) && !isPurchaseOfficerRole(role)) {
+    throw new functions.https.HttpsError('permission-denied', 'Not allowed to read live stock');
+  }
+}
+
+/** Products from one uploaded file. The screen searches here instead of downloading the file. */
+export const searchLiveStockOffers = ff
+  .runWith({ minInstances: 0, timeoutSeconds: 60, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    await requireStockReader(context.auth?.uid);
+    const uploadId = String(data?.uploadId || '').trim();
+    if (!uploadId) throw new functions.https.HttpsError('invalid-argument', 'uploadId required');
+    const q = String(data?.q || '').slice(0, 80);
+    const page = Math.min(20, Math.max(1, Number(data?.page) || 1));
+    const perPage = Math.min(250, Math.max(1, Number(data?.perPage) || 250));
+    try {
+      return await searchLiveStockHits({ uploadId, q, page, perPage });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Could not search stock';
+      throw new functions.https.HttpsError('failed-precondition', message.slice(0, 300));
+    }
+  });
+
+function dealDiscount(rate: number | null, effectiveRate: number | null): { discount: number; known: boolean } {
+  if (rate != null && rate > 0 && effectiveRate != null && effectiveRate >= 0 && effectiveRate <= rate) {
+    return { discount: Math.round(((rate - effectiveRate) / rate) * 10000) / 100, known: true };
+  }
+  return { discount: 0, known: false };
+}
+
+/** Rank live-stock vendors for order-summary names without sending every stock row to the browser. */
+export const rankLiveStockNames = ff
+  .runWith({ minInstances: 0, timeoutSeconds: 120, memory: '1GB' })
+  .https.onCall(async (data, context) => {
+    await requireStockReader(context.auth?.uid);
+    const names = Array.isArray(data?.names)
+      ? data.names.map((name: unknown) => String(name || '').trim()).filter(Boolean).slice(0, 80)
+      : [];
+    const offers = await loadLiveStockOffers(admin.firestore());
+    return {
+      matches: names.map((name: string) => ({
+        name,
+        vendors: rankDeals(name, 1, offers).map((deal) => {
+          const priced = dealDiscount(deal.rate, deal.effectiveRate);
+          return {
+            vendorName: deal.vendorName,
+            discount: priced.discount,
+            stockQty: deal.stockQty,
+            discountKnown: priced.known,
+          };
+        }),
+      })),
+    };
+  });
+
+/** One-time copy of Firestore stock rows into Typesense, then remove them from Firestore. */
+export const migrateLiveStockOffersToTypesense = ff
+  .runWith({ minInstances: 0, timeoutSeconds: 540, memory: '1GB' })
+  .https.onCall(async (_data, context) => {
+    await requireStockReader(context.auth?.uid);
+    const role = await getUserRole(context.auth!.uid);
+    if (role !== 'admin' && role !== 'Admin') {
+      throw new functions.https.HttpsError('permission-denied', 'Admin required');
+    }
+    return migrateFirestoreLiveStock(admin.firestore());
   });

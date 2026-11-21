@@ -6,11 +6,11 @@ import { limit } from 'firebase/firestore';
  * Format: SPP + YYYY + MM + 001 (incrementing)
  * Example: SPP202501001, SPP202501002, etc.
  */
-export const generatePurchaseInvoiceNumber = async (): Promise<string> => {
+export const generatePurchaseInvoiceNumber = async (numberPrefix?: string): Promise<string> => {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const prefix = `SPP${year}${month}`;
+  const prefix = numberPrefix || `SPP${year}${month}`;
   
   // Query all purchase invoices with this prefix, ordered by invoice number descending
   const invoicesCol = collection(db, 'purchaseInvoices');
@@ -62,11 +62,11 @@ export const generatePurchaseInvoiceNumber = async (): Promise<string> => {
  * Format: SPS + YYYY + MM + 001 (incrementing)
  * Example: SPS202501001, SPS202501002, etc.
  */
-export const generateOrderInvoiceNumber = async (): Promise<string> => {
+export const generateOrderInvoiceNumber = async (numberPrefix?: string): Promise<string> => {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const prefix = `SPS${year}${month}`;
+  const prefix = numberPrefix || `SPS${year}${month}`;
   
   // Query all orders with this prefix, ordered by invoice number descending
   const ordersCol = collection(db, 'orders');
@@ -117,11 +117,11 @@ export const generateOrderInvoiceNumber = async (): Promise<string> => {
  * Generate next credit note number
  * Format: SPC + YYYY + MM + 001 (incrementing)
  */
-export const generateCreditNoteNumber = async (): Promise<string> => {
+export const generateCreditNoteNumber = async (numberPrefix?: string): Promise<string> => {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const prefix = `SPC${year}${month}`;
+  const prefix = numberPrefix || `SPC${year}${month}`;
 
   const notesCol = collection(db, 'credit_notes');
   const q = query(
@@ -159,11 +159,11 @@ export const generateCreditNoteNumber = async (): Promise<string> => {
  * Generate next purchase return number
  * Format: SPR + YYYY + MM + 001 (incrementing)
  */
-export const generatePurchaseReturnNumber = async (): Promise<string> => {
+export const generatePurchaseReturnNumber = async (numberPrefix?: string): Promise<string> => {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const prefix = `SPR${year}${month}`;
+  const prefix = numberPrefix || `SPR${year}${month}`;
 
   const returnsCol = collection(db, 'purchaseReturns');
   const q = query(
@@ -201,11 +201,11 @@ export const generatePurchaseReturnNumber = async (): Promise<string> => {
  * Generate next debit note number
  * Format: SPD + YYYY + MM + 001 (incrementing)
  */
-export const generateDebitNoteNumber = async (): Promise<string> => {
+export const generateDebitNoteNumber = async (numberPrefix?: string): Promise<string> => {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const prefix = `SPD${year}${month}`;
+  const prefix = numberPrefix || `SPD${year}${month}`;
 
   const notesCol = collection(db, 'debit_notes');
   const q = query(

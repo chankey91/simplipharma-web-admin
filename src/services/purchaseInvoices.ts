@@ -10,6 +10,7 @@ import type { QueryConstraint, QueryDocumentSnapshot } from 'firebase/firestore'
 import { purchaseInvoiceLineBatchKeys, purchaseItemStockBatchNumber } from '../utils/purchaseInvoiceBatch';
 import { resolvedPurchaseAdditionalDiscount } from '../utils/purchaseInvoiceTotals';
 import { createInwardGstSnapshot } from './gstDocuments';
+import { isAlternateSellingFirm } from '../constants/sellingFirms';
 import { assertDocumentDateWritable } from './gstPeriods';
 import { gstLinesFromPurchaseItems } from '../utils/gstLineSnapshot';
 import {
@@ -458,6 +459,9 @@ export const createPurchaseInvoice = async (
   if (invoiceData.vendorGstin) {
     invoiceDoc.vendorGstin = invoiceData.vendorGstin;
   }
+  if (isAlternateSellingFirm(invoiceData.sellingFirmId)) {
+    invoiceDoc.sellingFirmId = invoiceData.sellingFirmId;
+  }
   if (invoiceData.vendorInvoiceNumber) {
     invoiceDoc.vendorInvoiceNumber = invoiceData.vendorInvoiceNumber;
   } else if (invoiceData.invoiceNumber) {
@@ -470,6 +474,7 @@ export const createPurchaseInvoice = async (
       taxableValue: Math.max(0, (invoiceData.subTotal || 0) - (invoiceData.discount || 0)),
       vendorGstin: invoiceData.vendorGstin,
       vendorName: invoiceData.vendorName,
+      firmId: invoiceData.sellingFirmId,
       lines: gstLinesFromPurchaseItems(
         invoiceData.items,
         Math.max(0, (invoiceData.subTotal || 0) - (invoiceData.discount || 0)),
@@ -638,7 +643,7 @@ export const updatePurchaseInvoice = async (
   const updateData: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(invoiceData)) {
-    if (key === 'items' || key === 'invoiceDate') continue;
+    if (key === 'items' || key === 'invoiceDate' || key === 'sellingFirmId' || key === 'gst') continue;
     if (value !== undefined) {
       updateData[key] = value;
     }
@@ -729,6 +734,37 @@ export const updatePurchaseInvoice = async (
 
       return cleanedItem;
     });
+  }
+
+  if ('sellingFirmId' in invoiceData) {
+    const existingSnap = await getDoc(invoiceRef);
+    const previousFirmId = existingSnap.data()?.sellingFirmId as string | undefined;
+    const nextFirmId = invoiceData.sellingFirmId;
+    const previousAlternate = isAlternateSellingFirm(previousFirmId);
+    const nextAlternate = isAlternateSellingFirm(nextFirmId);
+    if (previousAlternate || nextAlternate) {
+      updateData.sellingFirmId = nextAlternate ? nextFirmId : deleteField();
+    }
+    if (previousFirmId !== nextFirmId && (previousAlternate || nextAlternate)) {
+      const existing = existingSnap.data() || {};
+      const taxableValue = Math.max(
+        0,
+        Number(invoiceData.subTotal ?? existing.subTotal) -
+          Number(invoiceData.discount ?? existing.discount ?? 0)
+      );
+      updateData.gst = await createInwardGstSnapshot({
+        taxAmount: Number(invoiceData.taxAmount ?? existing.taxAmount) || 0,
+        taxableValue,
+        vendorGstin: invoiceData.vendorGstin || existing.vendorGstin,
+        vendorName: invoiceData.vendorName || existing.vendorName,
+        firmId: nextFirmId,
+        lines: gstLinesFromPurchaseItems(
+          invoiceData.items || existing.items || [],
+          taxableValue,
+          Number(invoiceData.taxAmount ?? existing.taxAmount) || 0
+        ),
+      });
+    }
   }
 
   await updateDoc(invoiceRef, updateData);

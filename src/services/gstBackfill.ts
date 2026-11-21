@@ -7,13 +7,14 @@ import { getPurchaseInvoicesInRange } from './purchaseInvoices';
 import { getAllVendors } from './vendors';
 import { getAllStores } from './stores';
 import { companyGstFilingGrain, getCompanyGstSettings } from './gstSettings';
+import { companySettingsForAlternateFirm, isAlternateSellingFirm } from '../constants/sellingFirms';
 import { assertPeriodOpenForWrite } from './gstPeriods';
 import { invalidateGstPeriodBooksCache } from './gstPeriodBooks';
 import { gstPeriodBounds, indianGstPeriod } from '../utils/gstPeriod';
 import { hasGstSnapshot, buildFaithfulOutwardSnapshot, buildFaithfulInwardSnapshot } from '../utils/gstSnapshot';
 import { gstinStateCode, isValidGstinFormat, normalizeGstin } from '../utils/gstin';
 import { stripUndefinedDeep } from '../utils/firestorePayload';
-import type { GstDocumentSnapshot, GstInvoiceType } from '../types/gst';
+import type { CompanyGstSettings, GstDocumentSnapshot, GstInvoiceType } from '../types/gst';
 import type { Order, CreditNote, DebitNote } from '../types';
 
 export interface GstBackfillSample {
@@ -37,6 +38,10 @@ export interface GstBackfillPreview {
   purchaseInvoices: number;
   total: number;
   samples: GstBackfillSample[];
+}
+
+function settingsForDocument(settings: CompanyGstSettings, firmId?: string | null): CompanyGstSettings {
+  return isAlternateSellingFirm(firmId) ? companySettingsForAlternateFirm(String(firmId)) : settings;
 }
 
 function taxableFrom(doc: { subTotal?: number; totalDiscount?: number; discount?: number }): number {
@@ -121,7 +126,7 @@ export async function previewGstBackfill(date = new Date()): Promise<GstBackfill
   for (const order of loaded.legacyOrders.slice(0, 12)) {
     const retailer = retailerFields(order.retailerId, order.retailerName);
     const gst = buildFaithfulOutwardSnapshot({
-      settings: loaded.settings,
+      settings: settingsForDocument(loaded.settings, order.sellingFirmId),
       taxAmount: order.taxAmount || 0,
       taxableValue: taxableFrom(order),
       totalAmount: order.totalAmount || 0,
@@ -229,7 +234,7 @@ export async function applyGstBackfill(
         collection: collectionName,
         id: row.id,
         gst: buildFaithfulOutwardSnapshot({
-          settings: loaded.settings,
+          settings: settingsForDocument(loaded.settings, row.sellingFirmId),
           taxAmount: row.taxAmount || 0,
           taxableValue: taxableFrom(row),
           totalAmount: row.totalAmount || 0,
@@ -254,7 +259,7 @@ export async function applyGstBackfill(
       collection: 'purchaseInvoices',
       id: invoice.id,
       gst: buildFaithfulInwardSnapshot({
-        settings: loaded.settings,
+        settings: settingsForDocument(loaded.settings, invoice.sellingFirmId),
         taxAmount: invoice.taxAmount || 0,
         taxableValue: taxableFrom(invoice),
         vendorGstin: invoice.vendorGstin || loaded.vendorGstin.get(invoice.vendorId),

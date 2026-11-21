@@ -7,6 +7,7 @@ import { invoiceStateHtml, resolveInvoiceState, COMPANY_INVOICE_DETAILS } from '
 import { renderHtmlDocumentToJsPdf } from './htmlToJsPdf';
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
 import { hasGstSnapshot } from './gstSnapshot';
+import { printedCompanyFromFirm } from '../constants/sellingFirms';
 import { defaultCompanyGstSettings, getCompanyGstSettings } from '../services/gstSettings';
 import {
   GST_INVOICE_STYLES,
@@ -113,10 +114,14 @@ const getDebitNoteHTML = async (note: DebitNote) => {
   const debitDate =
     note.debitNoteDate instanceof Date ? note.debitNoteDate : new Date(note.debitNoteDate);
 
-  const companySettings = hasGstSnapshot(note)
-    ? await getCompanyGstSettings().catch(() => defaultCompanyGstSettings())
-    : null;
-  const company = companySettings
+  const alternateCompany = printedCompanyFromFirm(note.sellingFirmId);
+  const companySettings =
+    !alternateCompany && hasGstSnapshot(note)
+      ? await getCompanyGstSettings().catch(() => defaultCompanyGstSettings())
+      : null;
+  const company = alternateCompany
+    ? alternateCompany
+    : companySettings
     ? {
         name: companySettings.legalName,
         address: companySettings.address,

@@ -1,5 +1,6 @@
 import { loadGstPeriodBooks, gstDocDate } from './gstPeriodBooks';
 import { hasGstSnapshot } from '../utils/gstSnapshot';
+import { inwardBelongsToFirm } from '../constants/sellingFirms';
 import { isValidGstinFormat, normalizeGstin } from '../utils/gstin';
 import {
   itcEligibleTotal,
@@ -11,7 +12,7 @@ import {
 
 export async function loadGstItcBooks(date = new Date()): Promise<GstItcBookRow[]> {
   const books = await loadGstPeriodBooks(date);
-  return books.purchases.map((invoice) => {
+  return books.purchases.filter((invoice) => inwardBelongsToFirm(invoice)).map((invoice) => {
     const gst = hasGstSnapshot(invoice) ? invoice.gst : undefined;
     return {
       id: invoice.id,

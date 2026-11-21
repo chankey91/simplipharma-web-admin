@@ -29,6 +29,8 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { exportPurchaseReturnItemList } from '../utils/purchaseReturnVendorListExport';
+import { SellingFirmFilterField } from '../components/SellingFirmField';
+import { matchesSellingFirmFilter } from '../constants/sellingFirms';
 import {
   itemReturnOutcome,
   purchaseReturnFulfillmentLabel,
@@ -88,6 +90,7 @@ export const PurchaseReturnsPage: React.FC = () => {
   const { data: vendors } = useVendors();
   const [searchTerm, setSearchTerm] = useState('');
   const [vendorFilter, setVendorFilter] = useState<Vendor | null>(null);
+  const [firmFilter, setFirmFilter] = useState('All');
   const [page, setPage] = useState(1);
   const { sortKey, sortDirection, requestSort } = useTableSort('returnDate', 'desc');
 
@@ -97,6 +100,7 @@ export const PurchaseReturnsPage: React.FC = () => {
     if (vendorFilter?.id) {
       rows = rows.filter((r) => r.vendorId === vendorFilter.id);
     }
+    rows = rows.filter((r) => matchesSellingFirmFilter(r.sellingFirmId, firmFilter));
     if (term) {
       rows = rows.filter(
         (r) =>
@@ -133,7 +137,7 @@ export const PurchaseReturnsPage: React.FC = () => {
       return applyDirection(cmp, sortDirection);
     });
     return sorted;
-  }, [returns, searchTerm, vendorFilter, sortKey, sortDirection]);
+  }, [returns, searchTerm, vendorFilter, firmFilter, sortKey, sortDirection]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
   const pageRows = filtered.slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE);
@@ -200,6 +204,13 @@ export const PurchaseReturnsPage: React.FC = () => {
                 <Search />
               </InputAdornment>
             ),
+          }}
+        />
+        <SellingFirmFilterField
+          value={firmFilter}
+          onChange={(next) => {
+            setFirmFilter(next);
+            setPage(1);
           }}
         />
         <Autocomplete

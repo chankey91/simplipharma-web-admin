@@ -36,6 +36,7 @@ export interface PurchaseListItem {
   coveredQty?: number;
   orderCount: number;
   orderNumbers: string[];
+  orderIds?: string[];
   status: PurchaseItemStatus;
   foundQty: number | null;
   deals?: Array<{
