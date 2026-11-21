@@ -201,6 +201,7 @@ service cloud.firestore {
         || isAdminOrOperations()
         || isOffice()
         || isSalesOfficer()
+        || isPurchaseOfficer()
         || retailerAssignedToSO(resource.data.retailerId)
       );
 

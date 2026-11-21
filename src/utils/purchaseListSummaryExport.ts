@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import { httpsCallable } from 'firebase/functions';
-import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, documentId, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { db, functions } from '../services/firebase';
 import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
 import { rankLiveStockForNames } from '../services/liveStock';
@@ -127,27 +127,109 @@ function assignPhoto(photos: Map<string, string>, item: PurchaseListItem, imageU
   if (name) photos.set(`name:${name}`, imageUrl);
 }
 
-/** Demand photos for this list. Order documents are not downloaded here. */
+/** Demand photos for this list. The picture often still sits on the order line after a merge. */
 async function loadDemandPhotos(
   items: PurchaseListItem[],
   photoLinks: SummaryFacts['photoLinks']
 ): Promise<Map<string, string>> {
+  const [linked, local, fromOrders] = await Promise.all([
+    Array.isArray(photoLinks) && photoLinks.length > 0 ? photosFromLinks(items, photoLinks) : Promise.resolve(new Map<string, string>()),
+    loadDemandPhotosLocally(items),
+    photosFromOrderLines(items),
+  ]);
   const photos = new Map<string, string>();
-  if (Array.isArray(photoLinks)) {
-    const hits = await demandImagesById(photoLinks.map((link) => link.demandId));
-    for (const link of photoLinks) {
-      const hit = hits.get(link.demandId);
-      if (!hit) continue;
-      const item = items.find(
-        (row) =>
-          (link.medicineId && row.medicineId === link.medicineId) ||
-          row.medicineName.trim().toLowerCase() === link.medicineName.trim().toLowerCase()
-      );
-      if (item) assignPhoto(photos, item, hit.imageUrl);
-    }
-    if (photos.size > 0) return photos;
+  for (const source of [local, linked, fromOrders]) {
+    for (const [key, image] of source) photos.set(key, image);
   }
-  return loadDemandPhotosLocally(items);
+  return photos;
+}
+
+async function photosFromLinks(
+  items: PurchaseListItem[],
+  photoLinks: NonNullable<SummaryFacts['photoLinks']>
+): Promise<Map<string, string>> {
+  const photos = new Map<string, string>();
+  const hits = await demandImagesById(photoLinks.map((link) => link.demandId));
+  for (const link of photoLinks) {
+    const hit = hits.get(link.demandId);
+    if (!hit) continue;
+    const item = items.find(
+      (row) =>
+        (link.medicineId && row.medicineId === link.medicineId) ||
+        row.medicineName.trim().toLowerCase() === link.medicineName.trim().toLowerCase()
+    );
+    if (item) assignPhoto(photos, item, hit.imageUrl);
+  }
+  return photos;
+}
+
+type OrderLinePhoto = { name: string; medicineId: string; demandId: string; imageUrl: string };
+
+function lineMatchesItem(item: PurchaseListItem, line: OrderLinePhoto): boolean {
+  if (line.demandId && item.productDemandIds?.includes(line.demandId)) return true;
+  if (item.medicineId && line.medicineId && item.medicineId === line.medicineId) return true;
+  return looseProductName(item.medicineName, line.name);
+}
+
+/** Retailer photo copied onto the order line. Survives after the demand is moved to a merged order. */
+async function photosFromOrderLines(items: PurchaseListItem[]): Promise<Map<string, string>> {
+  const photos = new Map<string, string>();
+  const orderIds = [...new Set(items.flatMap((item) => item.orderIds || []).filter(Boolean))];
+  const linesByOrder = new Map<string, OrderLinePhoto[]>();
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < orderIds.length) {
+      const orderId = orderIds[cursor];
+      cursor += 1;
+      try {
+        const snap = await getDoc(doc(db, 'orders', orderId));
+        if (!snap.exists()) continue;
+        const medicines = snap.data().medicines;
+        if (!Array.isArray(medicines)) continue;
+        linesByOrder.set(
+          orderId,
+          medicines.map((line) => {
+            const raw = line?.imageUrl;
+            return {
+              name: String(line?.name || ''),
+              medicineId: String(line?.medicineId || '').trim(),
+              demandId: String(line?.productDemandId || '').trim(),
+              imageUrl: typeof raw === 'string' ? raw.trim() : '',
+            };
+          })
+        );
+      } catch (error) {
+        console.warn('purchase list summary: order photo lookup failed', error);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, orderIds.length) }, () => worker()));
+
+  const needDemand = new Map<string, PurchaseListItem>();
+  for (const item of items) {
+    let image = '';
+    let demandId = '';
+    for (const orderId of item.orderIds || []) {
+      for (const line of linesByOrder.get(orderId) || []) {
+        if (!lineMatchesItem(item, line)) continue;
+        if (line.imageUrl) image = line.imageUrl;
+        if (!demandId && line.demandId) demandId = line.demandId;
+      }
+    }
+    if (image) assignPhoto(photos, item, image);
+    else if (demandId) needDemand.set(demandId, item);
+  }
+
+  if (needDemand.size > 0) {
+    const hits = await demandImagesById([...needDemand.keys()]);
+    for (const [demandId, item] of needDemand) {
+      const hit = hits.get(demandId);
+      if (hit && !photos.get(`name:${item.medicineName.trim().toLowerCase()}`)) {
+        assignPhoto(photos, item, hit.imageUrl);
+      }
+    }
+  }
+  return photos;
 }
 
 async function loadDemandPhotosLocally(items: PurchaseListItem[]): Promise<Map<string, string>> {
