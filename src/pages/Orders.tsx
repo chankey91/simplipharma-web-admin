@@ -88,6 +88,8 @@ import {
 import { loadOrdersListView, saveOrdersListView } from '../utils/ordersListView';
 import { useSessionPrintedIds } from '../utils/sessionPrintedInvoices';
 import { IstDateTimeField } from '../components/IstDateTimeField';
+import { SellingFirmFilterField } from '../components/SellingFirmField';
+import { matchesSellingFirmFilter } from '../constants/sellingFirms';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_ROWS_PER_PAGE = 20;
@@ -105,6 +107,7 @@ function getInitialOrdersListView() {
   return {
     searchTerm: saved.searchTerm ?? '',
     statusFilter: saved.statusFilter ?? ('All' as const),
+    firmFilter: saved.firmFilter ?? 'All',
     fromDateFilter,
     toDateFilter,
     page: saved.page ?? 1,
@@ -178,6 +181,7 @@ export const OrdersPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState(viewInit.searchTerm);
   const [debouncedTerm, setDebouncedTerm] = useState(viewInit.searchTerm.trim());
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>(viewInit.statusFilter);
+  const [firmFilter, setFirmFilter] = useState(viewInit.firmFilter);
   const [fromDateFilter, setFromDateFilter] = useState(viewInit.fromDateFilter);
   const [toDateFilter, setToDateFilter] = useState(viewInit.toDateFilter);
   const [draftFromDateFilter, setDraftFromDateFilter] = useState(viewInit.fromDateFilter);
@@ -229,6 +233,7 @@ export const OrdersPage: React.FC = () => {
     saveOrdersListView({
       searchTerm,
       statusFilter,
+      firmFilter,
       fromDateFilter,
       toDateFilter,
       page,
@@ -239,6 +244,7 @@ export const OrdersPage: React.FC = () => {
   }, [
     searchTerm,
     statusFilter,
+    firmFilter,
     fromDateFilter,
     toDateFilter,
     page,
@@ -250,7 +256,7 @@ export const OrdersPage: React.FC = () => {
   // Drop selection when filters / paging change so actions match what's on screen.
   useEffect(() => {
     setSelectedById({});
-  }, [debouncedTerm, statusFilter, fromDateFilter, toDateFilter, page, rowsPerPage, sortKey, sortDirection]);
+  }, [debouncedTerm, statusFilter, firmFilter, fromDateFilter, toDateFilter, page, rowsPerPage, sortKey, sortDirection]);
 
   const storeNameByRetailerId = useMemo(() => {
     const map = new Map<string, string>();
@@ -346,7 +352,9 @@ export const OrdersPage: React.FC = () => {
   ]);
   const hasDateFilter = Boolean((fromDateFilter || toDateFilter) && !dateRangeInvalid);
   /** Prefer Firestore for any date filter — Typesense can lag behind new orders. */
-  const useLocalList = typesenseDisabled || hasDateFilter;
+  const hasFirmFilter = firmFilter !== 'All';
+  /** Firm lives on the Firestore bill. Search index does not know it, so a firm pick uses the loaded orders. */
+  const useLocalList = typesenseDisabled || hasDateFilter || hasFirmFilter;
 
   /** Retailer ids whose town/district matches the search term (for Typesense location filter). */
   const locationMatchedRetailerIds = useMemo(() => {
@@ -416,7 +424,7 @@ export const OrdersPage: React.FC = () => {
 
   // Fallback path: full collection when Typesense unavailable and no date filter.
   const { data: allOrders, isLoading: allLoading, isFetching: allFetching } = useOrders({
-    enabled: typesenseDisabled && !hasDateFilter,
+    enabled: (typesenseDisabled || hasFirmFilter) && !hasDateFilter,
   });
 
   const localOrdersSource = hasDateFilter ? rangedOrders ?? [] : allOrders ?? [];
@@ -440,17 +448,19 @@ export const OrdersPage: React.FC = () => {
           order.medicines.some((m) => m.name.toLowerCase().includes(term));
         const matchesStatus =
           !applyStatusFilter || statusFilter === 'All' || order.status === statusFilter;
+        const matchesFirm = matchesSellingFirmFilter(order.sellingFirmId, firmFilter);
         const matchesDate = isDateInIstDateTimeRange(
           order.orderDate,
           fromDateFilter || undefined,
           toDateFilter || undefined
         );
-        return matchesSearch && matchesStatus && matchesDate;
+        return matchesSearch && matchesStatus && matchesDate && matchesFirm;
       });
     },
     [
       debouncedTerm,
       statusFilter,
+      firmFilter,
       fromDateFilter,
       toDateFilter,
       storeNameByRetailerId,
@@ -1040,7 +1050,11 @@ export const OrdersPage: React.FC = () => {
     setIsExporting(true);
     try {
       const ordersInRange = await getOrdersInRange(range.startMs, range.endMs);
-      const pendingOrders = ordersInRange.filter((o) => isAwaitingFulfillmentStatus(o.status));
+      const pendingOrders = ordersInRange.filter(
+        (o) =>
+          isAwaitingFulfillmentStatus(o.status) &&
+          matchesSellingFirmFilter(o.sellingFirmId, firmFilter)
+      );
       if (pendingOrders.length === 0) {
         await alert('No pending or picked up orders found in the selected date & time range', {
           severity: 'warning',
@@ -1072,8 +1086,12 @@ export const OrdersPage: React.FC = () => {
     setIsExportingProductSummary(true);
     try {
       const ordersInRange = await getOrdersInRange(range.startMs, range.endMs);
-      const pendingInRange = ordersInRange.filter((o) => o.status === 'Pending');
-      const pickedUpInRange = ordersInRange.filter((o) => o.status === 'Picked up');
+      const pendingInRange = ordersInRange.filter(
+        (o) => o.status === 'Pending' && matchesSellingFirmFilter(o.sellingFirmId, firmFilter)
+      );
+      const pickedUpInRange = ordersInRange.filter(
+        (o) => o.status === 'Picked up' && matchesSellingFirmFilter(o.sellingFirmId, firmFilter)
+      );
       const exportOrders = productSummaryDialog.includePickedUp
         ? [...pendingInRange, ...pickedUpInRange]
         : pendingInRange;
@@ -1290,6 +1308,13 @@ export const OrdersPage: React.FC = () => {
                   <Search fontSize="small" />
                 </InputAdornment>
               ),
+            }}
+          />
+          <SellingFirmFilterField
+            value={firmFilter}
+            onChange={(next) => {
+              setFirmFilter(next);
+              setPage(1);
             }}
           />
           <IstDateTimeField

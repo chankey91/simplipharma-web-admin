@@ -93,6 +93,7 @@ import { generateOrderInvoice } from '../utils/invoice';
 import { formatOrderNumberForDisplay } from '../utils/orderDisplay';
 import { ORDER_CANCEL_REASONS } from '../constants/orderCancelReasons';
 import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from '../utils/orderStatus';
+import { DEFAULT_SELLING_FIRM_ID, SELLING_FIRMS } from '../constants/sellingFirms';
 import {
   buildWhatsAppUrl,
   formatOrderItemsWhatsAppList,
@@ -641,6 +642,7 @@ export const OrderDetailsPage: React.FC = () => {
     open: false,
     itemIndex: -1,
   });
+  const [sellingFirmId, setSellingFirmId] = useState(DEFAULT_SELLING_FIRM_ID);
   const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; action: string; title: string; message: string }>({
     open: false,
     action: '',
@@ -1642,6 +1644,9 @@ export const OrderDetailsPage: React.FC = () => {
           },
           // Reuse React Query cache — fulfill must not re-download all purchase invoices.
           purchaseInvoices: purchaseInvoicesList,
+          sellingFirmId: order?.invoiceNumber
+            ? order.sellingFirmId || DEFAULT_SELLING_FIRM_ID
+            : sellingFirmId,
           applyWallet: Boolean(
             useWalletOnFulfill &&
               (fulfillWalletQuery.isError || (fulfillWalletQuery.data?.available ?? 0) > 0.01)
@@ -4533,6 +4538,22 @@ export const OrderDetailsPage: React.FC = () => {
           <Typography sx={{ whiteSpace: 'pre-wrap' }}>{confirmDialog.message}</Typography>
           {confirmDialog.action === 'fulfill' && (
             <Box sx={{ mt: 2 }}>
+              <FormControl fullWidth sx={{ mb: 2 }}>
+                <InputLabel id="fulfill-selling-firm-label">Selling firm</InputLabel>
+                <Select
+                  labelId="fulfill-selling-firm-label"
+                  label="Selling firm"
+                  value={order?.invoiceNumber ? order.sellingFirmId || DEFAULT_SELLING_FIRM_ID : sellingFirmId}
+                  disabled={Boolean(order?.invoiceNumber)}
+                  onChange={(e) => setSellingFirmId(e.target.value)}
+                >
+                  {SELLING_FIRMS.map((firm) => (
+                    <MenuItem key={firm.id} value={firm.id}>
+                      {firm.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
               {fulfillWalletQuery.isLoading ? (
                 <Typography variant="body2" color="text.secondary">
                   Checking retailer wallet…

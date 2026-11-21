@@ -1,6 +1,7 @@
 import { loadGstPeriodBooks, gstDocDate } from './gstPeriodBooks';
 import { getAllStores } from './stores';
 import { hasGstSnapshot } from '../utils/gstSnapshot';
+import { outwardBelongsToFirm } from '../constants/sellingFirms';
 import { isCancelledOrderStatus } from '../utils/orderStatus';
 import { buildEinvoicePayload, type EinvoiceExportResult } from '../utils/einvoiceJson';
 import { gstinStateCode } from '../utils/gstin';
@@ -15,6 +16,7 @@ export async function buildEinvoiceExport(date = new Date()): Promise<EinvoiceEx
         order.invoiceNumber &&
         order.status !== 'Pending' &&
         !isCancelledOrderStatus(order.status) &&
+        outwardBelongsToFirm(order) &&
         hasGstSnapshot(order) &&
         order.gst?.invoiceType === 'B2B'
     )

@@ -18,6 +18,8 @@ import { useGstr3bExport, useMarkGstPeriodStatus } from '../../hooks/useGst';
 import { useAuth } from '../../context/AuthContext';
 import { useAppDialog } from '../../context/AppDialogProvider';
 import { downloadGstr3bJson } from '../../utils/gstr3bJson';
+import { buildGstr3bExport } from '../../services/gstGstr3b';
+import { SANCHET_DAWA_FIRM_ID } from '../../constants/sellingFirms';
 import type { Gstr3bBucket } from '../../utils/gstr3bJson';
 
 function money(value?: number) {
@@ -51,6 +53,23 @@ export const GstGstr3bPage: React.FC = () => {
   const { alert, confirm, prompt } = useAppDialog();
   const exportQuery = useGstr3bExport(date, true);
   const markStatus = useMarkGstPeriodStatus(date);
+
+  const handleSanchetDownload = async () => {
+    try {
+      const result = await buildGstr3bExport(date, SANCHET_DAWA_FIRM_ID);
+      if (!result.summary.outwardCount && !result.summary.inwardCount) {
+        await alert('No Sanchet Pharmaceuticals bills in this period.', { severity: 'warning' });
+        return;
+      }
+      downloadGstr3bJson(result);
+      await alert(
+        `Downloaded ${result.filename} for Sanchet Pharmaceuticals and Solutions (GSTIN ${result.summary.gstin}).`,
+        { severity: 'success' }
+      );
+    } catch (err) {
+      await alert(err instanceof Error ? err.message : 'Download failed', { severity: 'error' });
+    }
+  };
 
   const handleDownload = async () => {
     const result = exportQuery.data;
@@ -147,8 +166,12 @@ export const GstGstr3bPage: React.FC = () => {
               startIcon={<FileDownload />}
               onClick={() => void handleDownload()}
               disabled={!summary}
+              sx={{ mr: 1 }}
             >
               Download GSTR-3B JSON
+            </Button>
+            <Button variant="outlined" startIcon={<FileDownload />} onClick={() => void handleSanchetDownload()}>
+              Sanchet GSTR-3B JSON
             </Button>
           </Paper>
         </>

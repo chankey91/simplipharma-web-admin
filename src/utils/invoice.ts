@@ -13,6 +13,8 @@ import { appAlert } from './appDialog';
 import { buildPurchaseBatchDiscountLookup } from './orderFulfillmentDiscount';
 import { orderLineInvoiceEconomics } from './orderLineInvoiceEconomics';
 import { PAYMENT_QR_DATA_URI } from '../assets/paymentQr';
+import QRCode from 'qrcode';
+import { isAlternateSellingFirm, printedCompanyFromFirm, resolveSellingFirm } from '../constants/sellingFirms';
 import { calculateOrderTotalsFromLines, hasBatchAssignment } from './orderTotals';
 import { printBuyerStateFromDocument, printTaxFromDocument } from './gstInvoicePrint';
 import { normalizeAdditionalDiscount } from './purchaseInvoiceTotals';
@@ -124,6 +126,8 @@ export type OrderInvoicePrepared = {
   };
   /** Order GST % used on tax summary (same as invoice template) */
   gstRatePercent: number;
+  paymentQrDataUri?: string;
+  paymentUpiId?: string;
 };
 
 function formatWalletCreditRefs(
@@ -412,19 +416,33 @@ async function prepareOrderInvoiceData(
   const totalProductDiscount = totals.totalDiscount;
 
   // Company details — settings only when this invoice has a GST snapshot (legacy PDFs stay hardcoded).
-  const companySettings = hasGstSnapshot(order)
-    ? await getCompanyGstSettings().catch(() => defaultCompanyGstSettings())
-    : null;
-  const company = companySettings
+  // The second firm freezes its own block. Sumukh still uses the live settings or the hardcoded block.
+  const alternateCompany = printedCompanyFromFirm(order.sellingFirmId);
+  const companySettings =
+    !alternateCompany && hasGstSnapshot(order)
+      ? await getCompanyGstSettings().catch(() => defaultCompanyGstSettings())
+      : null;
+  const company = alternateCompany
+    ? alternateCompany
+    : companySettings
+      ? {
+          name: companySettings.legalName,
+          address: companySettings.address,
+          phone: companySettings.phone || '',
+          email: companySettings.email || '',
+          dl: companySettings.dl || '',
+          gstin: companySettings.gstin,
+        }
+      : { ...COMPANY_INVOICE_DETAILS };
+  const payment = isAlternateSellingFirm(order.sellingFirmId)
     ? {
-        name: companySettings.legalName,
-        address: companySettings.address,
-        phone: companySettings.phone || '',
-        email: companySettings.email || '',
-        dl: companySettings.dl || '',
-        gstin: companySettings.gstin,
+        paymentQrDataUri: await QRCode.toDataURL(
+          `upi://pay?pa=${encodeURIComponent(resolveSellingFirm(order.sellingFirmId).upiId || '')}`,
+          { margin: 1, width: 280 }
+        ),
+        paymentUpiId: resolveSellingFirm(order.sellingFirmId).upiId,
       }
-    : { ...COMPANY_INVOICE_DETAILS };
+    : { paymentQrDataUri: PAYMENT_QR_DATA_URI };
   
   // Party/Retailer details - fetch from user if retailerId is available
   let party = {
@@ -524,6 +542,7 @@ async function prepareOrderInvoiceData(
     company,
     party,
     gstRatePercent: taxPercentage,
+    ...payment,
   };
 };
 
@@ -769,7 +788,8 @@ export const generateOrderInvoice = async (
           amountInWords: ctx.isLast
             ? data.summary.amountInWords
             : `Total C/F Rs. ${ctx.carriedForward.toFixed(2)}`,
-          paymentQrDataUri: PAYMENT_QR_DATA_URI,
+          paymentQrDataUri: data.paymentQrDataUri,
+          paymentUpiId: data.paymentUpiId,
           lastSummary: ctx.isLast ? data.summary : undefined,
           lastTax: ctx.isLast ? data.tax : undefined,
           gstRateHalf: data.gstRatePercent / 2,
@@ -1016,7 +1036,10 @@ const getInvoiceHTML = async (invoice: PurchaseInvoice) => {
   };
   
   // Party details - buyer (SimpliPharma / Sanchet on purchase invoices)
-  const party = { ...COMPANY_INVOICE_DETAILS, ...resolveInvoiceState() };
+  const alternateBuyer = printedCompanyFromFirm(invoice.sellingFirmId);
+  const party = alternateBuyer
+    ? { ...alternateBuyer, ...resolveInvoiceState() }
+    : { ...COMPANY_INVOICE_DETAILS, ...resolveInvoiceState() };
 
   // Company/Vendor details - fetch from vendor if vendorId is available (on top left)
   let company = {

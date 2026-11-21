@@ -43,6 +43,9 @@ import { SortableTableHeadCell } from '../components/SortableTableHeadCell';
 import { applyDirection, compareAsc, toTimeMs } from '../utils/tableSort';
 import { orderReferenceWithoutInvoice } from '../utils/orderDisplay';
 import { resolveOrderListTotalAmount } from '../utils/orderTotalOverrides';
+import { isCancelledOrderStatus } from '../utils/orderStatus';
+import { SellingFirmFilterField } from '../components/SellingFirmField';
+import { matchesSellingFirmFilter } from '../constants/sellingFirms';
 import { isAwaitingFulfillmentStatus, isCancelledOrderStatus } from '../utils/orderStatus';
 import { useAppDialog } from '../context/AppDialogProvider';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
@@ -239,6 +242,7 @@ export const InvoicesPage: React.FC = () => {
   const tab = tabFromSearch(searchParams.get('tab'));
   const statusFilter = paymentFromSearch(searchParams.get('payment'));
   const [searchTerm, setSearchTerm] = useState('');
+  const [firmFilter, setFirmFilter] = useState('All');
   const [debouncedTerm, setDebouncedTerm] = useState('');
   const [page, setPage] = useState(1);
 
@@ -283,6 +287,8 @@ export const InvoicesPage: React.FC = () => {
   }, [searchTerm]);
 
   const isOrder = tab === 'order';
+  const hasFirmFilter = firmFilter !== 'All';
+  const useLocalList = typesenseDisabled || hasFirmFilter;
 
   const orderSearch = useOrdersSearch(
     {
@@ -294,7 +300,7 @@ export const InvoicesPage: React.FC = () => {
       page,
       perPage: ROWS_PER_PAGE,
     },
-    { enabled: !typesenseDisabled }
+    { enabled: !useLocalList }
   );
 
   const purchaseSearch = usePurchaseInvoicesSearch(
@@ -306,7 +312,7 @@ export const InvoicesPage: React.FC = () => {
       page,
       perPage: ROWS_PER_PAGE,
     },
-    { enabled: !typesenseDisabled }
+    { enabled: !useLocalList }
   );
 
   useEffect(() => {
@@ -318,17 +324,23 @@ export const InvoicesPage: React.FC = () => {
   const { data: purchaseAmount } = usePurchaseInvoiceAmountTotal();
 
   // Fallback: full-load client-side (only when Typesense unavailable).
-  const { data: allOrders, isLoading: ordersLoading } = useOrders({ enabled: typesenseDisabled });
+  const { data: allOrders, isLoading: ordersLoading } = useOrders({ enabled: useLocalList });
   const { data: allPurchases, isLoading: purchaseLoading } = usePurchaseInvoices({
-    enabled: typesenseDisabled,
+    enabled: useLocalList,
   });
 
   const fallbackRows = useMemo(() => {
-    if (!typesenseDisabled) return [] as InvoiceRow[];
+    if (!useLocalList) return [] as InvoiceRow[];
     const term = debouncedTerm.toLowerCase();
     let list: InvoiceRow[] = [];
     if (isOrder) {
       list = (allOrders ?? [])
+        .filter(
+          (o) =>
+            o.status !== 'Pending' &&
+            !isCancelledOrderStatus(o.status) &&
+            matchesSellingFirmFilter(o.sellingFirmId, firmFilter)
+        )
         .filter((o) => !isAwaitingFulfillmentStatus(o.status) && !isCancelledOrderStatus(o.status))
         .map((o) => ({
           id: o.id,
@@ -340,7 +352,9 @@ export const InvoicesPage: React.FC = () => {
           status: o.paymentStatus || 'Unpaid',
         }));
     } else {
-      list = (allPurchases ?? []).map((inv) => ({
+      list = (allPurchases ?? [])
+        .filter((inv) => matchesSellingFirmFilter(inv.sellingFirmId, firmFilter))
+        .map((inv) => ({
         id: inv.id,
         invoiceNumber: inv.invoiceNumber,
         date: inv.invoiceDate instanceof Date ? inv.invoiceDate : new Date(inv.invoiceDate),
@@ -385,10 +399,10 @@ export const InvoicesPage: React.FC = () => {
       return applyDirection(compareAsc(a.invoiceNumber, b.invoiceNumber), sortDirection);
     });
     return filtered;
-  }, [typesenseDisabled, isOrder, allOrders, allPurchases, debouncedTerm, statusFilter, sortKey, sortDirection, storeNameByRetailerId]);
+  }, [useLocalList, isOrder, allOrders, allPurchases, debouncedTerm, statusFilter, firmFilter, sortKey, sortDirection, storeNameByRetailerId]);
 
   const rows: InvoiceRow[] = useMemo(() => {
-    if (typesenseDisabled) {
+    if (useLocalList) {
       return fallbackRows.slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE);
     }
     if (isOrder) {
@@ -411,7 +425,7 @@ export const InvoicesPage: React.FC = () => {
       amount: inv.totalAmount || 0,
       status: inv.paymentStatus || 'Unpaid',
     }));
-  }, [typesenseDisabled, isOrder, fallbackRows, page, orderSearch.data, purchaseSearch.data]);
+  }, [useLocalList, isOrder, fallbackRows, page, orderSearch.data, purchaseSearch.data]);
 
   // Global counts (independent of search/filter) for the KPI cards.
   const orderStatusCounts = orderSearch.data?.statusCounts;
@@ -431,7 +445,7 @@ export const InvoicesPage: React.FC = () => {
       (allPurchases ?? []).reduce((s, inv) => s + (inv.totalAmount || 0), 0)
     : (orderAmount ?? 0) + (purchaseAmount ?? 0);
 
-  const activeTotal = typesenseDisabled
+  const activeTotal = useLocalList
     ? fallbackRows.length
     : isOrder
     ? orderSearch.data?.found ?? 0
@@ -512,7 +526,7 @@ export const InvoicesPage: React.FC = () => {
     }
   };
 
-  const initialLoading = typesenseDisabled
+  const initialLoading = useLocalList
     ? isOrder
       ? ordersLoading
       : purchaseLoading
@@ -588,6 +602,13 @@ export const InvoicesPage: React.FC = () => {
               <MenuItem value="Partial">Partial</MenuItem>
             </Select>
           </FormControl>
+          <SellingFirmFilterField
+            value={firmFilter}
+            onChange={(next) => {
+              setFirmFilter(next);
+              setPage(1);
+            }}
+          />
         </Box>
       </Paper>
 

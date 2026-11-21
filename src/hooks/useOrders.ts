@@ -434,6 +434,7 @@ export const useFulfillOrder = () => {
       fulfillmentData,
       purchaseInvoices,
       applyWallet,
+      sellingFirmId,
     }: { 
       orderId: string; 
       fulfilledBy: string; 
@@ -441,7 +442,8 @@ export const useFulfillOrder = () => {
       /** Cached PI list from Order Details — skips a full collection download. */
       purchaseInvoices?: PurchaseInvoice[];
       applyWallet?: boolean;
-    }) => fulfillOrder(orderId, fulfilledBy, fulfillmentData, { purchaseInvoices, applyWallet }),
+      sellingFirmId?: string;
+    }) => fulfillOrder(orderId, fulfilledBy, fulfillmentData, { purchaseInvoices, applyWallet, sellingFirmId }),
     onSuccess: (_, variables) => {
       invalidateOrderListQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ['order', variables.orderId] });

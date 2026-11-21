@@ -21,6 +21,7 @@ import { useAppDialog } from '../../context/AppDialogProvider';
 import { downloadGstr1Json } from '../../utils/gstr1Json';
 import { downloadGstr1Excel, gstr1ExcelWarnings } from '../../utils/gstr1Excel';
 import { buildGstr1Export } from '../../services/gstGstr1';
+import { SANCHET_DAWA_FIRM_ID } from '../../constants/sellingFirms';
 import { gstr1GoldenErrors } from '../../utils/gstr1Golden';
 
 export const GstGstr1Page: React.FC = () => {
@@ -73,6 +74,28 @@ export const GstGstr1Page: React.FC = () => {
       }
       await alert(
         `Downloaded ${result.filename}. Upload on gst.gov.in → Returns → GSTR-1 → Prepare Offline.`,
+        { severity: 'success' }
+      );
+    } catch (err) {
+      await alert(err instanceof Error ? err.message : 'Download failed', { severity: 'error' });
+    }
+  };
+
+  const handleSanchetDownload = async (kind: 'json' | 'excel') => {
+    try {
+      const result = await buildGstr1Export(date, 'original', SANCHET_DAWA_FIRM_ID);
+      if (result.summary.errors.length) {
+        await alert(result.summary.errors.join('\n'), { severity: 'error' });
+        return;
+      }
+      if (!result.summary.documentCount) {
+        await alert('No Sanchet Pharmaceuticals bills in this period.', { severity: 'warning' });
+        return;
+      }
+      if (kind === 'json') downloadGstr1Json(result);
+      else downloadGstr1Excel(result);
+      await alert(
+        `Downloaded ${result.filename} for Sanchet Pharmaceuticals and Solutions (GSTIN ${result.summary.gstin}).`,
         { severity: 'success' }
       );
     } catch (err) {
@@ -179,6 +202,12 @@ export const GstGstr1Page: React.FC = () => {
                 onClick={() => void handleDownload('amendment')}
               >
                 Download amendment JSON
+              </Button>
+              <Button variant="outlined" onClick={() => void handleSanchetDownload('json')}>
+                Sanchet GSTR-1 JSON
+              </Button>
+              <Button variant="outlined" onClick={() => void handleSanchetDownload('excel')}>
+                Sanchet GSTR-1 Excel
               </Button>
             </Box>
           </Paper>

@@ -375,6 +375,7 @@ export function buildGstInvoiceHalfPageFooter(opts: {
   signatoryFor: string;
   amountInWords: string;
   paymentQrDataUri?: string;
+  paymentUpiId?: string;
   termsHtml?: string;
   lastSummary?: GstInvoiceSummary;
   lastTax?: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string };
@@ -387,7 +388,8 @@ ${buildGstInvoiceFooter(
   opts.amountInWords,
   opts.signatoryFor,
   opts.termsHtml,
-  opts.paymentQrDataUri
+  opts.paymentQrDataUri,
+  opts.paymentUpiId
 )}`;
 }
 
@@ -461,13 +463,15 @@ export function buildGstInvoiceFooter(
   amountInWords: string,
   signatoryFor: string,
   termsHtml = DEFAULT_SALES_TERMS,
-  paymentQrDataUri?: string
+  paymentQrDataUri?: string,
+  paymentUpiId?: string
 ): string {
   const qrCell = paymentQrDataUri
     ? `
     <td width="18%" class="pay-qr">
       <img src="${paymentQrDataUri}" alt="Scan to Pay">
       <div class="pay-qr-label">Scan to Pay</div>
+      ${paymentUpiId ? `<div class="pay-qr-label">UPI ID: ${paymentUpiId}</div>` : ''}
     </td>`
     : '';
   const termsWidth = paymentQrDataUri ? '42%' : '60%';

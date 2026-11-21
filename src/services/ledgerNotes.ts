@@ -360,6 +360,7 @@ export async function updateLedgerNote(
         taxAmount,
         taxableValue: subTotal,
         totalAmount: nextTotal,
+        firmId: typeof data.sellingFirmId === 'string' ? data.sellingFirmId : undefined,
         buyerGstin: retailerGstin,
         buyerLegalName: retailerName,
         documentKind: kind === 'credit' ? 'credit_note' : 'debit_note',

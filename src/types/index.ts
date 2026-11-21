@@ -197,6 +197,8 @@ export interface Order {
   status: OrderStatus;
   orderDate: Date | any;
   invoiceNumber?: string; // Auto-generated invoice number (SPS + YYYY + MM + 001)
+  /** Set only when the bill is issued under the second firm. Blank means Sumukh. */
+  sellingFirmId?: string;
   /** Written on new fulfills only. Missing on historical invoices — PDFs use the legacy split. */
   gst?: GstDocumentSnapshot;
   trayNumber?: string; // Tray number for order fulfillment
@@ -520,6 +522,8 @@ export interface PurchaseInvoice {
   invoiceDate: Date | any;
   /** Written on new purchase invoices only. */
   gst?: GstDocumentSnapshot;
+  /** Set only when the purchase is booked under the second firm. */
+  sellingFirmId?: string;
   items: PurchaseInvoiceItem[];
   subTotal: number;
   taxAmount: number;
@@ -578,6 +582,8 @@ export interface PurchaseReturn {
   vendorGstin?: string;
   returnDate: Date | any;
   gst?: GstDocumentSnapshot;
+  /** Set only when the return is booked under the second firm. */
+  sellingFirmId?: string;
   items: PurchaseReturnItem[];
   subTotal: number;
   taxAmount: number;
@@ -652,6 +658,8 @@ export type DebitNoteSourceType =
 export interface CreditNote {
   id: string;
   creditNoteNumber: string;
+  /** Set only when the note follows an invoice from the second firm. */
+  sellingFirmId?: string;
   creditNoteDate: Date | any;
   type: CreditNoteType;
   /** When false/omitted, note is included in retailer wallet. */
@@ -685,6 +693,8 @@ export interface CreditNote {
 }
 
 export interface DebitNote {
+  /** Set only when the note follows an invoice from the second firm. */
+  sellingFirmId?: string;
   id: string;
   debitNoteNumber: string;
   debitNoteDate: Date | any;
