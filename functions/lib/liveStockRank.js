@@ -4,6 +4,7 @@ exports.sameProduct = sameProduct;
 exports.effectivePurchaseRate = effectivePurchaseRate;
 exports.loadLiveStockOffers = loadLiveStockOffers;
 exports.rankDeals = rankDeals;
+const liveStockTypesense_1 = require("./liveStockTypesense");
 const STOP = new Set([
     'tab',
     'tablet',
@@ -17,9 +18,22 @@ const STOP = new Set([
     'syp',
     'syrup',
     'inj',
+    'injection',
     'strip',
     'of',
     'the',
+    // Release and dispersible labels. Vendor files often leave these off.
+    // Keep in step with src/utils/liveStockDeals.ts.
+    'sr',
+    'er',
+    'xr',
+    'cr',
+    'mr',
+    'pr',
+    'dr',
+    'ir',
+    'dt',
+    'md',
 ]);
 function tokens(value) {
     return value
@@ -29,7 +43,7 @@ function tokens(value) {
         .map((t) => t.trim())
         .filter((t) => t && !STOP.has(t));
 }
-/** Same product: shared words agree, and a different strength (40 vs 10, or an extra H) does not match. */
+/** Same product: shared words agree. Strength still has to agree. OD and a lone letter such as H still separate products. */
 function sameProduct(a, b) {
     const at = tokens(a);
     const bt = tokens(b);
@@ -64,53 +78,43 @@ function effectivePurchaseRate(rate, schemePaidQty, schemeFreeQty, discountPerce
     }
     return Math.round(unit * 100) / 100;
 }
-function asNumber(value) {
-    if (typeof value === 'number' && Number.isFinite(value))
-        return value;
-    if (value == null || value === '')
-        return null;
-    const n = parseFloat(String(value).replace(/,/g, ''));
-    return Number.isFinite(n) ? n : null;
-}
+let offerCache = null;
 async function loadLiveStockOffers(db) {
-    var _a, _b, _c;
-    const [snap, readySnap] = await Promise.all([
-        db.collection('liveStockOffers').select('uploadId', 'vendorId', 'vendorName', 'productName', 'manufacturer', 'pack', 'stockQty', 'rate', 'effectiveRate', 'discountPercentage', 'scheme', 'uploadedAtMs').get(),
+    var _a;
+    if (offerCache && Date.now() - offerCache.at < 60000)
+        return offerCache.offers;
+    const [hits, readySnap] = await Promise.all([
+        (0, liveStockTypesense_1.exportLiveStockHits)(),
         db.collection('liveStockUploads').where('status', '==', 'ready').select('rowCount').get(),
     ]);
     const readyUploadIds = new Set(readySnap.docs.map((doc) => doc.id));
     const rows = [];
-    for (const doc of snap.docs) {
-        const d = doc.data();
-        const uploadId = String(d.uploadId || '').trim();
-        if (!uploadId || !readyUploadIds.has(uploadId))
+    for (const hit of hits) {
+        if (!readyUploadIds.has(hit.uploadId))
             continue;
-        const vendorId = String(d.vendorId || '').trim();
-        const productName = String(d.productName || '').trim();
-        if (!vendorId || !productName)
-            continue;
-        const stockQty = (_a = asNumber(d.stockQty)) !== null && _a !== void 0 ? _a : 0;
         rows.push({
-            vendorId,
-            vendorName: String(d.vendorName || ''),
-            productName,
-            manufacturer: String(d.manufacturer || ''),
-            pack: String(d.pack || ''),
-            stockQty,
-            rate: asNumber(d.rate),
-            effectiveRate: asNumber(d.effectiveRate),
-            discountPercentage: asNumber(d.discountPercentage),
-            scheme: String(d.scheme || ''),
-            uploadedAtMs: (_b = asNumber(d.uploadedAtMs)) !== null && _b !== void 0 ? _b : 0,
+            vendorId: hit.vendorId,
+            vendorName: hit.vendorName,
+            productName: hit.productName,
+            manufacturer: hit.manufacturer,
+            pack: hit.pack,
+            stockQty: hit.stockQty,
+            rate: hit.rate,
+            effectiveRate: hit.effectiveRate,
+            discountPercentage: hit.discountPercentage,
+            scheme: hit.scheme,
+            uploadedAtMs: hit.uploadedAtMs,
         });
     }
     const latest = new Map();
     for (const row of rows) {
-        const prev = (_c = latest.get(row.vendorId)) !== null && _c !== void 0 ? _c : 0;
+        const prev = (_a = latest.get(row.vendorId)) !== null && _a !== void 0 ? _a : 0;
         if (row.uploadedAtMs >= prev)
             latest.set(row.vendorId, row.uploadedAtMs);
     }
-    return rows.filter((row) => { var _a; return row.uploadedAtMs === ((_a = latest.get(row.vendorId)) !== null && _a !== void 0 ? _a : 0); });
+    const current = rows.filter((row) => { var _a; return row.uploadedAtMs === ((_a = latest.get(row.vendorId)) !== null && _a !== void 0 ? _a : 0); });
+    offerCache = { at: Date.now(), offers: current };
+    return current;
 }
 function rankDeals(productName, needQty, offers) {
     const matched = offers.filter((offer) => sameProduct(productName, offer.productName));

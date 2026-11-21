@@ -6,8 +6,7 @@ import { getAllPurchaseInvoices } from '../services/purchaseInvoices';
 import { istDateStampCompact } from './dateTime';
 import { appAlert } from './appDialog';
 import type { SoReceivableSummary } from './soReceivables';
-import { listCurrentLiveStockOffers } from '../services/liveStock';
-import { rankLiveStockVendors } from './liveStockDeals';
+import { rankLiveStockForNames } from '../services/liveStock';
 import {
   buildBestDiscountVendorByMedicineId,
   buildRankedPurchaseVendorsByMedicineId,
@@ -194,13 +193,6 @@ export const exportPendingOrdersProductSummary = async (
     console.warn('Failed to load purchase invoices for best-discount vendor column:', error);
   }
 
-  let liveOffers: Awaited<ReturnType<typeof listCurrentLiveStockOffers>> = [];
-  try {
-    liveOffers = await listCurrentLiveStockOffers();
-  } catch (error) {
-    console.warn('Failed to load live stock for vendor columns:', error);
-  }
-
   const productAggregate = new Map<
     string,
     {
@@ -241,6 +233,13 @@ export const exportPendingOrdersProductSummary = async (
     a.medicineName.localeCompare(b.medicineName)
   );
 
+  let liveByName = new Map<string, VendorSuggestion[]>();
+  try {
+    liveByName = await rankLiveStockForNames(rows.map((row) => row.medicineName));
+  } catch (error) {
+    console.warn('Failed to load live stock for vendor columns:', error);
+  }
+
   const excelData: (string | number)[][] = [
     [
       'S.No',
@@ -263,7 +262,7 @@ export const exportPendingOrdersProductSummary = async (
       ? bestDiscountByMedicineId.get(row.medicineId)
       : undefined;
     const history = row.medicineId ? pastVendorsByMedicineId.get(row.medicineId) || [] : [];
-    const live = rankLiveStockVendors(row.medicineName, liveOffers);
+    const live = liveByName.get(row.medicineName) || [];
     const [p1, p2, p3, p4, p5] = suggestVendors(live, history);
     excelData.push([
       index + 1,

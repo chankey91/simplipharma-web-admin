@@ -14,9 +14,22 @@ const STOP = new Set([
   'syp',
   'syrup',
   'inj',
+  'injection',
   'strip',
   'of',
   'the',
+  // Release and dispersible labels. Vendor files often leave these off.
+  // Keep in step with functions/src/liveStockRank.ts.
+  'sr',
+  'er',
+  'xr',
+  'cr',
+  'mr',
+  'pr',
+  'dr',
+  'ir',
+  'dt',
+  'md',
 ]);
 
 function tokens(value: string): string[] {
@@ -28,7 +41,7 @@ function tokens(value: string): string[] {
     .filter((token) => token && !STOP.has(token));
 }
 
-/** Same product: shared words agree, and a different strength does not match. */
+/** Same product: shared words agree. Strength still has to agree. OD and a lone letter such as H still separate products. */
 function sameProduct(a: string, b: string): boolean {
   const at = tokens(a);
   const bt = tokens(b);

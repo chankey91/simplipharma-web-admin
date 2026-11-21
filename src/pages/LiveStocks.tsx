@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Autocomplete,
   Box,
@@ -20,7 +20,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAllVendors } from '../services/vendors';
 import {
   deleteLiveStockUpload,
-  listLiveStockOffers,
+  searchLiveStockOffers,
   listLiveStockUploads,
   uploadLiveStockFile,
   type LiveStockUpload,
@@ -46,13 +46,19 @@ export const LiveStocksPage: React.FC = () => {
   const [deletingId, setDeletingId] = useState('');
   const [selected, setSelected] = useState<LiveStockUpload | null>(null);
   const [filter, setFilter] = useState('');
+  const [debouncedFilter, setDebouncedFilter] = useState('');
   const [addVendorOpen, setAddVendorOpen] = useState(false);
 
   const vendorsQuery = useQuery({ queryKey: ['vendors'], queryFn: getAllVendors });
   const uploadsQuery = useQuery({ queryKey: ['liveStockUploads'], queryFn: listLiveStockUploads });
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedFilter(filter.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [filter]);
+
   const offersQuery = useQuery({
-    queryKey: ['liveStockOffers', selected?.id],
-    queryFn: () => listLiveStockOffers(selected!.id),
+    queryKey: ['liveStockOffers', selected?.id, debouncedFilter],
+    queryFn: () => searchLiveStockOffers(selected!.id, debouncedFilter),
     enabled: Boolean(selected?.id) && selected?.status === 'ready',
   });
 
@@ -62,14 +68,8 @@ export const LiveStocksPage: React.FC = () => {
   );
   const selectedVendor = vendors.find((vendor) => vendor.id === vendorId) || null;
 
-  const visibleOffers = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    const rows = offersQuery.data || [];
-    if (!q) return rows;
-    return rows.filter((row) =>
-      `${row.productName} ${row.manufacturer || ''} ${row.pack || ''}`.toLowerCase().includes(q)
-    );
-  }, [offersQuery.data, filter]);
+  const visibleOffers = offersQuery.data?.offers || [];
+  const foundOffers = offersQuery.data?.found ?? visibleOffers.length;
 
   const loadFile = async () => {
     const vendor = vendors.find((item) => item.id === vendorId);
@@ -255,7 +255,7 @@ export const LiveStocksPage: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {visibleOffers.slice(0, 2000).map((row) => (
+                {visibleOffers.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell>
                       {row.productName}
@@ -275,9 +275,9 @@ export const LiveStocksPage: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
-          {visibleOffers.length > 2000 ? (
+          {foundOffers > visibleOffers.length ? (
             <Typography variant="caption" color="text.secondary">
-              Showing the first 2000 of {visibleOffers.length}. Use Find product to see the rest, including products from the right-hand column of a price list.
+              Showing {visibleOffers.length} of {foundOffers}. Type more of the product name to narrow the list.
             </Typography>
           ) : null}
         </Paper>

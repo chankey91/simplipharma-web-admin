@@ -3,22 +3,17 @@ import {
   collection,
   doc,
   getDoc,
-  documentId,
   getDocs,
   limit,
   orderBy,
   query,
-  startAfter,
-  type Query,
-  type QueryDocumentSnapshot,
-  type QuerySnapshot,
   serverTimestamp,
   updateDoc,
-  where,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytes } from 'firebase/storage';
 import { auth, db, functions, storage } from './firebase';
+import type { VendorSuggestion } from '../utils/vendorLastPurchase';
 
 export type LiveStockUpload = {
   id: string;
@@ -196,29 +191,19 @@ export async function listLiveStockUploads(): Promise<LiveStockUpload[]> {
   return snap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockUpload, 'id'>) }));
 }
 
-export async function listLiveStockOffers(uploadId: string): Promise<LiveStockOffer[]> {
-  const pageSize = 2000;
-  const offers: LiveStockOffer[] = [];
-  const offersCol = collection(db, 'liveStockOffers');
-  let cursor: QueryDocumentSnapshot | null = null;
-  while (offers.length < 50000) {
-    const pageQuery: Query = cursor
-      ? query(
-          offersCol,
-          where('uploadId', '==', uploadId),
-          orderBy(documentId()),
-          startAfter(cursor),
-          limit(pageSize)
-        )
-      : query(offersCol, where('uploadId', '==', uploadId), orderBy(documentId()), limit(pageSize));
-    const snap: QuerySnapshot = await getDocs(pageQuery);
-    offers.push(
-      ...snap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<LiveStockOffer, 'id'>) }))
-    );
-    if (snap.size < pageSize) break;
-    cursor = snap.docs[snap.docs.length - 1] ?? null;
-  }
-  return offers.sort((a, b) => a.productName.localeCompare(b.productName));
+export async function searchLiveStockOffers(
+  uploadId: string,
+  q = ''
+): Promise<{ offers: LiveStockOffer[]; found: number }> {
+  const fn = httpsCallable<
+    { uploadId: string; q: string; page: number; perPage: number },
+    { offers: LiveStockOffer[]; found: number }
+  >(functions, 'searchLiveStockOffers');
+  const result = await fn({ uploadId, q, page: 1, perPage: 250 });
+  return {
+    offers: result.data?.offers || [],
+    found: Number(result.data?.found || 0),
+  };
 }
 
 export type CurrentLiveStockOffer = {
@@ -231,46 +216,20 @@ export type CurrentLiveStockOffer = {
   discountPercentage: number | null;
 };
 
-function asNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (value == null || value === '') return null;
-  const n = parseFloat(String(value).replace(/,/g, ''));
-  return Number.isFinite(n) ? n : null;
-}
-
-/** Latest uploaded file per vendor, including rows that list the product with no quantity. */
-export async function listCurrentLiveStockOffers(): Promise<CurrentLiveStockOffer[]> {
-  const [snap, readySnap] = await Promise.all([
-    getDocs(collection(db, 'liveStockOffers')),
-    getDocs(query(collection(db, 'liveStockUploads'), where('status', '==', 'ready'))),
-  ]);
-  const readyUploadIds = new Set(readySnap.docs.map((item) => item.id));
-  const rows: Array<CurrentLiveStockOffer & { uploadedAtMs: number }> = [];
-  for (const item of snap.docs) {
-    const data = item.data();
-    const uploadId = String(data.uploadId || '').trim();
-    if (!uploadId || !readyUploadIds.has(uploadId)) continue;
-    const vendorId = String(data.vendorId || '').trim();
-    const productName = String(data.productName || '').trim();
-    const stockQty = asNumber(data.stockQty) ?? 0;
-    if (!vendorId || !productName) continue;
-    rows.push({
-      vendorId,
-      vendorName: String(data.vendorName || ''),
-      productName,
-      stockQty,
-      rate: asNumber(data.rate),
-      effectiveRate: asNumber(data.effectiveRate),
-      discountPercentage: asNumber(data.discountPercentage),
-      uploadedAtMs: asNumber(data.uploadedAtMs) ?? 0,
-    });
+/** Ranked live-stock vendors for these product names. Stock rows stay in Typesense. */
+export async function rankLiveStockForNames(names: string[]): Promise<Map<string, VendorSuggestion[]>> {
+  const unique = [...new Set(names.map((name) => name.trim()).filter(Boolean))];
+  const out = new Map<string, VendorSuggestion[]>();
+  if (!unique.length) return out;
+  const fn = httpsCallable<
+    { names: string[] },
+    { matches: Array<{ name: string; vendors: VendorSuggestion[] }> }
+  >(functions, 'rankLiveStockNames');
+  for (let i = 0; i < unique.length; i += 80) {
+    const result = await fn({ names: unique.slice(i, i + 80) });
+    for (const row of result.data?.matches || []) {
+      out.set(row.name, row.vendors || []);
+    }
   }
-  const latest = new Map<string, number>();
-  for (const row of rows) {
-    const prev = latest.get(row.vendorId) ?? 0;
-    if (row.uploadedAtMs >= prev) latest.set(row.vendorId, row.uploadedAtMs);
-  }
-  return rows
-    .filter((row) => row.uploadedAtMs === (latest.get(row.vendorId) ?? 0))
-    .map(({ uploadedAtMs: _uploadedAtMs, ...offer }) => offer);
+  return out;
 }
