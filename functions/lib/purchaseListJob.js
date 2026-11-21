@@ -120,12 +120,15 @@ async function aggregateGrossNeed(db, orderDocs) {
             }
             if (!manufacturer)
                 manufacturer = 'N/A';
+            const demandId = String(medicine.productDemandId || '').trim();
             const qty = Number(medicine.quantity) || 0;
             const existing = aggregate.get(key);
             if (existing) {
                 existing.totalQty += qty;
                 existing.orderNumbers.add(orderNumber);
                 existing.orderIds.add(orderDoc.id);
+                if (demandId)
+                    existing.productDemandIds.add(demandId);
             }
             else {
                 aggregate.set(key, {
@@ -136,6 +139,7 @@ async function aggregateGrossNeed(db, orderDocs) {
                     totalQty: qty,
                     orderNumbers: new Set([orderNumber]),
                     orderIds: new Set([orderDoc.id]),
+                    productDemandIds: new Set(demandId ? [demandId] : []),
                 });
             }
         }
@@ -178,6 +182,7 @@ async function writePurchaseListItems(db, listRef, rows) {
                 orderCount: row.orderNumbers.length,
                 orderNumbers: row.orderNumbers,
                 orderIds: row.orderIds,
+                productDemandIds: row.productDemandIds,
                 status: 'pending',
                 foundQty: null,
                 deals: row.deals && row.deals.length > 0 ? row.deals : [],
@@ -220,6 +225,7 @@ async function publishNetPurchaseListForDay(args) {
             totalQty: net,
             orderNumbers: Array.from(row.orderNumbers).sort(),
             orderIds: Array.from(row.orderIds).sort(),
+            productDemandIds: Array.from(row.productDemandIds).sort(),
             grossQty: row.totalQty,
             coveredQty,
         });

@@ -502,6 +502,7 @@ service cloud.firestore {
       allow read: if signedIn() && (
         isAdminOrOperations()
         || isOffice()
+        || isPurchaseOfficer()
         || resource.data.retailerId == request.auth.uid
         || (
           isSalesOfficer()
