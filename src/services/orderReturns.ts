@@ -97,6 +97,19 @@ export const getOrderReturnRequests = async (
   return snapshot.docs.map((d) => parseDoc(d));
 };
 
+/** Approved returns, including ones later marked paid. Pending and rejected are excluded. */
+export const getApprovedOrderReturns = async (): Promise<OrderReturnRequest[]> => {
+  const col = collection(db, 'order_return_requests');
+  try {
+    const snapshot = await getDocs(query(col, where('status', 'in', ['approved', 'paid'])));
+    return snapshot.docs.map((d) => parseDoc(d));
+  } catch (error) {
+    console.warn('getApprovedOrderReturns fallback:', error);
+    const all = await getOrderReturnRequests('all');
+    return all.filter((request) => request.status === 'approved' || request.status === 'paid');
+  }
+};
+
 export { approveOrderReturnRequest } from './creditNotes';
 
 export const rejectOrderReturnRequest = async (requestId: string, reason?: string): Promise<void> => {
