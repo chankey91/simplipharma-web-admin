@@ -31,6 +31,7 @@ import {
 import { useAreaManagers } from '../hooks/useAreaManagers';
 import { useSalesOfficers } from '../hooks/useSalesOfficers';
 import { useStores } from '../hooks/useStores';
+import { getApprovedOrderReturns } from '../services/orderReturns';
 import { getOrdersInRange } from '../services/orders';
 import { IstDateField } from '../components/IstDateField';
 import { Loading } from '../components/Loading';
@@ -72,6 +73,8 @@ type Sale = {
   date: string;
   amount: number;
   orderId: string;
+  rowId: string;
+  kind: 'order' | 'return';
   invoiceNumber?: string;
   status: string;
   retailerName?: string;
@@ -122,6 +125,16 @@ export const PerformancePage: React.FC = () => {
     enabled: range != null,
   });
 
+  const {
+    data: orderReturns = [],
+    isLoading: returnsLoading,
+    isError: returnsError,
+  } = useQuery({
+    queryKey: ['performanceApprovedOrderReturns'],
+    queryFn: () => getApprovedOrderReturns(),
+    enabled: range != null,
+  });
+
   const peopleReady = !amLoading && !soLoading && !storesLoading;
 
   const model = useMemo(() => {
@@ -149,9 +162,31 @@ export const PerformancePage: React.FC = () => {
         date: getTodayDateStringIST(date),
         amount: Number(order.totalAmount) || 0,
         orderId: order.id,
+        rowId: order.id,
+        kind: 'order',
         invoiceNumber: order.invoiceNumber,
         status: order.status,
         retailerName: order.retailerName,
+      });
+    }
+
+    for (const request of orderReturns) {
+      if (request.status !== 'approved' && request.status !== 'paid') continue;
+      if (!request.retailerId) continue;
+      const amount = Number(request.totalRefundAmount) || 0;
+      if (amount <= 0) continue;
+      const date = coerceToDate(request.approvedAt ?? request.paidAt);
+      if (!date) continue;
+      sales.push({
+        retailerId: request.retailerId,
+        date: getTodayDateStringIST(date),
+        amount: -amount,
+        orderId: request.orderId || '',
+        rowId: request.id,
+        kind: 'return',
+        invoiceNumber: request.creditNoteNumber || request.invoiceNumber,
+        status: request.status === 'paid' ? 'Paid return' : 'Approved return',
+        retailerName: request.retailerName,
       });
     }
 
@@ -159,7 +194,7 @@ export const PerformancePage: React.FC = () => {
     const inPrevious = (date: string) => Boolean(prev && date >= prev.from && date <= prev.to);
 
     return { amById, soById, storeById, ownerOf, sales, inCurrent, inPrevious };
-  }, [areaManagers, salesOfficers, stores, orders, fromDate, toDate, prev]);
+  }, [areaManagers, salesOfficers, stores, orders, orderReturns, fromDate, toDate, prev]);
 
   const scopeSales = useMemo(() => {
     return model.sales.filter((sale) => {
@@ -180,7 +215,7 @@ export const PerformancePage: React.FC = () => {
       const bucket = totals.get(key);
       if (!bucket) continue;
       bucket.amount += sale.amount;
-      bucket.orders += 1;
+      if (sale.kind === 'order') bucket.orders += 1;
     }
     return buckets.map((key) => ({
       label: bucketLabel(key, grain),
@@ -203,13 +238,14 @@ export const PerformancePage: React.FC = () => {
       name: string,
       detail: string,
       amount: number,
-      previous: boolean
+      previous: boolean,
+      countOrder: boolean
     ) => {
       const row = map.get(id) || { id, name, detail, current: 0, previous: 0, orders: 0 };
       if (previous) row.previous += amount;
       else {
         row.current += amount;
-        row.orders += 1;
+        if (countOrder) row.orders += 1;
       }
       map.set(id, row);
     };
@@ -223,14 +259,14 @@ export const PerformancePage: React.FC = () => {
         const id = owner.amId;
         const name =
           id === NO_AM ? 'No area manager' : personName(model.amById.get(id), 'Area manager');
-        add(map, id, name, 'Area manager', sale.amount, previous);
+        add(map, id, name, 'Area manager', sale.amount, previous, sale.kind === 'order');
         return;
       }
       if (level === 'am') {
         if (owner.amId !== amId) return;
         const id = owner.soId;
         const name = id === NO_SO ? 'No sales officer' : personName(model.soById.get(id), 'Sales officer');
-        add(map, id, name, 'Sales officer', sale.amount, previous);
+        add(map, id, name, 'Sales officer', sale.amount, previous, sale.kind === 'order');
         return;
       }
       if (owner.soId !== soId) return;
@@ -241,7 +277,8 @@ export const PerformancePage: React.FC = () => {
         personName(store, sale.retailerName || 'Retailer'),
         store?.storeCode || 'Retailer',
         sale.amount,
-        previous
+        previous,
+        sale.kind === 'order'
       );
     };
 
@@ -322,7 +359,7 @@ export const PerformancePage: React.FC = () => {
   const listTitle =
     level === 'company' ? 'Area managers' : level === 'am' ? 'Sales officers' : 'Retailers';
 
-  if (!peopleReady || ordersLoading) {
+  if (!peopleReady || ordersLoading || returnsLoading) {
     return <Loading message="Loading performance..." />;
   }
 
@@ -394,7 +431,7 @@ export const PerformancePage: React.FC = () => {
         {title}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Sales follow each retailer's current sales officer and area manager. Cancelled orders are left out.
+        Sales follow each retailer's current sales officer and area manager. Cancelled orders are left out. Only approved order returns are subtracted, on the approval date.
       </Typography>
 
       <Grid container spacing={2} sx={{ mb: 2 }}>
@@ -436,7 +473,7 @@ export const PerformancePage: React.FC = () => {
       </Grid>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2, height: 340 }}>
-        {isError ? (
+        {isError || returnsError ? (
           <Typography color="error">Could not load orders for this range.</Typography>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -470,15 +507,19 @@ export const PerformancePage: React.FC = () => {
               ) : (
                 retailerOrders.map((sale) => (
                   <TableRow
-                    key={sale.orderId}
+                    key={sale.rowId}
                     hover
-                    sx={{ cursor: 'pointer' }}
-                    onClick={() => navigate(`/orders/${sale.orderId}`)}
+                    sx={{ cursor: sale.orderId ? 'pointer' : 'default' }}
+                    onClick={() => {
+                      if (sale.orderId) navigate(`/orders/${sale.orderId}`);
+                    }}
                   >
                     <TableCell>{sale.date}</TableCell>
-                    <TableCell>{sale.invoiceNumber || sale.orderId}</TableCell>
+                    <TableCell>{sale.invoiceNumber || sale.orderId || sale.rowId}</TableCell>
                     <TableCell>{sale.status}</TableCell>
-                    <TableCell align="right">{inr(sale.amount)}</TableCell>
+                    <TableCell align="right" sx={{ color: sale.amount < 0 ? 'error.main' : undefined }}>
+                      {inr(sale.amount)}
+                    </TableCell>
                   </TableRow>
                 ))
               )}
