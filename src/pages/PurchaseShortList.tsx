@@ -58,7 +58,7 @@ export const PurchaseShortListPage: React.FC = () => {
   const medicineIds = useMemo(() => {
     const ids = new Set<string>();
     for (const order of orders ?? []) {
-      if (order.status !== 'Pending') continue;
+      if (order.status !== 'Picked up') continue;
       for (const line of order.medicines ?? []) {
         if (line.lineType === 'product_demand') continue;
         if (line.medicineId) ids.add(line.medicineId);
@@ -116,7 +116,7 @@ export const PurchaseShortListPage: React.FC = () => {
             Purchase short list
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            Pending orders between the date and time you pick, compared with stock on hand. Save the day’s purchase
+            Picked up orders between the date and time you pick, compared with stock on hand. Save the day’s purchase
             bills first — those bills already increase stock, so they are not added again. A row appears
             only when ordered quantity is still above stock. Product requests are listed separately
             because they are not a stock item.
@@ -165,7 +165,7 @@ export const PurchaseShortListPage: React.FC = () => {
         <>
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              {list.orderCount} pending order{list.orderCount === 1 ? '' : 's'} · {shorts.length} short
+              {list.orderCount} picked up order{list.orderCount === 1 ? '' : 's'} · {shorts.length} short
               {shorts.length === 1 ? '' : 's'}
             </Typography>
             <Button

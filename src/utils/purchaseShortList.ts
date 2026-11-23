@@ -1,5 +1,5 @@
 /**
- * Pending-order need versus current stock.
+ * Need from picked-up orders versus current stock.
  * Purchase bills are not added again: saving a bill already increases stock.
  */
 import type { Order, OrderMedicine } from '../types';
@@ -46,14 +46,14 @@ export function buildPurchaseShortList(
   orders: Order[],
   medicines: Map<string, { stockBatches?: Array<{ quantity?: unknown }> }>
 ): PurchaseShortList {
-  const pending = orders.filter((order) => order.status === 'Pending');
+  const pickedUp = orders.filter((order) => order.status === 'Picked up');
   const catalog = new Map<
     string,
     { name: string; medicineId: string; orderedQty: number; orders: Set<string> }
   >();
   const requests = new Map<string, { name: string; orderedQty: number; orders: Set<string> }>();
 
-  for (const order of pending) {
+  for (const order of pickedUp) {
     const orderNo = formatOrderNumberForDisplay(order.id);
     for (const line of order.medicines ?? []) {
       const qty = orderedQty(line);
@@ -109,5 +109,5 @@ export function buildPurchaseShortList(
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  return { orderCount: pending.length, shorts, requests: requestRows };
+  return { orderCount: pickedUp.length, shorts, requests: requestRows };
 }
