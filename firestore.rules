@@ -194,6 +194,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Retailer maintenance flag. Cloud Functions (admin SDK) are the only writers.
+    match /app_config/retailer_maintenance {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /orders/{orderId} {
       allow read: if signedIn() && (
         request.auth.uid == resource.data.retailerId

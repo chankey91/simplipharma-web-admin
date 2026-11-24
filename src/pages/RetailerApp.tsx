@@ -24,7 +24,9 @@ import { format } from 'date-fns';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { Loading } from '../components/Loading';
+import { RetailerMaintenanceCard } from '../components/RetailerMaintenanceCard';
 import { useAppDialog } from '../context/AppDialogProvider';
+import { useAuth } from '../context/AuthContext';
 import { useStores } from '../hooks/useStores';
 import {
   broadcastRetailerApkUpdate,
@@ -37,6 +39,7 @@ import {
 export const RetailerAppPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { alert, confirm } = useAppDialog();
+  const { panelRole } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [versionName, setVersionName] = useState('');
@@ -137,6 +140,8 @@ export const RetailerAppPage: React.FC = () => {
         Upload the latest APK. Registration emails include this download link. Use broadcast to
         email the same link to every active retailer when you ship an update.
       </Typography>
+
+      {panelRole === 'admin' && <RetailerMaintenanceCard />}
 
       {releaseQuery.error && (
         <Alert severity="error" sx={{ mb: 2 }}>
