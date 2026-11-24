@@ -210,17 +210,14 @@ export async function exportLiveStockHits(): Promise<LiveStockHit[]> {
   return rows;
 }
 
-export async function searchLiveStockHits(args: {
-  uploadId: string;
-  q: string;
-  page: number;
-  perPage: number;
-}): Promise<{ offers: LiveStockHit[]; found: number }> {
-  // Admin key: a search-only key is often limited to the medicines collection and
-  // cannot read live_stock_offers, which left the View list empty.
-  const client = getTypesenseClient() || getTypesenseSearchClient();
-  if (!client) throw new Error('Typesense is not configured');
-  await ensureLiveStockCollection(client);
+function typesenseStatus(error: unknown): number | undefined {
+  return (error as { httpStatus?: number })?.httpStatus;
+}
+
+async function searchCollection(
+  client: TypesenseClient,
+  args: { uploadId: string; q: string; page: number; perPage: number }
+): Promise<{ offers: LiveStockHit[]; found: number }> {
   const q = args.q.trim();
   const browsing = q.length < 2;
   const filterBy = `uploadId:=${filterValue(args.uploadId)}`;
@@ -242,6 +239,7 @@ export async function searchLiveStockHits(args: {
       browsing ? 'productName:asc' : '_text_match:desc,productName:asc'
     );
   } catch (error) {
+    if (typesenseStatus(error) === 401 || typesenseStatus(error) === 403) throw error;
     console.warn('live stock search retrying without extra fields', error);
     result = await search('productName');
   }
@@ -249,6 +247,35 @@ export async function searchLiveStockHits(args: {
     .map((hit) => mapLiveStockHit((hit.document || {}) as Record<string, unknown>))
     .filter((row): row is LiveStockHit => Boolean(row));
   return { offers: hits, found: Number(result.found || hits.length) };
+}
+
+export async function searchLiveStockHits(args: {
+  uploadId: string;
+  q: string;
+  page: number;
+  perPage: number;
+}): Promise<{ offers: LiveStockHit[]; found: number }> {
+  // Search the documents only. Opening the collection schema is an admin call and
+  // Typesense answers a search key with 401, which left View empty.
+  const adminClient = getTypesenseClient();
+  const searchClient = getTypesenseSearchClient();
+  const clients = [adminClient, searchClient].filter(
+    (client, index, all): client is TypesenseClient => Boolean(client) && all.indexOf(client) === index
+  );
+  if (!clients.length) throw new Error('Typesense is not configured');
+
+  let lastError: unknown;
+  for (const client of clients) {
+    try {
+      return await searchCollection(client, args);
+    } catch (error) {
+      lastError = error;
+      const status = typesenseStatus(error);
+      if (status !== 401 && status !== 403) throw error;
+    }
+  }
+  const detail = lastError instanceof Error ? lastError.message : 'Typesense rejected the API key';
+  throw new Error(detail);
 }
 
 /**
