@@ -216,21 +216,35 @@ export async function searchLiveStockHits(args: {
   page: number;
   perPage: number;
 }): Promise<{ offers: LiveStockHit[]; found: number }> {
-  const client = getTypesenseSearchClient() || getTypesenseClient();
+  // Admin key: a search-only key is often limited to the medicines collection and
+  // cannot read live_stock_offers, which left the View list empty.
+  const client = getTypesenseClient() || getTypesenseSearchClient();
   if (!client) throw new Error('Typesense is not configured');
   await ensureLiveStockCollection(client);
   const q = args.q.trim();
   const browsing = q.length < 2;
-  const result = await client.collections(LIVE_STOCK_COLLECTION).documents().search({
-    q: browsing ? '*' : q,
-    query_by: 'productName,manufacturer,pack',
-    filter_by: `uploadId:=${filterValue(args.uploadId)}`,
-    per_page: args.perPage,
-    page: args.page,
-    sort_by: browsing ? 'productName:asc' : '_text_match:desc,productName:asc',
-    prefix: true,
-    num_typos: browsing ? 0 : 1,
-  });
+  const filterBy = `uploadId:=${filterValue(args.uploadId)}`;
+  const search = (queryBy: string, sortBy?: string) =>
+    client.collections(LIVE_STOCK_COLLECTION).documents().search({
+      q: browsing ? '*' : q,
+      query_by: queryBy,
+      filter_by: filterBy,
+      per_page: args.perPage,
+      page: args.page,
+      ...(sortBy ? { sort_by: sortBy } : {}),
+      prefix: true,
+      num_typos: browsing ? 0 : 1,
+    });
+  let result;
+  try {
+    result = await search(
+      'productName,manufacturer,pack',
+      browsing ? 'productName:asc' : '_text_match:desc,productName:asc'
+    );
+  } catch (error) {
+    console.warn('live stock search retrying without extra fields', error);
+    result = await search('productName');
+  }
   const hits = (result.hits || [])
     .map((hit) => mapLiveStockHit((hit.document || {}) as Record<string, unknown>))
     .filter((row): row is LiveStockHit => Boolean(row));

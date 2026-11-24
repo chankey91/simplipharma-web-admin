@@ -241,7 +241,14 @@ export const LiveStocksPage: React.FC = () => {
               onChange={(event) => setFilter(event.target.value)}
             />
           </Box>
-          {offersQuery.isLoading ? <LinearProgress /> : null}
+          {offersQuery.isLoading || offersQuery.isFetching ? <LinearProgress sx={{ mb: 1 }} /> : null}
+          {offersQuery.isError ? (
+            <Typography color="error" variant="body2" sx={{ mb: 1 }}>
+              {offersQuery.error instanceof Error
+                ? offersQuery.error.message
+                : 'Could not load products for this file.'}
+            </Typography>
+          ) : null}
           <TableContainer>
             <Table size="small">
               <TableHead>
@@ -255,6 +262,11 @@ export const LiveStocksPage: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
+                {!offersQuery.isLoading && !offersQuery.isError && visibleOffers.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6}>No products found in this file.</TableCell>
+                  </TableRow>
+                ) : null}
                 {visibleOffers.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell>
