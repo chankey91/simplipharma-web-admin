@@ -319,6 +319,14 @@ type GeminiPart =
   | { text: string }
   | { inline_data: { mime_type: string; data: string } };
 
+/**
+ * Successful processPurchaseInvoiceDraft runs before the 20s abort took up to 137s.
+ * 180s covers that tail. Both providers share 240s so a hung Vertex call cannot
+ * burn the whole 300s function limit before the API-key attempt and heuristic fallback.
+ */
+const GEMINI_ATTEMPT_MS = 180_000;
+const GEMINI_BUDGET_MS = 240_000;
+
 function toVertexParts(parts: GeminiPart[]): Array<Record<string, unknown>> {
   return parts.map((p) => {
     if ('text' in p) return { text: p.text };
@@ -331,7 +339,10 @@ function toVertexParts(parts: GeminiPart[]): Array<Record<string, unknown>> {
   });
 }
 
-async function callGeminiVertex(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
+async function callGeminiVertex(
+  parts: GeminiPart[],
+  timeoutMs: number
+): Promise<{ text: string; model: string }> {
   const projectId = getGcpProjectId();
   if (!projectId) throw new Error('GCP project id not available for Vertex AI');
 
@@ -357,7 +368,7 @@ async function callGeminiVertex(parts: GeminiPart[]): Promise<{ text: string; mo
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       contents: [{ role: 'user', parts: toVertexParts(parts) }],
       generationConfig: {
@@ -382,7 +393,10 @@ async function callGeminiVertex(parts: GeminiPart[]): Promise<{ text: string; mo
   return { text, model: `vertex:${model}` };
 }
 
-async function callGeminiApiKey(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
+async function callGeminiApiKey(
+  parts: GeminiPart[],
+  timeoutMs: number
+): Promise<{ text: string; model: string }> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw new Error('Gemini API key not configured');
@@ -395,7 +409,7 @@ async function callGeminiApiKey(parts: GeminiPart[]): Promise<{ text: string; mo
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       contents: [{ role: 'user', parts }],
       generationConfig: {
@@ -421,21 +435,34 @@ async function callGeminiApiKey(parts: GeminiPart[]): Promise<{ text: string; mo
 }
 
 async function callGemini(parts: GeminiPart[]): Promise<{ text: string; model: string }> {
+  const deadline = Date.now() + GEMINI_BUDGET_MS;
   const errors: string[] = [];
+  const nextTimeout = (): number => {
+    const remaining = deadline - Date.now();
+    if (remaining < 15_000) return 0;
+    return Math.min(GEMINI_ATTEMPT_MS, remaining);
+  };
+
   if (getGcpProjectId()) {
-    try {
-      return await callGeminiVertex(parts);
-    } catch (e: any) {
-      errors.push(e?.message || String(e));
-      console.error('Vertex Gemini failed:', e?.message || e);
+    const timeoutMs = nextTimeout();
+    if (timeoutMs > 0) {
+      try {
+        return await callGeminiVertex(parts, timeoutMs);
+      } catch (e: any) {
+        errors.push(e?.message || String(e));
+        console.error('Vertex Gemini failed:', e?.message || e);
+      }
     }
   }
   if (getGeminiApiKey()) {
-    try {
-      return await callGeminiApiKey(parts);
-    } catch (e: any) {
-      errors.push(e?.message || String(e));
-      console.error('Gemini API key failed:', e?.message || e);
+    const timeoutMs = nextTimeout();
+    if (timeoutMs > 0) {
+      try {
+        return await callGeminiApiKey(parts, timeoutMs);
+      } catch (e: any) {
+        errors.push(e?.message || String(e));
+        console.error('Gemini API key failed:', e?.message || e);
+      }
     }
   }
   throw new Error(
