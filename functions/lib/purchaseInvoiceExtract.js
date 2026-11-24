@@ -277,6 +277,13 @@ function getVertexLocation() {
 function isGeminiConfigured() {
     return Boolean(getGcpProjectId()) || Boolean(getGeminiApiKey());
 }
+/**
+ * Successful processPurchaseInvoiceDraft runs before the 20s abort took up to 137s.
+ * 180s covers that tail. Both providers share 240s so a hung Vertex call cannot
+ * burn the whole 300s function limit before the API-key attempt and heuristic fallback.
+ */
+const GEMINI_ATTEMPT_MS = 180000;
+const GEMINI_BUDGET_MS = 240000;
 function toVertexParts(parts) {
     return parts.map((p) => {
         if ('text' in p)
@@ -289,7 +296,7 @@ function toVertexParts(parts) {
         };
     });
 }
-async function callGeminiVertex(parts) {
+async function callGeminiVertex(parts, timeoutMs) {
     var _a, _b, _c, _d, _e;
     const projectId = getGcpProjectId();
     if (!projectId)
@@ -314,7 +321,7 @@ async function callGeminiVertex(parts) {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
         },
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
             contents: [{ role: 'user', parts: toVertexParts(parts) }],
             generationConfig: {
@@ -337,7 +344,7 @@ async function callGeminiVertex(parts) {
         throw new Error('Vertex Gemini returned empty response');
     return { text, model: `vertex:${model}` };
 }
-async function callGeminiApiKey(parts) {
+async function callGeminiApiKey(parts, timeoutMs) {
     var _a, _b, _c, _d, _e;
     const apiKey = getGeminiApiKey();
     if (!apiKey) {
@@ -348,7 +355,7 @@ async function callGeminiApiKey(parts) {
     const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
             contents: [{ role: 'user', parts }],
             generationConfig: {
@@ -372,23 +379,36 @@ async function callGeminiApiKey(parts) {
     return { text, model };
 }
 async function callGemini(parts) {
+    const deadline = Date.now() + GEMINI_BUDGET_MS;
     const errors = [];
+    const nextTimeout = () => {
+        const remaining = deadline - Date.now();
+        if (remaining < 15000)
+            return 0;
+        return Math.min(GEMINI_ATTEMPT_MS, remaining);
+    };
     if (getGcpProjectId()) {
-        try {
-            return await callGeminiVertex(parts);
-        }
-        catch (e) {
-            errors.push((e === null || e === void 0 ? void 0 : e.message) || String(e));
-            console.error('Vertex Gemini failed:', (e === null || e === void 0 ? void 0 : e.message) || e);
+        const timeoutMs = nextTimeout();
+        if (timeoutMs > 0) {
+            try {
+                return await callGeminiVertex(parts, timeoutMs);
+            }
+            catch (e) {
+                errors.push((e === null || e === void 0 ? void 0 : e.message) || String(e));
+                console.error('Vertex Gemini failed:', (e === null || e === void 0 ? void 0 : e.message) || e);
+            }
         }
     }
     if (getGeminiApiKey()) {
-        try {
-            return await callGeminiApiKey(parts);
-        }
-        catch (e) {
-            errors.push((e === null || e === void 0 ? void 0 : e.message) || String(e));
-            console.error('Gemini API key failed:', (e === null || e === void 0 ? void 0 : e.message) || e);
+        const timeoutMs = nextTimeout();
+        if (timeoutMs > 0) {
+            try {
+                return await callGeminiApiKey(parts, timeoutMs);
+            }
+            catch (e) {
+                errors.push((e === null || e === void 0 ? void 0 : e.message) || String(e));
+                console.error('Gemini API key failed:', (e === null || e === void 0 ? void 0 : e.message) || e);
+            }
         }
     }
     throw new Error(errors.length
