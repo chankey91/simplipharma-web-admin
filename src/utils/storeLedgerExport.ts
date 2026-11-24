@@ -43,17 +43,51 @@ export function buildStoreLedgerPdfBlob(ledger: StoreLedgerResult): {
     y += size * 0.45 + 1.5;
   };
 
-  // Column layout (mm)
+  const rightEdge = pageWidth - margin;
+  const measure = (text: string, size: number, bold: boolean) => {
+    pdf.setFont('helvetica', bold ? 'bold' : 'normal');
+    pdf.setFontSize(size);
+    return pdf.getTextWidth(text || '');
+  };
+  const colWidth = (header: string, values: string[]) => {
+    const headerWidth = measure(header, 8, true);
+    const bodyWidth = values.reduce((max, value) => Math.max(max, measure(value, 7.5, true)), 0);
+    return Math.max(headerWidth, bodyWidth) + 3;
+  };
+
+  const debitValues = ledger.entries.map((e) => (e.debit ? formatLedgerAmount(e.debit) : ''));
+  const creditValues = ledger.entries.map((e) => (e.credit ? formatLedgerAmount(e.credit) : ''));
+  if (ledger.closingBalance > 0) debitValues.push(formatLedgerAmount(ledger.closingBalance));
+  if (ledger.closingBalance < 0) creditValues.push(formatLedgerAmount(Math.abs(ledger.closingBalance)));
+
+  const gap = 3;
+  const dateW = colWidth('Date', ['11-Nov-26']);
+  const typeW = colWidth(
+    'Vch Type',
+    ledger.entries.map((e) => (e.vchType === 'Opening' ? '' : e.vchType))
+  );
+  const vchW = colWidth(
+    'Vch No.',
+    ledger.entries.map((e) => e.vchNo || '')
+  );
+  const debitW = colWidth('Debit', debitValues);
+  const creditW = colWidth('Credit', creditValues);
+  const balanceW = colWidth('Balance', [
+    ...ledger.entries.map((e) => formatLedgerAmount(e.balance)),
+    formatLedgerAmount(ledger.closingBalance),
+  ]);
+
+  // Amounts sit on the right. Voucher number ends before the debit column starts.
   const cols = {
     date: margin,
-    particulars: margin + 18,
-    vchType: margin + 88,
-    vchNo: margin + 108,
-    debit: margin + 128,
-    credit: margin + 148,
-    balance: margin + 168,
+    particulars: margin + dateW + gap,
+    balance: rightEdge,
+    credit: rightEdge - balanceW - gap,
+    debit: rightEdge - balanceW - gap - creditW - gap,
+    vchNo: rightEdge - balanceW - gap - creditW - gap - debitW - gap - vchW,
+    vchType: 0,
   };
-  const rightEdge = pageWidth - margin;
+  cols.vchType = cols.vchNo - gap - typeW;
 
   const drawTableHeader = () => {
     pdf.setFont('helvetica', 'bold');
