@@ -206,27 +206,36 @@ async function exportLiveStockHits() {
     }
     return rows;
 }
-async function searchLiveStockHits(args) {
-    const client = (0, typesenseMedicines_1.getTypesenseSearchClient)() || (0, typesenseMedicines_1.getTypesenseClient)();
-    if (!client)
-        throw new Error('Typesense is not configured');
-    await ensureLiveStockCollection(client);
+function typesenseStatus(error) {
+    return error === null || error === void 0 ? void 0 : error.httpStatus;
+}
+async function searchCollection(client, args) {
     const q = args.q.trim();
     const browsing = q.length < 2;
-    const result = await client.collections(exports.LIVE_STOCK_COLLECTION).documents().search({
-        q: browsing ? '*' : q,
-        query_by: 'productName,manufacturer,pack',
-        filter_by: `uploadId:=${filterValue(args.uploadId)}`,
-        per_page: args.perPage,
-        page: args.page,
-        sort_by: browsing ? 'productName:asc' : '_text_match:desc,productName:asc',
-        prefix: true,
-        num_typos: browsing ? 0 : 1,
-    });
+    const filterBy = `uploadId:=${filterValue(args.uploadId)}`;
+    const search = (queryBy, sortBy) => client.collections(exports.LIVE_STOCK_COLLECTION).documents().search(Object.assign(Object.assign({ q: browsing ? '*' : q, query_by: queryBy, filter_by: filterBy, per_page: args.perPage, page: args.page }, (sortBy ? { sort_by: sortBy } : {})), { prefix: true, num_typos: browsing ? 0 : 1 }));
+    let result;
+    try {
+        result = await search('productName,manufacturer,pack', browsing ? 'productName:asc' : '_text_match:desc,productName:asc');
+    }
+    catch (error) {
+        if (typesenseStatus(error) === 401 || typesenseStatus(error) === 403)
+            throw error;
+        console.warn('live stock search retrying without extra fields', error);
+        result = await search('productName');
+    }
     const hits = (result.hits || [])
         .map((hit) => mapLiveStockHit((hit.document || {})))
         .filter((row) => Boolean(row));
     return { offers: hits, found: Number(result.found || hits.length) };
+}
+async function searchLiveStockHits(args) {
+    // Same admin key that writes live_stock_offers. The search-only key is limited to
+    // medicines, and Typesense answers it with 401 on this collection.
+    const client = (0, typesenseMedicines_1.getTypesenseClient)();
+    if (!client)
+        throw new Error('Typesense is not configured');
+    return searchCollection(client, args);
 }
 /**
  * Copy existing Firestore stock rows into Typesense, then delete each page
