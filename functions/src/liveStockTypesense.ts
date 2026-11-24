@@ -3,7 +3,7 @@
  * sends a new file. Firestore keeps the small upload record (status, file, vendor).
  */
 import * as admin from 'firebase-admin';
-import { getTypesenseClient, getTypesenseSearchClient } from './typesenseMedicines';
+import { getTypesenseClient } from './typesenseMedicines';
 import type { ExtractedStockRow } from './liveStockExtract';
 
 export const LIVE_STOCK_COLLECTION = 'live_stock_offers';
@@ -255,27 +255,11 @@ export async function searchLiveStockHits(args: {
   page: number;
   perPage: number;
 }): Promise<{ offers: LiveStockHit[]; found: number }> {
-  // Search the documents only. Opening the collection schema is an admin call and
-  // Typesense answers a search key with 401, which left View empty.
-  const adminClient = getTypesenseClient();
-  const searchClient = getTypesenseSearchClient();
-  const clients = [adminClient, searchClient].filter(
-    (client, index, all): client is TypesenseClient => Boolean(client) && all.indexOf(client) === index
-  );
-  if (!clients.length) throw new Error('Typesense is not configured');
-
-  let lastError: unknown;
-  for (const client of clients) {
-    try {
-      return await searchCollection(client, args);
-    } catch (error) {
-      lastError = error;
-      const status = typesenseStatus(error);
-      if (status !== 401 && status !== 403) throw error;
-    }
-  }
-  const detail = lastError instanceof Error ? lastError.message : 'Typesense rejected the API key';
-  throw new Error(detail);
+  // Same admin key that writes live_stock_offers. The search-only key is limited to
+  // medicines, and Typesense answers it with 401 on this collection.
+  const client = getTypesenseClient();
+  if (!client) throw new Error('Typesense is not configured');
+  return searchCollection(client, args);
 }
 
 /**

@@ -534,8 +534,18 @@ async function requireStockReader(uid: string | undefined): Promise<void> {
 }
 
 /** Products from one uploaded file. The screen searches here instead of downloading the file. */
+const liveStockProjectId =
+  process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
 export const searchLiveStockOffers = ff
-  .runWith({ minInstances: 0, timeoutSeconds: 60, memory: '256MB' })
+  .runWith({
+    minInstances: 0,
+    timeoutSeconds: 60,
+    memory: '256MB',
+    // firebase-tools 14 crashes on deploy when this is left unset.
+    ...(liveStockProjectId
+      ? { serviceAccount: `${liveStockProjectId}@appspot.gserviceaccount.com` }
+      : {}),
+  })
   .https.onCall(async (data, context) => {
     await requireStockReader(context.auth?.uid);
     const uploadId = String(data?.uploadId || '').trim();

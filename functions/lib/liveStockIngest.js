@@ -454,8 +454,11 @@ async function requireStockReader(uid) {
     }
 }
 /** Products from one uploaded file. The screen searches here instead of downloading the file. */
+const liveStockProjectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
 exports.searchLiveStockOffers = functionRegion_1.ff
-    .runWith({ minInstances: 0, timeoutSeconds: 60, memory: '256MB' })
+    .runWith(Object.assign({ minInstances: 0, timeoutSeconds: 60, memory: '256MB' }, (liveStockProjectId
+    ? { serviceAccount: `${liveStockProjectId}@appspot.gserviceaccount.com` }
+    : {})))
     .https.onCall(async (data, context) => {
     var _a;
     await requireStockReader((_a = context.auth) === null || _a === void 0 ? void 0 : _a.uid);
