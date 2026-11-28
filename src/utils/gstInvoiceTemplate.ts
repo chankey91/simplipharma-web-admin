@@ -134,6 +134,7 @@ export const GST_INVOICE_STYLES = `
     border-top: 1px solid #000;
   }
   .footer-terms { font-size: 9px; line-height: 1.15; }
+  .account-details { margin-top: 3px; }
   .signatory { vertical-align: bottom; }
   .pay-qr { text-align: center; vertical-align: top; }
   .pay-qr img { width: 52px; height: 52px; display: block; margin: 0 auto 1px; }
@@ -376,6 +377,7 @@ export function buildGstInvoiceHalfPageFooter(opts: {
   amountInWords: string;
   paymentQrDataUri?: string;
   paymentUpiId?: string;
+  accountDetailsHtml?: string;
   termsHtml?: string;
   lastSummary?: GstInvoiceSummary;
   lastTax?: { taxable: string; cgst: string; sgst: string; igst?: string; rate: string; summaryAmt?: string };
@@ -389,7 +391,8 @@ ${buildGstInvoiceFooter(
   opts.signatoryFor,
   opts.termsHtml,
   opts.paymentQrDataUri,
-  opts.paymentUpiId
+  opts.paymentUpiId,
+  opts.accountDetailsHtml
 )}`;
 }
 
@@ -458,13 +461,60 @@ const DEFAULT_SALES_TERMS = `Bills not paid by due date will attract 24% interes
       Goods once sold will not be taken back.<br>
       Cold storage items will not be returned.`;
 
+export type InvoiceAccountDetails = {
+  accountName?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifsc?: string;
+  upiId?: string;
+};
+
+function escapeInvoiceText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+export function invoiceAccountLines(
+  account?: InvoiceAccountDetails
+): { label: string; value: string }[] {
+  if (!account) return [];
+  const bank = (account.bankName || '').trim();
+  const number = (account.accountNumber || '').trim();
+  const ifsc = (account.ifsc || '').trim();
+  const upi = (account.upiId || '').trim();
+  if (!bank && !number && !ifsc && !upi) return [];
+  const lines: { label: string; value: string }[] = [];
+  const add = (label: string, value?: string) => {
+    const text = (value || '').trim();
+    if (text) lines.push({ label, value: text });
+  };
+  add('A/c name', account.accountName);
+  add('Bank', bank);
+  add('A/c no.', number);
+  add('IFSC', ifsc);
+  add('UPI', upi);
+  return lines;
+}
+
+export function formatInvoiceAccountDetailsHtml(account?: InvoiceAccountDetails): string {
+  const lines = invoiceAccountLines(account);
+  if (!lines.length) return '';
+  return `<div class="account-details"><b>Account details</b><br>${lines
+    .map((line) => `<b>${escapeInvoiceText(line.label)}:</b> ${escapeInvoiceText(line.value)}`)
+    .join('<br>')}</div>`;
+}
+
 export function buildGstInvoiceFooter(
   remarks: string,
   amountInWords: string,
   signatoryFor: string,
   termsHtml = DEFAULT_SALES_TERMS,
   paymentQrDataUri?: string,
-  paymentUpiId?: string
+  paymentUpiId?: string,
+  accountDetailsHtml?: string
 ): string {
   const qrCell = paymentQrDataUri
     ? `
@@ -483,6 +533,7 @@ export function buildGstInvoiceFooter(
       ${termsHtml}<br>
       <b>Remarks:</b> ${remarks}<br>
       <b>Rs.</b> ${amountInWords}
+      ${accountDetailsHtml || ''}
     </td>${qrCell}
     <td width="40%" class="center signatory">
       For ${signatoryFor}<br>
