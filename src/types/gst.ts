@@ -66,6 +66,12 @@ export interface CompanyGstSettings {
   filingFrequency: GstFilingFrequency;
   einvoiceEnabled: boolean;
   fyStartMonth: number;
+  /** Printed on sales invoices. */
+  accountName?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifsc?: string;
+  upiId?: string;
   updatedAt?: Date | any;
   updatedBy?: string;
 }

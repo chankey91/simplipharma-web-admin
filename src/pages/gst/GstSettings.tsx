@@ -38,6 +38,11 @@ export const GstSettingsPage: React.FC = () => {
     phone: '',
     email: '',
     dl: '',
+    accountName: '',
+    bankName: '',
+    accountNumber: '',
+    ifsc: '',
+    upiId: '',
     filingFrequency: 'qrmp' as GstFilingFrequency,
     einvoiceEnabled: false,
     fyStartMonth: 4,
@@ -56,6 +61,11 @@ export const GstSettingsPage: React.FC = () => {
       phone: data.phone || '',
       email: data.email || '',
       dl: data.dl || '',
+      accountName: data.accountName || '',
+      bankName: data.bankName || '',
+      accountNumber: data.accountNumber || '',
+      ifsc: data.ifsc || '',
+      upiId: data.upiId || '',
       filingFrequency: data.filingFrequency,
       einvoiceEnabled: data.einvoiceEnabled,
       fyStartMonth: data.fyStartMonth,
@@ -199,6 +209,56 @@ export const GstSettingsPage: React.FC = () => {
               label="Drug licence"
               value={form.dl}
               onChange={(e) => setForm({ ...form, dl: e.target.value })}
+              disabled={!writable}
+            />
+          </Grid>
+          <Grid item xs={12}>
+            <Typography variant="subtitle1" sx={{ mt: 1 }}>
+              Bank account on sales invoices
+            </Typography>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              fullWidth
+              label="Account name"
+              value={form.accountName}
+              onChange={(e) => setForm({ ...form, accountName: e.target.value })}
+              disabled={!writable}
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              fullWidth
+              label="Bank name"
+              value={form.bankName}
+              onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+              disabled={!writable}
+            />
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <TextField
+              fullWidth
+              label="Account number"
+              value={form.accountNumber}
+              onChange={(e) => setForm({ ...form, accountNumber: e.target.value })}
+              disabled={!writable}
+            />
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <TextField
+              fullWidth
+              label="IFSC"
+              value={form.ifsc}
+              onChange={(e) => setForm({ ...form, ifsc: e.target.value.toUpperCase() })}
+              disabled={!writable}
+            />
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <TextField
+              fullWidth
+              label="UPI ID"
+              value={form.upiId}
+              onChange={(e) => setForm({ ...form, upiId: e.target.value })}
               disabled={!writable}
             />
           </Grid>
