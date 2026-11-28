@@ -31,8 +31,11 @@ import {
   buildGstInvoiceItemTableHtml,
   buildGstInvoiceTotalsSection,
   buildGstInvoiceHalfPageFooter,
+  formatInvoiceAccountDetailsHtml,
+  invoiceAccountLines,
   type GstInvoiceLineItem,
   type GstInvoiceSummary,
+  type InvoiceAccountDetails,
 } from './gstInvoiceTemplate';
 import {
   buildContinuationHeaderHtml,
@@ -128,6 +131,7 @@ export type OrderInvoicePrepared = {
   gstRatePercent: number;
   paymentQrDataUri?: string;
   paymentUpiId?: string;
+  accountDetails?: InvoiceAccountDetails;
 };
 
 function formatWalletCreditRefs(
@@ -434,15 +438,34 @@ async function prepareOrderInvoiceData(
           gstin: companySettings.gstin,
         }
       : { ...COMPANY_INVOICE_DETAILS };
+  const sellingFirm = resolveSellingFirm(order.sellingFirmId);
   const payment = isAlternateSellingFirm(order.sellingFirmId)
     ? {
         paymentQrDataUri: await QRCode.toDataURL(
-          `upi://pay?pa=${encodeURIComponent(resolveSellingFirm(order.sellingFirmId).upiId || '')}`,
+          `upi://pay?pa=${encodeURIComponent(sellingFirm.upiId || '')}`,
           { margin: 1, width: 280 }
         ),
-        paymentUpiId: resolveSellingFirm(order.sellingFirmId).upiId,
+        paymentUpiId: sellingFirm.upiId,
       }
     : { paymentQrDataUri: PAYMENT_QR_DATA_URI };
+  const bankSettings = isAlternateSellingFirm(order.sellingFirmId)
+    ? null
+    : companySettings || (await getCompanyGstSettings().catch(() => null));
+  const accountDetails: InvoiceAccountDetails = isAlternateSellingFirm(order.sellingFirmId)
+    ? {
+        accountName: sellingFirm.accountName || sellingFirm.legalName,
+        bankName: sellingFirm.bankName,
+        accountNumber: sellingFirm.accountNumber,
+        ifsc: sellingFirm.ifsc,
+        upiId: sellingFirm.upiId,
+      }
+    : {
+        accountName: bankSettings?.accountName || bankSettings?.legalName,
+        bankName: bankSettings?.bankName,
+        accountNumber: bankSettings?.accountNumber,
+        ifsc: bankSettings?.ifsc,
+        upiId: bankSettings?.upiId,
+      };
   
   // Party/Retailer details - fetch from user if retailerId is available
   let party = {
@@ -543,6 +566,7 @@ async function prepareOrderInvoiceData(
     party,
     gstRatePercent: taxPercentage,
     ...payment,
+    accountDetails,
   };
 };
 
@@ -603,7 +627,9 @@ ${buildGstInvoiceFooter(
   data.summary.amountInWords,
   data.company.name,
   undefined,
-  PAYMENT_QR_DATA_URI
+  data.paymentQrDataUri,
+  data.paymentUpiId,
+  formatInvoiceAccountDetailsHtml(data.accountDetails)
 )}`;
 };
 
@@ -623,6 +649,7 @@ export function formatOrderInvoiceAsCsv(data: OrderInvoicePrepared): string {
     ['Company Name', company.name],
     ['Company Address', company.address],
     ['Company GSTIN', company.gstin],
+    ...invoiceAccountLines(data.accountDetails).map((line) => [line.label, line.value]),
     ['Party Name', party.name],
     ['Party Address', party.address],
     ['Town / District', formatTownDistrict(party.town, party.district)],
@@ -790,6 +817,9 @@ export const generateOrderInvoice = async (
             : `Total C/F Rs. ${ctx.carriedForward.toFixed(2)}`,
           paymentQrDataUri: data.paymentQrDataUri,
           paymentUpiId: data.paymentUpiId,
+          accountDetailsHtml: ctx.isLast
+            ? formatInvoiceAccountDetailsHtml(data.accountDetails)
+            : '',
           lastSummary: ctx.isLast ? data.summary : undefined,
           lastTax: ctx.isLast ? data.tax : undefined,
           gstRateHalf: data.gstRatePercent / 2,

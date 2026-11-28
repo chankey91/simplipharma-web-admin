@@ -28,6 +28,10 @@ export type SellingFirm = {
   email: string;
   dl: string;
   upiId?: string;
+  accountName?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifsc?: string;
 };
 
 const yearMonth = () => {
@@ -65,6 +69,10 @@ export const SELLING_FIRMS: SellingFirm[] = [
     email: 'simplipharma.2025@gmail.com',
     dl: '20B/1862/67/2026, 21B/1863/67/2026',
     upiId: 'sanchet@idfcbank',
+    accountName: 'Sanchet Pharmaceuticals and Solutions',
+    bankName: 'IDFC',
+    accountNumber: '50804199260',
+    ifsc: 'IDFB0041277',
   },
 ];
 
@@ -123,6 +131,11 @@ export function companySettingsForAlternateFirm(firmId: string): CompanyGstSetti
     phone: firm.phone,
     email: firm.email,
     dl: firm.dl,
+    accountName: firm.accountName,
+    bankName: firm.bankName,
+    accountNumber: firm.accountNumber,
+    ifsc: firm.ifsc,
+    upiId: firm.upiId,
     filingFrequency: 'qrmp',
     einvoiceEnabled: false,
     fyStartMonth: 4,
